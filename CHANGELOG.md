@@ -890,6 +890,28 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `crypto-hash`: the README stated the round constants and the initial
+  values were generated from their definition in FIPS 180-4, while
+  `sha256.rs` and `sha512.rs` hold them as literal arrays (issue #26).
+  The README now states the tables, and `tests::constants` derives all
+  168 of them — 24 initial words and 144 round constants — from the
+  fractional parts of the square and cube roots of the first 80 primes.
+  The derivation is integer arithmetic 256 bits wide, because the widest
+  radicand is `409 * 2^192`, and finds each root bit by bit from the top
+  in O(log n) products; a mistyped digit now fails a test.
+
+- `crypto-hash`: `Sha256::update` counted bytes with `wrapping_add` and
+  `Sha256::finish` multiplied by eight with `wrapping_mul`, so a message
+  of 2^61 bytes or more padded with the bit length of a short message and
+  produced that message's digest with no error (issue #27). The counter
+  clamps at `MAX_MESSAGE_LEN`, the `2^61 - 1` bytes FIPS 180-4,
+  section 1, defines SHA-256 for, so a message past the domain pads with
+  a length no message inside it can pad with. The counter of SHA-512 and
+  SHA-384 saturates at `u64::MAX` for the same reason; the domain of
+  those two is wider than a 64-bit byte counter reaches, so the counter
+  is their only bound. Two regression tests drive each counter to its
+  bound.
+
 - `xtask`: the Secure Shell interop run waited for `[init] started app-ssh`
   under one `E2E_TIMEOUT` of 180 seconds, which had to cover the firmware, the
   kernel and the fifteen programs up to it, eleven of them read off the scratch
@@ -1036,6 +1058,41 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   difference between a scattering of edge pixels and the whole emoji.
 
 ### Changed
+
+- `crypto-dh`: `ModpGroup::shared_secret` holds the peer's public value to
+  the subgroup of order `(p-1)/2` as well as to the interval RFC 8268,
+  section 4, requires (issue #30). For a safe prime that subgroup is the
+  quadratic residues; a peer value of order `2q` is a non-residue, and
+  `v^x` is a residue exactly when `x` is even, so keying from one handed
+  the peer the low bit of this side's private exponent in the Legendre
+  symbol of the shared secret. The check is `v^((p-1)/2) = 1`, one
+  exponentiation with a public base and a public exponent — `pow_wide`
+  and not the ladder — and it runs once per exchange, after the interval
+  and after the output-width check. `DhError::PeerValueOutsideSubgroup`
+  is the new refusal. `check_public` stays the document's interval and
+  nothing more, and `public_value` does not pay the check: the generator
+  of every group of RFC 3526 is a residue and every power of a residue is
+  one. Four regression tests cover the refusal, the residues that pass,
+  the order of the two checks, and an honest exchange.
+
+- `crypto-dh`: the doc comment of `ModpGroup::new` and the README state
+  that the caller vouches for the prime (issue #31). Construction judges
+  the bytes against what the arithmetic needs — odd, normalized, narrow
+  enough — and against nothing else, because deciding more costs a
+  primality test of `p` and of `(p-1)/2` that this crate does not carry.
+  The two arguments that rest on a safe prime are named where they are:
+  the subgroup check, and the reading of `1 < v < p-1` as excluding every
+  small subgroup. A regression test holds that `2^64 - 1`, odd and
+  composite, is accepted.
+
+  `ModpGroup::new` also holds the generator to `2 <= g < p-1`, the
+  interval every public value of the group lies in. The doc comment
+  argued the upper end away from the prime having a non-zero top limb,
+  which is `2^63` for a prime of eight bytes and below the largest byte
+  for a modulus of one limb; a modulus of three with a generator of 200
+  was accepted, and `public_value` then reported `OutputTooShort`. A
+  regression test covers the three generators that reach `p-1` for that
+  modulus.
 
 - D-183 supersedes D-175 in its mechanism: the gamma value corrects the colour
   channels around every blend rather than the coverage before it, because at

@@ -22,6 +22,16 @@ alone, so the other MODP groups of the same document that the arithmetic
 is wide enough for — group 15 at 3072 bits and group 16 at 4096 — are a
 constant away.
 
+`ModpGroup::new` holds the generator to `2 <= g < p-1`, the interval
+every public value lies in, and judges the prime against what the
+arithmetic needs — odd, normalized, narrow enough — and against nothing
+else, because deciding more costs a primality test of `p` and of
+`(p-1)/2` that this crate does not carry. The caller vouches for the
+prime, and two arguments below hold for a safe prime alone: the subgroup
+check and the reading of the interval as excluding every small subgroup.
+`group14()` is the one call that vouches with the document's own
+constants.
+
 ## What is secret and what is not
 
 The private exponent is the secret, and it is the only one. The prime,
@@ -46,6 +56,17 @@ shared secret is then known to anybody watching. A refused value is
 wiped from the output buffer, as `crypto-aead` wipes a plaintext whose
 tag did not verify, so a caller that ignores the result holds nothing it
 could use.
+
+`shared_secret` adds one check the document does not ask for: the peer's
+value must satisfy `v^((p-1)/2) = 1`, which for a safe prime is the
+subgroup of quadratic residues. A value of order `2q` is a non-residue,
+and `v^x` is a residue exactly when `x` is even, so keying from such a
+value hands the peer the low bit of this side's private exponent in the
+Legendre symbol of the shared secret. The check is one exponentiation
+with a public base and a public exponent, `pow_wide` and not the ladder,
+and it runs once per exchange. `public_value` does not repeat it: the
+generator of every group of RFC 3526 is a residue and every power of a
+residue is one.
 
 ## The length of the private exponent
 

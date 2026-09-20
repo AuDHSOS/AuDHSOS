@@ -18,6 +18,12 @@ pub enum DhError {
     /// refused before it is used; a value this side computed fails it
     /// only for a degenerate exponent, and is refused before it is sent.
     PublicValueOutOfRange,
+    /// The peer's public value is outside the subgroup of order
+    /// `(p-1)/2`, which for a safe prime is the quadratic residues.
+    /// Raising such a value to the private exponent puts the low bit of
+    /// that exponent in the Legendre symbol of the shared secret, so the
+    /// exchange is refused before the exponentiation runs.
+    PeerValueOutsideSubgroup,
     /// The exchange produced one or `p-1` as the shared secret, which
     /// only a degenerate exponent can do and which no party may use.
     DegenerateSharedSecret,
@@ -32,6 +38,9 @@ impl fmt::Display for DhError {
             DhError::InvalidGenerator => f.write_str("the generator is below two"),
             DhError::PublicValueOutOfRange => {
                 f.write_str("the public value is not between one and the prime less one")
+            }
+            DhError::PeerValueOutsideSubgroup => {
+                f.write_str("the peer's public value is outside the prime-order subgroup")
             }
             DhError::DegenerateSharedSecret => {
                 f.write_str("the exchange produced a degenerate shared secret")

@@ -306,6 +306,20 @@ fn a_group_refuses_a_generator_below_two() {
     }
 }
 
+/// The generator lies in the interval every public value lies in. A
+/// modulus of one limb can be smaller than the largest byte, where the
+/// generator reaches `p-1` and the group holds no usable public value.
+#[test]
+fn a_group_refuses_a_generator_that_reaches_the_prime_less_one() {
+    for generator in [2u8, 3, 255] {
+        assert_eq!(
+            ModpGroup::new(&[3u8], generator),
+            Err(DhError::InvalidGenerator),
+            "{generator} against a modulus of three"
+        );
+    }
+}
+
 #[test]
 fn a_group_refuses_a_prime_the_arithmetic_cannot_hold() {
     let mut even = GROUP14_PRIME.to_vec();
@@ -357,6 +371,7 @@ fn every_refusal_renders_a_sentence_of_its_own() {
         DhError::InvalidPrime,
         DhError::InvalidGenerator,
         DhError::PublicValueOutOfRange,
+        DhError::PeerValueOutsideSubgroup,
         DhError::DegenerateSharedSecret,
         DhError::OutputTooShort,
     ] {
@@ -374,7 +389,7 @@ fn every_refusal_renders_a_sentence_of_its_own() {
 #[test]
 fn the_exchange_accepts_a_peer_value_wider_than_the_arithmetic() {
     let group = group();
-    let peer = prime_less(2);
+    let peer = power_of_two(2047);
     let mut padded = vec![0u8; 513 - peer.len()];
     padded.extend_from_slice(&peer);
 
@@ -411,4 +426,111 @@ fn a_refused_public_value_leaves_nothing_in_the_output() {
         Err(DhError::PublicValueOutOfRange)
     );
     assert_eq!(hex(&out), hex(&vec![0u8; GROUP14_PRIME_BYTES]));
+}
+
+/// RFC 8268, section 4, asks for the interval and no more, and
+/// `check_public` is that interval: `p-2` is inside it. The subgroup
+/// check that refuses `p-2` belongs to `shared_secret`, and the two
+/// stay apart.
+#[test]
+fn the_range_check_stays_the_interval_of_the_document() {
+    let group = group();
+    assert_eq!(group.check_public(&prime_less(2)), Ok(()));
+}
+
+/// `p-2` is `-2` modulo the prime. The prime of group 14 is `3` modulo
+/// `4`, so `-1` is a quadratic non-residue, and it is `7` modulo `8`, so
+/// `2` is a residue; the product is a non-residue and has order `2q`.
+/// Keying from it would put the low bit of the private exponent in the
+/// Legendre symbol of the shared secret.
+#[test]
+fn the_exchange_refuses_a_peer_value_outside_the_subgroup() {
+    let group = group();
+    let mut out = vec![0xaau8; GROUP14_PRIME_BYTES];
+    assert_eq!(
+        group.shared_secret(&[7u8; 4], &prime_less(2), &mut out),
+        Err(DhError::PeerValueOutsideSubgroup)
+    );
+    assert_eq!(
+        hex(&out),
+        hex(&vec![0xaau8; GROUP14_PRIME_BYTES]),
+        "the refusal comes before the exponentiation with the secret"
+    );
+}
+
+/// The generator of the group is a quadratic residue, so every public
+/// value either side computes is one and passes the subgroup check. The
+/// non-residue above and these residues are the two sides of it.
+#[test]
+fn the_exchange_accepts_a_peer_value_inside_the_subgroup() {
+    let group = group();
+    for peer in [
+        power_of_two(1),
+        power_of_two(2047),
+        two_to_the_width_reduced(),
+    ] {
+        let mut out = vec![0u8; GROUP14_PRIME_BYTES];
+        assert_eq!(
+            group.shared_secret(&[7u8; 4], &peer, &mut out),
+            Ok(()),
+            "{}",
+            hex(&peer)
+        );
+    }
+}
+
+/// The subgroup check runs on the peer's value and not on this side's,
+/// so an exchange between two honest sides pays one exponentiation for
+/// it and reaches the same secret it did before.
+#[test]
+fn the_subgroup_check_leaves_an_honest_exchange_alone() {
+    let group = group();
+    let ours = [0x5au8; GROUP14_SECRET_BYTES];
+    let theirs = [0xa5u8; GROUP14_SECRET_BYTES];
+    let mut our_public = vec![0u8; GROUP14_PRIME_BYTES];
+    let mut their_public = vec![0u8; GROUP14_PRIME_BYTES];
+    group
+        .public_value(&ours, &mut our_public)
+        .expect("our exponent is a usable one");
+    group
+        .public_value(&theirs, &mut their_public)
+        .expect("their exponent is a usable one");
+
+    let mut from_us = vec![0u8; GROUP14_PRIME_BYTES];
+    let mut from_them = vec![0u8; GROUP14_PRIME_BYTES];
+    group
+        .shared_secret(&ours, &their_public, &mut from_us)
+        .expect("their public value is in the subgroup");
+    group
+        .shared_secret(&theirs, &our_public, &mut from_them)
+        .expect("our public value is in the subgroup");
+    assert_eq!(hex(&from_us), hex(&from_them));
+}
+
+/// The interval is judged before the subgroup, so a value at an end of
+/// the interval reports the range and never spends the exponentiation.
+#[test]
+fn the_interval_is_judged_before_the_subgroup() {
+    let group = group();
+    let mut out = vec![0u8; GROUP14_PRIME_BYTES];
+    for value in [power_of_two(0), prime_less(1)] {
+        assert_eq!(
+            group.shared_secret(&[7u8; 4], &value, &mut out),
+            Err(DhError::PublicValueOutOfRange),
+            "{}",
+            hex(&value)
+        );
+    }
+}
+
+/// `ModpGroup::new` judges the bytes against what the arithmetic needs
+/// and against nothing else. `2^64 - 1` is odd, fills its top limb, and
+/// is `3 * 5 * 17 * 257 * 641 * 65537 * 6700417`; the caller is the one
+/// who vouches that a modulus is a safe prime.
+#[test]
+fn a_group_accepts_an_odd_modulus_that_is_no_prime() {
+    let composite = [0xffu8; 8];
+    let group = ModpGroup::new(&composite, 2).expect("the modulus is odd and normalized");
+    assert_eq!(group.public_len(), 8);
+    assert_eq!(group.check_public(&[0x07u8]), Ok(()));
 }
