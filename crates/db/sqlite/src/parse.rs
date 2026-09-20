@@ -95,6 +95,9 @@ pub enum Expected {
     /// Nothing: the table an `UPDATE` changes named again in its
     /// `FROM`, which the span names.
     TargetInFrom,
+    /// Nothing: a word after a name of the column list of a `CREATE
+    /// VIEW`, which the span names.
+    AfterViewColumn,
     /// `AS`, in a `WITH` clause.
     WithAs,
     /// `SELECT`, `VALUES` or `WITH`.
@@ -1442,7 +1445,18 @@ impl<'a> Parser<'a> {
         let columns = if self.eat(Kind::Lp) {
             let mut names = Vec::new();
             loop {
-                names.push(self.name()?);
+                let written = self.name()?;
+                names.push(written);
+                // `sqlite3CreateView` takes names alone, so a type or a
+                // constraint after one is refused naming that name,
+                // which `research/sqlite/src/build.c:2626` writes.
+                if !self.at(Kind::Comma) && !self.at(Kind::Rp) {
+                    return Err(Error {
+                        at: written.start,
+                        len: written.len,
+                        expected: Expected::AfterViewColumn,
+                    });
+                }
                 if !self.eat(Kind::Comma) {
                     break;
                 }

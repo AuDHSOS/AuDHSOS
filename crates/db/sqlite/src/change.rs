@@ -1894,6 +1894,20 @@ impl Writer {
         }
         let (rowids, mut roots) = self.named(&name, asked.kind)?;
         if rowids.is_empty() {
+            // `sqlite3DropTable` names the kind the schema holds where the
+            // statement named the other, which is
+            // `research/sqlite/src/build.c:3573`.
+            let bytes = self.image();
+            let database = self.reading(&bytes)?;
+            let other = match asked.kind {
+                crate::ast::Dropped::Table => database.view(&name).is_some().then_some(true),
+                crate::ast::Dropped::View => database.table(&name).is_some().then_some(false),
+                _ => None,
+            };
+            if let Some(view) = other {
+                return Err(Error::DropKind(view, name));
+            }
+            drop(database);
             return if asked.if_exists {
                 Ok(())
             } else {
@@ -9655,7 +9669,7 @@ pub(crate) fn listed_collations(collating: &[crate::value::Collating]) -> Vec<Ve
 /// Reading the table costs O(n) in its columns.
 pub(crate) fn columns_of(database: &Database<'_>, name: &[u8], every: bool) -> Vec<Vec<Value>> {
     let Some((table, _)) = database.table(name) else {
-        return Vec::new();
+        return view_columns(database, name, every);
     };
     let mut out = Vec::new();
     for (at, column) in table.columns.iter().enumerate() {
@@ -9681,6 +9695,51 @@ pub(crate) fn columns_of(database: &Database<'_>, name: &[u8], every: bool) -> V
         out.push(row);
     }
     out
+}
+
+/// The columns a view answers, as `PRAGMA table_info` writes them, and no
+/// row where the schema holds no view of that name or the statement of
+/// the view does not run.
+///
+/// `sqlite3ViewGetColumnNames` reads the statement of the view for its
+/// columns, so the names and the declared types are the ones a statement
+/// over the view answers. Reading them costs what that statement costs
+/// over no row.
+fn view_columns(database: &Database<'_>, name: &[u8], every: bool) -> Vec<Vec<Value>> {
+    if database.view(name).is_none() {
+        return Vec::new();
+    }
+    let mut sql = b"SELECT * FROM \"".to_vec();
+    for byte in name {
+        if *byte == b'"' {
+            sql.push(b'"');
+        }
+        sql.push(*byte);
+    }
+    sql.extend_from_slice(b"\" LIMIT 0");
+    let Ok(answered) = database.query(&sql) else {
+        return Vec::new();
+    };
+    answered
+        .names
+        .iter()
+        .zip(answered.declared.iter())
+        .enumerate()
+        .map(|(at, (column, declared))| {
+            let mut row = alloc::vec![
+                Value::Int(i64::try_from(at).unwrap_or(0)),
+                Value::Text(column.clone()),
+                Value::Text(declared.clone()),
+                Value::Int(0),
+                Value::Null,
+                Value::Int(0),
+            ];
+            if every {
+                row.push(Value::Int(0));
+            }
+            row
+        })
+        .collect()
 }
 
 /// One place of an index as `PRAGMA index_xinfo` writes it.

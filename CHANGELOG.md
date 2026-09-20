@@ -7,6 +7,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` answers the columns of a view for `PRAGMA table_info`,
+  refuses a column list of another width than the view's statement with
+  `expected <n> columns for '<name>' but got <m>`, refuses a word after a
+  name of that list, and names the kind the schema holds where a `DROP` of
+  the other kind reaches it. D-352 records it. Catalog 6.6.240.
+  `view.test` goes from 76 cases passing to 85.
+
 - `db-sqlite` writes `VACUUM ... INTO`: the expression after `INTO` is
   answered against the databases the connection holds, a value that is no
   text is refused `non-text filename`, a name the client holds bytes for

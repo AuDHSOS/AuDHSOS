@@ -73,6 +73,7 @@ mod upsert;
 mod utf8;
 mod vacuum;
 mod value;
+mod view;
 mod wal;
 mod window;
 mod window_words;

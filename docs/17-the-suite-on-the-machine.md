@@ -55,7 +55,7 @@ Before this track the harness read nine commands of a file and counted
 every other command as one it could not run: 1171 files held 17 724
 cases it knew about, and 13 086 of them were refused because a step
 before them was such a command. Running the files under `tclsh` makes
-108 093 cases of 798 files: 95 710 pass, 3169 answer differently and
+108 094 cases of 798 files: 95 720 pass, 3160 answer differently and
 9214 are refused.
 
 What the 9214 refusals are for, most first: `db status` (2106), which
@@ -76,7 +76,7 @@ What each answers, over the same files:
 
 | Configuration | Passed | Answered differently | Refused |
 |---------------|-------:|---------------------:|--------:|
-| `utf8-4096-delete` | 95 710 | 3169 | 9214 |
+| `utf8-4096-delete` | 95 720 | 3160 | 9214 |
 | `utf16le-4096-delete` | 61 214 | 2392 | 9500 |
 | `utf16be-4096-delete` | 61 229 | 2392 | 9500 |
 | `utf8-512-delete` | 61 073 | 2452 | 9435 |

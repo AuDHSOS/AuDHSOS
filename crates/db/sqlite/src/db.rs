@@ -217,6 +217,16 @@ pub enum Error {
     OutputExists,
     /// A `VACUUM ... INTO` whose expression answers other than text.
     NonTextFilename,
+    /// A `DROP TABLE` over a view or a `DROP VIEW` over a table, with the
+    /// word of what the name carries and the name.
+    DropKind(bool, Vec<u8>),
+    /// A word after a name of the column list of a `CREATE VIEW`, with
+    /// that name.
+    AfterViewColumn(Vec<u8>),
+    /// A view whose column list is of another width than its statement,
+    /// with the name, how many names it wrote and how many columns the
+    /// statement answers.
+    ViewWidth(Vec<u8>, usize, usize),
     /// Two `WITH` terms of one statement under one name.
     DuplicateTerm(Vec<u8>),
     /// `WITH` terms that read each other.
@@ -500,6 +510,13 @@ impl Error {
                 "table {} has {answered} values for {written} columns",
                 shown(name)
             ),
+            Error::AfterViewColumn(name) => {
+                alloc::format!("syntax error after column name \"{}\"", shown(name))
+            }
+            Error::ViewWidth(name, written, answered) => alloc::format!(
+                "expected {written} columns for '{}' but got {answered}",
+                shown(name)
+            ),
             Error::IndexedView => alloc::string::String::from("views may not be indexed"),
             Error::ConstraintIndex => alloc::string::String::from(
                 "index associated with UNIQUE or PRIMARY KEY constraint cannot be dropped",
@@ -587,6 +604,12 @@ impl Error {
             Error::NoSchema(name) => alloc::format!("unknown database {}", shown(name)),
             Error::OutputExists => alloc::string::String::from("output file already exists"),
             Error::NonTextFilename => alloc::string::String::from("non-text filename"),
+            Error::DropKind(view, name) => alloc::format!(
+                "use DROP {} to delete {} {}",
+                if *view { "VIEW" } else { "TABLE" },
+                if *view { "view" } else { "table" },
+                shown(name)
+            ),
             Error::VacuumInTransaction => {
                 alloc::string::String::from("cannot VACUUM from within a transaction")
             }
@@ -961,6 +984,9 @@ impl Error {
         }
         if error.expected == parse::Expected::TargetInFrom {
             return Error::TargetInFrom(held.unwrap_or_default().to_vec());
+        }
+        if error.expected == parse::Expected::AfterViewColumn {
+            return Error::AfterViewColumn(held.unwrap_or_default().to_vec());
         }
         match held.filter(|token| !token.is_empty()) {
             Some(token) => Error::Syntax(token.to_vec()),
@@ -2204,11 +2230,21 @@ impl<'a> Database<'a> {
             views: scope.views.saturating_add(1),
         };
         let mut answered = self.statement(&view.arena, view.select, &view.sql, inner)?;
+        // `sqlite3ViewGetColumnNames` refuses a column list of another
+        // width than the statement answers.
+        let written = view.columns.len();
+        if written != 0 && written != answered.shape.columns.len() {
+            return Err(Error::ViewWidth(
+                view.name.clone(),
+                written,
+                answered.shape.columns.len(),
+            ));
+        }
         // `CREATE VIEW v(a,b) AS ...` answers its columns under the
         // names the definition wrote, and under the statement's own
         // where it wrote none.
-        for (column, written) in answered.shape.columns.iter_mut().zip(&view.columns) {
-            column.name.clone_from(written);
+        for (column, name) in answered.shape.columns.iter_mut().zip(&view.columns) {
+            column.name.clone_from(name);
         }
         Ok(Viewed {
             shape: answered.shape,

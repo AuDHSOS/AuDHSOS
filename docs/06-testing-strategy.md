@@ -6489,3 +6489,19 @@ Document 16 step Q8.
 - `PRAGMA empty_result_callbacks` answers the truth value the connection
   holds, and nought where no statement set it.
 - Setting it answers no row.
+
+### 6.6.240 The columns a view answers (`db-sqlite`)
+
+Document 16 step Q8.
+
+- `PRAGMA table_info` over a view answers the columns its statement
+  answers, a column of a table carrying the declared type and a column of
+  an expression carrying none.
+- The names the column list wrote name the columns.
+- A view whose statement does not run answers no row, and a quote in the
+  name of a view is written twice where the pragma reads the view again.
+- A column list of another width than the statement answers is refused
+  where the view is read.
+- A word after a name of the column list is refused naming that name.
+- A `DROP TABLE` over a view and a `DROP VIEW` over a table each name the
+  kind the schema holds.
