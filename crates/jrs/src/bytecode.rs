@@ -7770,6 +7770,9 @@ impl RegisterLowerer {
         for statement in body {
             let flow = match statement {
                 Stmt::Declare(bindings) => self.lower_lexical_declaration(bindings)?,
+                // 14.2.3 step 1 instantiated these where the CaseBlock was
+                // entered, so the clause itself runs nothing for them.
+                Stmt::Function(_, _) => RegisterFlow::Empty,
                 _ => self.lower_statement(statement)?,
             };
             // A name the statement declared is initialized here and nowhere
@@ -7973,6 +7976,27 @@ impl RegisterLowerer {
     /// strictly equal to the discriminant. Execution then falls through the
     /// remaining clause bodies in source order, accumulating the completion
     /// value, which 14.12.2 updates to undefined when it stays empty.
+    /// 14.2.3 step 1 for the `CaseBlock` of 14.12.4: every clause sees the
+    /// functions of every other one, however the dispatch enters.
+    fn instantiate_case_block_functions(
+        &mut self,
+        clauses: &[(Option<Expr>, Vec<Stmt>)],
+    ) -> Option<()> {
+        for (_, body) in clauses {
+            for statement in body {
+                if let Stmt::Function(name, function) = statement {
+                    let value_type = self.lower_function_declaration(name, function)?;
+                    let binding = *self.bindings.get(name)?;
+                    self.store_binding_as(binding, !binding.initialized);
+                    let entry = self.bindings.get_mut(name)?;
+                    entry.value_type = Some(value_type);
+                    entry.initialized = true;
+                }
+            }
+        }
+        Some(())
+    }
+
     fn lower_switch(
         &mut self,
         discriminant: &Expr,
@@ -7980,12 +8004,15 @@ impl RegisterLowerer {
     ) -> Option<RegisterFlow> {
         use crate::engine::bytecode::Instruction;
         // 14.2.2 makes a function declaration of a clause a binding of the
-        // CaseBlock, which B.3.2.4 also writes on the variable scope around
-        // it.
-        if clauses.iter().any(|(_, body)| {
+        // CaseBlock. B.3.2.4 gives a sloppy one a `var` binding of the
+        // enclosing function as well, which this lowering does not make, so
+        // only a strict CaseBlock takes one.
+        let carries_a_function = clauses.iter().any(|(_, body)| {
             body.iter()
                 .any(|statement| matches!(statement, Stmt::Function(_, _)))
-        }) {
+        });
+        if carries_a_function && !self.code.strict {
+            self.refuse("a function declaration in a sloppy CaseBlock");
             return None;
         }
         let result_register = self.allocate_register()?;
@@ -7998,6 +8025,9 @@ impl RegisterLowerer {
         // 14.12.4 makes one Environment Record for the whole CaseBlock, after
         // the discriminant and before the selectors.
         let scoped = self.enter_case_block_scope(clauses)?;
+        if carries_a_function {
+            self.instantiate_case_block_functions(clauses)?;
+        }
 
         let bindings_before = self.bindings.clone();
         let layouts_before = self.object_layouts.clone();
