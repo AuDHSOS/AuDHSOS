@@ -584,8 +584,8 @@ negative-test passes. Other parser/builtin completeness gaps remain open.
 The engine is the target of the migration and the stack backend the
 source (architecture, section 17.1). What gates the switch is not the
 count either path reaches but the set of variants the stack path passes
-and the engine does not. At `11d78f0` that set holds 1,694 variants:
-none of them the engine fails, and 1,694 it names as gaps. The engine
+and the engine does not. At `a1adb83` that set holds 1,686 variants:
+none of them the engine fails, and 1,686 it names as gaps. The engine
 passes 25,539 variants the stack path does not. Only the failures are
 breaches of the equality duty; a gap costs coverage and answers nothing
 wrongly.
@@ -600,7 +600,7 @@ What a switch would cost is those gaps, by the reason the engine names:
 | 310 | a direct eval inside a function |
 | 194 | a property that is an accessor |
 | 121 | an internal method of a Proxy |
-| 64 | `ToPrimitive` of an Object outside a call |
+| 56 | `ToPrimitive` of an Object outside a call |
 | 76 | an eval of a Script the lowering does not take |
 | 68 | `ToString` of an Object |
 | 46 | a frame of a call the lowering does not prepare |
@@ -617,13 +617,13 @@ every site of the reason a name of its own and running the suite once:
 | 310 | a direct eval inside a function | one site, `perform_eval` |
 | 194 | a property that is an accessor | about thirty call sites, the largest 22 |
 | 121 | an internal method of a Proxy | the walks that read a descriptor per key |
-| 64 | `ToPrimitive` of an Object outside a call | 38 `array_length_of`, the rest in sites of 8 or fewer |
+| 56 | `ToPrimitive` of an Object outside a call | sites of 8 variants or fewer |
 | 68 | `ToString` of an Object | 26 `property_key`, the rest in ten sites of 4 or fewer |
 
-`array_length_of` is the `length` of an array-like that 7.3.18 reads,
-which needs the frame `Resume::Length` opens for the receiver of
-23.1.3 and does not reach it. The `lastIndex` of 22.2.7.2 was the
-other half, which `Resume::LastIndex` closed.
+The two largest sites of that reason are closed: the `lastIndex` of
+22.2.7.2 by `Resume::LastIndex` and the `length` of 10.4.2.4 by
+`Resume::ArrayLength`. What is left is a tail no site of which holds
+more than eight variants.
 
 | Commit | Blockers | Failures | Gaps |
 |---|---:|---:|---:|
@@ -768,6 +768,7 @@ other half, which `Resume::LastIndex` closed.
 | `a737641` | 1,712 | **0** | 1,712 |
 | `3a6e905` | 1,712 | **0** | 1,712 |
 | `11d78f0` | 1,694 | **0** | 1,694 |
+| `a1adb83` | 1,686 | **0** | 1,686 |
 
 The list is the join of the two per-variant runs, without `--summary`:
 
@@ -1167,7 +1168,10 @@ aarch64 with the pinned nightly-2026-08-25 toolchain, release profile.
 | 13.3.7.1 with a spread element in the argument list (focused) | focused | `03d3688` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/language/expressions/super test/staging/sm/class --summary` | 188 | 371 | 232 (62.53%) | 14 (3.77%) | 125 (33.69%) |
 | The same, on the stack backend (focused) | focused | `03d3688` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/language/expressions/super test/staging/sm/class --summary` | 188 | 371 | 258 (69.54%) | 61 (16.44%) | 52 (14.02%) |
 | Complete pinned suite on the register engine, before the close of 14.7.5.7 step 3.j (outdated) | full | `33ffe90` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 58,747 (57.08%) | 20,543 (19.96%) | 23,635 (22.96%) |
-| Complete pinned suite on the register engine | full | `11d78f0` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 63,199 (61.40%) | 18,961 (18.42%) | 20,765 (20.18%) |
+| Complete pinned suite on the register engine | full | `a1adb83` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 63,207 (61.41%) | 18,961 (18.42%) | 20,757 (20.17%) |
+| The `length` of 10.4.2.4 through 7.1.6 (focused) | focused | `a1adb83` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/Array --summary` | 3,082 | 6,117 | 5,524 (90.31%) | 46 (0.75%) | 547 (8.94%) |
+| The same, on the stack backend (focused) | focused | `a1adb83` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/Array --summary` | 3,082 | 6,117 | 5,066 (82.82%) | 983 (16.07%) | 68 (1.11%) |
+| Complete pinned suite on the register engine, before the `length` of 10.4.2.4 (outdated) | full | `11d78f0` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 63,199 (61.40%) | 18,961 (18.42%) | 20,765 (20.18%) |
 | The `lastIndex` of 22.2.7.2 through 7.1.20 (focused) | focused | `11d78f0` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 test/built-ins/RegExp --summary` | 1,879 | 3,756 | 1,522 (40.52%) | 70 (1.86%) | 2,164 (57.61%) |
 | The same, on the stack backend (focused) | focused | `11d78f0` | `sh tools/xtask.sh jrs --fuel 1000000 --test262 docs/test-ext/test262 test/built-ins/RegExp --summary` | 1,879 | 3,756 | 1,462 (38.93%) | 96 (2.56%) | 2,198 (58.52%) |
 | Complete pinned suite on the register engine, before the `lastIndex` of 22.2.7.2 (outdated) | full | `3a6e905` | `sh tools/xtask.sh jrs --fuel 1000000 --engine --test262 docs/test-ext/test262 --all --summary` | 53,582 | 102,925 | 63,181 (61.39%) | 18,961 (18.42%) | 20,783 (20.19%) |
