@@ -2258,11 +2258,19 @@ impl RegisterVM {
         let mut parent = parent;
         // A body that carries a direct eval of 13.3.6.1 holds its bindings in
         // the record of 9.1.1.1, whose slots the text of the eval may name.
-        let names: Vec<alloc::rc::Rc<[u16]>> = code
+        let mut names: Vec<alloc::rc::Rc<[u16]>> = code
             .own_context_names
             .iter()
             .map(|name| alloc::rc::Rc::from(name.as_slice()))
             .collect();
+        // Every slot the unit counts is a slot the record holds, whether the
+        // lowering gave it a name or not: a slot with no name is one no text
+        // of an eval can reach, and every read of it names its index.
+        if !names.is_empty() {
+            names.resize_with(usize::from(slot_count), || {
+                alloc::rc::Rc::from([].as_slice())
+            });
+        }
         loop {
             let made = if names.is_empty() {
                 heap.allocate_context(parent, usize::from(slot_count))

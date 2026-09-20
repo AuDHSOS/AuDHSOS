@@ -841,6 +841,10 @@ struct RegisterLowerer {
     /// than the frame it inherited them from, which holds where the frame was
     /// made with a context of its own.
     inherits_at_depth: bool,
+    /// Whether this body carries a direct eval of 13.3.6.1, in itself or in
+    /// any function nested inside it, so that every binding it holds takes a
+    /// named slot of the record of 9.1.1.1 that the text of the eval reaches.
+    carries_a_direct_eval: bool,
     loops: Vec<RegisterLoop>,
     /// The labels of 14.13 the statement being lowered carries, which the
     /// frame it opens takes.
@@ -1088,6 +1092,7 @@ struct RegisterSnapshot {
     object_layouts: BTreeMap<u32, RegisterObjectLayout>,
     functions: usize,
     own_context_slot_count: Option<u16>,
+    own_context_names: Vec<Vec<u16>>,
     outer_context_slot_counts: Vec<u16>,
     function_returns: BTreeMap<u32, RegisterType>,
     function_parameters: BTreeMap<u32, Vec<RegisterType>>,
@@ -1123,6 +1128,7 @@ impl RegisterLowerer {
             // A Script has a context of its own wherever it needs one, and no
             // binding it inherits stands at a depth this would move.
             inherits_at_depth: false,
+            carries_a_direct_eval: false,
             loops: Vec::new(),
             pending_labels: Vec::new(),
             block_scoped: Vec::new(),
@@ -2026,6 +2032,17 @@ impl RegisterLowerer {
         let slot_count = self.code.own_context_slot_count.unwrap_or(0);
         let next = slot_count.checked_add(1)?;
         self.code.own_context_slot_count = Some(next);
+        // A body that carries a direct eval of 13.3.6.1 holds the record of
+        // 9.1.1.1: the text of the eval names its bindings rather than their
+        // slots, so each slot carries the name it was made for.
+        if self.carries_a_direct_eval {
+            while self.code.own_context_names.len() < usize::from(slot_count) {
+                self.code.own_context_names.push(Vec::new());
+            }
+            self.code
+                .own_context_names
+                .push(name.encode_utf16().collect());
+        }
         if binding.initialized {
             self.code
                 .emit(crate::engine::bytecode::Instruction::Ldar(register));
@@ -2091,6 +2108,7 @@ impl RegisterLowerer {
             object_layouts: self.object_layouts.clone(),
             functions: self.code.functions.len(),
             own_context_slot_count: self.code.own_context_slot_count,
+            own_context_names: self.code.own_context_names.clone(),
             outer_context_slot_counts: self.code.outer_context_slot_counts.clone(),
             function_returns: self.function_returns.clone(),
             function_parameters: self.function_parameters.clone(),
@@ -2118,6 +2136,7 @@ impl RegisterLowerer {
         self.object_layouts = snapshot.object_layouts;
         self.code.functions.truncate(snapshot.functions);
         self.code.own_context_slot_count = snapshot.own_context_slot_count;
+        self.code.own_context_names = snapshot.own_context_names;
         self.code.outer_context_slot_counts = snapshot.outer_context_slot_counts;
         self.function_returns = snapshot.function_returns;
         self.function_parameters = snapshot.function_parameters;
@@ -3958,6 +3977,7 @@ impl RegisterLowerer {
             code_id.checked_add(1)?,
         );
         child.allow_return = true;
+        child.carries_a_direct_eval = register_body_carries_a_direct_eval(&function.body);
         // The body is lowered before the unit is finished, and 10.4.4 reads
         // the strictness and the shape of the parameter list while it runs.
         child.code.strict = function.strict;
@@ -12543,6 +12563,23 @@ enum Reads {
     /// The same, read by an arrow of the body and not by the body itself,
     /// which 10.2.1.1 answers out of the frame around the arrow.
     ArrowNewTarget,
+    /// A call written as the name `eval`, which 13.3.6.1 makes a direct eval
+    /// of and 19.2.1.1 step 5 evaluates against the Variable Environment of
+    /// the frame it stands in.
+    ///
+    /// The scan for it descends into every nested function, because the text
+    /// of an eval names every binding of the chain around the call and not
+    /// only those of the body the call stands in.
+    DirectEval,
+}
+
+/// Whether a body carries a direct eval of 13.3.6.1, in itself or in any
+/// function nested inside it.
+///
+/// Such a body holds its bindings in the Declarative Environment Record of
+/// 9.1.1.1, because the text of the eval names them rather than their slots.
+fn register_body_carries_a_direct_eval(body: &[Stmt]) -> bool {
+    register_body_reads(body, Reads::DirectEval)
 }
 
 fn register_body_reads_this(body: &[Stmt]) -> bool {
@@ -12644,9 +12681,12 @@ fn register_expression_reads(expression: &Expr, what: Reads) -> bool {
         // default constructor of 15.7.14 reads all three.
         // An arrow is the only expression that reads the `this` of the frame
         // around it, so the scan for one stops at every other.
-        ExprKind::Class(_) | ExprKind::DefaultSuper => {
-            !matches!(what, Reads::ArrowThis | Reads::ArrowNewTarget)
-        }
+        // A class body the lowering does not take carries no call the scan
+        // could find, and every other question about it answers true.
+        ExprKind::Class(_) | ExprKind::DefaultSuper => !matches!(
+            what,
+            Reads::ArrowThis | Reads::ArrowNewTarget | Reads::DirectEval
+        ),
         ExprKind::Super => !matches!(
             what,
             Reads::NewTarget | Reads::ArrowThis | Reads::ArrowNewTarget
@@ -12683,7 +12723,12 @@ fn register_expression_reads(expression: &Expr, what: Reads) -> bool {
                 || register_expression_reads(no, what)
         }
         ExprKind::Call(callee, arguments) | ExprKind::Construct(callee, arguments) => {
-            register_expression_reads(callee, what)
+            // 13.3.6.1 tells a direct eval from every other call by the name
+            // the callee is written as, which is what the scan asks for.
+            (matches!(what, Reads::DirectEval)
+                && matches!(expression.kind, ExprKind::Call(..))
+                && callee.reference_name() == Some(EVAL_NAME))
+                || register_expression_reads(callee, what)
                 || arguments
                     .iter()
                     .any(|expression| register_expression_reads(expression, what))
@@ -12703,7 +12748,7 @@ fn register_expression_reads(expression: &Expr, what: Reads) -> bool {
             .flatten()
             .any(|expression| register_expression_reads(expression, what)),
         ExprKind::Function(function) => {
-            function.arrow
+            (function.arrow || matches!(what, Reads::DirectEval))
                 && register_body_reads(
                     &function.body,
                     // Inside the arrow every `this` and every `new.target`
