@@ -12,6 +12,7 @@ use test_support::property::check;
 
 use super::fixture::Fixture;
 use crate::cancel::cancel;
+use crate::destroy::{destroy_reply, destroyed};
 use crate::endpoint::{
     Handover, Intent, Meeting, Reception, close_reply, open_reply, received, recv, replied,
     reply_caller, send, sent, undo_meeting,
@@ -1040,4 +1041,81 @@ fn call_and_receive(
     )
     .unwrap();
     reply
+}
+
+#[test]
+fn a_reply_object_left_by_a_suspended_caller_wakes_nobody_when_it_is_dropped() {
+    // The caller was suspended out of its wait and blocked on a second
+    // endpoint afterwards. Waking it there would leave it ready while its
+    // links still chain it into that endpoint's receivers queue.
+    let mut fixture = Fixture::new();
+    let client = fixture.process(8);
+    let server = fixture.process(8);
+    let caller = fixture.running(client, 4);
+    let endpoint = fixture.endpoint();
+    let second = fixture.endpoint();
+    let receiver = fixture.running(server, 4);
+
+    let reply = call_and_receive(&mut fixture, caller, receiver, server, endpoint);
+    assert!(cancel(&mut fixture.objects, caller));
+    fixture
+        .scheduler
+        .suspend(&mut fixture.objects.threads, caller)
+        .unwrap();
+    fixture
+        .scheduler
+        .resume(&mut fixture.objects.threads, caller)
+        .unwrap();
+    fixture.on_the_processor(caller);
+    recv(
+        &mut fixture.objects,
+        &mut fixture.scheduler,
+        caller,
+        second,
+        true,
+    )
+    .unwrap();
+
+    let gone = fixture
+        .objects
+        .destroy(AnyObjectId::of(reply))
+        .expect("the last reference went");
+    let mut waiters = destroyed(&gone);
+    assert!(
+        waiters
+            .wake_next(&mut fixture.objects.threads, &mut fixture.scheduler)
+            .is_none(),
+        "the dropped reply object owes the caller nothing"
+    );
+    assert_eq!(fixture.state(caller), Some(ThreadState::BlockedRecv));
+    assert_eq!(fixture.receivers(second), vec![caller]);
+    assert_eq!(
+        fixture.wait_of(caller),
+        Wait::Endpoint {
+            endpoint: second,
+            queue: Queue::Receivers,
+            badge: 0
+        }
+    );
+}
+
+#[test]
+fn cancelling_a_wait_for_an_answer_consumes_the_reply_object() {
+    let mut fixture = Fixture::new();
+    let client = fixture.process(8);
+    let server = fixture.process(8);
+    let caller = fixture.running(client, 4);
+    let endpoint = fixture.endpoint();
+    let receiver = fixture.running(server, 4);
+
+    let reply = call_and_receive(&mut fixture, caller, receiver, server, endpoint);
+    assert!(cancel(&mut fixture.objects, caller));
+
+    assert!(fixture.objects.replies.get(reply).unwrap().consumed);
+    let waiters = destroy_reply(fixture.objects.replies.get(reply).unwrap());
+    assert!(waiters.is_empty());
+    assert_eq!(
+        reply_caller(&fixture.objects, reply),
+        Err(Error::InvalidState)
+    );
 }
