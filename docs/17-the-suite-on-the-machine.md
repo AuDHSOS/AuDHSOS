@@ -55,7 +55,7 @@ Before this track the harness read nine commands of a file and counted
 every other command as one it could not run: 1171 files held 17 724
 cases it knew about, and 13 086 of them were refused because a step
 before them was such a command. Running the files under `tclsh` makes
-108 100 cases of 798 files: 95 355 pass, 3310 answer differently and
+108 077 cases of 798 files: 95 387 pass, 3255 answer differently and
 9435 are refused.
 
 What the 9435 refusals are for, most first: `db status` (2106), which
@@ -76,7 +76,7 @@ What each answers, over the same files:
 
 | Configuration | Passed | Answered differently | Refused |
 |---------------|-------:|---------------------:|--------:|
-| `utf8-4096-delete` | 95 355 | 3310 | 9435 |
+| `utf8-4096-delete` | 95 387 | 3255 | 9435 |
 | `utf16le-4096-delete` | 61 214 | 2392 | 9500 |
 | `utf16be-4096-delete` | 61 229 | 2392 | 9500 |
 | `utf8-512-delete` | 61 073 | 2452 | 9435 |
@@ -413,6 +413,10 @@ Size: S.
     statement, which D-342 records. A script that runs a statement of
     its own reaches the engine while the engine waits for its answer,
     which the line has no path for.
+21. `$db preupdate hook` names a script per connection, which the engine
+    calls before it writes a row, and `$db preupdate count`, `depth`,
+    `old` and `new` answer out of what the call handed the tester, which
+    D-343 records.
 
 ### Produces
 

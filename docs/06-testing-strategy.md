@@ -6381,3 +6381,19 @@ Document 16 step Q8.
   trigger's body wrote and the rows of an attached database.
 - A row of a `WITHOUT ROWID` table and a row of `sqlite_sequence` tell
   the update hook nothing.
+
+### 6.6.232 The preupdate hook a connection is told (`db-sqlite`)
+
+Document 16 step Q8.
+
+- An `INSERT`, an `UPDATE` and a `DELETE` each tell the action, the
+  database, the table, the two keys, the depth and the rows.
+- The column the key is another name for carries the key in both rows.
+- The row a `REPLACE` writes over is told as a row taken away, which the
+  update hook is not told of.
+- A row of a table that keeps its rows in the key's own tree carries
+  nought for both keys.
+- A row a trigger's body writes carries how many triggers deep the
+  statement stands.
+- A row the triggers before it took away is told once, and the statement
+  writes nothing over it.

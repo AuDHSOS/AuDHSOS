@@ -622,6 +622,39 @@ pub struct Wrote<'a> {
 /// for itself.
 pub type Writing = fn(&Wrote<'_>);
 
+/// One row a statement is about to write, as the connection tells it.
+pub struct Peeked<'a> {
+    /// What the statement will do to the row.
+    pub did: Did,
+    /// The name of the database that holds the table.
+    pub schema: &'a [u8],
+    /// The name of the table.
+    pub table: &'a [u8],
+    /// The key the row stands under now, which a row being written
+    /// carries as the key it takes.
+    pub was: i64,
+    /// The key the row will stand under.
+    pub key: i64,
+    /// The values the row holds now, and nothing where the statement
+    /// writes the row.
+    pub old: Option<&'a [Value]>,
+    /// The values the row will hold, and nothing where the statement
+    /// takes the row away.
+    pub new: Option<&'a [Value]>,
+    /// How many triggers deep the statement stands, which
+    /// `sqlite3_preupdate_depth` answers.
+    pub depth: usize,
+}
+
+/// The function `sqlite3_preupdate_hook` told the connection, which every
+/// row a statement is about to write in a table that keeps a key of its
+/// own tells before the write.
+///
+/// `sqlite3_preupdate_hook` of `research/sqlite/src/main.c:2415` is told
+/// the row a `REPLACE` writes over as well, which the function
+/// `sqlite3_update_hook` told the connection is not.
+pub type Peeking = fn(&Peeked<'_>);
+
 /// A database being written, statement by statement.
 pub struct Writer {
     /// The file the statement running now writes, which is `main` where
@@ -664,6 +697,9 @@ pub struct Writer {
     /// every row a statement writes in a table that keeps a key of its
     /// own tells.
     writes: Option<Writing>,
+    /// The function `sqlite3_preupdate_hook` told the connection, which
+    /// every row a statement is about to write tells before the write.
+    peeking: Option<Peeking>,
     /// The columns of the `UPDATE` running now that the function
     /// ignored, which keep the value they had.
     unwritten: Vec<Vec<u8>>,
@@ -797,6 +833,7 @@ impl Writer {
             committing: None,
             rolling: None,
             writes: None,
+            peeking: None,
             unwritten: Vec::new(),
             counted: crate::func::Counted::default(),
             writing: 0,
@@ -860,6 +897,7 @@ impl Writer {
             committing: None,
             rolling: None,
             writes: None,
+            peeking: None,
             unwritten: Vec::new(),
             counted: crate::func::Counted::default(),
             writing: 0,
@@ -3026,6 +3064,37 @@ impl Writer {
         }
     }
 
+    /// Tells the function `sqlite3_preupdate_hook` told the connection of
+    /// one row a statement is about to write.
+    ///
+    /// The row carries the key in the column the key is another name
+    /// for, which `sqlite3_preupdate_old` answers, so copying it costs
+    /// O(n) in the columns of the table.
+    fn tells_peek(
+        &self,
+        did: Did,
+        table: &Table,
+        keys: (i64, i64),
+        rows: (Option<&[Value]>, Option<&[Value]>),
+    ) {
+        let Some(peeking) = self.peeking else {
+            return;
+        };
+        let (was, key) = keys;
+        let old = rows.0.map(|values| shown_row(table, values, was));
+        let new = rows.1.map(|values| shown_row(table, values, key));
+        peeking(&Peeked {
+            did,
+            schema: &self.called.name,
+            table: &table.name,
+            was,
+            key,
+            old: old.as_deref(),
+            new: new.as_deref(),
+            depth: self.running.len(),
+        });
+    }
+
     /// Tells the function `sqlite3_update_hook` told the connection of one
     /// row a statement wrote, which costs O(1).
     ///
@@ -3072,6 +3141,41 @@ impl Writer {
     fn commit(&mut self, was: &Header) -> Result<(), Error> {
         commit_file(&mut self.held, was)
     }
+}
+
+/// The row an `UPDATE` fires its triggers over: what it holds now under
+/// the key it stands under, and what it will hold under the key it takes.
+const fn changing<'a>(
+    table: &'a Table,
+    old: (&'a [Value], i64),
+    new: (&'a [Value], i64),
+    encoding: Encoding,
+) -> Fired<'a> {
+    Fired {
+        table,
+        old: Some(old),
+        new: Some(new),
+        encoding,
+    }
+}
+
+/// The values of one row as the function `sqlite3_preupdate_hook` told the
+/// connection sees them, which is the column the key is another name for
+/// carrying the key.
+///
+/// Copying costs O(n) in the columns of the table.
+fn shown_row(table: &Table, values: &[Value], rowid: i64) -> Vec<Value> {
+    values
+        .iter()
+        .enumerate()
+        .map(|(at, value)| {
+            if Some(at) == table.rowid_alias {
+                Value::Int(rowid)
+            } else {
+                value.clone()
+            }
+        })
+        .collect()
 }
 
 /// Whether the refusal came while the statement ran rather than while the
@@ -3823,6 +3927,18 @@ impl Writer {
     /// `sqlite3_update_hook` with a null pointer.
     pub const fn writes_nothing(&mut self) {
         self.writes = None;
+    }
+
+    /// The function `sqlite3_preupdate_hook` told this connection, which
+    /// the connection tells before it writes a row.
+    pub const fn peeks(&mut self, peeking: Peeking) {
+        self.peeking = Some(peeking);
+    }
+
+    /// The same, with the connection told no function, which is
+    /// `sqlite3_preupdate_hook` with a null pointer.
+    pub const fn peeks_nothing(&mut self) {
+        self.peeking = None;
     }
 
     /// The database at `at` of the list becomes the one the connection
@@ -5530,6 +5646,7 @@ impl Writer {
             }
             // `D.2` of `src/fkey.c`: a row that rows of another table
             // point at is refused, or those rows are written.
+            self.tells_peek(Did::Delete, &table, (0, 0), (Some(&values), None));
             self.unparented(&table, &values, 0)?;
             self.orphaned(name, &table, &values, 0, None)?;
             let key = crate::schema::key_of(&table, &values);
@@ -5610,6 +5727,7 @@ impl Writer {
                 }
                 Conflicted::Write => {}
             }
+            self.tells_peek(Did::Insert, &table, (0, 0), (None, Some(&named)));
             self.parented(&table, &named, 0)?;
             self.index_row(&kept, &table, &named, &key)?;
             let record =
@@ -5928,6 +6046,7 @@ impl Writer {
         if !self.fire(&before, &[], &row)? {
             return Ok(false);
         }
+        self.tells_peek(Did::Delete, table, (0, 0), (Some(&values), None));
         self.unparented(table, &values, 0)?;
         self.orphaned(&table.name, table, &values, 0, None)?;
         self.unindex_row(kept, table, &values, key)?;
@@ -6153,6 +6272,7 @@ impl Writer {
                 continue;
             }
             let key = crate::schema::key_of(&table, &named);
+            self.tells_peek(Did::Update, &table, (0, 0), (Some(&held), Some(&named)));
             self.unparented(&table, &held, 0)?;
             self.parented(&table, &named, 0)?;
             self.orphaned(name, &table, &held, 0, Some((&named, 0)))?;
@@ -6601,6 +6721,7 @@ impl Writer {
             4,
             self.held.header.encoding,
         );
+        self.tells_peek(Did::Insert, table, (rowid, rowid), (None, Some(named)));
         self.parented(table, named, rowid)?;
         self.index_row(kept, table, named, &keyed_as(rowid))?;
         insert(&mut self.held.pages, root, rowid, &record)?;
@@ -7858,11 +7979,20 @@ impl Writer {
             if fires && !self.fire(&before, &[], &row)? {
                 continue;
             }
+            // `sqlite3GenerateRowDelete` of
+            // `research/sqlite/src/delete.c:625` reads the row again
+            // after the triggers before it have run, so a trigger whose
+            // body took the row away leaves this statement nothing to
+            // take.
+            if fires && !crate::tree::holds(&self.held.pages, root, key)? {
+                continue;
+            }
             // `D.2` of `src/fkey.c`: a row that rows of another table
             // point at is refused, or those rows are written, by what
             // the key says happens.
             self.unparented(&table, &values, key)?;
             self.orphaned(&name, &table, &values, key, None)?;
+            self.tells_peek(Did::Delete, &table, (key, key), (Some(&values), None));
             self.unindex_row(&kept, &table, &values, &keyed_as(key))?;
             crate::tree::remove(&mut self.held.pages, root, key)?;
             self.tells_write(Did::Delete, &table, key);
@@ -8058,14 +8188,16 @@ impl Writer {
             // row holds no value for that column.
             let mut named;
             (key, named) = Self::rekeying(&mut values, alias, key)?;
+            let encoding = self.held.header.encoding;
             if fires {
-                let row = Fired {
-                    table: &table,
-                    old: Some((&held, rowid)),
-                    new: Some((&named, key)),
-                    encoding: self.held.header.encoding,
-                };
-                if !self.fire(&before, &columns, &row)? {
+                let row = changing(&table, (&held, rowid), (&named, key), encoding);
+                if !self.fire(&before, &columns, &row)?
+                    // `sqlite3Update` reads the row again after the
+                    // triggers before it have run, so a trigger whose
+                    // body took the row away leaves this statement
+                    // nothing to write.
+                    || !crate::tree::holds(&self.held.pages, root, rowid)?
+                {
                     continue;
                 }
             }
@@ -8073,12 +8205,7 @@ impl Writer {
                 continue;
             }
             Self::refilled(&named, &mut values, alias);
-            let row = Fired {
-                table: &table,
-                old: Some((&held, rowid)),
-                new: Some((&named, key)),
-                encoding: self.held.header.encoding,
-            };
+            let row = changing(&table, (&held, rowid), (&named, key), encoding);
             // A row that keeps the key it had shares it with nothing.
             if key != rowid && !self.keyed(root, &kept, &table, alias, key, statement.conflict)? {
                 continue;
@@ -8107,6 +8234,12 @@ impl Writer {
             // `sqlite3Update` removes the entries of the row, removes
             // the row itself where the key changes, and then writes
             // the new entries before the new row.
+            self.tells_peek(
+                Did::Update,
+                &table,
+                (rowid, key),
+                (Some(&held), Some(&named)),
+            );
             self.unindex_row(&kept, &table, &held, &keyed_as(rowid))?;
             let moved = key != rowid;
             if moved {
@@ -8229,6 +8362,7 @@ impl Writer {
         // `sqlite3GenerateRowDelete` of
         // `research/sqlite/src/delete.c:625` does under `OE_Replace` as
         // it does for a `DELETE`.
+        self.tells_peek(Did::Delete, table, (rowid, rowid), (Some(&values), None));
         self.unparented(table, &values, rowid)?;
         self.orphaned(&table.name, table, &values, rowid, None)?;
         self.unindex_row(kept, table, &values, &keyed_as(rowid))?;

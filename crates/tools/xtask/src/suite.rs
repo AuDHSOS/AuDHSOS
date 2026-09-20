@@ -20,7 +20,7 @@
 
 use std::cell::RefCell;
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -619,17 +619,6 @@ struct Prepared {
     stamp: u64,
 }
 
-/// The two hooks one connection was told.
-#[derive(Clone, Copy, Default)]
-struct Hooked {
-    /// Whether `sqlite3_commit_hook` named a script.
-    commits: bool,
-    /// Whether `sqlite3_rollback_hook` named a script.
-    rolls: bool,
-    /// Whether `sqlite3_update_hook` named a script.
-    writes: bool,
-}
-
 /// One run of one file: the interpreter on one side of the line and the
 /// engine on the other.
 struct Session {
@@ -663,9 +652,10 @@ struct Session {
     /// Whether the tester told each connection an authorizer, which a
     /// connection that is opened again holds none of.
     authorizers: BTreeMap<String, bool>,
-    /// Whether the tester told each connection a commit hook and a
-    /// rollback hook, which the writer is told for each request.
-    hooked: BTreeMap<String, Hooked>,
+    /// The hooks the tester told each connection, each by the name of the
+    /// request that named its script, which the writer is told for each
+    /// request.
+    hooked: BTreeMap<String, BTreeSet<String>>,
     /// The statements the tester prepared, by the name it holds each at.
     statements: BTreeMap<String, Prepared>,
     /// How many statements the tester has prepared, which names the next
@@ -836,7 +826,7 @@ impl Session {
             "clock" => self.ticks(first),
             // `sqlite3_set_authorizer`, `sqlite3_commit_hook`,
             // `sqlite3_rollback_hook` and `sqlite3_update_hook`.
-            "authorizer" | "commit_hook" | "rollback_hook" | "update_hook" => {
+            "authorizer" | "commit_hook" | "rollback_hook" | "update_hook" | "preupdate_hook" => {
                 self.hooks(verb, first, second);
                 Ok(Vec::new())
             }
@@ -1618,10 +1608,10 @@ impl Session {
             return;
         }
         let held = self.hooked.entry(connection.to_owned()).or_default();
-        match verb {
-            "commit_hook" => held.commits = !name.is_empty(),
-            "rollback_hook" => held.rolls = !name.is_empty(),
-            _ => held.writes = !name.is_empty(),
+        if name.is_empty() {
+            held.remove(verb);
+        } else {
+            held.insert(verb.to_owned());
         }
     }
 
@@ -1666,7 +1656,7 @@ impl Session {
         let collating = self.collations.get(name).copied().unwrap_or_default();
         let defines = self.defines(name);
         let asks = self.authorizers.contains_key(name);
-        let hooked = self.hooked.get(name).copied().unwrap_or_default();
+        let hooked = self.hooked.get(name).cloned().unwrap_or_default();
         let writer = self
             .held
             .get_mut(&path)
@@ -1683,20 +1673,25 @@ impl Session {
         } else {
             writer.asks_nothing();
         }
-        if hooked.commits {
+        if hooked.contains("commit_hook") {
             writer.commits(committing);
         } else {
             writer.commits_nothing();
         }
-        if hooked.rolls {
+        if hooked.contains("rollback_hook") {
             writer.rolls_back(rolling);
         } else {
             writer.rolls_back_nothing();
         }
-        if hooked.writes {
+        if hooked.contains("update_hook") {
             writer.writes_rows(writing);
         } else {
             writer.writes_nothing();
+        }
+        if hooked.contains("preupdate_hook") {
+            writer.peeks(peeking);
+        } else {
+            writer.peeks_nothing();
         }
         WHO.with(|who| who.borrow_mut().clone_from(&name.to_owned()));
         NULLED.with(|text| text.borrow_mut().clone_from(&null));
@@ -2020,6 +2015,46 @@ fn writing(wrote: &db_sqlite::change::Wrote<'_>) {
             wrote.rowid.to_string(),
         ];
         if write_call(&mut line.writer, "update_hook", &values).is_ok() {
+            drop(returned(&mut line.reader));
+        }
+    });
+}
+
+/// Tells the preupdate hook the tester named of one row a statement is
+/// about to write, which is one `CALL` onto the line and the `RET` that
+/// answers it.
+///
+/// The call carries the row itself, so the tester answers
+/// `sqlite3_preupdate_old`, `sqlite3_preupdate_new`,
+/// `sqlite3_preupdate_count` and `sqlite3_preupdate_depth` out of what it
+/// was handed rather than asking the engine again, which the line has no
+/// path for. A row of n columns costs O(n) bytes on the line.
+fn peeking(peeked: &db_sqlite::change::Peeked<'_>) {
+    let text = |bytes: &[u8]| String::from_utf8_lossy(bytes).into_owned();
+    let mut values = vec![
+        WHO.with(|who| who.borrow().clone()),
+        text(peeked.did.word()),
+        text(peeked.schema),
+        text(peeked.table),
+        peeked.was.to_string(),
+        peeked.key.to_string(),
+        peeked.depth.to_string(),
+    ];
+    for row in [peeked.old, peeked.new] {
+        match row {
+            None => values.push(String::from("-1")),
+            Some(row) => {
+                values.push(row.len().to_string());
+                values.extend(row.iter().map(|value| listed(value, "")));
+            }
+        }
+    }
+    LINE.with(|line| {
+        let mut held = line.borrow_mut();
+        let Some(line) = held.as_mut() else {
+            return;
+        };
+        if write_call(&mut line.writer, "preupdate", &values).is_ok() {
             drop(returned(&mut line.reader));
         }
     });

@@ -91,6 +91,7 @@ array set ::nulls {}
 # The script each callback of each connection names, by connection name
 # and method name.
 array set ::hooks {}
+array set ::peeked {}
 
 # How many transactions of `db transaction` each connection has open,
 # by connection name.
@@ -152,6 +153,33 @@ proc harness_call {kind vals} {
   # `sqlite3_commit_hook` and `sqlite3_rollback_hook` name one script
   # per connection, which the first value names. A script that raises
   # answers nought, which lets the commit stand.
+  # `sqlite3_preupdate_hook` names one script per connection, and the
+  # call carries the row, so the script's readings of it are answered
+  # here rather than over the line.
+  if {$kind eq "preupdate"} {
+    set who [lindex $vals 0]
+    if {![info exists ::hooks($who,preupdate)]} { return [list 0] }
+    catch { unset ::peeked }
+    set ::peeked(depth) [lindex $vals 6]
+    set count 0
+    set at 7
+    foreach which {old new} {
+      set n [lindex $vals $at]
+      if {$n >= 0} {
+        set ::peeked($which) [lrange $vals [expr {$at + 1}] [expr {$at + $n}]]
+        if {$n > $count} { set count $n }
+        set at [expr {$at + $n + 1}]
+      } else {
+        set at [expr {$at + 1}]
+      }
+    }
+    set ::peeked(count) $count
+    set cmd $::hooks($who,preupdate)
+    foreach v [lrange $vals 1 5] { lappend cmd $v }
+    catch { uplevel #0 $cmd }
+    catch { unset ::peeked }
+    return [list 0]
+  }
   if {$kind eq "update_hook"} {
     set who [lindex $vals 0]
     if {![info exists ::hooks($who,update_hook)]} { return [list 0] }
@@ -408,6 +436,7 @@ set ::method_args {
   nullvalue         {{0 1} NULLVALUE}
   onecolumn         {1 SQL}
   profile           {{0 1} ?CALLBACK?}
+  preupdate         {{1 2} {SUB-COMMAND ?ARGS?}}
   progress          {{0 2} {N CALLBACK}}
   rekey             {1 KEY}
   rollback_hook     {{0 1} ?CALLBACK?}
@@ -782,8 +811,43 @@ proc sqlite3 {args} {
         }
         return {}
       }
+      preupdate {
+        # `$db preupdate hook ?SCRIPT?`, and the four readings a script
+        # the engine calls makes of the row it was handed.
+        set sub [one_word [lindex $args 0] {count depth hook new old} sub-command]
+        if {$sub eq "hook"} {
+          if {[llength $args] < 2} {
+            if {[info exists ::hooks(%N%,preupdate)]} {
+              return $::hooks(%N%,preupdate)
+            }
+            return {}
+          }
+          set held [lindex $args 1]
+          if {$held eq ""} {
+            catch { unset ::hooks(%N%,preupdate) }
+          } else {
+            set ::hooks(%N%,preupdate) $held
+          }
+          harness_send preupdate_hook %N% $held
+          return {}
+        }
+        if {![info exists ::peeked(count)]} { error "no row is being written" }
+        if {$sub eq "count"} { return $::peeked(count) }
+        if {$sub eq "depth"} { return $::peeked(depth) }
+        set at [lindex $args 1]
+        if {![string is integer -strict $at]} {
+          error "expected integer but got \"$at\""
+        }
+        if {![info exists ::peeked($sub)]} {
+          error "no such preupdate value: $at"
+        }
+        if {$at < 0 || $at >= $::peeked(count)} {
+          error "no such preupdate value: $at"
+        }
+        return [lindex $::peeked($sub) $at]
+      }
       copy - collation_needed - enable_load_extension - interrupt -
-      preupdate - rekey - timeout - version - config - deserialize -
+      rekey - timeout - version - config - deserialize -
       serialize - backup - restore {
         return {}
       }

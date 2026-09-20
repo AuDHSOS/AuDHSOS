@@ -30,6 +30,16 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` tells the function `sqlite3_preupdate_hook` told a
+  connection before it writes a row: the call carries the action, the
+  database, the table, the key the row stands under, the key it takes, how
+  many triggers deep the statement stands, the values the row holds and
+  the values it will hold, and the row a `REPLACE` writes over is told as
+  a row taken away. A row the triggers before it took away is read again,
+  so the statement tells the function once and writes nothing over a row
+  that is gone. D-343 records it. Catalog 6.6.232. `hook.test` goes from
+  57 cases passing to 97 and `hook2.test` from 6 to 20.
+
 - `db-sqlite` takes the three hooks of a connection: `sqlite3_commit_hook`
   is asked where a transaction that wrote a page ends and a true answer
   refuses the statement `constraint failed` with

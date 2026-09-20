@@ -911,6 +911,9 @@ Size: L.
     that wrote a page asks, the rollback hook a transaction that goes
     back tells, and the update hook every row of a table keeping a key
     of its own tells. Built, which D-342 records.
+91. The preupdate hook a connection is told, which every row a statement
+    is about to write tells with the two keys, the depth, the values the
+    row holds and the values it will hold. Built, which D-343 records.
 
 ### Done when
 
@@ -920,8 +923,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 108 100 cases in 798 files, 95 355
-pass, 3310 answer differently, and 9435 name something the engine
+under the `tclsh` of the machine. Of 108 077 cases in 798 files, 95 387
+pass, 3255 answer differently, and 9435 name something the engine
 refuses or a command that needs the C library's internals. The files
 that answer for tens of thousands of rows reach the three-minute
 deadline and are counted with the cases they ran by then. One run over
