@@ -455,7 +455,8 @@ Size: S.
 33. `::sqlite_sort_count`, which `cksort` reads, is answered from the
     sorts the last statement counted, which D-372 records.
 34. A statement opening with `EXPLAIN QUERY PLAN` is answered by the
-    reader and not by the writer, which D-375 records.
+    reader where the reader answers the statement under it, and by the
+    writer otherwise, which D-375 records.
 
 ### Produces
 

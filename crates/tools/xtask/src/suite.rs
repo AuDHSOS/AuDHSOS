@@ -3196,17 +3196,25 @@ fn pragma_columns(sql: &str) -> Vec<String> {
 /// answers one out of what it holds and a file with no table holds no
 /// encoding.
 fn reads(sql: &str) -> bool {
-    let words = words(sql);
+    reading(&words(sql))
+}
+
+/// The same over the words of a statement, which `EXPLAIN QUERY PLAN`
+/// is read again without.
+fn reading(words: &[String]) -> bool {
     let first = words.first().map_or("", String::as_str);
     if first.eq_ignore_ascii_case("select") || first.eq_ignore_ascii_case("values") {
         return true;
     }
     // `EXPLAIN QUERY PLAN` answers the plan of the statement under it
-    // and writes nothing, so the reader answers it.
+    // and writes nothing, so the reader answers it where the reader
+    // answers that statement.
     if first.eq_ignore_ascii_case("explain") {
         let second = words.get(1).map_or("", String::as_str);
         let third = words.get(2).map_or("", String::as_str);
-        return second.eq_ignore_ascii_case("query") && third.eq_ignore_ascii_case("plan");
+        return second.eq_ignore_ascii_case("query")
+            && third.eq_ignore_ascii_case("plan")
+            && reading(words.get(3..).unwrap_or_default());
     }
     // A `WITH` clause stands in front of a statement that writes as
     // well, and the statement after it is what says which connection
