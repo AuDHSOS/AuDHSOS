@@ -27,6 +27,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` answers `Writer::inside`, the file as the connection that
+  writes it reads it, and the suite harness reads a statement of that
+  connection through it, so a connection in write-ahead logging reads
+  what its own open transaction wrote. D-385 records it. Catalog
+  6.6.266. `wal.test` goes from 207 cases passing to 212.
+
 - The suite harness reads a database of the connection's own for a path
   of no bytes and for `:memory:`, fresh at every opening and read by no
   other connection. D-384 records it. `temptable2.test` goes from 136

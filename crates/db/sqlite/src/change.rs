@@ -1076,6 +1076,20 @@ impl Writer {
         written_image(&self.held)
     }
 
+    /// The file as the connection that writes it reads it: every page
+    /// it has written, which a log has taken the committed ones of and
+    /// which holds the ones of an open transaction besides.
+    ///
+    /// `sqlite3PagerGet` of `research/sqlite/src/pager.c` answers the
+    /// page of the cache, so the connection that wrote a page reads
+    /// what it wrote whether the log has taken it or not.
+    ///
+    /// Building the image costs O(n) in the pages.
+    #[must_use]
+    pub fn inside(&self) -> Vec<u8> {
+        self.held.pages.written(&self.held.header)
+    }
+
     /// The file as the transaction of this connection found it, which is
     /// what a connection that did not begin that transaction reads:
     /// `sqlite3PagerSharedLock` answers the pages of the file and a

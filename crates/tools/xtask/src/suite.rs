@@ -2580,14 +2580,21 @@ fn answered_rows(
 ) -> Result<db_sqlite::db::Answer, String> {
     {
         let beside = attached_images(writer);
+        // A connection in write-ahead logging holds its newest pages in
+        // the log, so a connection that did not write them follows the
+        // log beside the file; the connection that wrote them reads its
+        // own pages, which hold what a log has taken and what an open
+        // transaction has written besides.
         let bytes = if outside {
             writer.outside()
         } else {
-            writer.written()
+            writer.inside()
         };
-        // A connection in write-ahead logging holds its newest pages in
-        // the log, so a reader follows the log beside the file.
-        let log = writer.log().map(db_sqlite::wal::Wal::open);
+        let log = if outside {
+            writer.log().map(db_sqlite::wal::Wal::open)
+        } else {
+            None
+        };
         let opened = match &log {
             Some(Ok(log)) => Database::open_log_collating(&bytes, log, collating),
             Some(Err(error)) => return Err(format!("{error}")),

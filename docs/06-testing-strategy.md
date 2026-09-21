@@ -6816,3 +6816,13 @@ Document 16 step Q8.
   one of the temp schema.
 - A trigger of `main` whose body names a table two databases hold.
 - An `INSERT`, an `UPDATE`, a `DELETE` and a `SELECT` in one body.
+
+### 6.6.266 The pages a connection reads back (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A connection in write-ahead logging reading a row its own commit put
+  in the log.
+- The same connection reading inside a transaction that took the row
+  out, and after the rollback.
+- The file the pragma left, which holds neither the table nor the row.

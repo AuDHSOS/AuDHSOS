@@ -424,3 +424,41 @@ fn the_file_a_transaction_found_is_what_a_connection_outside_it_reads() {
     logged.run(b"CREATE TABLE t(a)").unwrap();
     assert_eq!(logged.outside(), logged.written());
 }
+
+#[test]
+fn the_pages_a_connection_wrote_are_what_it_reads_back() {
+    use crate::change::Writer;
+    use crate::header::Encoding;
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"PRAGMA journal_mode = wal".as_slice(),
+        b"CREATE TABLE t(a)",
+        b"INSERT INTO t VALUES(1)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    // The commits put the table and the row in the log, so the file the
+    // pragma left holds neither and the pages the connection wrote hold
+    // both.
+    let rows = |bytes: &[u8]| {
+        crate::db::Database::open(bytes)
+            .unwrap()
+            .query(b"SELECT a FROM t")
+            .unwrap()
+            .rows
+    };
+    assert_eq!(rows(&writer.inside()), [alloc::vec![Value::Int(1)]]);
+    assert_eq!(
+        crate::db::Database::open(&writer.written())
+            .unwrap()
+            .query(b"SELECT a FROM t"),
+        Err(crate::db::Error::NoTable(b"t".to_vec()))
+    );
+    writer.run(b"BEGIN").unwrap();
+    writer.run(b"DELETE FROM t").unwrap();
+    // The transaction has written no frame, so the connection that
+    // began it reads no row where the file alone holds the table.
+    assert!(rows(&writer.inside()).is_empty());
+    writer.run(b"ROLLBACK").unwrap();
+    assert_eq!(rows(&writer.inside()), [alloc::vec![Value::Int(1)]]);
+}

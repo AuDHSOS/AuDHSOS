@@ -470,6 +470,9 @@ Size: S.
 38. A connection opened over a path of no bytes or `:memory:` reads a
     database of its own that no other connection reads and that is
     fresh at every opening, which D-384 records.
+39. A statement of the connection that writes a file is read through the
+    pages that connection wrote, and one of another connection follows
+    the log beside the file, which D-385 records.
 
 ### Produces
 
