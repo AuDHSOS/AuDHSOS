@@ -12,8 +12,8 @@
 //!
 //! The hash key and the accumulator are held bit-reversed, where bit `j`
 //! is the coefficient of `X^j`, because that is the order the shifts of a
-//! carry-less multiplication assume. [`GHash::new`] reverses the key,
-//! [`GHash::block`] reverses each input block, and [`GHash::finish`]
+//! carry-less multiplication assume. [`GHash::new`] reverses the key, the
+//! private `block` reverses each input block, and [`GHash::finish`]
 //! reverses the result back into the order of the standard.
 //!
 //! One product costs three 64-bit carry-less multiplications (Karatsuba)
