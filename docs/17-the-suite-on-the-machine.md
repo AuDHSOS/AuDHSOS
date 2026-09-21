@@ -457,6 +457,9 @@ Size: S.
 34. A statement opening with `EXPLAIN QUERY PLAN` is answered by the
     reader where the reader answers the statement under it, and by the
     writer otherwise, which D-375 records.
+35. `::sqlite_search_count`, which `count` reads, is answered from the
+    descents and the steps the last statement took, which D-378
+    records.
 
 ### Produces
 

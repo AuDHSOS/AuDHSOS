@@ -169,3 +169,16 @@ fn the_order_by_of_a_compound_statement_counts_one_sort() {
         (103, 1)
     );
 }
+
+/// What `sql` counted as searches.
+fn searched(sql: &[u8]) -> i64 {
+    counted(sql).searched
+}
+
+#[test]
+fn what_a_walk_counts_as_a_search() {
+    // A walk of a whole table counts one per row after the first.
+    assert_eq!(searched(b"SELECT * FROM m"), 4);
+    // A walk held to one rowid descends to it and counts nothing.
+    assert_eq!(searched(b"SELECT * FROM m WHERE rowid=2"), 0);
+}

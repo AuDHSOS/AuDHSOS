@@ -649,6 +649,10 @@ struct Session {
     /// connection, sorted, which `sqlite3_sort_count` counts and
     /// `::sqlite_sort_count` answers.
     sorted: u64,
+    /// The descents and the steps the last statement of the run took,
+    /// which `sqlite3_search_count` counts and `::sqlite_search_count`
+    /// answers.
+    searched: i64,
     /// What each connection was told for the pragmas it keeps a value
     /// for, which belong to a connection and not to the file.
     pragmas: BTreeMap<String, Kept>,
@@ -700,6 +704,7 @@ impl Session {
             owners: BTreeMap::new(),
             stepped: BTreeMap::new(),
             sorted: 0,
+            searched: 0,
             pragmas: BTreeMap::new(),
             collations: BTreeMap::new(),
             functions: BTreeMap::new(),
@@ -834,6 +839,8 @@ impl Session {
             "status" => self.status(first, second),
             // `sqlite3_sort_count` of `vdbe.c:79`.
             "sorts" => Ok(alloc_one(&self.sorted.to_string())),
+            // `sqlite3_search_count` of `vdbe.c:56`.
+            "searches" => Ok(alloc_one(&self.searched.to_string())),
             "clock" => self.ticks(first),
             // `sqlite3_set_authorizer`, `sqlite3_commit_hook`,
             // `sqlite3_rollback_hook` and `sqlite3_update_hook`.
@@ -1893,6 +1900,7 @@ impl Session {
         }
         let stepped = STEPPED.with(core::cell::Cell::take);
         self.sorted = stepped.sorts;
+        self.searched = stepped.searched;
         self.stepped.insert(name.to_owned(), stepped);
         self.counters.insert(name.to_owned(), counted);
         self.pragmas.insert(name.to_owned(), kept);
@@ -2051,7 +2059,7 @@ thread_local! {
     /// What the walks and the sorts of the last statement counted, which
     /// `db status` answers, because `run_one` carries no connection.
     static STEPPED: core::cell::Cell<db_sqlite::db::Stepped> =
-        const { core::cell::Cell::new(db_sqlite::db::Stepped { steps: 0, sorts: 0 }) };
+        const { core::cell::Cell::new(db_sqlite::db::Stepped { steps: 0, sorts: 0, searched: 0 }) };
 
     /// The line of the run on this thread, which `asked` reaches
     /// because `Comparing` is a bare function and carries nothing.

@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` counts the descents and the steps of the walks of a
+  statement, which `sqlite3_search_count` counts and
+  `::sqlite_search_count` answers. D-378 records it. Catalog 6.6.262.
+  `where.test` goes from 161 cases passing to 197 and `intpkey.test`
+  from 79 to 88.
+
 - `db-sqlite` answers `EXPLAIN QUERY PLAN`, which names the walk of every
   side of the statement under it as `sqlite3WhereExplainOneScan` writes
   it: `SCAN`, `SEARCH` with the columns the key and the bounds name, and

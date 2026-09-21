@@ -6782,3 +6782,13 @@ Document 16 step Q8.
 - A walk held to a key and a walk of the whole index, each answering the
   rows the table holds.
 - `EXPLAIN QUERY PLAN` saying `USING COVERING INDEX` for such a walk.
+
+### 6.6.262 The searches a statement counts (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A walk of a whole table, one held from a rowid up, and one held to
+  one rowid.
+- A walk of an index, with and without the row of the table each entry
+  names.
+- A sort, which counts one search back.

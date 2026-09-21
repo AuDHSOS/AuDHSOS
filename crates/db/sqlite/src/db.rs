@@ -1851,6 +1851,12 @@ pub struct Stepped {
     pub steps: u64,
     /// How many times the rows were sorted, which `OP_Sort` counts.
     pub sorts: u64,
+    /// The descents and the steps the walks took, which
+    /// `sqlite3_search_count` of `research/sqlite/src/vdbe.c:56` counts:
+    /// one per `OP_SeekGE` and its three fellows, one per `OP_Next` or
+    /// `OP_Prev` that moved, one per table row an index entry named,
+    /// and one fewer per `OP_Sort`.
+    pub searched: i64,
 }
 
 impl<'a> Database<'a> {
@@ -2972,10 +2978,19 @@ impl<'a> Database<'a> {
         self.stepped.set(held);
     }
 
-    /// Counts one more sort.
+    /// Counts one more sort, which counts one search back: `OP_Sort`
+    /// takes back the step `OP_Rewind` counts after it.
     fn sort(&self) {
         let mut held = self.stepped.get();
         held.sorts = held.sorts.saturating_add(1);
+        held.searched = held.searched.saturating_sub(1);
+        self.stepped.set(held);
+    }
+
+    /// Counts `searched` more descents and steps of a walk.
+    fn search(&self, searched: i64) {
+        let mut held = self.stepped.get();
+        held.searched = held.searched.saturating_add(searched);
         self.stepped.set(held);
     }
 
@@ -4141,6 +4156,7 @@ impl<'a> Database<'a> {
             bounds,
             from_high,
             covering,
+            searched: 0,
             encoding: self.encoding,
             collation: self.collation(),
             payload: Vec::new(),
@@ -4161,6 +4177,11 @@ impl<'a> Database<'a> {
             image: self.imaged(stored.place),
             stored,
             walk: self.walk(stored, range),
+            // A walk held to one rowid is `OP_SeekRowid`, which counts
+            // no search, and one held from a rowid up is `OP_SeekGE`,
+            // which counts one.
+            seeking: range.0.is_some() && range.0 != range.1,
+            taken: 0,
             encoding: self.encoding,
             collation: self.collation(),
             payload: Vec::new(),
@@ -4207,7 +4228,8 @@ impl<'a> Database<'a> {
         let deeper = at.saturating_add(1);
         let mut any = false;
         let mut ordinal = 0i64;
-        for step in self.feed(side, cursor) {
+        let mut feed = self.feed(side, cursor);
+        for step in feed.by_ref() {
             let (rowid, mut values) = step?;
             self.nulled(side, &mut values);
             let at_row = ordinal;
@@ -4247,6 +4269,7 @@ impl<'a> Database<'a> {
         if whole_walk(side) {
             self.step(u64::try_from(ordinal.saturating_sub(1)).unwrap_or(0));
         }
+        self.search(feed.searched());
         if spare.is_none() && !any && matches!(side.kind, JoinKind::Left | JoinKind::Full) {
             // A `LEFT JOIN` answers the row on the left once with
             // nothing on the right where nothing on the right matched.
@@ -6191,6 +6214,8 @@ struct Sought<'i, 'f> {
     /// Where each place of the index stands in the table, where the row
     /// is built from the entry and the table's tree is not descended.
     covering: Option<Vec<Option<usize>>>,
+    /// The descents and the steps the walk has taken.
+    searched: i64,
     /// Where the rowid stands in an entry.
     rowid_at: usize,
     /// What encoding the file keeps its text in.
@@ -6206,6 +6231,10 @@ impl<'i> Sought<'i, '_> {
     /// longer begin with the key.
     fn read(&mut self) -> Option<Read> {
         let entry = self.walk.next()?;
+        // The first entry the walk answers is where the descent stood,
+        // which is `OP_SeekGE`; each one after it is a step, which is
+        // `OP_Next`. Both count a search.
+        self.searched = self.searched.saturating_add(1);
         match self.take(entry) {
             Ok(Some(row)) => Some(Ok(row)),
             // Every entry after this one sorts after it, so the entries
@@ -6284,7 +6313,9 @@ impl<'i> Sought<'i, '_> {
         }
         let rowid = rowid_of(&self.image, &entry, self.rowid_at, &mut self.payload)?;
         // The row the entry names, which the table's tree is descended
-        // to: O(log n) for each entry the index answers.
+        // to: O(log n) for each entry the index answers, and one search
+        // for each, which is `sqlite3VdbeFinishMoveto`.
+        self.searched = self.searched.saturating_add(1);
         let row = self
             .image
             .rows_between(self.stored.root, Some(rowid), Some(rowid))
@@ -6312,6 +6343,12 @@ struct Tree<'i, 'f> {
     stored: &'f Stored,
     /// Where the walk stands.
     walk: Walk<'i>,
+    /// Whether the walk began at a rowid it descended to, which
+    /// `OP_SeekGE` counts and `OP_Rewind` does not.
+    seeking: bool,
+    /// How many steps the walk has taken, which is what it counts a
+    /// search for after the first.
+    taken: u64,
     /// What encoding the file keeps its text in.
     encoding: Encoding,
     /// What a comparison uses where nothing writes a collation.
@@ -6321,6 +6358,14 @@ struct Tree<'i, 'f> {
 }
 
 impl<'i> Tree<'i, '_> {
+    /// The descents and the steps the walk has taken, which is one for
+    /// the descent it began at and one per step after the first.
+    fn searched(&self) -> i64 {
+        let stepped = i64::try_from(self.taken.saturating_sub(1)).unwrap_or(i64::MAX);
+        let descended = i64::from(self.seeking);
+        stepped.saturating_add(descended)
+    }
+
     /// One step of the walk as the values of a row.
     fn read(
         &mut self,
@@ -6339,6 +6384,18 @@ impl<'i> Tree<'i, '_> {
     }
 }
 
+impl Feed<'_, '_> {
+    /// The descents and the steps every walk it holds has taken.
+    fn searched(&self) -> i64 {
+        match self {
+            Feed::Tree(tree) => tree.searched(),
+            Feed::Rows(_) => 0,
+            Feed::Keyed(sought) => sought.searched,
+            Feed::Union(union) => union.feeds.iter().map(Feed::searched).sum(),
+        }
+    }
+}
+
 impl Iterator for Feed<'_, '_> {
     type Item = Read;
 
@@ -6346,6 +6403,7 @@ impl Iterator for Feed<'_, '_> {
         match self {
             Feed::Tree(tree) => {
                 let step = tree.walk.next()?;
+                tree.taken = tree.taken.saturating_add(1);
                 Some(tree.read(step))
             }
             Feed::Rows(rows) => rows.next().map(|values| Ok((None, values.clone()))),

@@ -979,6 +979,8 @@ Size: L.
      names. Built, which D-376 records.
 119. The row read out of the entry of a covering index. Built, which
      D-377 records.
+120. The descents and the steps the walks of a statement took.
+     Built, which D-378 records.
 
 ### Done when
 

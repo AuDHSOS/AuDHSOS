@@ -1926,6 +1926,16 @@ proc harness_sort_count {args} {
 }
 trace add variable ::sqlite_sort_count read harness_sort_count
 
+# sqlite3_search_count of vdbe.c:56: the descents and the steps the
+# last statement took, which a test reads to see how much of a table a
+# walk read. The harness holds the count, so reading the variable asks
+# for it.
+set ::sqlite_search_count 0
+proc harness_search_count {args} {
+  set ::sqlite_search_count [lindex [harness_send searches] 0]
+}
+trace add variable ::sqlite_search_count read harness_search_count
+
 
 # save_prng_state, restore_prng_state: the state random and randomblob
 # draw from next, which a test holds to draw the same words again.
