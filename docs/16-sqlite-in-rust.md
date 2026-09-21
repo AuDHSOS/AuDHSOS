@@ -972,6 +972,8 @@ Size: L.
      D-372 records.
 115. The walk of an index held between bounds read from its last
      entry. Built, which D-373 records.
+116. The collation a term of an `ORDER BY` compares under. Built,
+     which D-374 records.
 
 ### Done when
 

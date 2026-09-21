@@ -68,6 +68,30 @@ fn an_order_by_the_walk_of_an_index_read_backwards_answers_needs_no_sort() {
 }
 
 #[test]
+fn what_collation_a_term_of_an_order_by_compares_under() {
+    // `q` compares under `NOCASE` and `mq` holds it under that
+    // collation, so a term naming it answers the walk.
+    assert_eq!(pair(b"SELECT * FROM m ORDER BY q COLLATE nocase"), (4, 0));
+    assert_eq!(
+        pair(b"SELECT * FROM m ORDER BY q COLLATE NOCASE DESC"),
+        (4, 0)
+    );
+    // A collation the index does not hold, one over the rowid, and one
+    // the connection does not define.
+    assert_eq!(pair(b"SELECT * FROM m ORDER BY q COLLATE rtrim"), (4, 1));
+    assert_eq!(
+        pair(b"SELECT * FROM m ORDER BY rowid COLLATE binary"),
+        (4, 1)
+    );
+    assert!(
+        Database::open(super::INDEXED)
+            .unwrap()
+            .query(b"SELECT * FROM m ORDER BY q COLLATE nope")
+            .is_err()
+    );
+}
+
+#[test]
 fn what_a_term_over_the_rowid_after_the_columns_answers() {
     // The rowid stands after every column of the index and runs from
     // the smallest up.

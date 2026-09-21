@@ -6743,3 +6743,14 @@ Document 16 step Q8.
   from its last entry.
 - An index held forwards and one held backwards, each read either way.
 - A tree of one leaf and one that carries interior pages.
+
+### 6.6.258 The collation a term of an `ORDER BY` compares under (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A `COLLATE` naming the collation the index place holds, and one naming
+  another.
+- A term carrying no `COLLATE` over a column whose own collation the
+  index place holds.
+- A `COLLATE` over the rowid, and one naming a collation the connection
+  does not define.

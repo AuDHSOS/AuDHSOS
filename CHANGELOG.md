@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` reads the collation a term of an `ORDER BY` compares under
+  from the outermost `COLLATE` written on it, and from the column's own
+  collation where the term carries none, so the walk of an index answers
+  the term where the place holds that collation. D-374 records it.
+  Catalog 6.6.258. `collate4.test` goes from 73 cases passing to 89.
+
 - `db-sqlite` reads a walk of an index held between bounds from its last
   entry where that answers the `ORDER BY`, descending to that entry
   rather than reading the ones after it. D-373 records it. Catalog

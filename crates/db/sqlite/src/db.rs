@@ -3315,7 +3315,16 @@ impl<'a> Database<'a> {
         let walked = overs.is_empty()
             && calls.is_empty()
             && select.group.is_empty()
-            && in_order(arena, &select, sql, &mut sides, self.schema_format());
+            && in_order(
+                arena,
+                &select,
+                sql,
+                &mut sides,
+                Settling {
+                    format: self.schema_format(),
+                    collating: self.collating,
+                },
+            );
         let mut rows: Vec<Sorted> = Vec::new();
         if !overs.is_empty() {
             // A window function reads the rows a statement has already
@@ -4932,6 +4941,26 @@ const fn whole_walk(side: &Side<'_>) -> bool {
         }
 }
 
+/// What the file and the connection settle for an `ORDER BY`.
+#[derive(Clone, Copy)]
+struct Settling {
+    /// The schema format of the file, which decides whether a place of
+    /// an index written `DESC` is held backwards.
+    format: u32,
+    /// The collations the connection defines.
+    collating: &'static [crate::value::Collating],
+}
+
+/// One term of an `ORDER BY` over the one side.
+struct Termed {
+    /// Which column of the table it names, and nothing for the rowid.
+    place: Option<usize>,
+    /// Whether it runs from the largest value down.
+    descending: bool,
+    /// What it compares its text under.
+    collation: Collation,
+}
+
 /// What the `ORDER BY` of a statement over one table asks of the walk.
 enum Ordering {
     /// The walk answers another order, so the rows are sorted.
@@ -4954,9 +4983,9 @@ fn in_order(
     select: &Select,
     sql: &[u8],
     sides: &mut [Side<'_>],
-    format: u32,
+    settling: Settling,
 ) -> bool {
-    let plan = match ordering(arena, select, sql, sides, format) {
+    let plan = match ordering(arena, select, sql, sides, settling) {
         Ordering::Sorted => return false,
         Ordering::Walked => None,
         Ordering::Index(plan) => Some(plan),
@@ -4975,7 +5004,7 @@ fn ordering(
     select: &Select,
     sql: &[u8],
     sides: &[Side<'_>],
-    format: u32,
+    settling: Settling,
 ) -> Ordering {
     let terms = arena.orders(select.order);
     let [side] = sides else {
@@ -4987,26 +5016,39 @@ fn ordering(
     if terms.is_empty() || stored.table.without_rowid {
         return Ordering::Sorted;
     }
-    let mut places: Vec<(Option<usize>, bool)> = Vec::new();
+    let mut places: Vec<Termed> = Vec::new();
     for term in terms {
         // A term whose nulls are put where the order does not put them
-        // asks about another order, and a `COLLATE` over the column is
-        // no column, which `reached` answers nothing for.
+        // asks about another order.
         if term.nulls != crate::ast::Nulls::Unspecified {
             return Ordering::Sorted;
         }
         let descending = term.order == crate::ast::Order::Descending;
-        match reached(arena, term.expr, sql, sides) {
-            Some((_, Reached::Key)) => places.push((None, descending)),
-            Some((_, Reached::Column(place))) => places.push((Some(place), descending)),
-            None => return Ordering::Sorted,
-        }
+        // A `COLLATE` names what the term compares under and leaves the
+        // column it is written on, which `sqlite3ExprSkipCollate` reads
+        // through.
+        let held = uncollated(arena, term.expr);
+        let Some((_, reached)) = reached(arena, held, sql, sides) else {
+            return Ordering::Sorted;
+        };
+        let place = match reached {
+            Reached::Key => None,
+            Reached::Column(place) => Some(place),
+        };
+        let Some(collation) = sorted_under(arena, term.expr, sql, settling, stored, place) else {
+            return Ordering::Sorted;
+        };
+        places.push(Termed {
+            place,
+            descending,
+            collation,
+        });
     }
     // A rowid stands once in the table, so no term after one decides
     // anything, and the table's own tree holds its rows from the
     // smallest rowid up.
-    if let Some((None, descending)) = places.first() {
-        return if !descending && matches!(side.plan, Plan::Rows(_, _)) {
+    if let Some(first) = places.first().filter(|term| term.place.is_none()) {
+        return if !first.descending && matches!(side.plan, Plan::Rows(_, _)) {
             Ordering::Walked
         } else {
             Ordering::Sorted
@@ -5015,18 +5057,18 @@ fn ordering(
     // An entry of an index ends with the rowid, held from the smallest
     // up, so a last term naming the rowid is answered by the walk that
     // answers the terms before it.
-    let mut tail = None;
-    if let Some((None, descending)) = places.last() {
-        tail = Some(*descending);
+    let tail = places
+        .last()
+        .filter(|term| term.place.is_none())
+        .map(|term| term.descending);
+    if tail.is_some() {
         places.pop();
     }
-    let Some(wanted) = places
-        .into_iter()
-        .map(|(place, descending)| place.map(|place| (place, descending)))
-        .collect::<Option<Vec<(usize, bool)>>>()
-    else {
+    if places.iter().any(|term| term.place.is_none()) {
         return Ordering::Sorted;
-    };
+    }
+    let wanted = places;
+    let format = settling.format;
     // A side already held to a key by an index answers its entries in
     // that index's order, so the key is kept where that order is the one
     // the terms name.
@@ -5063,6 +5105,39 @@ fn ordering(
     }
 }
 
+/// What one term of an `ORDER BY` compares its text under, which is the
+/// name the outermost `COLLATE` on it spells and the collation of the
+/// column it names where it carries none.
+///
+/// A name no collation answers leaves the order to a sort, because the
+/// statement refuses the name where it runs. A `COLLATE` over the rowid
+/// leaves it to a sort as well, because the rowid is a number and
+/// compares under no collation.
+fn sorted_under(
+    arena: &Arena,
+    id: ExprId,
+    sql: &[u8],
+    settling: Settling,
+    stored: &Stored,
+    place: Option<usize>,
+) -> Option<Collation> {
+    let Some(Node::Collate { name, .. }) = arena.node(id) else {
+        let Some(place) = place else {
+            // A rowid is a number, which every collation compares the
+            // same way.
+            return Some(Collation::Binary);
+        };
+        return stored
+            .table
+            .columns
+            .get(place)
+            .map(|column| column.collation);
+    };
+    place?;
+    let named = crate::schema::dequote(name.text(sql));
+    crate::value::collation_of(&named, settling.collating)
+}
+
 /// Whether the walk of the index whose tree begins at `root`, held to
 /// `held` many values of its key, answers its rows in the order the
 /// columns at `wanted` name.
@@ -5076,7 +5151,7 @@ fn suffixed(
     stored: &Stored,
     root: u32,
     held: usize,
-    wanted: &[(usize, bool)],
+    wanted: &[Termed],
     tail: Option<bool>,
     format: u32,
 ) -> Option<bool> {
@@ -5093,18 +5168,11 @@ fn suffixed(
     for matching in [true, false] {
         let mut at = held;
         let mut answers = true;
-        for (place, descending) in wanted {
-            if constant.contains(place) {
+        for term in wanted {
+            if term.place.is_some_and(|place| constant.contains(&place)) {
                 continue;
             }
-            if !holds_column(
-                stored,
-                &kept.index,
-                at,
-                (*place, *descending),
-                matching,
-                format,
-            ) {
+            if !holds_column(&kept.index, at, term, matching, format) {
                 answers = false;
                 break;
             }
@@ -5124,33 +5192,26 @@ fn suffixed(
     None
 }
 
-/// Whether the column of `index` at `at` holds the table column at
-/// `place` in the order a term over that column asks about.
+/// Whether the place of `index` at `at` holds the column a term names in
+/// the order that term asks about.
 ///
-/// A place over an expression holds a value no column names, and a
-/// place under another collation than the column compares under answers
-/// its entries in another order. `wanted` names the table column and
-/// the direction the term over it runs in; `matching` says whether the
-/// place is to run that way, which a walk read from the last entry to
-/// the first asks false for, because such a walk answers the order of
-/// a place that runs the other way.
+/// A place over an expression holds a value no column names, and a place
+/// under another collation than the term compares under answers its
+/// entries in another order. `matching` says whether the place is to run
+/// the way the term does, which a walk read from the last entry to the
+/// first asks false for, because such a walk answers the order of a
+/// place that runs the other way.
 fn holds_column(
-    stored: &Stored,
     index: &crate::schema::Index,
     at: usize,
-    wanted: (usize, bool),
+    wanted: &Termed,
     matching: bool,
     format: u32,
 ) -> bool {
-    let (place, descending) = wanted;
     index.columns.get(at).is_some_and(|held| {
-        held.place() == Some(place)
-            && (held_backwards(Some(held), format) == descending) == matching
-            && stored
-                .table
-                .columns
-                .get(place)
-                .is_some_and(|column| column.collation == held.collation)
+        held.place() == wanted.place
+            && (held_backwards(Some(held), format) == wanted.descending) == matching
+            && held.collation == wanted.collation
     })
 }
 
@@ -5162,12 +5223,7 @@ fn holds_column(
 /// entry begins with the key.
 ///
 /// Costs O(n*m) in the indexes and the columns named.
-fn walked(
-    stored: &Stored,
-    wanted: &[(usize, bool)],
-    tail: Option<bool>,
-    format: u32,
-) -> Option<Plan> {
+fn walked(stored: &Stored, wanted: &[Termed], tail: Option<bool>, format: u32) -> Option<Plan> {
     for kept in &stored.indexes {
         // A partial index answers fewer entries than the table has rows,
         // so it holds its entries in no order over the columns.
@@ -5190,7 +5246,7 @@ fn walked(
             let held = wanted
                 .iter()
                 .enumerate()
-                .all(|(at, want)| holds_column(stored, &kept.index, at, *want, matching, format));
+                .all(|(at, want)| holds_column(&kept.index, at, want, matching, format));
             if held {
                 return Some(Plan::Keyed {
                     root: kept.root,
