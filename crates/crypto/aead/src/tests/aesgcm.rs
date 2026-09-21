@@ -378,3 +378,121 @@ fn clearing_the_mode_overwrites_the_hash_key() {
     mode.clear();
     assert_eq!(mode.hash_key(), &[0u8; 16]);
 }
+
+/// AES-GCM built from the block cipher and GHASH alone, the way NIST SP
+/// 800-38D, sections 7.1 and 6.4, define it: counter block one masks the
+/// tag, the message runs from counter block two, and each counter block is
+/// encrypted on its own. The mode under test shares one group of four
+/// lanes between the mask and the first three message blocks, and has to
+/// produce what this produces.
+fn reference_seal(
+    key: &[u8; 16],
+    nonce: &[u8; 12],
+    aad: &[u8],
+    plaintext: &[u8],
+) -> (Vec<u8>, Vec<u8>) {
+    use crate::ghash::GHash;
+
+    let cipher = Aes::new_128(key);
+    let counter_block = |counter: u32| {
+        let mut block = [0u8; 16];
+        block[..12].copy_from_slice(nonce);
+        block[12..].copy_from_slice(&counter.to_be_bytes());
+        block
+    };
+    let zeros_to_a_block =
+        |length: usize| vec![0u8; length.next_multiple_of(16).wrapping_sub(length)];
+    let bits = |length: usize| u64::try_from(length).unwrap_or(0).wrapping_mul(8);
+
+    let mut hash_key = [0u8; 16];
+    cipher.encrypt_block(&mut hash_key);
+
+    let mut ciphertext = plaintext.to_vec();
+    for (index, chunk) in ciphertext.chunks_mut(16).enumerate() {
+        let step = u32::try_from(index).expect("the test messages are short");
+        let mut stream = counter_block(2u32.wrapping_add(step));
+        cipher.encrypt_block(&mut stream);
+        for (byte, key) in chunk.iter_mut().zip(stream) {
+            *byte ^= key;
+        }
+    }
+
+    let mut hash = GHash::new(&hash_key);
+    hash.update(aad);
+    hash.update(&zeros_to_a_block(aad.len()));
+    hash.update(&ciphertext);
+    hash.update(&zeros_to_a_block(ciphertext.len()));
+    let mut lengths = [0u8; 16];
+    lengths[..8].copy_from_slice(&bits(aad.len()).to_be_bytes());
+    lengths[8..].copy_from_slice(&bits(ciphertext.len()).to_be_bytes());
+    hash.update(&lengths);
+    let hashed = hash.finish();
+
+    let mut mask = counter_block(1);
+    cipher.encrypt_block(&mut mask);
+    let tag: Vec<u8> = mask.iter().zip(hashed).map(|(a, b)| a ^ b).collect();
+    (ciphertext, tag)
+}
+
+/// Regression for issue #47: the tag mask used to be a block encryption of
+/// its own and now rides the first lane of the first group, whose other
+/// three lanes carry the first three message blocks. Every length from
+/// none to past two groups has to seal to what the block-at-a-time
+/// definition seals to, which is where a counter shifted by one lane or a
+/// mask read from the wrong lane shows.
+#[test]
+fn every_length_seals_to_what_the_block_at_a_time_definition_gives() {
+    let key = [0x2Bu8; 16];
+    let nonce = [0x7Eu8; 12];
+    let cipher = Aes128Gcm::from_key(&key);
+    for length in 0..=160usize {
+        let plaintext: Vec<u8> = (0..length)
+            .map(|index| u8::try_from(index % 251).unwrap_or(0))
+            .collect();
+        let aad: Vec<u8> = (0..length % 37)
+            .map(|index| u8::try_from(index).unwrap_or(0))
+            .collect();
+
+        let mut sealed = plaintext.clone();
+        let tag = cipher
+            .seal(&nonce, &aad, &mut sealed)
+            .expect("the message is short");
+
+        let (expected_text, expected_tag) = reference_seal(&key, &nonce, &aad, &plaintext);
+        assert_eq!(
+            hex(&sealed),
+            hex(&expected_text),
+            "ciphertext at length {length}"
+        );
+        assert_eq!(hex(&tag), hex(&expected_tag), "tag at length {length}");
+
+        cipher
+            .open(&nonce, &aad, &mut sealed, &tag)
+            .expect("the tag is the one just produced");
+        assert_eq!(
+            hex(&sealed),
+            hex(&plaintext),
+            "round trip at length {length}"
+        );
+    }
+}
+
+/// Regression for issue #47: the keystream of a message is a prefix of the
+/// keystream of every longer message under the same key and nonce, which
+/// holds only if the counter of each block is the one its position gives.
+#[test]
+fn the_keystream_of_a_message_is_a_prefix_of_the_keystream_of_a_longer_one() {
+    let cipher = Aes256Gcm::from_key(&[0x41u8; 32]);
+    let nonce = [0x09u8; 12];
+    let mut longest = vec![0u8; 200];
+    let _ = cipher
+        .seal(&nonce, b"", &mut longest)
+        .expect("the message is short");
+    for length in 0..=200usize {
+        let mut sealed = vec![0u8; length];
+        let _ = cipher
+            .seal(&nonce, b"", &mut sealed)
+            .expect("the message is short");
+        assert_eq!(hex(&sealed), hex(&longest[..length]), "length {length}");
+    }
+}

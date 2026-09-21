@@ -186,6 +186,36 @@ impl<C: Curve<N>, const N: usize, const BYTES: usize> Point<C, N, BYTES> {
         result
     }
 
+    /// `[scalar] * self + [other_scalar] * other`, by Shamir's trick: one
+    /// chain of doublings drives both scalars, and the bit pair at each
+    /// position selects which of `self`, `other`, or their sum is added.
+    ///
+    /// The cost is `BYTES * 8` doublings and at most as many additions,
+    /// against the `2 * BYTES * 8` doublings two separate chains take.
+    /// Both scalars and both points are public wherever this crate
+    /// verifies, so the selection is a branch.
+    #[must_use]
+    pub fn mul_add(
+        self,
+        scalar: &[u8; BYTES],
+        other: Point<C, N, BYTES>,
+        other_scalar: &[u8; BYTES],
+    ) -> Point<C, N, BYTES> {
+        let both = self.add(other);
+        let bits = u32::try_from(BYTES).unwrap_or(0).wrapping_mul(8);
+        let mut result = Point::identity();
+        for position in (0..bits).rev() {
+            result = result.double();
+            match (bit_of(scalar, position), bit_of(other_scalar, position)) {
+                (1, 1) => result = result.add(both),
+                (1, _) => result = result.add(self),
+                (_, 1) => result = result.add(other),
+                _ => {}
+            }
+        }
+        result
+    }
+
     /// The affine coordinates, or `None` for the neutral element.
     #[must_use]
     pub fn to_affine(self) -> Option<(Fp<C, N, BYTES>, Fp<C, N, BYTES>)> {

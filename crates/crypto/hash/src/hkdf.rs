@@ -81,10 +81,14 @@ pub fn expand<H: Hash>(prk: &Prk<H>, info: &[u8], out: &mut [u8]) -> Result<(), 
         return Err(HashError::OutputTooLong);
     }
 
+    // The key schedule of the code is the same for every block, so it is
+    // built once and cloned: `Hmac::new` absorbs two padded blocks, which a
+    // 255-block expansion would otherwise pay 510 times.
+    let keyed = Hmac::<H>::new(prk.as_bytes());
     let mut previous: Option<H::Output> = None;
     let mut counter: u8 = 1;
     for chunk in out.chunks_mut(H::OUTPUT_LEN) {
-        let mut mac = Hmac::<H>::new(prk.as_bytes());
+        let mut mac = keyed.clone();
         if let Some(block) = previous {
             mac.update(block.as_ref());
         }

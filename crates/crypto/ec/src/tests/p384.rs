@@ -416,3 +416,42 @@ fn a_secret_outside_the_range_is_refused() {
     );
     assert_eq!(sign(&[0u8; 48], &[7u8; 48]), Err(EcError::InvalidScalar));
 }
+
+/// Regression for issue #50: verification ran two full double-and-add
+/// chains and now runs one shared chain, so the joint form has to give
+/// what the two separate multiplications give. The pairs cover the cases
+/// the shared chain decides on its own: a zero scalar on either side,
+/// equal points, and a point against its inverse.
+#[test]
+fn the_joint_multiplication_agrees_with_two_separate_chains() {
+    let generator = Point::generator();
+    let one = unhex48(
+        "000000000000000000000000000000000000000000000000000000000000000000000000000000\
+         0000000001",
+    );
+    let large = unhex48(
+        "6b9d3dad2e1b8c1c05b19875b6659f4de23c3b667bf297ba9aa47740787137d896d5724e4c70a8\
+         25f872c9ea60d2edf5",
+    );
+    let scalars = [[0u8; 48], one, large];
+    let points = [
+        generator,
+        generator.double(),
+        generator.mul(&large),
+        Point::identity(),
+    ];
+    for point in points {
+        for left in scalars {
+            for right in scalars {
+                let separate = generator.mul(&left).add(point.mul(&right));
+                let joint = generator.mul_add(&left, point, &right);
+                assert_eq!(
+                    separate
+                        .to_affine()
+                        .map(|(x, y)| (x.to_bytes(), y.to_bytes())),
+                    joint.to_affine().map(|(x, y)| (x.to_bytes(), y.to_bytes()))
+                );
+            }
+        }
+    }
+}

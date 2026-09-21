@@ -254,6 +254,42 @@ impl Point {
         result
     }
 
+    /// The point with the same `y` and the opposite `x`, which is the
+    /// inverse of this point in the group.
+    #[must_use]
+    pub fn negate(self) -> Point {
+        Point {
+            x: self.x.negate(),
+            y: self.y,
+            z: self.z,
+            t: self.t.negate(),
+        }
+    }
+
+    /// `[scalar] * self + [other_scalar] * other`, by Shamir's trick: one
+    /// chain of 256 doublings drives both scalars, and the bit pair at
+    /// each position selects which of `self`, `other`, or their sum is
+    /// added.
+    ///
+    /// Two separate chains take 512 doublings for the same result. Both
+    /// scalars and both points are public wherever this crate multiplies,
+    /// so the selection is a branch.
+    #[must_use]
+    pub fn mul_add(self, scalar: Scalar, other: Point, other_scalar: Scalar) -> Point {
+        let both = self.add(other);
+        let mut result = Point::IDENTITY;
+        for position in (0..256u32).rev() {
+            result = result.double();
+            match (scalar.bit(position), other_scalar.bit(position)) {
+                (1, 1) => result = result.add(both),
+                (1, _) => result = result.add(self),
+                (_, 1) => result = result.add(other),
+                _ => {}
+            }
+        }
+        result
+    }
+
     /// The multiple of this point by a scalar whose bits are secret.
     ///
     /// Every position costs one doubling and one addition, and which of
@@ -334,9 +370,11 @@ pub fn verify(
     hash.update(message);
     let k = Scalar::from_wide(&hash.finish());
 
-    let expected = Point::base().mul(s);
-    let found = r.add(a.mul(k));
-    if expected.compress() == found.compress() {
+    // `[s]B = R + [k]A` rearranged to `[s]B + [k](-A) = R`, so that one
+    // chain of doublings serves both scalars. The two forms decide the
+    // same way, because the points form a group.
+    let found = Point::base().mul_add(s, a.negate(), k);
+    if found.compress() == r.compress() {
         Ok(())
     } else {
         Err(EcError::BadSignature)

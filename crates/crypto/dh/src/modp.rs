@@ -16,7 +16,16 @@ use crate::error::DhError;
 /// one group alone, so that the groups of RFC 3526 the arithmetic is wide
 /// enough for are a constant away from each other. [`crate::group14`]
 /// builds the one SSH requires.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// The type carries no `Copy`, because [`Modulus`] carries none.
+///
+/// ```compile_fail
+/// use crypto_dh::ModpGroup;
+/// fn copied(group: ModpGroup) -> (ModpGroup, ModpGroup) {
+///     (group, group)
+/// }
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ModpGroup {
     /// The prime, and what reducing modulo it needs.
     prime: Modulus,
@@ -79,11 +88,12 @@ impl ModpGroup {
         if as_value >= upper {
             return Err(DhError::InvalidGenerator);
         }
+        let width = modulus.width();
         Ok(ModpGroup {
             prime: modulus,
             upper,
             order: halved(&upper),
-            width: modulus.width(),
+            width,
             generator,
         })
     }

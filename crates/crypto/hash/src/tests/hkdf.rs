@@ -151,3 +151,27 @@ fn a_clone_of_a_pseudorandom_key_clears_independently() {
     assert_eq!(hex(prk.as_bytes()), hex(derived.as_ref()));
     assert_eq!(hex(clone.as_bytes()), hex(&[0u8; 32]));
 }
+
+/// Regression for issue #48: `expand` used to rebuild the key schedule of
+/// the code in every iteration and now clones one built before the loop.
+/// The longest expansion the construction allows is where a schedule that
+/// drifted between blocks would show, so it runs against the per-block
+/// reference the definition gives.
+#[test]
+fn the_longest_expansion_matches_a_schedule_built_per_block() {
+    let prk = extract::<Sha256>(b"salt", b"key material");
+    let mut okm = vec![0u8; 255 * <Sha256 as Hash>::OUTPUT_LEN];
+    expand::<Sha256>(&prk, b"info", &mut okm).expect("255 blocks are the bound itself");
+
+    let mut expected = Vec::new();
+    let mut previous: Vec<u8> = Vec::new();
+    for counter in 1u8..=255 {
+        let mut mac = Hmac::<Sha256>::new(prk.as_bytes());
+        mac.update(&previous);
+        mac.update(b"info");
+        mac.update(&[counter]);
+        previous = mac.finish().to_vec();
+        expected.extend_from_slice(&previous);
+    }
+    assert_eq!(hex(&okm), hex(&expected));
+}
