@@ -259,3 +259,79 @@ fn a_transaction_takes_a_name_that_names_nothing() {
     let database = crate::db::Database::open(&bytes).unwrap();
     assert_eq!(database.rows_of(b"t1"), Ok(alloc::vec::Vec::new()));
 }
+
+/// The first value of every entry of the index `name`, in the order the
+/// tree holds them.
+fn entries<'a>(bytes: &'a [u8], name: &[u8]) -> alloc::vec::Vec<crate::record::Value<'a>> {
+    let image = crate::image::Image::open(bytes).unwrap();
+    let mut root = 0;
+    for row in image.schema() {
+        let record = row.unwrap().record().unwrap();
+        if record.value(1).unwrap() == Some(crate::record::Value::Text(name))
+            && let Some(crate::record::Value::Int(held)) = record.value(3).unwrap()
+        {
+            root = u32::try_from(held).unwrap();
+        }
+    }
+    image
+        .entries(root)
+        .map(|entry| {
+            let payload = entry.unwrap();
+            crate::record::Record::parse(payload.local)
+                .unwrap()
+                .value(0)
+                .unwrap()
+                .unwrap()
+        })
+        .collect()
+}
+
+/// An index written `DESC` holds its entries from the largest value
+/// down, which `sqlite3CreateIndex` honors on a file of schema format 4.
+#[test]
+fn an_index_written_desc_holds_its_entries_backwards() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t(a)".as_slice(),
+        b"CREATE INDEX ta ON t(a)",
+        b"CREATE INDEX tb ON t(a DESC)",
+        b"INSERT INTO t VALUES(2),(1),(3)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let bytes = writer.written();
+    let held = |number: i64| crate::record::Value::Int(number);
+    assert_eq!(entries(&bytes, b"ta"), [held(1), held(2), held(3)]);
+    assert_eq!(entries(&bytes, b"tb"), [held(3), held(2), held(1)]);
+}
+
+/// A key of an index stops at the first place held the other way round
+/// from the place before it, because the entries after that place run
+/// in another order than the terms name.
+#[test]
+fn a_key_stops_at_a_place_held_the_other_way() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t(a,b)".as_slice(),
+        b"CREATE INDEX tab ON t(a, b DESC)",
+        b"INSERT INTO t VALUES(1,1),(1,2),(2,1)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let bytes = writer.written();
+    let database = crate::db::Database::open(&bytes).unwrap();
+    let rows = database
+        .query(b"SELECT rowid FROM t WHERE a=1 AND b=2")
+        .unwrap();
+    assert_eq!(rows.rows, alloc::vec![alloc::vec![Value::Int(2)]]);
+}
+
+/// An integrity check of a file whose schema format is below 4 reads
+/// every place of an index forwards, because `sqlite3CreateIndex`
+/// ignores `DESC` there.
+#[test]
+fn an_index_written_desc_on_an_old_format_holds_its_entries_forwards() {
+    let database = crate::db::Database::open(crate::tests::FORMAT1).unwrap();
+    let answer = database.query(b"PRAGMA integrity_check").unwrap();
+    assert_eq!(answer.rows, [alloc::vec![Value::Text(b"ok".to_vec())]]);
+}

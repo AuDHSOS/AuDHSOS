@@ -67,6 +67,9 @@ fn what_order_by_the_walk_does_not_answer() {
     // expression, or over a column under a collation of its own.
     assert_eq!(pair(b"SELECT * FROM m ORDER BY q DESC"), (4, 1));
     assert_eq!(pair(b"SELECT * FROM m ORDER BY q NULLS LAST"), (4, 1));
+    // Two terms running in two directions, and a rowid read backwards.
+    assert_eq!(pair(b"SELECT * FROM m ORDER BY p, q DESC"), (4, 1));
+    assert_eq!(pair(b"SELECT * FROM m ORDER BY rowid DESC"), (4, 1));
     assert_eq!(pair(b"SELECT * FROM m ORDER BY r+1"), (4, 1));
     assert_eq!(pair(b"SELECT * FROM m ORDER BY q COLLATE binary"), (4, 1));
     // A rowid between two columns leaves the terms after it unanswered.

@@ -119,6 +119,42 @@ const fn word(letters: [u8; 4]) -> u32 {
     u32::from_be_bytes(letters)
 }
 
+/// How one place of a key compares: what its text compares under, and
+/// whether the entries run from the largest value down.
+///
+/// `KeyInfo` of `research/sqlite/src/sqliteInt.h` holds the two the same
+/// way, as `aColl` beside `aSortFlags`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Placing {
+    /// What its text compares under.
+    pub collation: Collation,
+    /// Whether the entries run backwards, which a `CREATE INDEX`
+    /// writing `DESC` makes them do on a file whose schema format is 4.
+    pub backwards: bool,
+}
+
+impl Placing {
+    /// A place that compares under `collation` and runs forwards.
+    #[must_use]
+    pub const fn forwards(collation: Collation) -> Self {
+        Self {
+            collation,
+            backwards: false,
+        }
+    }
+}
+
+/// Where `left` stands against `right` under `placing`, which is
+/// [`compare`] read backwards where the place runs backwards.
+#[must_use]
+pub fn compare_placed(left: &Value, right: &Value, placing: Placing) -> core::cmp::Ordering {
+    let order = compare(left, right, placing.collation);
+    if placing.backwards {
+        return order.reverse();
+    }
+    order
+}
+
 /// The three collations SQLite has built in, and the ones an
 /// application defines.
 #[derive(Clone, Copy, Debug, Default)]

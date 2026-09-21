@@ -252,8 +252,33 @@ fn an_or_one_branch_of_which_names_no_key_leaves_the_table_scanned() {
 
 #[test]
 fn a_where_that_holds_no_or_is_read_by_the_table() {
-    let rows = keys(super::INDEXED, b"SELECT rowid FROM m WHERE r>20");
-    assert_eq!(rows, [Value::Int(3), Value::Int(5)]);
+    let rows = keys(super::INDEXED, b"SELECT rowid FROM m WHERE q IS NOT NULL");
+    assert_eq!(
+        rows,
+        [Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)]
+    );
+}
+
+#[test]
+fn an_index_held_backwards_is_walked_from_the_high_end_of_the_bounds() {
+    // `mr` holds `r` from the largest value down, so a walk of it
+    // answers the rows in that order.
+    assert_eq!(
+        listed(super::INDEXED, b"SELECT rowid FROM m WHERE r>20"),
+        "5,3"
+    );
+    assert_eq!(
+        listed(super::INDEXED, b"SELECT rowid FROM m WHERE r<=30"),
+        "3,2,1"
+    );
+    assert_eq!(
+        listed(super::INDEXED, b"SELECT rowid FROM m WHERE r>10 AND r<50"),
+        "3,2"
+    );
+    assert_eq!(
+        listed(super::INDEXED, b"SELECT rowid FROM m ORDER BY r DESC"),
+        "5,3,2,1,4"
+    );
 }
 
 #[test]
@@ -313,13 +338,9 @@ fn a_walk_of_an_index_is_held_between_the_bounds_the_terms_name() {
 
 #[test]
 fn what_index_no_term_reaches_a_key_or_a_bound_of() {
-    // `mr` holds its entries backwards, `ea` holds what an expression
-    // answers, `ec` holds its entries under another collation, and `eb`
-    // holds fewer rows than the table has.
-    assert_eq!(
-        keys(super::INDEXED, b"SELECT rowid FROM m WHERE r>20"),
-        [Value::Int(3), Value::Int(5)]
-    );
+    // `ea` holds what an expression answers, `ec` holds its entries
+    // under another collation, and `eb` holds fewer rows than the table
+    // has.
     assert_eq!(
         keys(super::INDEXED, b"SELECT rowid FROM e WHERE a>1"),
         [Value::Int(2), Value::Int(3)]

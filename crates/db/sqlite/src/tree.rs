@@ -22,7 +22,7 @@ use crate::error::Error;
 use crate::header::Header;
 use crate::image::MAX_DEPTH;
 use crate::page::{Cell, Kind, Page, Payload, Source, Writer, build, local_len, write_cell};
-use crate::value::{Collation, Value};
+use crate::value::Value;
 
 /// Writes `value` where `at` names a slot of `list`, and writes nothing
 /// where the list is shorter, which no caller of this is.
@@ -1380,8 +1380,8 @@ fn spilled_as<'a>(
 /// which is what `sqlite3VdbeRecordCompare` compares.
 #[derive(Clone, Copy)]
 pub struct Ordering<'a> {
-    /// The collation of each column of the index, in its order.
-    pub collations: &'a [Collation],
+    /// How each place of the index compares, in its order.
+    pub collations: &'a [crate::value::Placing],
     /// The encoding the file writes its text in.
     pub encoding: crate::header::Encoding,
 }
@@ -1436,7 +1436,7 @@ fn place_entry(
     pages: &Pages,
     root: u32,
     key: &[Value],
-    collations: &[Collation],
+    collations: &[crate::value::Placing],
 ) -> Result<Vec<(u32, usize)>, Error> {
     let mut path = Vec::new();
     let mut number = root;
@@ -1469,7 +1469,7 @@ fn order_of_entry(
     number: u32,
     at: usize,
     key: &[Value],
-    collations: &[Collation],
+    collations: &[crate::value::Placing],
 ) -> Result<core::cmp::Ordering, Error> {
     let page = pages.page(number)?;
     let payload = page.entry(at)?;
@@ -1487,8 +1487,8 @@ fn order_of_entry(
     let mut orders = Vec::new();
     for (at, wanted) in key.iter().enumerate() {
         let mine = record.value(at)?.map_or(Value::Null, held_value);
-        let collation = collations.get(at).copied().unwrap_or(Collation::Binary);
-        orders.push(crate::value::compare(&mine, wanted, collation));
+        let placing = collations.get(at).copied().unwrap_or_default();
+        orders.push(crate::value::compare_placed(&mine, wanted, placing));
     }
     Ok(orders
         .into_iter()
@@ -1665,7 +1665,7 @@ pub(crate) fn find_entry(
     pages: &Pages,
     root: u32,
     key: &[Value],
-    collations: &[Collation],
+    collations: &[crate::value::Placing],
 ) -> Result<Option<Vec<(u32, usize)>>, Error> {
     let mut path = Vec::new();
     let mut number = root;

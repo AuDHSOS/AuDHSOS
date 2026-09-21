@@ -965,6 +965,8 @@ Size: L.
 111. The rowid range a branch of an `OR` names, and the bounds a `LIKE`
      or a `GLOB` names. Built, which D-368 records.
 112. The two bounds a `BETWEEN` names. Built, which D-369 records.
+113. The entries of an index written `DESC`, held from the largest
+     value down and read that way. Built, which D-371 records.
 
 ### Done when
 

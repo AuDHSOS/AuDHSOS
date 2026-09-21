@@ -1415,6 +1415,10 @@ enum Plan {
         rowid_at: usize,
         /// What the column after the key is held between.
         bounds: Bounds,
+        /// Whether the index holds its entries from the largest value
+        /// down, which a `CREATE INDEX` writing `DESC` makes it do on a
+        /// file of schema format 4.
+        backwards: bool,
     },
     /// The rows of every plan it holds, each row once, which is what
     /// an `OR` whose every branch names a key is read by. It is not the
@@ -2599,6 +2603,14 @@ impl<'a> Database<'a> {
         self.encoding
     }
 
+    /// The schema format the file is written in, which is 4 where a
+    /// `CREATE INDEX` writing `DESC` holds its entries backwards and
+    /// below it where `sqlite3CreateIndex` ignores the word.
+    #[must_use]
+    pub const fn schema_format(&self) -> u32 {
+        self.image.header().schema_format
+    }
+
     /// The table of `name` and the page its tree begins at, where the
     /// database holds one.
     #[must_use]
@@ -3263,7 +3275,14 @@ impl<'a> Database<'a> {
             return listed(arena, &select, sql, &cursor);
         }
         let mut sides = self.sides(arena, &select, sql, scope)?;
-        planned(arena, select.filter, sql, &mut sides, self.sensitive);
+        planned(
+            arena,
+            select.filter,
+            sql,
+            &mut sides,
+            self.sensitive,
+            self.schema_format(),
+        );
         let shape = shape(arena, &select, sql, &sides, self.naming, self.collating)?;
         let collations = self.collations(&shape);
         let names: Vec<Vec<u8>> = shape
@@ -3292,7 +3311,7 @@ impl<'a> Database<'a> {
         let walked = overs.is_empty()
             && calls.is_empty()
             && select.group.is_empty()
-            && in_order(arena, &select, sql, &mut sides);
+            && in_order(arena, &select, sql, &mut sides, self.schema_format());
         let mut rows: Vec<Sorted> = Vec::new();
         if !overs.is_empty() {
             // A window function reads the rows a statement has already
@@ -3989,14 +4008,19 @@ impl<'a> Database<'a> {
             collations,
             rowid_at,
             bounds,
+            backwards,
         } = held;
         let image = self.imaged(stored.place);
         // The descent stands on the first entry the walk takes, which is
-        // the first one no lower than the key and the low end of the
-        // bounds, and the entry after it where the low end leaves it out.
+        // the first one the end the entries begin at does not reach
+        // before, and the entry after it where that end leaves it out.
+        // An index that holds its entries backwards begins at the high
+        // end of the bounds and one that holds them forwards at the low
+        // end.
         let mut descent = key.clone();
         let mut inside = true;
-        if let Some((value, held)) = &bounds.low {
+        let end = if backwards { &bounds.high } else { &bounds.low };
+        if let Some((value, held)) = end {
             descent.push(value.clone());
             inside = *held;
         }
@@ -4012,7 +4036,7 @@ impl<'a> Database<'a> {
                     &mut scratch,
                 )
                 .map_err(|_| crate::error::Error::Overrun)?;
-                Ok(is_before(order, inside))
+                Ok(is_before(order, backwards, inside))
             })
             .ok()?;
         Some(Feed::Keyed(Box::new(Sought {
@@ -4023,6 +4047,7 @@ impl<'a> Database<'a> {
             collations,
             rowid_at,
             bounds,
+            backwards,
             encoding: self.encoding,
             collation: self.collation(),
             payload: Vec::new(),
@@ -4322,6 +4347,7 @@ fn planned(
     sql: &[u8],
     sides: &mut [Side<'_>],
     sensitive: bool,
+    format: u32,
 ) {
     let terms = filter.map_or_else(Vec::new, |filter| {
         terms_of(arena, filter, sql, sides, sensitive)
@@ -4350,10 +4376,18 @@ fn planned(
                 // side, so the first is taken where both are there. An
                 // `OR` is read last, because one index costs less than
                 // one walk per branch.
-                plan_of(&terms, at, stored)
+                plan_of(&terms, at, stored, format)
                     .or_else(|| {
                         filter.and_then(|filter| {
-                            union_of(arena, filter, sql, sides, at, stored, sensitive)
+                            union_of(
+                                arena,
+                                filter,
+                                sql,
+                                sides,
+                                at,
+                                stored,
+                                Settled { sensitive, format },
+                            )
                         })
                     })
                     .or_else(|| joined(arena, sql, sides, at, stored))
@@ -4755,7 +4789,7 @@ fn reached(arena: &Arena, id: ExprId, sql: &[u8], sides: &[Side<'_>]) -> Option<
 /// between, which is the loop `sqlite3WhereBegin` writes for
 /// `WHERE_COLUMN_EQ` and `WHERE_COLUMN_RANGE`. Reading the terms costs
 /// O(i*c*t) in the indexes, their columns and the terms.
-fn plan_of(terms: &[Bound], at: usize, stored: &Stored) -> Option<Plan> {
+fn plan_of(terms: &[Bound], at: usize, stored: &Stored, format: u32) -> Option<Plan> {
     for kept in &stored.indexes {
         // A partial index answers fewer entries than the table has rows,
         // so a statement planned against one would read fewer rows than
@@ -4766,6 +4800,10 @@ fn plan_of(terms: &[Bound], at: usize, stored: &Stored) -> Option<Plan> {
         let mut key = Vec::new();
         let mut collations = Vec::new();
         let mut bounds = Bounds::default();
+        // An index holds every place it has in one direction or reaches
+        // no key, because the entries of a place held the other way run
+        // over again for each value of the place before it.
+        let backwards = held_backwards(kept.index.columns.first(), format);
         for held in &kept.index.columns {
             // An index held in another order than the terms ask about,
             // a place over an expression, and a place under another
@@ -4781,7 +4819,8 @@ fn plan_of(terms: &[Bound], at: usize, stored: &Stored) -> Option<Plan> {
             let Some((place, column)) = found else {
                 break;
             };
-            if held.order == crate::ast::Order::Descending || held.collation != column.collation {
+            if held_backwards(Some(held), format) != backwards || held.collation != column.collation
+            {
                 break;
             }
             // A column of real affinity holds a whole number as a whole
@@ -4864,6 +4903,7 @@ fn plan_of(terms: &[Bound], at: usize, stored: &Stored) -> Option<Plan> {
             collations,
             rowid_at: kept.index.columns.len(),
             bounds,
+            backwards,
         });
     }
     None
@@ -4898,8 +4938,14 @@ enum Ordering {
 /// This is what `sqlite3WhereIsOrdered` answers: the terms of the
 /// `ORDER BY` a loop already answers need no sort. Finding the index
 /// costs O(n*m) in the indexes of the table and the terms.
-fn in_order(arena: &Arena, select: &Select, sql: &[u8], sides: &mut [Side<'_>]) -> bool {
-    let plan = match ordering(arena, select, sql, sides) {
+fn in_order(
+    arena: &Arena,
+    select: &Select,
+    sql: &[u8],
+    sides: &mut [Side<'_>],
+    format: u32,
+) -> bool {
+    let plan = match ordering(arena, select, sql, sides, format) {
         Ordering::Sorted => return false,
         Ordering::Walked => None,
         Ordering::Index(plan) => Some(plan),
@@ -4913,7 +4959,13 @@ fn in_order(arena: &Arena, select: &Select, sql: &[u8], sides: &mut [Side<'_>]) 
 }
 
 /// What the walk of the one side answers of the `ORDER BY`.
-fn ordering(arena: &Arena, select: &Select, sql: &[u8], sides: &[Side<'_>]) -> Ordering {
+fn ordering(
+    arena: &Arena,
+    select: &Select,
+    sql: &[u8],
+    sides: &[Side<'_>],
+    format: u32,
+) -> Ordering {
     let terms = arena.orders(select.order);
     let [side] = sides else {
         return Ordering::Sorted;
@@ -4925,14 +4977,16 @@ fn ordering(arena: &Arena, select: &Select, sql: &[u8], sides: &[Side<'_>]) -> O
         return Ordering::Sorted;
     }
     let mut places = Vec::new();
+    // An index holds its entries in one direction, so terms running in
+    // two ask about an order no index holds.
+    let backwards = terms
+        .first()
+        .is_some_and(|term| term.order == crate::ast::Order::Descending);
     for term in terms {
-        // A term written backwards asks about an order no index of this
-        // engine holds, because a `CREATE INDEX` writing `DESC` writes
-        // its entries in the one order all the same. A term whose nulls
-        // are put where the order does not put them asks about another
-        // order again, and a `COLLATE` over the column is no column,
-        // which `reached` answers nothing for.
-        if term.order == crate::ast::Order::Descending
+        // A term whose nulls are put where the order does not put them
+        // asks about another order again, and a `COLLATE` over the
+        // column is no column, which `reached` answers nothing for.
+        if (term.order == crate::ast::Order::Descending) != backwards
             || term.nulls != crate::ast::Nulls::Unspecified
         {
             return Ordering::Sorted;
@@ -4946,7 +5000,7 @@ fn ordering(arena: &Arena, select: &Select, sql: &[u8], sides: &[Side<'_>]) -> O
     // A rowid stands once in the table, so no term after one decides
     // anything, and the table's own tree holds its rows in that order.
     if places.first() == Some(&None) {
-        return if matches!(side.plan, Plan::Rows(_, _)) {
+        return if !backwards && matches!(side.plan, Plan::Rows(_, _)) {
             Ordering::Walked
         } else {
             Ordering::Sorted
@@ -4964,7 +5018,7 @@ fn ordering(arena: &Arena, select: &Select, sql: &[u8], sides: &[Side<'_>]) -> O
     // that index's order, so the key is kept where that order is the one
     // the terms name.
     if let Plan::Keyed { root, key, .. } = &side.plan {
-        return if suffixed(stored, *root, key.len(), &wanted) {
+        return if suffixed(stored, *root, key.len(), &wanted, backwards, format) {
             Ordering::Walked
         } else {
             Ordering::Sorted
@@ -4973,7 +5027,7 @@ fn ordering(arena: &Arena, select: &Select, sql: &[u8], sides: &[Side<'_>]) -> O
     if !matches!(side.plan, Plan::Rows(None, None)) {
         return Ordering::Sorted;
     }
-    match walked(stored, &wanted) {
+    match walked(stored, &wanted, backwards, format) {
         Some(plan) => Ordering::Index(plan),
         None => Ordering::Sorted,
     }
@@ -4988,7 +5042,14 @@ fn ordering(arena: &Arena, select: &Select, sql: &[u8], sides: &[Side<'_>]) -> O
 /// terms after it name the columns from there on.
 ///
 /// Costs O(n*m) in the columns of the index and the terms.
-fn suffixed(stored: &Stored, root: u32, held: usize, wanted: &[usize]) -> bool {
+fn suffixed(
+    stored: &Stored,
+    root: u32,
+    held: usize,
+    wanted: &[usize],
+    backwards: bool,
+    format: u32,
+) -> bool {
     stored
         .indexes
         .iter()
@@ -5006,7 +5067,7 @@ fn suffixed(stored: &Stored, root: u32, held: usize, wanted: &[usize]) -> bool {
                 if constant.contains(place) {
                     continue;
                 }
-                if !holds_column(stored, &kept.index, at, *place) {
+                if !holds_column(stored, &kept.index, at, *place, backwards, format) {
                     return false;
                 }
                 at = at.saturating_add(1);
@@ -5019,13 +5080,22 @@ fn suffixed(stored: &Stored, root: u32, held: usize, wanted: &[usize]) -> bool {
 /// `place` in the order a term over that column asks about.
 ///
 /// A place over an expression holds a value no column names, a place
-/// written `DESC` answers its entries in an order no term of this engine
-/// asks about, and a place under another collation than the column
-/// compares under answers them in another order again.
-fn holds_column(stored: &Stored, index: &crate::schema::Index, at: usize, place: usize) -> bool {
+/// held the other way answers its entries in the other order, and a
+/// place under another collation than the column compares under answers
+/// them in another order again. An index every place of which is held
+/// backwards answers a `DESC` order read from its first entry on, which
+/// is what a `CREATE INDEX` writing `DESC` is for.
+fn holds_column(
+    stored: &Stored,
+    index: &crate::schema::Index,
+    at: usize,
+    place: usize,
+    backwards: bool,
+    format: u32,
+) -> bool {
     index.columns.get(at).is_some_and(|held| {
         held.place() == Some(place)
-            && held.order != crate::ast::Order::Descending
+            && held_backwards(Some(held), format) == backwards
             && stored
                 .table
                 .columns
@@ -5042,7 +5112,7 @@ fn holds_column(stored: &Stored, index: &crate::schema::Index, at: usize, place:
 /// entry begins with the key.
 ///
 /// Costs O(n*m) in the indexes and the columns named.
-fn walked(stored: &Stored, wanted: &[usize]) -> Option<Plan> {
+fn walked(stored: &Stored, wanted: &[usize], backwards: bool, format: u32) -> Option<Plan> {
     for kept in &stored.indexes {
         // A partial index answers fewer entries than the table has rows,
         // so it holds its entries in no order over the columns.
@@ -5052,7 +5122,7 @@ fn walked(stored: &Stored, wanted: &[usize]) -> Option<Plan> {
         let held = wanted
             .iter()
             .enumerate()
-            .all(|(at, place)| holds_column(stored, &kept.index, at, *place));
+            .all(|(at, place)| holds_column(stored, &kept.index, at, *place, backwards, format));
         if held {
             return Some(Plan::Keyed {
                 root: kept.root,
@@ -5060,10 +5130,29 @@ fn walked(stored: &Stored, wanted: &[usize]) -> Option<Plan> {
                 collations: Vec::new(),
                 rowid_at: kept.index.columns.len(),
                 bounds: Bounds::default(),
+                backwards,
             });
         }
     }
     None
+}
+
+/// Whether the place of an index is held from the largest value down,
+/// which `sqlite3CreateIndex` honors on a file of schema format 4 and
+/// ignores on one below.
+fn held_backwards(held: Option<&crate::schema::Keyed>, format: u32) -> bool {
+    format >= 4 && held.is_some_and(|held| held.order == crate::ast::Order::Descending)
+}
+
+/// What the connection and the file settle for a plan.
+#[derive(Clone, Copy)]
+struct Settled {
+    /// Whether `LIKE` compares its two sides case sensitively, which
+    /// `PRAGMA case_sensitive_like` sets.
+    sensitive: bool,
+    /// The schema format of the file, which decides whether a place of
+    /// an index written `DESC` is held backwards.
+    format: u32,
 }
 
 /// The plans a top-level `OR` of the `WHERE` names, where every branch
@@ -5083,7 +5172,7 @@ fn union_of(
     sides: &[Side<'_>],
     at: usize,
     stored: &Stored,
-    sensitive: bool,
+    settled: Settled,
 ) -> Option<Plan> {
     let mut spine = alloc::vec![filter];
     while let Some(id) = spine.pop() {
@@ -5099,7 +5188,7 @@ fn union_of(
             Some(Node::Binary {
                 op: BinaryOp::Or, ..
             }) => {
-                if let Some(plan) = ored(arena, id, sql, sides, at, stored, sensitive) {
+                if let Some(plan) = ored(arena, id, sql, sides, at, stored, settled) {
                     return Some(plan);
                 }
             }
@@ -5120,7 +5209,7 @@ fn ored(
     sides: &[Side<'_>],
     at: usize,
     stored: &Stored,
-    sensitive: bool,
+    settled: Settled,
 ) -> Option<Plan> {
     let mut plans = Vec::new();
     let mut spine = alloc::vec![id];
@@ -5135,11 +5224,11 @@ fn ored(
             spine.push(left);
             continue;
         }
-        let terms = terms_of(arena, held, sql, sides, sensitive);
+        let terms = terms_of(arena, held, sql, sides, settled.sensitive);
         // A branch that names the rowid is read out of the table's own
         // tree, which is the `OP_SeekRowid` loop `sqlite3WhereBegin`
         // writes for `WHERE_IPK`.
-        let plan = plan_of(&terms, at, stored).or_else(|| ranged_of(&terms, at))?;
+        let plan = plan_of(&terms, at, stored, settled.format).or_else(|| ranged_of(&terms, at))?;
         plans.push(plan);
     }
     Some(Plan::Union(plans))
@@ -5179,6 +5268,8 @@ struct Seek {
     rowid_at: usize,
     /// What the column after the key is held between.
     bounds: Bounds,
+    /// Whether the index holds its entries backwards.
+    backwards: bool,
 }
 
 /// What `plan` holds a walk of an index to.
@@ -5197,12 +5288,14 @@ fn sought(plan: &Plan, cursor: &Cursor<'_>) -> Option<Seek> {
             collations,
             rowid_at,
             bounds,
+            backwards,
         } => Some(Seek {
             root: *root,
             key: key.clone(),
             collations: collations.clone(),
             rowid_at: *rowid_at,
             bounds: bounds.clone(),
+            backwards: *backwards,
         }),
         Plan::Joined {
             root,
@@ -5226,6 +5319,7 @@ fn sought(plan: &Plan, cursor: &Cursor<'_>) -> Option<Seek> {
                 collations: alloc::vec![*collation],
                 rowid_at: *rowid_at,
                 bounds: Bounds::default(),
+                backwards: false,
             })
         }
     }
@@ -5593,8 +5687,10 @@ struct Sought<'i, 'f> {
     /// the bounds hold compares under.
     collations: Vec<Collation>,
     /// What the column after the key is held between, which ends the
-    /// walk where an entry reaches past the high end.
+    /// walk where an entry reaches past the end it runs towards.
     bounds: Bounds,
+    /// Whether the index holds its entries backwards.
+    backwards: bool,
     /// Where the rowid stands in an entry.
     rowid_at: usize,
     /// What encoding the file keeps its text in.
@@ -5623,7 +5719,12 @@ impl<'i> Sought<'i, '_> {
     /// end of the bounds, which every entry after it reaches past as
     /// well, so the walk is read out there.
     fn is_past(&mut self, entry: &crate::page::Payload<'i>) -> Result<bool, Error> {
-        let Some((wanted, inside)) = self.bounds.high.clone() else {
+        let end = if self.backwards {
+            &self.bounds.low
+        } else {
+            &self.bounds.high
+        };
+        let Some((wanted, inside)) = end.clone() else {
             return Ok(false);
         };
         let at = self.key.len();
@@ -5634,11 +5735,9 @@ impl<'i> Sought<'i, '_> {
             .copied()
             .unwrap_or(Collation::Binary);
         let order = compare(&held, &wanted, collation);
-        Ok(if inside {
-            order == core::cmp::Ordering::Greater
-        } else {
-            order != core::cmp::Ordering::Less
-        })
+        // The end the entries run towards stands where the end they
+        // begin at stands for an index that holds them the other way.
+        Ok(is_before(order, !self.backwards, inside))
     }
 
     /// One entry as the row it names, or nothing where the entry no
@@ -5769,14 +5868,17 @@ fn order_of_entry(
     Ok(core::cmp::Ordering::Equal)
 }
 
-/// Whether an entry standing at `order` against the low end of the
-/// bounds comes before that end, where `inside` says an entry holding
-/// the bound is one the walk takes.
-const fn is_before(order: core::cmp::Ordering, inside: bool) -> bool {
-    if inside {
-        matches!(order, core::cmp::Ordering::Less)
-    } else {
-        !matches!(order, core::cmp::Ordering::Greater)
+/// Whether an entry standing at `order` against the end the entries of
+/// the index begin at comes before that end.
+///
+/// `inside` says an entry holding the bound is one the walk takes, and
+/// `backwards` says the entries run from the largest value down.
+const fn is_before(order: core::cmp::Ordering, backwards: bool, inside: bool) -> bool {
+    match (backwards, inside) {
+        (false, true) => matches!(order, core::cmp::Ordering::Less),
+        (false, false) => !matches!(order, core::cmp::Ordering::Greater),
+        (true, true) => matches!(order, core::cmp::Ordering::Greater),
+        (true, false) => !matches!(order, core::cmp::Ordering::Less),
     }
 }
 

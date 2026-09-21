@@ -5670,7 +5670,7 @@ impl Writer {
                 .table(over)
                 .ok_or(Error::NoTable(schema_named_as(over)))?;
             let read = crate::schema::index(arena, index, sql, table, self.collating)?;
-            let collations = collations_of(&read);
+            let collations = collations_of(&read, self.held.header.schema_format);
             let over = Over {
                 arena,
                 sql,
@@ -6523,7 +6523,7 @@ impl Writer {
         root: u32,
         table: &Table,
         key: &[Value],
-        collations: &[Collation],
+        collations: &[crate::value::Placing],
         kept: &[Kept],
         written: Conflict,
     ) -> Result<bool, Error> {
@@ -6591,7 +6591,7 @@ impl Writer {
         &self,
         table: &Table,
         key: &[Value],
-        collations: &[Collation],
+        collations: &[crate::value::Placing],
     ) -> Result<Vec<Value>, Error> {
         let bytes = self.image();
         let database = self.reading(&bytes)?;
@@ -6875,7 +6875,7 @@ impl Writer {
     fn write_entries(
         &mut self,
         entries: Vec<Vec<Value>>,
-        collations: &[Collation],
+        collations: &[crate::value::Placing],
         root: u32,
     ) -> Result<(), Error> {
         // `sqlite3VdbeSorterInit`: the entries are sorted before any is
@@ -6943,7 +6943,7 @@ impl Writer {
                 }
                 entries
             };
-            let collations = collations_of(&index);
+            let collations = collations_of(&index, self.held.header.schema_format);
             self.write_entries(entries, &collations, root)?;
         }
         Ok(())
@@ -9244,8 +9244,8 @@ impl Writer {
 struct Kept {
     /// The index as its statement describes it.
     index: crate::schema::Index,
-    /// The collation of each of its places.
-    collations: Vec<Collation>,
+    /// How each of its places compares.
+    collations: Vec<crate::value::Placing>,
     /// The page its tree begins on.
     root: u32,
     /// The `CREATE INDEX` text, which a place over an expression and a
@@ -9273,6 +9273,7 @@ impl Kept {
 /// Every index over the table `name`, read once so that the statement
 /// keeps them while it writes the rows the database answered.
 fn kept_indexes(database: &Database<'_>, name: &[u8]) -> Vec<Kept> {
+    let format = database.schema_format();
     database
         .indexes(name)
         .iter()
@@ -9284,7 +9285,7 @@ fn kept_indexes(database: &Database<'_>, name: &[u8]) -> Vec<Kept> {
             let reads = reads_expressions(kept.index);
             Kept {
                 index: kept.index.clone(),
-                collations: collations_of(kept.index),
+                collations: collations_of(kept.index, format),
                 root: kept.root,
                 sql: if reads { kept.sql.to_vec() } else { Vec::new() },
                 arena: if reads {
@@ -9500,12 +9501,20 @@ const fn keyed_as(rowid: i64) -> [Value; 1] {
     [Value::Int(rowid)]
 }
 
-/// The collation each column of an index is held in.
-pub(crate) fn collations_of(index: &crate::schema::Index) -> Vec<Collation> {
+/// How each place of an index compares: the collation it is held in,
+/// and whether it runs backwards, which `sqlite3CreateIndex` honors on a
+/// file whose schema format is 4 and ignores on one below it.
+pub(crate) fn collations_of(
+    index: &crate::schema::Index,
+    format: u32,
+) -> Vec<crate::value::Placing> {
     index
         .columns
         .iter()
-        .map(|column| column.collation)
+        .map(|column| crate::value::Placing {
+            collation: column.collation,
+            backwards: format >= 4 && column.order == crate::ast::Order::Descending,
+        })
         .collect()
 }
 
@@ -9515,7 +9524,7 @@ pub(crate) fn collations_of(index: &crate::schema::Index) -> Vec<Collation> {
 pub(crate) fn order_of_keys(
     one: &[Value],
     other: &[Value],
-    collations: &[Collation],
+    collations: &[crate::value::Placing],
 ) -> core::cmp::Ordering {
     one.iter()
         .zip(other)
@@ -9523,8 +9532,8 @@ pub(crate) fn order_of_keys(
         .map(|(at, (mine, theirs))| {
             // The key of the row stands after the columns and is
             // compared as bytes, which is what the default here is.
-            let collation = collations.get(at).copied().unwrap_or(Collation::Binary);
-            crate::value::compare(mine, theirs, collation)
+            let placing = collations.get(at).copied().unwrap_or_default();
+            crate::value::compare_placed(mine, theirs, placing)
         })
         .find(|order| *order != core::cmp::Ordering::Equal)
         .unwrap_or(core::cmp::Ordering::Equal)
@@ -9553,7 +9562,10 @@ fn written_statement(prefix: &[u8], name: Span, sql: &[u8]) -> Vec<u8> {
 
 /// How an index tree orders its entries, from the collations of the
 /// index and the encoding of the file.
-const fn ordering(collations: &[Collation], encoding: Encoding) -> crate::tree::Ordering<'_> {
+const fn ordering(
+    collations: &[crate::value::Placing],
+    encoding: Encoding,
+) -> crate::tree::Ordering<'_> {
     crate::tree::Ordering {
         collations,
         encoding,

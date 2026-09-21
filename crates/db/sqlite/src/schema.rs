@@ -279,14 +279,16 @@ pub fn key_of(table: &Table, values: &[Value]) -> Vec<Value> {
 
 /// The collation each column of the `PRIMARY KEY` is held in.
 #[must_use]
-pub fn key_collations(table: &Table) -> Vec<Collation> {
+pub fn key_collations(table: &Table) -> Vec<crate::value::Placing> {
     key_places(table)
         .iter()
         .map(|at| {
-            table
-                .columns
-                .get(*at)
-                .map_or(Collation::Binary, |column| column.collation)
+            crate::value::Placing::forwards(
+                table
+                    .columns
+                    .get(*at)
+                    .map_or(Collation::Binary, |column| column.collation),
+            )
         })
         .collect()
 }

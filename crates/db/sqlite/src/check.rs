@@ -377,11 +377,7 @@ fn entries_held(
         encoding: database.encoding(),
     };
     let image = database.image();
-    let collations: Vec<crate::value::Collation> = index
-        .columns
-        .iter()
-        .map(|column| column.collation)
-        .collect();
+    let collations = crate::change::collations_of(index, database.schema_format());
     // The entry of a row ends with the key of that row, which is one
     // value for a rowid and the columns of the `PRIMARY KEY` for a
     // table that keeps its rows in the key's own tree.
@@ -470,22 +466,19 @@ fn held(value: Option<crate::record::Value<'_>>) -> Value {
     }
 }
 
-/// Where one entry stands against another, column by column under the
-/// collation each is held in.
+/// Where one entry stands against another, place by place as the index
+/// holds them.
 fn order_of(
     one: &[Value],
     other: &[Value],
-    collations: &[crate::value::Collation],
+    collations: &[crate::value::Placing],
 ) -> core::cmp::Ordering {
     one.iter()
         .zip(other)
         .enumerate()
         .map(|(at, (mine, theirs))| {
-            let collation = collations
-                .get(at)
-                .copied()
-                .unwrap_or(crate::value::Collation::Binary);
-            crate::value::compare(mine, theirs, collation)
+            let placing = collations.get(at).copied().unwrap_or_default();
+            crate::value::compare_placed(mine, theirs, placing)
         })
         .find(|order| *order != core::cmp::Ordering::Equal)
         .unwrap_or(core::cmp::Ordering::Equal)

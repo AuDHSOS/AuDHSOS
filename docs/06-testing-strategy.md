@@ -6713,3 +6713,13 @@ Document 16 step Q8.
   alone.
 - A connection in write-ahead logging answers the file the pragma left
   either way.
+
+### 6.6.255 The entries of an index written `DESC` (`db-sqlite`)
+
+Document 16 step Q8.
+
+- An index written `DESC` beside one written `ASC` over the same column,
+  read from the tree as the writer left it.
+- A walk of an index held backwards between one bound, between two, and
+  between none.
+- An `ORDER BY` a place held backwards answers, and one it does not.

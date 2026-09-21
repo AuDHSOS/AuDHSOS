@@ -7,6 +7,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` writes the entries of an index a `CREATE INDEX` wrote
+  `DESC` from the largest value down and reads them that way, which
+  `sqlite3CreateIndex` honors on a file of schema format 4 and ignores
+  below it, so the planner answers an `ORDER BY DESC` over such an index
+  by the walk. D-371 records it, superseding D-367. Catalog 6.6.255.
+  `descidx1.test` goes from 35 cases passing to 42.
+
 - `db-sqlite` answers `Writer::outside`, the file as the transaction of
   the connection found it, and the suite harness reads a statement of
   another connection over the same path through it, so a transaction one

@@ -17,7 +17,7 @@
 use alloc::vec::Vec;
 
 use crate::db::{Database, Error};
-use crate::value::{Collation, Value};
+use crate::value::Value;
 
 /// One row of `sqlite_stat1`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -67,7 +67,7 @@ pub fn stats_of(
         out.push(Stat {
             table: table.to_vec(),
             index: Some(kept.index.name.clone()),
-            stat: stat_of(kept, database.encoding(), &rows)?,
+            stat: stat_of(kept, database.encoding(), database.schema_format(), &rows)?,
         });
     }
     Ok(out)
@@ -79,6 +79,7 @@ pub fn stats_of(
 fn stat_of(
     kept: &crate::db::Indexed<'_>,
     encoding: crate::header::Encoding,
+    format: u32,
     rows: &[(i64, Vec<Value>)],
 ) -> Result<Vec<u8>, Error> {
     let index = kept.index;
@@ -96,7 +97,7 @@ fn stat_of(
         let key = [Value::Int(*rowid)];
         keys.push(crate::change::entry_of(index, &over, values, &key)?);
     }
-    let collations = crate::change::collations_of(index);
+    let collations = crate::change::collations_of(index, format);
     keys.sort_by(|one, other| crate::change::order_of_keys(one, other, &collations));
     let columns = index.columns.len();
     // One entry of its own is one value of its own for every prefix,
@@ -113,8 +114,8 @@ fn stat_of(
             .take(columns)
             .enumerate()
             .find(|(at, (mine, theirs))| {
-                let collation = collations.get(*at).copied().unwrap_or(Collation::Binary);
-                crate::value::compare(mine, theirs, collation) != core::cmp::Ordering::Equal
+                let placing = collations.get(*at).copied().unwrap_or_default();
+                crate::value::compare_placed(mine, theirs, placing) != core::cmp::Ordering::Equal
             })
             .map(|(at, _)| at);
         if let Some(at) = first {
