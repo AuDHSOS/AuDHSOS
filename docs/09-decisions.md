@@ -222,6 +222,10 @@ End-to-end, SSH and TLS runs check display, drawing-application and network
 startup separately before application output. QEMU 8.2.2 TCG with four
 processors exceeded the old whole-boot wait while still loading programs.
 Each stage retains the 180-second deadline and all application assertions.
+The runner connects when the network client listens, before waiting for
+later programs. SMP lets the client's accept deadline expire while the
+root task loads those programs.
+The anchor-count assertion waits for the TLS application's final report.
 
 The root task grants the unused bootstrap-region remainder to the memory
 server. Selecting the largest region for bootstrap otherwise withheld most

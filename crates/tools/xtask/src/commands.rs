@@ -295,8 +295,8 @@ const E2E_LINES: [(&str, &str); 25] = [
         "the program that uses a socket did not start",
     ),
     (
-        "[tls-app] anchors=",
-        "the program that reads the trust anchors reported none",
+        "[tls-app] trust anchors=",
+        "the program that reads the trust anchors did not finish",
     ),
     (
         "[faulter] about to write to nowhere",
@@ -311,6 +311,16 @@ const E2E_LINES: [(&str, &str); 25] = [
 /// The four structures a driver of the network device needs, which the bus
 /// walk has to have read off the device itself.
 const VIRTIO_STRUCTURES: [&str; 4] = ["common", "notify", "isr", "device"];
+
+/// Wait for each checkpoint and report the first missing line.
+fn wait_for_lines(session: &mut Session, lines: &[(&str, &str)]) -> Vec<String> {
+    for (needle, complaint) in lines {
+        if !session.wait_for(needle, E2E_TIMEOUT) {
+            return vec![(*complaint).to_owned()];
+        }
+    }
+    Vec::new()
+}
 
 /// What the line about the virtio device does not say.
 ///
@@ -496,27 +506,20 @@ fn test_e2e(root: &Path, options: &[String]) -> Result<(), Error> {
     let forwarded = run.network;
     let mut session = Session::start(&machine, &path, &run)?;
 
-    let mut violations = Vec::new();
-    for (needle, complaint) in BOOT_PROGRESS.into_iter().chain(E2E_LINES) {
-        if !session.wait_for(needle, E2E_TIMEOUT) {
-            violations.push((*complaint).to_owned());
-            break;
-        }
+    let mut violations = wait_for_lines(&mut session, &BOOT_PROGRESS);
+    // Connect before waiting for later programs: the listener's deadline
+    // starts while the root task is still loading those programs on SMP.
+    if violations.is_empty() {
+        violations.extend(exchange_over_the_network(forwarded, &mut session));
+    }
+    if violations.is_empty() {
+        violations.extend(wait_for_lines(&mut session, &E2E_LINES));
     }
     if violations.is_empty() {
         violations.extend(virtio_lines(&session.output()));
     }
     if violations.is_empty() {
         violations.extend(block_lines(&session.output()));
-    }
-    // The network, before anything else this run drives: the program of
-    // the image takes the connection the forwarded port opens, sends back
-    // what it was sent, and then makes an HTTP request over the same
-    // connection, which this answers. It waits for the connection with a
-    // deadline of its own, so the runner opens it as soon as the program
-    // says it is listening.
-    if violations.is_empty() {
-        violations.extend(exchange_over_the_network(forwarded, &mut session));
     }
     if violations.is_empty() {
         violations.extend(network_lines(&session.output()));
