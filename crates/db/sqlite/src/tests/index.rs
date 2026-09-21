@@ -840,6 +840,82 @@ fn explain_query_plan_names_the_walk_of_every_side() {
 }
 
 #[test]
+fn an_index_that_holds_every_column_read_answers_the_row_out_of_its_entry() {
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT q FROM m WHERE q='b'"
+        ),
+        "SEARCH m USING COVERING INDEX mq (q=?)"
+    );
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT q FROM m ORDER BY q"
+        ),
+        "SCAN m USING COVERING INDEX mq"
+    );
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT p,q FROM m WHERE p=1"
+        ),
+        "SEARCH m USING COVERING INDEX mpq (p=?)"
+    );
+    // The rowid ends every entry, so a statement reading it reads no
+    // row of the table either.
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT rowid, q FROM m WHERE q='b'"
+        ),
+        "SEARCH m USING COVERING INDEX mq (q=?)"
+    );
+    // A column the index leaves out is read from the table.
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT p FROM m WHERE q='b'"
+        ),
+        "SEARCH m USING INDEX mq (q=?)"
+    );
+    // The rows a covering walk answers are the rows the table holds.
+    assert_eq!(
+        listed(super::INDEXED, b"SELECT q FROM m WHERE q='A'"),
+        "Text([65]),Text([65])"
+    );
+    assert_eq!(
+        listed(super::INDEXED, b"SELECT rowid FROM m WHERE q='A'"),
+        "1,3"
+    );
+    assert_eq!(
+        listed(super::INDEXED, b"SELECT p FROM m ORDER BY p"),
+        "1,1,2,2,3"
+    );
+}
+
+#[test]
+fn a_covering_walk_refuses_an_entry_whose_later_value_it_cannot_read() {
+    // The descent compares the key alone, so an entry whose second
+    // serial type is one no type answers is read out of the walk and
+    // refused where the row is built from it.
+    let mut bytes = super::INDEXED.to_vec();
+    let root = usize::try_from(index_root(&bytes, b"mpq")).unwrap();
+    let at = (root - 1) * 4096;
+    let pointer = at + 8;
+    let offset = usize::from(u16::from_be_bytes([bytes[pointer], bytes[pointer + 1]]));
+    // The cell holds the length of its payload, then the record: the
+    // length of the header, then one serial type per value.
+    bytes[at + offset + 3] = 10;
+    assert!(
+        Database::open(&bytes)
+            .unwrap()
+            .query(b"SELECT p, q FROM m WHERE p=1")
+            .is_err()
+    );
+}
+
+#[test]
 fn an_order_by_that_names_an_alias_answers_what_the_alias_names() {
     assert_eq!(
         listed(super::INDEXED, b"SELECT r AS q FROM m ORDER BY q"),

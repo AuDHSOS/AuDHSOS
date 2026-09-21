@@ -16,6 +16,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` answers a row out of the entry of an index that holds
+  every column the statement reads, so the table's tree is not
+  descended and each row costs O(log n) less. D-377 records it. Catalog
+  6.6.261. `like.test` goes from 66 cases passing to 108.
+
 - `db-sqlite` plans a term of an `ORDER BY` that counts or names a
   column of the answer against what that column answers, so
   `ORDER BY 1` reaches the walk of an index and `SELECT r AS q FROM m

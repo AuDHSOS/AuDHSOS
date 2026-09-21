@@ -1373,6 +1373,10 @@ struct Side<'a> {
     /// where this side's row is read rather than once per row of the
     /// sides after it.
     pushed: Vec<ExprId>,
+    /// Where each place of the index the plan names stands in the
+    /// table, where the index holds every column the statement reads
+    /// and the row is built from the entry rather than from the table.
+    covering: Option<Vec<Option<usize>>>,
 }
 
 /// What the column after the key of a plan is held between, which is
@@ -3389,6 +3393,7 @@ impl<'a> Database<'a> {
                     collating: self.collating,
                 },
             );
+        covered(arena, &select, sql, &mut sides);
         self.explain(&sides, !select.order.is_empty() && !walked);
         let mut rows: Vec<Sorted> = Vec::new();
         if !overs.is_empty() {
@@ -3570,6 +3575,7 @@ impl<'a> Database<'a> {
                 using,
                 plan: Plan::Rows(None, None),
                 pushed: Vec::new(),
+                covering: None,
             });
         }
         rightward(arena, sql, &out)?;
@@ -3678,6 +3684,7 @@ impl<'a> Database<'a> {
                     using: Vec::new(),
                     plan: Plan::Rows(None, None),
                     pushed: Vec::new(),
+                    covering: None,
                 };
                 let columns = side.shape.columns.clone();
                 let mut rows = Vec::new();
@@ -4047,7 +4054,7 @@ impl<'a> Database<'a> {
                 None => self.scanned(side, stored),
             };
         }
-        if let Some(held) = sought(&side.plan, cursor)
+        if let Some(held) = sought(&side.plan, side.covering.as_deref(), cursor)
             && let Some(feed) = self.keyed(stored, held)
         {
             return feed;
@@ -4069,7 +4076,7 @@ impl<'a> Database<'a> {
         if let Plan::Rows(first, last) = plan {
             return Some(self.ranged(stored, (*first, *last)));
         }
-        sought(plan, cursor).and_then(|held| self.keyed(stored, held))
+        sought(plan, None, cursor).and_then(|held| self.keyed(stored, held))
     }
 
     /// The walk of one index, held to the key the plan names, and
@@ -4088,6 +4095,7 @@ impl<'a> Database<'a> {
             bounds,
             backwards,
             reversed,
+            covering,
         } = held;
         let image = self.imaged(stored.place);
         // The descent stands on the first entry the walk takes, which is
@@ -4132,6 +4140,7 @@ impl<'a> Database<'a> {
             rowid_at,
             bounds,
             from_high,
+            covering,
             encoding: self.encoding,
             collation: self.collation(),
             payload: Vec::new(),
@@ -5063,6 +5072,85 @@ fn in_order(
     true
 }
 
+/// Marks each side whose index holds every column the statement reads
+/// of it, so the row is built from the entry and the table's tree is
+/// not descended.
+///
+/// This is the covering index of `sqlite3WhereBegin`, which sets
+/// `WHERE_IDX_ONLY` where `pWInfo->pTabList` names no column the index
+/// leaves out: the walk saves one descent of O(log n) per row.
+///
+/// Finding what the statement reads costs O(n) in the nodes and O(s) in
+/// the sides for each of them.
+fn covered(arena: &Arena, select: &Select, sql: &[u8], sides: &mut [Side<'_>]) {
+    let mut reading: Vec<Vec<usize>> = alloc::vec![Vec::new(); sides.len()];
+    // A `*` answers every column of the side it names, and a column no
+    // side of this statement answers is one this reading cannot place,
+    // so neither leaves an index covering.
+    let results = arena.results(select.columns);
+    if results.iter().any(|held| expression_of(held).is_none()) {
+        return;
+    }
+    for id in arena.column_places() {
+        match reached(arena, id, sql, sides) {
+            // A rowid is what every entry of an index ends with.
+            Some((_, Reached::Key)) => {}
+            Some((at, Reached::Column(place))) => {
+                for held in reading.iter_mut().skip(at).take(1) {
+                    held.push(place);
+                }
+            }
+            // A name no side of this statement answers is one this
+            // reading cannot place, so no index of it covers.
+            None => return,
+        }
+    }
+    // A `USING` or a `NATURAL` matches two sides by columns the
+    // statement does not write out.
+    for (at, side) in sides.iter().enumerate() {
+        for name in &side.using {
+            let place = side
+                .shape
+                .columns
+                .iter()
+                .position(|column| column.name.eq_ignore_ascii_case(name));
+            for held in reading.iter_mut().skip(at).take(1) {
+                held.extend(place);
+            }
+        }
+    }
+    for (side, read) in sides.iter_mut().zip(reading) {
+        side.covering = covering_of(side, &read);
+    }
+}
+
+/// Where each place of the index the side's plan names stands in the
+/// table, where the index holds every column of `read`.
+///
+/// A column the schema computes is held in an entry as the value it
+/// computed, and a column a row written before it was added falls back
+/// to is held as the value it fell back to, so an entry answers either
+/// one as the table does. A table that keeps its rows in the key's own
+/// tree reaches no such plan. The column the rowid is another name for
+/// is reached as the rowid and stands in no reading, because the rowid
+/// is what every entry ends with.
+fn covering_of(side: &Side<'_>, read: &[usize]) -> Option<Vec<Option<usize>>> {
+    let (Plan::Keyed { root, .. }, Source::Table(stored)) = (&side.plan, &side.source) else {
+        return None;
+    };
+    let kept = stored.indexes.iter().find(|kept| kept.root == *root)?;
+    let places: Vec<Option<usize>> = kept
+        .index
+        .columns
+        .iter()
+        .map(crate::schema::Keyed::place)
+        .collect();
+    if read.iter().all(|place| places.contains(&Some(*place))) {
+        return Some(places);
+    }
+    None
+}
+
 /// One line of an `EXPLAIN QUERY PLAN`: which line it hangs under,
 /// counting from one, and what it says.
 type Explained = (usize, Vec<u8>);
@@ -5078,11 +5166,14 @@ fn detailed(side: &Side<'_>, plan: &Plan, lines: &mut Vec<Explained>, parent: us
     // A side that reads what another statement answers names no index,
     // which is the `SCAN` `sqlite3SelectNew` writes for a co-routine.
     let Source::Table(stored) = &side.source else {
-        lines.push((parent, scanned(&side.name, b"")));
+        lines.push((parent, scanned(&side.name, b"", false)));
         return;
     };
+    // `sqlite3WhereExplainOneScan` says `COVERING` for a walk that
+    // reads no row of the table.
+    let covering = side.covering.is_some();
     match plan {
-        Plan::Rows(None, None) => lines.push((parent, scanned(&side.name, b""))),
+        Plan::Rows(None, None) => lines.push((parent, scanned(&side.name, b"", false))),
         Plan::Rows(low, high) => {
             let mut held = b"SEARCH ".to_vec();
             held.extend_from_slice(&side.name);
@@ -5117,14 +5208,14 @@ fn detailed(side: &Side<'_>, plan: &Plan, lines: &mut Vec<Explained>, parent: us
             }
             lines.push((
                 parent,
-                searched(&side.name, &named_index(stored, *root), &terms),
+                searched(&side.name, &named_index(stored, *root), &terms, covering),
             ));
         }
         Plan::Joined { root, .. } => {
             let terms = alloc::vec![term_of(stored, *root, 0, b"=?")];
             lines.push((
                 parent,
-                searched(&side.name, &named_index(stored, *root), &terms),
+                searched(&side.name, &named_index(stored, *root), &terms, covering),
             ));
         }
         Plan::Union(branches) => {
@@ -5144,25 +5235,35 @@ fn detailed(side: &Side<'_>, plan: &Plan, lines: &mut Vec<Explained>, parent: us
 }
 
 /// `SCAN t`, with the index the walk reads where `index` names one.
-fn scanned(name: &[u8], index: &[u8]) -> Vec<u8> {
+fn scanned(name: &[u8], index: &[u8], covering: bool) -> Vec<u8> {
     let mut held = b"SCAN ".to_vec();
     held.extend_from_slice(name);
     if !index.is_empty() {
-        held.extend_from_slice(b" USING INDEX ");
+        held.extend_from_slice(using(covering));
         held.extend_from_slice(index);
     }
     held
 }
 
+/// The words in front of the index's name, which say whether the walk
+/// reads any row of the table.
+const fn using(covering: bool) -> &'static [u8] {
+    if covering {
+        b" USING COVERING INDEX "
+    } else {
+        b" USING INDEX "
+    }
+}
+
 /// `SEARCH t USING INDEX i (a=? AND b>?)`, which is `SCAN t USING
 /// INDEX i` where no term holds the walk to part of the index.
-fn searched(name: &[u8], index: &[u8], terms: &[Vec<u8>]) -> Vec<u8> {
+fn searched(name: &[u8], index: &[u8], terms: &[Vec<u8>], covering: bool) -> Vec<u8> {
     if terms.is_empty() {
-        return scanned(name, index);
+        return scanned(name, index, covering);
     }
     let mut held = b"SEARCH ".to_vec();
     held.extend_from_slice(name);
-    held.extend_from_slice(b" USING INDEX ");
+    held.extend_from_slice(using(covering));
     held.extend_from_slice(index);
     held.extend_from_slice(b" (");
     let spans: Vec<&[u8]> = terms.iter().map(alloc::vec::Vec::as_slice).collect();
@@ -5658,6 +5759,9 @@ struct Seek {
     backwards: bool,
     /// Whether the walk reads the entries from the last to the first.
     reversed: bool,
+    /// Where each place of the index stands in the table, where the
+    /// row is built from the entry.
+    covering: Option<Vec<Option<usize>>>,
 }
 
 /// What `plan` holds a walk of an index to.
@@ -5667,7 +5771,7 @@ struct Seek {
 /// makes the walk fall back to the whole tree.
 ///
 /// Reading one key costs what the expression it is read from costs.
-fn sought(plan: &Plan, cursor: &Cursor<'_>) -> Option<Seek> {
+fn sought(plan: &Plan, covering: Option<&[Option<usize>]>, cursor: &Cursor<'_>) -> Option<Seek> {
     match plan {
         Plan::Rows(_, _) | Plan::Union(_) => None,
         Plan::Keyed {
@@ -5686,6 +5790,7 @@ fn sought(plan: &Plan, cursor: &Cursor<'_>) -> Option<Seek> {
             bounds: bounds.clone(),
             backwards: *backwards,
             reversed: *reversed,
+            covering: covering.map(<[Option<usize>]>::to_vec),
         }),
         Plan::Joined {
             root,
@@ -5711,6 +5816,7 @@ fn sought(plan: &Plan, cursor: &Cursor<'_>) -> Option<Seek> {
                 bounds: Bounds::default(),
                 backwards: false,
                 reversed: false,
+                covering: None,
             })
         }
     }
@@ -6082,6 +6188,9 @@ struct Sought<'i, 'f> {
     bounds: Bounds,
     /// Whether the walk begins at the high end of the bounds.
     from_high: bool,
+    /// Where each place of the index stands in the table, where the row
+    /// is built from the entry and the table's tree is not descended.
+    covering: Option<Vec<Option<usize>>>,
     /// Where the rowid stands in an entry.
     rowid_at: usize,
     /// What encoding the file keeps its text in.
@@ -6151,6 +6260,27 @@ impl<'i> Sought<'i, '_> {
         }
         if self.is_past(&entry)? {
             return Ok(None);
+        }
+        // An index that holds every column the statement reads answers
+        // the row out of the entry, which saves the O(log n) descent.
+        if let Some(places) = self.covering.clone() {
+            let mut values = entry_values(
+                &self.image,
+                &entry,
+                &places,
+                self.stored,
+                self.encoding,
+                &mut self.payload,
+            )?;
+            let rowid = rowid_of(&self.image, &entry, self.rowid_at, &mut self.payload)?;
+            // The column the rowid is another name for holds nothing of
+            // its own: the key is what it answers. A table that carries
+            // no such column is skipped past its last value.
+            let alias = self.stored.table.rowid_alias.unwrap_or(usize::MAX);
+            for slot in values.iter_mut().skip(alias).take(1) {
+                *slot = Value::Int(rowid);
+            }
+            return Ok(Some((Some(rowid), values)));
         }
         let rowid = rowid_of(&self.image, &entry, self.rowid_at, &mut self.payload)?;
         // The row the entry names, which the table's tree is descended
@@ -6293,6 +6423,55 @@ fn value_of_entry(
         record::Record::parse(held)?
     };
     held_value(&record, at, encoding)
+}
+
+/// The row one entry of a covering index answers: the columns the index
+/// holds, read out of the entry, and nothing for the rest.
+///
+/// `places` says where each place of the index stands in the table. A
+/// column no place holds is one the statement does not read, so the row
+/// answers nothing there, which is what `OP_IdxColumn` leaves a register
+/// that no `OP_Column` of the loop reads. The column the rowid is
+/// another name for is filled from the rowid by the caller.
+fn entry_values(
+    image: &Image<'_>,
+    entry: &crate::page::Payload<'_>,
+    places: &[Option<usize>],
+    stored: &Stored,
+    encoding: Encoding,
+    scratch: &mut Vec<u8>,
+) -> Result<Vec<Value>, Error> {
+    let held;
+    let record = if entry.is_whole() {
+        record::Record::parse(entry.local)?
+    } else {
+        read_payload(image, entry, scratch)?;
+        held = scratch;
+        record::Record::parse(held)?
+    };
+    let table = &stored.table;
+    let mut out = alloc::vec![Value::Null; table.columns.len()];
+    for (at, held) in places.iter().enumerate() {
+        // A place that holds what an expression answers stands for no
+        // column of the table, so no column answers out of it.
+        let Some((place, column)) =
+            held.and_then(|place| table.columns.get(place).map(|column| (place, column)))
+        else {
+            continue;
+        };
+        let mut value = held_value(&record, at, encoding)?;
+        // A real that is a whole number is stored as an integer, and
+        // `OP_RealAffinity` is what turns it back on the way out.
+        if column.affinity == Affinity::Real
+            && let Value::Int(number) = value
+        {
+            value = Value::Real(crate::value::integer_as_real(number));
+        }
+        for slot in out.iter_mut().skip(place).take(1) {
+            *slot = value.clone();
+        }
+    }
+    Ok(out)
 }
 
 /// The rowid an entry ends with, which is the value after every column

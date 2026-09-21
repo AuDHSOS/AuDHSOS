@@ -977,6 +977,8 @@ Size: L.
 117. `EXPLAIN QUERY PLAN`. Built, which D-375 records.
 118. The column of the answer a term of an `ORDER BY` counts or
      names. Built, which D-376 records.
+119. The row read out of the entry of a covering index. Built, which
+     D-377 records.
 
 ### Done when
 

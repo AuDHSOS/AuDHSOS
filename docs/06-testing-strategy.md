@@ -6772,3 +6772,13 @@ Document 16 step Q8.
 - A whole number counting to one answered column and to several.
 - A name one column is answered under, over a column of another name.
 - A number written where the statement carries a `*`.
+
+### 6.6.261 The row read out of a covering index (`db-sqlite`)
+
+Document 16 step Q8.
+
+- An index holding every column read, one leaving a column out, and one
+  read together with the rowid.
+- A walk held to a key and a walk of the whole index, each answering the
+  rows the table holds.
+- `EXPLAIN QUERY PLAN` saying `USING COVERING INDEX` for such a walk.

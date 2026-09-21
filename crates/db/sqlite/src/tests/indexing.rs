@@ -335,3 +335,68 @@ fn an_index_written_desc_on_an_old_format_holds_its_entries_forwards() {
     let answer = database.query(b"PRAGMA integrity_check").unwrap();
     assert_eq!(answer.rows, [alloc::vec![Value::Text(b"ok".to_vec())]]);
 }
+
+/// A walk of a covering index answers the values the table holds: a
+/// place that holds what an expression answers stands for no column,
+/// a column of real affinity holds a whole number as a whole number,
+/// and an entry longer than a page runs onto an overflow page.
+#[test]
+fn a_covering_index_answers_the_values_the_table_holds() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    let long = alloc::string::String::from_utf8(alloc::vec![b'x'; 4000]).unwrap();
+    for sql in [
+        b"CREATE TABLE t(a, b REAL, c)".as_slice(),
+        b"CREATE INDEX tab ON t(a, b, abs(c))",
+        b"INSERT INTO t VALUES(1,2,3),(2,4.5,6)",
+        b"CREATE TABLE u(x)",
+        b"CREATE INDEX ux ON u(x)",
+        alloc::format!("INSERT INTO u VALUES('{long}')").as_bytes(),
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let bytes = writer.written();
+    let database = crate::db::Database::open(&bytes).unwrap();
+    assert_eq!(
+        database
+            .query(b"SELECT a, b FROM t WHERE a=1")
+            .unwrap()
+            .rows,
+        [alloc::vec![Value::Int(1), Value::Real(2.0)]]
+    );
+    assert_eq!(
+        database
+            .query(b"SELECT a, b FROM t ORDER BY a")
+            .unwrap()
+            .rows,
+        [
+            alloc::vec![Value::Int(1), Value::Real(2.0)],
+            alloc::vec![Value::Int(2), Value::Real(4.5)]
+        ]
+    );
+    let answer = database.query(b"SELECT x FROM u ORDER BY x").unwrap();
+    assert_eq!(answer.rows, [alloc::vec![Value::Text(long.into_bytes())]]);
+}
+
+/// The column the rowid is another name for is answered out of the
+/// rowid every entry ends with, so an index that holds it nowhere
+/// covers a statement that reads it.
+#[test]
+fn a_covering_index_answers_the_column_the_rowid_names() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE k(i INTEGER PRIMARY KEY, a)".as_slice(),
+        b"CREATE INDEX ka ON k(a)",
+        b"INSERT INTO k VALUES(7,'z'),(8,'y')",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let bytes = writer.written();
+    let database = crate::db::Database::open(&bytes).unwrap();
+    assert_eq!(
+        database
+            .query(b"SELECT i, a FROM k WHERE a='z'")
+            .unwrap()
+            .rows,
+        [alloc::vec![Value::Int(7), Value::Text(b"z".to_vec())]]
+    );
+}

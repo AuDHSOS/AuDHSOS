@@ -1544,6 +1544,20 @@ impl Arena {
             .copied()
     }
 
+    /// Where every column reference of the statement stands, in the
+    /// order the parser wrote the nodes.
+    ///
+    /// Costs O(n) over the nodes of the statement.
+    #[must_use]
+    pub fn column_places(&self) -> Vec<ExprId> {
+        self.nodes
+            .iter()
+            .enumerate()
+            .filter(|(_, node)| matches!(node, Node::Column { .. }))
+            .map(|(at, _)| ExprId(u32::try_from(at).unwrap_or(u32::MAX)))
+            .collect()
+    }
+
     /// The name and the arguments of every call of the statement, in
     /// the order the parser wrote the nodes.
     ///
