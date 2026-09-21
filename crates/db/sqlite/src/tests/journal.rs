@@ -393,3 +393,34 @@ fn a_playback_shortens_a_database_the_transaction_had_grown() {
     assert_eq!(back.len(), super::ROLLED.len());
     assert_eq!(back.get(..page), super::ROLLED.get(..page));
 }
+
+#[test]
+fn the_file_a_transaction_found_is_what_a_connection_outside_it_reads() {
+    use crate::change::Writer;
+    use crate::header::Encoding;
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t(a)".as_slice(),
+        b"CREATE TABLE u(b)",
+        // A row of its own page, which the transaction leaves alone.
+        b"INSERT INTO u VALUES(zeroblob(500))",
+        b"INSERT INTO t VALUES(1)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let before = writer.written();
+    writer.run(b"BEGIN").unwrap();
+    // Enough rows to make the transaction write a page the file did not
+    // hold, so the image it found is shorter than the one it wrote.
+    for _ in 0..200 {
+        writer.run(b"INSERT INTO t VALUES(zeroblob(200))").unwrap();
+    }
+    assert_eq!(writer.outside(), before);
+    assert_ne!(writer.written(), before);
+    // A connection in write-ahead logging holds the file the pragma
+    // left, which is what it answers either way.
+    let mut logged = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    logged.run(b"PRAGMA journal_mode = wal").unwrap();
+    logged.run(b"CREATE TABLE t(a)").unwrap();
+    assert_eq!(logged.outside(), logged.written());
+}

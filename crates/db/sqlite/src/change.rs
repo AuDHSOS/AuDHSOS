@@ -1076,6 +1076,24 @@ impl Writer {
         written_image(&self.held)
     }
 
+    /// The file as the transaction of this connection found it, which is
+    /// what a connection that did not begin that transaction reads:
+    /// `sqlite3PagerSharedLock` answers the pages of the file and a
+    /// transaction another connection began has written none of them
+    /// yet.
+    ///
+    /// A connection with no transaction open has written every page it
+    /// holds, and [`Writer::written`] is the file it answers.
+    ///
+    /// Building the image costs O(n) in the pages.
+    #[must_use]
+    pub fn outside(&self) -> Vec<u8> {
+        match &self.held.origin {
+            Some(bytes) => bytes.clone(),
+            None => self.held.pages.committed(&self.held.header),
+        }
+    }
+
     /// The image of the database the connection holds under `name`, and
     /// nothing where it holds none under that name.
     ///

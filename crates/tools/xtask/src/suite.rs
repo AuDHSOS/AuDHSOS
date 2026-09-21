@@ -638,6 +638,10 @@ struct Session {
     /// The three counters of each connection, which belong to a
     /// connection and not to the file the connection opened.
     counters: BTreeMap<String, Counted>,
+    /// Which connection holds the transaction open on each path, where
+    /// one does. A connection that did not begin it reads the file as
+    /// the transaction found it.
+    owners: BTreeMap<String, String>,
     /// What the last statement of each connection counted, which
     /// `db status` answers.
     stepped: BTreeMap<String, db_sqlite::db::Stepped>,
@@ -689,6 +693,7 @@ impl Session {
             nulls: BTreeMap::new(),
             stamps: BTreeMap::new(),
             counters: BTreeMap::new(),
+            owners: BTreeMap::new(),
             stepped: BTreeMap::new(),
             pragmas: BTreeMap::new(),
             collations: BTreeMap::new(),
@@ -1476,7 +1481,7 @@ impl Session {
             .held
             .get(&path)
             .ok_or_else(|| format!("no such database: {path}"))?;
-        answered_rows(writer, sql, collating, defines)
+        answered_rows(writer, sql, collating, defines, false)
     }
 
     /// `sqlite3_step STMT`: the code the step answers, which is
@@ -1810,6 +1815,9 @@ impl Session {
         let defines = self.defines(name);
         let asks = self.authorizers.contains_key(name);
         let hooked = self.hooked.get(name).cloned().unwrap_or_default();
+        // A connection that did not begin the transaction open on the
+        // path reads the file as that transaction found it.
+        let outside = self.owners.get(&path).is_some_and(|held| held != name);
         let writer = self
             .held
             .get_mut(&path)
@@ -1859,7 +1867,7 @@ impl Session {
             if text.trim().is_empty() {
                 continue;
             }
-            match run_one(writer, text, collating, defines) {
+            match run_one(writer, text, collating, defines, outside) {
                 Ok(values) => out.extend(values.iter().map(|value| listed(value, &null))),
                 Err(message) => {
                     ran = Err(message);
@@ -1869,7 +1877,13 @@ impl Session {
         }
         let counted = writer.counts();
         let kept = writer.kept();
+        let began = writer.began();
         let files = writer.attached_files();
+        if began {
+            self.owners.entry(path.clone()).or_insert(name.to_owned());
+        } else {
+            self.owners.remove(&path);
+        }
         self.stepped
             .insert(name.to_owned(), STEPPED.with(core::cell::Cell::take));
         self.counters.insert(name.to_owned(), counted);
@@ -2491,13 +2505,14 @@ fn run_one(
     text: &str,
     collating: &'static [Collating],
     defines: &'static [Defined],
+    outside: bool,
 ) -> Result<Vec<Value>, String> {
     let mut out = Vec::new();
     // `tclsqlite.c:1790` reads the counters of each statement in turn,
     // so the last statement of a run is the one `db status` answers for.
     STEPPED.with(|held| held.set(db_sqlite::db::Stepped::default()));
     if reads(text) {
-        let answered = answered_rows(writer, text, collating, defines)?;
+        let answered = answered_rows(writer, text, collating, defines, outside)?;
         STEPPED.with(|held| held.set(answered.stepped));
         for row in &answered.rows {
             out.extend(row.iter().cloned());
@@ -2524,10 +2539,15 @@ fn answered_rows(
     text: &str,
     collating: &'static [Collating],
     defines: &'static [Defined],
+    outside: bool,
 ) -> Result<db_sqlite::db::Answer, String> {
     {
         let beside = attached_images(writer);
-        let bytes = writer.written();
+        let bytes = if outside {
+            writer.outside()
+        } else {
+            writer.written()
+        };
         // A connection in write-ahead logging holds its newest pages in
         // the log, so a reader follows the log beside the file.
         let log = writer.log().map(db_sqlite::wal::Wal::open);

@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` answers `Writer::outside`, the file as the transaction of
+  the connection found it, and the suite harness reads a statement of
+  another connection over the same path through it, so a transaction one
+  connection began is one the others do not see. D-370 records it.
+  Catalog 6.6.254. `trans.test` goes from 240 cases passing to 243.
+
 - `db-sqlite` reads `x BETWEEN a AND b` as the two bounds `x >= a` and
   `x <= b`, so a walk is held at both ends and a branch of an `OR` that
   writes one reaches a walk. D-369 records it. `where7.test` goes from

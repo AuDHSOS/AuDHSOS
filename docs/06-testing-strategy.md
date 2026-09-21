@@ -6703,3 +6703,13 @@ Document 16 step Q8.
 - A `BETWEEN` over the rowid and one over a column, and a `BETWEEN`
   written after `NOT`, over a value that is no column, or whose end is a
   column.
+
+### 6.6.254 The file a transaction found (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A transaction that writes a page the file already held, one that
+  writes a page the file did not hold, and a page the transaction leaves
+  alone.
+- A connection in write-ahead logging answers the file the pragma left
+  either way.

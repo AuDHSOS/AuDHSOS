@@ -1230,6 +1230,31 @@ impl Pages {
             .collect();
         crate::image::write(&header, &pages)
     }
+
+    /// The file as it stood when the transaction began: the pages the
+    /// transaction opened to write as it found them, the length the file
+    /// had, and the header page one held then.
+    ///
+    /// `sqlite3PagerSharedLock` answers a reader the pages of the file,
+    /// so a connection that did not begin the transaction reads these
+    /// and not the pages the transaction has written.
+    ///
+    /// Building the image costs O(n) in the pages.
+    #[must_use]
+    pub fn committed(&self, header: &Header) -> Vec<u8> {
+        let pages: Vec<Vec<u8>> = (0..size(u64::from(self.origin)))
+            .map(|at| match self.before.get(at).and_then(Option::as_ref) {
+                Some(bytes) => bytes.clone(),
+                None => self.held.get(at).cloned().unwrap_or_default(),
+            })
+            .collect();
+        let mut held = pages
+            .first()
+            .and_then(|page| Header::parse(page).ok())
+            .unwrap_or(*header);
+        (held.freelist, held.freelist_pages) = self.list;
+        crate::image::write(&held, &pages)
+    }
 }
 
 /// Where a trunk of the free list holds the leaf at `index`, which is
