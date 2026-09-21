@@ -6644,3 +6644,22 @@ Document 16 step Q8.
 - A branch whose index the descent cannot read leaves the table scanned;
   one whose index the walk cannot read refuses.
 - A term that carries a `COLLATE` names no key.
+
+### 6.6.251 The steps and the sorts of a statement (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A walk of a whole table counts one step per row after the first, and
+  an empty table counts none.
+- A walk held to a key, by an index, by a rowid range, by an `ON` or by
+  the branches of an `OR`, counts no step.
+- An `ORDER BY` the walk of the table's own tree answers needs no sort.
+- An `ORDER BY` the walk of an index answers needs no sort, with a last
+  term naming the rowid among them.
+- A term written backwards, with its nulls moved, over an expression or
+  under a collation of its own leaves the rows sorted.
+- A join, a group, a window, a statement inside a `FROM` and a table
+  that keeps its rows in the key's own tree each leave the rows sorted.
+- An index over an expression, a partial index and an index under
+  another collation answer no order.
+- The `ORDER BY` of a compound statement counts one sort.

@@ -7,6 +7,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` reads a statement whose `ORDER BY` names the columns one
+  index holds its entries in by a walk of that index and answers no
+  sort, and `Answer::stepped` carries what the walks and the sorts of
+  the statement counted, which the suite tester answers `DB status step`
+  and `DB status sort` from. D-365 records it. Catalog 6.6.251.
+  `where.test` goes from 76 cases passing to 116, `where9.test` from 35
+  to 55 and `where7.test` from 3 to 44.
+
 - `db-sqlite` reads a `WHERE` whose top-level `OR` names a key of an
   index for every branch by one walk per branch, one after another, with
   a row two branches name answered once, and a term that carries a

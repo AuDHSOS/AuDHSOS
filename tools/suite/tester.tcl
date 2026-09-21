@@ -655,6 +655,7 @@ proc sqlite3 {args} {
         return {}
       }
       errorcode { return [lindex [harness_send errorcode %N%] 0] }
+      status { return [lindex [harness_send status %N% [lindex $args 0]] 0] }
       complete { return [lindex [harness_send complete %N% [lindex $args 0]] 0] }
       collate {
         set ::collations([lindex $args 0]) [lindex $args 1]

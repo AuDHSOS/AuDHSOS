@@ -55,11 +55,12 @@ Before this track the harness read nine commands of a file and counted
 every other command as one it could not run: 1171 files held 17 724
 cases it knew about, and 13 086 of them were refused because a step
 before them was such a command. Running the files under `tclsh` makes
-118 297 cases of 847 files: 105 772 pass, 3372 answer differently and
-9153 are refused.
+117 006 cases of 847 files: 105 884 pass, 4084 answer differently and
+7038 are refused. `where7.test` reaches the three-minute deadline after
+594 of its 2020 cases, which is why the count of cases is lower than it
+was before D-365.
 
-What the 9153 refusals are for, most first: `db status` (2114), which
-answers counters of memory and of the page cache; `sqlite3_memdebug_fail`
+What the 7038 refusals are for, most first: `sqlite3_memdebug_fail`
 (1261), which fails one allocation of the C library; `crash_on_write`
 (960) and the crash the harness does not simulate (435); a table an
 earlier refusal left unmade (683); `EXPLAIN` and `EXPLAIN QUERY PLAN`
@@ -67,8 +68,8 @@ earlier refusal left unmade (683); `EXPLAIN` and `EXPLAIN QUERY PLAN`
 earlier case left inside a transaction (632); a statement the engine
 does not read (203); `sqlite3_quota_glob` (108), which counts the bytes a
 file may take; and `db format` (105), which writes a row the way the
-shell writes it. `sqlite3_stmt_readonly` was among them until D-338 and
-`REGEXP` until D-362, and neither is.
+shell writes it. `sqlite3_stmt_readonly` was among them until D-338,
+`REGEXP` until D-362 and `db status` until D-365, and none is.
 
 `--configuration` opens every connection of a run under one of nine
 page-size, encoding and journal-mode settings, which D-275 decides.
@@ -76,7 +77,7 @@ What each answers, over the same files:
 
 | Configuration | Passed | Answered differently | Refused |
 |---------------|-------:|---------------------:|--------:|
-| `utf8-4096-delete` | 105 772 | 3372 | 9153 |
+| `utf8-4096-delete` | 105 884 | 4084 | 7038 |
 | `utf16le-4096-delete` | 61 214 | 2392 | 9500 |
 | `utf16be-4096-delete` | 61 229 | 2392 | 9500 |
 | `utf8-512-delete` | 61 073 | 2452 | 9435 |
@@ -447,6 +448,8 @@ Size: S.
     registers the functions of `regexp` on the connection, and the
     runner reads every file under the system encoding UTF-8, which
     D-362 and D-363 record.
+31. `DB status (step|sort|autoindex|vmstep)` answers what the last
+    statement of the connection counted, which D-365 records.
 
 ### Produces
 

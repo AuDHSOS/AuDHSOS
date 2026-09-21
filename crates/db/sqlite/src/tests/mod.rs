@@ -67,6 +67,7 @@ mod rowvalue;
 mod savepoint;
 mod schema;
 mod separator;
+mod stepped;
 mod strict;
 mod token;
 mod tree;

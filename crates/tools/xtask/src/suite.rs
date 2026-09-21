@@ -638,6 +638,9 @@ struct Session {
     /// The three counters of each connection, which belong to a
     /// connection and not to the file the connection opened.
     counters: BTreeMap<String, Counted>,
+    /// What the last statement of each connection counted, which
+    /// `db status` answers.
+    stepped: BTreeMap<String, db_sqlite::db::Stepped>,
     /// What each connection was told for the pragmas it keeps a value
     /// for, which belong to a connection and not to the file.
     pragmas: BTreeMap<String, Kept>,
@@ -686,6 +689,7 @@ impl Session {
             nulls: BTreeMap::new(),
             stamps: BTreeMap::new(),
             counters: BTreeMap::new(),
+            stepped: BTreeMap::new(),
             pragmas: BTreeMap::new(),
             collations: BTreeMap::new(),
             functions: BTreeMap::new(),
@@ -816,6 +820,8 @@ impl Session {
                 self.nulls.insert(first.to_owned(), second.to_owned());
                 Ok(Vec::new())
             }
+            // `db status (step|sort|autoindex|vmstep)`.
+            "status" => self.status(first, second),
             "clock" => self.ticks(first),
             // `sqlite3_set_authorizer`, `sqlite3_commit_hook`,
             // `sqlite3_rollback_hook` and `sqlite3_update_hook`.
@@ -1250,6 +1256,23 @@ impl Session {
         }
         defined.extend_from_slice(EXTENDED);
         *held = Box::leak(defined.into_boxed_slice());
+    }
+
+    /// `db status (step|sort|autoindex|vmstep)` of `tclsqlite.c:3766`:
+    /// what the last statement the connection ran counted. This harness
+    /// counts no automatic index and no step of a program, so both
+    /// answer nought.
+    fn status(&self, connection: &str, what: &str) -> Result<Vec<String>, String> {
+        let held = self.stepped.get(connection).copied().unwrap_or_default();
+        let count = match what {
+            "step" => held.steps,
+            "sort" => held.sorts,
+            "autoindex" | "vmstep" => 0,
+            _ => {
+                return Err("bad argument: should be autoindex, step, sort or vmstep".to_owned());
+            }
+        };
+        Ok(alloc_one(&count.to_string()))
     }
 
     /// `sqlite_current_time` of `test1.c`: the moment `now` names, as
@@ -1847,6 +1870,8 @@ impl Session {
         let counted = writer.counts();
         let kept = writer.kept();
         let files = writer.attached_files();
+        self.stepped
+            .insert(name.to_owned(), STEPPED.with(core::cell::Cell::take));
         self.counters.insert(name.to_owned(), counted);
         self.pragmas.insert(name.to_owned(), kept);
         self.mirror(&path, files);
@@ -2001,6 +2026,11 @@ struct Line {
 }
 
 thread_local! {
+    /// What the walks and the sorts of the last statement counted, which
+    /// `db status` answers, because `run_one` carries no connection.
+    static STEPPED: core::cell::Cell<db_sqlite::db::Stepped> =
+        const { core::cell::Cell::new(db_sqlite::db::Stepped { steps: 0, sorts: 0 }) };
+
     /// The line of the run on this thread, which `asked` reaches
     /// because `Comparing` is a bare function and carries nothing.
     static LINE: RefCell<Option<Line>> = const { RefCell::new(None) };
@@ -2463,8 +2493,12 @@ fn run_one(
     defines: &'static [Defined],
 ) -> Result<Vec<Value>, String> {
     let mut out = Vec::new();
+    // `tclsqlite.c:1790` reads the counters of each statement in turn,
+    // so the last statement of a run is the one `db status` answers for.
+    STEPPED.with(|held| held.set(db_sqlite::db::Stepped::default()));
     if reads(text) {
         let answered = answered_rows(writer, text, collating, defines)?;
+        STEPPED.with(|held| held.set(answered.stepped));
         for row in &answered.rows {
             out.extend(row.iter().cloned());
         }

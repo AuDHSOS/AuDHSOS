@@ -1657,6 +1657,11 @@ pub struct Database<'a> {
     /// through a shared reference, so the cell is what carries it from
     /// the reading of the statement to the rows it answers.
     ignored: core::cell::RefCell<Vec<(Vec<u8>, Vec<u8>)>>,
+    /// What the walks and the sorts of the statement running now have
+    /// counted. The counts belong to the statement and the statement is
+    /// answered through a shared reference, so the cell is what carries
+    /// them out to the answer.
+    stepped: core::cell::Cell<Stepped>,
     /// What the connection has written, which `changes()`,
     /// `total_changes()` and `last_insert_rowid()` answer.
     counted: crate::func::Counted,
@@ -1793,6 +1798,21 @@ pub struct Answer {
     pub declared: Vec<Vec<u8>>,
     /// The rows, each as many values as there are names.
     pub rows: Vec<Vec<Value>>,
+    /// What the walks and the sorts of the statement counted.
+    pub stepped: Stepped,
+}
+
+/// What one statement's walks and sorts counted, which
+/// `sqlite3_stmt_status` answers for `SQLITE_STMTSTATUS_FULLSCAN_STEP`
+/// and `SQLITE_STMTSTATUS_SORT`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Stepped {
+    /// The steps the walks of a whole table and of a whole index took,
+    /// which is one per row after the first of each walk, as `OP_Next`
+    /// counts them.
+    pub steps: u64,
+    /// How many times the rows were sorted, which `OP_Sort` counts.
+    pub sorts: u64,
 }
 
 impl<'a> Database<'a> {
@@ -1881,6 +1901,7 @@ impl<'a> Database<'a> {
             sensitive: false,
             asking: None,
             ignored: core::cell::RefCell::new(Vec::new()),
+            stepped: core::cell::Cell::new(Stepped::default()),
             counted: crate::func::Counted::default(),
             naming: Naming::default(),
             defined: &[],
@@ -2891,7 +2912,24 @@ impl<'a> Database<'a> {
     ///
     /// [`Error`] names what it could not answer and why.
     pub fn query(&self, sql: &[u8]) -> Result<Answer, Error> {
-        self.queried(sql).map_err(|error| error.near(sql))
+        self.stepped.set(Stepped::default());
+        let mut answer = self.queried(sql).map_err(|error| error.near(sql))?;
+        answer.stepped = self.stepped.get();
+        Ok(answer)
+    }
+
+    /// Counts `steps` more steps of a walk.
+    fn step(&self, steps: u64) {
+        let mut held = self.stepped.get();
+        held.steps = held.steps.saturating_add(steps);
+        self.stepped.set(held);
+    }
+
+    /// Counts one more sort.
+    fn sort(&self) {
+        let mut held = self.stepped.get();
+        held.sorts = held.sorts.saturating_add(1);
+        self.stepped.set(held);
     }
 
     /// One statement answered, with a parse answered as the parser
@@ -3006,6 +3044,7 @@ impl<'a> Database<'a> {
             declared: alloc::vec![Vec::new(); columns.len()],
             names: columns.clone(),
             rows,
+            stepped: Stepped::default(),
         };
         if let Some(quick) = quick {
             let asked = crate::check::checking(asked.value.map(|value| value.text(sql)));
@@ -3155,6 +3194,7 @@ impl<'a> Database<'a> {
         }
         let keys = matched(arena, &first, sql, &cores, &collations, self.collating)?;
         if !keys.is_empty() {
+            self.sort();
             sort_by_keys(&mut answer.rows, &keys);
         }
         let reach = Reach {
@@ -3221,6 +3261,15 @@ impl<'a> Database<'a> {
         subqueries(arena, &select)?;
         let calls = aggregates(arena, &select, sql, &sides, self.grouped)?;
         let overs = overs(arena, &select, sql, self.grouped)?;
+        // An `ORDER BY` the walk already answers in needs no sort, which
+        // is what `sqlite3WhereIsOrdered` answers for the loops
+        // `sqlite3WhereBegin` chose. Only the walk of one table answers
+        // an order: a join answers the product, a group answers one row
+        // per group, and a window reads the rows it was given.
+        let walked = overs.is_empty()
+            && calls.is_empty()
+            && select.group.is_empty()
+            && in_order(arena, &select, sql, &mut sides);
         let mut rows: Vec<Sorted> = Vec::new();
         if !overs.is_empty() {
             // A window function reads the rows a statement has already
@@ -3243,7 +3292,8 @@ impl<'a> Database<'a> {
                 rows.push(sorted(arena, &select, sql, &group, &keys)?);
             }
         }
-        if !keys.is_empty() {
+        if !keys.is_empty() && !walked {
+            self.sort();
             rows.sort_by(|left, right| order_of(&left.keys, &right.keys, &keys));
         }
         let mut rows: Vec<Vec<Value>> = rows.into_iter().map(|row| row.values).collect();
@@ -3263,6 +3313,7 @@ impl<'a> Database<'a> {
                     .map(|column| column.declared.clone())
                     .collect(),
                 rows,
+                stepped: Stepped::default(),
             },
             shape,
         })
@@ -3739,6 +3790,7 @@ impl<'a> Database<'a> {
                         declared: answered.answer.declared.clone(),
                         names: answered.answer.names.clone(),
                         rows: alloc::vec![row],
+                        stepped: Stepped::default(),
                     },
                     shape: answered.shape.clone(),
                 },
@@ -4012,6 +4064,11 @@ impl<'a> Database<'a> {
             }
             cursor.held.pop();
         }
+        // `wherecode.c` counts a step for each row of a loop after the
+        // first, and only for a loop no term holds to a key.
+        if whole_walk(side) {
+            self.step(u64::try_from(ordinal.saturating_sub(1)).unwrap_or(0));
+        }
         if spare.is_none() && !any && matches!(side.kind, JoinKind::Left | JoinKind::Full) {
             // A `LEFT JOIN` answers the row on the left once with
             // nothing on the right where nothing on the right matched.
@@ -4178,6 +4235,7 @@ fn listed(
             declared: alloc::vec![Vec::new(); names.len()],
             names,
             rows,
+            stepped: Stepped::default(),
         },
         shape: Shape {
             columns,
@@ -4473,6 +4531,144 @@ fn plan_of(terms: &[Bound], at: usize, stored: &Stored) -> Option<Plan> {
             collations: alloc::vec![first.collation],
             rowid_at: kept.index.columns.len(),
         });
+    }
+    None
+}
+
+/// Whether the walk of this side reads a whole table or a whole index,
+/// which is the loop `wherecode.c` counts the steps of: a loop no term
+/// holds to a key.
+const fn whole_walk(side: &Side<'_>) -> bool {
+    matches!(side.source, Source::Table(_))
+        && match &side.plan {
+            Plan::Rows(None, None) => true,
+            Plan::Keyed { key, .. } => key.is_empty(),
+            Plan::Rows(_, _) | Plan::Joined { .. } | Plan::Union(_) => false,
+        }
+}
+
+/// What the `ORDER BY` of a statement over one table asks of the walk.
+enum Ordering {
+    /// The walk answers another order, so the rows are sorted.
+    Sorted,
+    /// The walk of the table's own tree answers the order.
+    Rowid,
+    /// The walk of an index answers the order, read by this plan.
+    Index(Plan),
+}
+
+/// Whether the walk of the one side answers the rows in the order the
+/// `ORDER BY` asks for, reading that side by an index where one index
+/// holds its entries in that order.
+///
+/// This is what `sqlite3WhereIsOrdered` answers: the terms of the
+/// `ORDER BY` a loop already answers need no sort. Finding the index
+/// costs O(n*m) in the indexes of the table and the terms.
+fn in_order(arena: &Arena, select: &Select, sql: &[u8], sides: &mut [Side<'_>]) -> bool {
+    let plan = match ordering(arena, select, sql, sides) {
+        Ordering::Sorted => return false,
+        Ordering::Rowid => None,
+        Ordering::Index(plan) => Some(plan),
+    };
+    if let Some(plan) = plan {
+        for side in sides.iter_mut().take(1) {
+            side.plan = plan.clone();
+        }
+    }
+    true
+}
+
+/// What the walk of the one side answers of the `ORDER BY`.
+fn ordering(arena: &Arena, select: &Select, sql: &[u8], sides: &[Side<'_>]) -> Ordering {
+    let terms = arena.orders(select.order);
+    let [side] = sides else {
+        return Ordering::Sorted;
+    };
+    let Source::Table(stored) = &side.source else {
+        return Ordering::Sorted;
+    };
+    if terms.is_empty() || stored.table.without_rowid {
+        return Ordering::Sorted;
+    }
+    let mut places = Vec::new();
+    for term in terms {
+        // A term written backwards, or with its nulls put where the
+        // order does not put them, asks about an order no tree holds.
+        // A `COLLATE` over the column is no column, which `reached`
+        // answers nothing for, and the term compares under the
+        // collation it names rather than the column's.
+        if term.order == crate::ast::Order::Descending
+            || term.nulls != crate::ast::Nulls::Unspecified
+        {
+            return Ordering::Sorted;
+        }
+        match reached(arena, term.expr, sql, sides) {
+            Some((_, Reached::Key)) => places.push(None),
+            Some((_, Reached::Column(place))) => places.push(Some(place)),
+            None => return Ordering::Sorted,
+        }
+    }
+    // A rowid stands once in the table, so no term after one decides
+    // anything, and the table's own tree holds its rows in that order.
+    if places.first() == Some(&None) {
+        return if matches!(side.plan, Plan::Rows(_, _)) {
+            Ordering::Rowid
+        } else {
+            Ordering::Sorted
+        };
+    }
+    // An entry of an index ends with the rowid, so a last term naming
+    // the rowid is the order the index holds its entries in already.
+    if places.last() == Some(&None) {
+        places.pop();
+    }
+    let Some(wanted) = places.into_iter().collect::<Option<Vec<usize>>>() else {
+        return Ordering::Sorted;
+    };
+    // A side already held to a key answers fewer entries than a walk of
+    // the index whole, so the key is kept and the rows are sorted.
+    if !matches!(side.plan, Plan::Rows(None, None)) {
+        return Ordering::Sorted;
+    }
+    match walked(stored, &wanted) {
+        Some(plan) => Ordering::Index(plan),
+        None => Ordering::Sorted,
+    }
+}
+
+/// The plan that walks an index of `stored` whole, where one index holds
+/// its entries in the order the columns at `wanted` name.
+///
+/// The key of the plan is empty, which is the walk of every entry from
+/// the first: `order_of_entry` compares nothing and answers that every
+/// entry begins with the key.
+///
+/// Costs O(n*m) in the indexes and the columns named.
+fn walked(stored: &Stored, wanted: &[usize]) -> Option<Plan> {
+    for kept in &stored.indexes {
+        // A partial index answers fewer entries than the table has rows
+        // and a place over an expression holds a value no column names,
+        // so neither holds its entries in an order over the columns.
+        if kept.index.filter.is_some() || kept.index.columns.len() < wanted.len() {
+            continue;
+        }
+        let held = kept.index.columns.iter().zip(wanted).all(|(held, place)| {
+            held.place() == Some(*place)
+                && held.order != crate::ast::Order::Descending
+                && stored
+                    .table
+                    .columns
+                    .get(*place)
+                    .is_some_and(|column| column.collation == held.collation)
+        });
+        if held {
+            return Some(Plan::Keyed {
+                root: kept.root,
+                key: Vec::new(),
+                collations: Vec::new(),
+                rowid_at: kept.index.columns.len(),
+            });
+        }
     }
     None
 }

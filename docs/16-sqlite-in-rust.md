@@ -957,6 +957,8 @@ Size: L.
      which D-362 records.
 108. The rows a top-level `OR` names, read by one walk of an index per
      branch. Built, which D-364 records.
+109. The `ORDER BY` a walk answers without a sort, and what the walks
+     and the sorts of a statement count. Built, which D-365 records.
 
 ### Done when
 
@@ -966,8 +968,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 118 297 cases in 847 files, 105 772
-pass, 3372 answer differently, and 9153 name something the engine
+under the `tclsh` of the machine. Of 117 006 cases in 847 files, 105 884
+pass, 4084 answer differently, and 7038 name something the engine
 refuses or a command that needs the C library's internals. The files
 that answer for tens of thousands of rows reach the three-minute
 deadline and are counted with the cases they ran by then. One run over
