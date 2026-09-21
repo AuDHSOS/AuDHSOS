@@ -1916,6 +1916,7 @@ set ::sqlite_current_time 0
 trace add variable ::sqlite_current_time write harness_clock
 proc harness_clock {args} { harness_send clock $::sqlite_current_time }
 
+
 # save_prng_state, restore_prng_state: the state random and randomblob
 # draw from next, which a test holds to draw the same words again.
 proc save_prng_state {} { harness_send save_prng }

@@ -7,6 +7,16 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` holds the key of a plan to as many leading columns of an
+  index as the terms name with `=`, and the column after them to the
+  bounds a `<`, `<=`, `>` or `>=` term names, and a walk already held to
+  a key answers the order of the columns after the key without a sort. A
+  column of real affinity reaches no key and no bound, because it holds
+  a whole number as a whole number and the row reads it back as a real.
+  D-366 records it. Catalog 6.6.252. `where7.test` goes from 44 cases
+  passing to 96, `where.test` from 116 to 132 and `where9.test` from 55
+  to 57.
+
 - `db-sqlite` reads a statement whose `ORDER BY` names the columns one
   index holds its entries in by a walk of that index and answers no
   sort, and `Answer::stepped` carries what the walks and the sorts of

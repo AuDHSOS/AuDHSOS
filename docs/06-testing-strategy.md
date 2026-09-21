@@ -6663,3 +6663,22 @@ Document 16 step Q8.
 - An index over an expression, a partial index and an index under
   another collation answer no order.
 - The `ORDER BY` of a compound statement counts one sort.
+
+### 6.6.252 The bounds a walk of an index is held between (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A term with `>=`, `>`, `<=` or `<` over the first column of an index
+  holds the walk to a range of it, and two of them to both ends.
+- A term with `=` over the first column and one with `>` over the second
+  hold the key and the bounds together.
+- An index written `DESC`, over an expression, under another collation,
+  or over fewer rows than the table has reaches no key and no bound.
+- A walk held to one value of the first column answers its entries in the
+  order of the second, and one held to a range of the first in the order
+  of the first and then the second.
+- An entry that runs onto an overflow page is read whole before the
+  bound is compared against it.
+- A bound the affinity of the column changes is widened to hold the
+  value itself.
+- A column of real affinity reaches no key and no bound.

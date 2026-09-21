@@ -1375,6 +1375,26 @@ struct Side<'a> {
     pushed: Vec<ExprId>,
 }
 
+/// What the column after the key of a plan is held between, which is
+/// the range `sqlite3WhereBegin` writes the seek and the terminating
+/// comparison of a loop from.
+#[derive(Clone, Debug, Default)]
+struct Bounds {
+    /// The lowest value of that column, and whether an entry holding it
+    /// is one the walk takes.
+    low: Option<(Value, bool)>,
+    /// The highest value of that column, and whether an entry holding it
+    /// is one the walk takes.
+    high: Option<(Value, bool)>,
+}
+
+impl Bounds {
+    /// Whether neither end holds the column.
+    const fn is_empty(&self) -> bool {
+        self.low.is_none() && self.high.is_none()
+    }
+}
+
 /// How a side's rows are read.
 #[derive(Clone, Debug)]
 enum Plan {
@@ -1385,13 +1405,16 @@ enum Plan {
     Keyed {
         /// The page the index's tree begins at.
         root: u32,
-        /// The values the key begins with.
+        /// The values every entry the walk takes begins with.
         key: Vec<Value>,
-        /// What each of them compares under.
+        /// What each of them compares under, and after them what the
+        /// column the bounds hold compares under.
         collations: Vec<Collation>,
         /// Where the rowid stands in an entry, which is after every
         /// column the index holds.
         rowid_at: usize,
+        /// What the column after the key is held between.
+        bounds: Bounds,
     },
     /// The rows of every plan it holds, each row once, which is what
     /// an `OR` whose every branch names a key is read by. It is not the
@@ -3944,22 +3967,37 @@ impl<'a> Database<'a> {
     /// the descent gives up: a caller that answers no walk reads the
     /// table's own tree instead, which answers the same rows and only
     /// the cost is not the same.
-    fn keyed<'f>(&self, stored: &'f Stored, held: Sought_) -> Option<Feed<'a, 'f>> {
-        let (root, key, collations, rowid_at) = held;
+    fn keyed<'f>(&self, stored: &'f Stored, held: Seek) -> Option<Feed<'a, 'f>> {
+        let Seek {
+            root,
+            key,
+            collations,
+            rowid_at,
+            bounds,
+        } = held;
         let image = self.imaged(stored.place);
+        // The descent stands on the first entry the walk takes, which is
+        // the first one no lower than the key and the low end of the
+        // bounds, and the entry after it where the low end leaves it out.
+        let mut descent = key.clone();
+        let mut inside = true;
+        if let Some((value, held)) = &bounds.low {
+            descent.push(value.clone());
+            inside = *held;
+        }
         let mut scratch = Vec::new();
         let walk = image
             .entries_from(root, &mut |entry| {
                 let order = order_of_entry(
                     &image,
                     entry,
-                    &key,
+                    &descent,
                     &collations,
                     self.encoding,
                     &mut scratch,
                 )
                 .map_err(|_| crate::error::Error::Overrun)?;
-                Ok(order == core::cmp::Ordering::Less)
+                Ok(is_before(order, inside))
             })
             .ok()?;
         Some(Feed::Keyed(Box::new(Sought {
@@ -3969,6 +4007,7 @@ impl<'a> Database<'a> {
             key,
             collations,
             rowid_at,
+            bounds,
             encoding: self.encoding,
             collation: self.collation(),
             payload: Vec::new(),
@@ -4490,46 +4529,111 @@ fn reached(arena: &Arena, id: ExprId, sql: &[u8], sides: &[Side<'_>]) -> Option<
 }
 
 /// The index the terms reach on one side, where they reach one.
+///
+/// The key is what the terms hold the leading columns of the index to
+/// with `=`, and the bounds are what a term holds the column after them
+/// between, which is the loop `sqlite3WhereBegin` writes for
+/// `WHERE_COLUMN_EQ` and `WHERE_COLUMN_RANGE`. Reading the terms costs
+/// O(i*c*t) in the indexes, their columns and the terms.
 fn plan_of(terms: &[Bound], at: usize, stored: &Stored) -> Option<Plan> {
     for kept in &stored.indexes {
-        // An index over an expression, and a partial index, answer
-        // fewer entries than their places say, so a statement planned
-        // against either would read fewer rows than it must.
-        let found = kept.index.first_keyed().and_then(|(place, first)| {
-            stored
-                .table
-                .columns
-                .get(place)
-                .map(|column| (place, first, column))
-        });
-        let Some((place, first, column)) = found else {
-            continue;
-        };
-        // An index held in another order, or under another collation
-        // than the column compares under, answers its entries in an
-        // order the terms do not ask about.
-        if first.order == crate::ast::Order::Descending || first.collation != column.collation {
+        // A partial index answers fewer entries than the table has rows,
+        // so a statement planned against one would read fewer rows than
+        // it must.
+        if kept.index.filter.is_some() {
             continue;
         }
-        let Some(term) = terms.iter().find(|term| {
-            term.at == at
-                && term.op == BinaryOp::Eq
-                && term.reached == Reached::Column(place)
-                // An index holds no entry a `=` against `NULL` reaches,
-                // which is what `NULL = NULL` answering nothing means.
-                && term.value != Value::Null
-        }) else {
+        let mut key = Vec::new();
+        let mut collations = Vec::new();
+        let mut bounds = Bounds::default();
+        for held in &kept.index.columns {
+            // An index held in another order than the terms ask about,
+            // a place over an expression, and a place under another
+            // collation than the column compares under each answer
+            // entries in an order no term names.
+            let found = held.place().and_then(|place| {
+                stored
+                    .table
+                    .columns
+                    .get(place)
+                    .map(|column| (place, column))
+            });
+            let Some((place, column)) = found else {
+                break;
+            };
+            if held.order == crate::ast::Order::Descending || held.collation != column.collation {
+                break;
+            }
+            // A column of real affinity holds a whole number as a whole
+            // number, which `OP_RealAffinity` reads back as a real, so
+            // an entry compares against a bound as the row does not:
+            // 3175546974276630385 stands in an entry as itself and is
+            // read out of the row as 3175546974276630528.
+            if column.affinity == Affinity::Real {
+                break;
+            }
+            let reached = Reached::Column(place);
+            let named = |op: BinaryOp| {
+                terms
+                    .iter()
+                    .find(|term| {
+                        term.at == at
+                            && term.op == op
+                            && term.reached == reached
+                            // An index holds no entry a comparison
+                            // against `NULL` reaches, which is what
+                            // `NULL = NULL` answering nothing means.
+                            && term.value != Value::Null
+                    })
+                    .map(|term| {
+                        // An entry holds what the table's affinity left
+                        // of the value, so the bound is what that
+                        // affinity leaves of it. A conversion that
+                        // answers another number, which a real affinity
+                        // over a large whole number does, is one the
+                        // bound is widened for.
+                        let mut value = term.value.clone();
+                        crate::value::apply(&mut value, column.affinity);
+                        let exact = compare(&value, &term.value, Collation::Binary)
+                            == core::cmp::Ordering::Equal;
+                        (value, exact)
+                    })
+            };
+            // A key that is not the value the term names would reach
+            // other entries than the term is true of, so the index is
+            // left alone.
+            if let Some((value, exact)) = named(BinaryOp::Eq) {
+                if !exact {
+                    break;
+                }
+                key.push(value);
+                collations.push(held.collation);
+                continue;
+            }
+            // The column after the key is the last one a term reaches,
+            // because the entries of the columns after it run over
+            // again for each value of this one.
+            let widened = |held: Option<(Value, bool)>, inside: bool| {
+                held.map(|(value, exact)| (value, inside || !exact))
+            };
+            bounds.low =
+                widened(named(BinaryOp::Ge), true).or_else(|| widened(named(BinaryOp::Gt), false));
+            bounds.high =
+                widened(named(BinaryOp::Le), true).or_else(|| widened(named(BinaryOp::Lt), false));
+            if !bounds.is_empty() {
+                collations.push(held.collation);
+            }
+            break;
+        }
+        if key.is_empty() && bounds.is_empty() {
             continue;
-        };
-        // An entry holds what the table's affinity left of the value, so
-        // the key is what that affinity leaves of the bound.
-        let mut value = term.value.clone();
-        crate::value::apply(&mut value, column.affinity);
+        }
         return Some(Plan::Keyed {
             root: kept.root,
-            key: alloc::vec![value],
-            collations: alloc::vec![first.collation],
+            key,
+            collations,
             rowid_at: kept.index.columns.len(),
+            bounds,
         });
     }
     None
@@ -4542,7 +4646,7 @@ const fn whole_walk(side: &Side<'_>) -> bool {
     matches!(side.source, Source::Table(_))
         && match &side.plan {
             Plan::Rows(None, None) => true,
-            Plan::Keyed { key, .. } => key.is_empty(),
+            Plan::Keyed { key, bounds, .. } => key.is_empty() && bounds.is_empty(),
             Plan::Rows(_, _) | Plan::Joined { .. } | Plan::Union(_) => false,
         }
 }
@@ -4551,8 +4655,8 @@ const fn whole_walk(side: &Side<'_>) -> bool {
 enum Ordering {
     /// The walk answers another order, so the rows are sorted.
     Sorted,
-    /// The walk of the table's own tree answers the order.
-    Rowid,
+    /// The walk as the plan stands answers the order.
+    Walked,
     /// The walk of an index answers the order, read by this plan.
     Index(Plan),
 }
@@ -4567,7 +4671,7 @@ enum Ordering {
 fn in_order(arena: &Arena, select: &Select, sql: &[u8], sides: &mut [Side<'_>]) -> bool {
     let plan = match ordering(arena, select, sql, sides) {
         Ordering::Sorted => return false,
-        Ordering::Rowid => None,
+        Ordering::Walked => None,
         Ordering::Index(plan) => Some(plan),
     };
     if let Some(plan) = plan {
@@ -4592,11 +4696,12 @@ fn ordering(arena: &Arena, select: &Select, sql: &[u8], sides: &[Side<'_>]) -> O
     }
     let mut places = Vec::new();
     for term in terms {
-        // A term written backwards, or with its nulls put where the
-        // order does not put them, asks about an order no tree holds.
-        // A `COLLATE` over the column is no column, which `reached`
-        // answers nothing for, and the term compares under the
-        // collation it names rather than the column's.
+        // A term written backwards asks about an order no index of this
+        // engine holds, because a `CREATE INDEX` writing `DESC` writes
+        // its entries in the one order all the same. A term whose nulls
+        // are put where the order does not put them asks about another
+        // order again, and a `COLLATE` over the column is no column,
+        // which `reached` answers nothing for.
         if term.order == crate::ast::Order::Descending
             || term.nulls != crate::ast::Nulls::Unspecified
         {
@@ -4612,7 +4717,7 @@ fn ordering(arena: &Arena, select: &Select, sql: &[u8], sides: &[Side<'_>]) -> O
     // anything, and the table's own tree holds its rows in that order.
     if places.first() == Some(&None) {
         return if matches!(side.plan, Plan::Rows(_, _)) {
-            Ordering::Rowid
+            Ordering::Walked
         } else {
             Ordering::Sorted
         };
@@ -4625,8 +4730,16 @@ fn ordering(arena: &Arena, select: &Select, sql: &[u8], sides: &[Side<'_>]) -> O
     let Some(wanted) = places.into_iter().collect::<Option<Vec<usize>>>() else {
         return Ordering::Sorted;
     };
-    // A side already held to a key answers fewer entries than a walk of
-    // the index whole, so the key is kept and the rows are sorted.
+    // A side already held to a key by an index answers its entries in
+    // that index's order, so the key is kept where that order is the one
+    // the terms name.
+    if let Plan::Keyed { root, key, .. } = &side.plan {
+        return if suffixed(stored, *root, key.len(), &wanted) {
+            Ordering::Walked
+        } else {
+            Ordering::Sorted
+        };
+    }
     if !matches!(side.plan, Plan::Rows(None, None)) {
         return Ordering::Sorted;
     }
@@ -4634,6 +4747,61 @@ fn ordering(arena: &Arena, select: &Select, sql: &[u8], sides: &[Side<'_>]) -> O
         Some(plan) => Ordering::Index(plan),
         None => Ordering::Sorted,
     }
+}
+
+/// Whether the walk of the index whose tree begins at `root`, held to
+/// `held` many values of its key, answers its rows in the order the
+/// columns at `wanted` name.
+///
+/// The first `held` columns of the index stand at one value for the
+/// whole walk, so a term naming one of them decides nothing and the
+/// terms after it name the columns from there on.
+///
+/// Costs O(n*m) in the columns of the index and the terms.
+fn suffixed(stored: &Stored, root: u32, held: usize, wanted: &[usize]) -> bool {
+    stored
+        .indexes
+        .iter()
+        .find(|kept| kept.root == root)
+        .is_some_and(|kept| {
+            let constant: Vec<usize> = kept
+                .index
+                .columns
+                .iter()
+                .take(held)
+                .filter_map(crate::schema::Keyed::place)
+                .collect();
+            let mut at = held;
+            for place in wanted {
+                if constant.contains(place) {
+                    continue;
+                }
+                if !holds_column(stored, &kept.index, at, *place) {
+                    return false;
+                }
+                at = at.saturating_add(1);
+            }
+            true
+        })
+}
+
+/// Whether the column of `index` at `at` holds the table column at
+/// `place` in the order a term over that column asks about.
+///
+/// A place over an expression holds a value no column names, a place
+/// written `DESC` answers its entries in an order no term of this engine
+/// asks about, and a place under another collation than the column
+/// compares under answers them in another order again.
+fn holds_column(stored: &Stored, index: &crate::schema::Index, at: usize, place: usize) -> bool {
+    index.columns.get(at).is_some_and(|held| {
+        held.place() == Some(place)
+            && held.order != crate::ast::Order::Descending
+            && stored
+                .table
+                .columns
+                .get(place)
+                .is_some_and(|column| column.collation == held.collation)
+    })
 }
 
 /// The plan that walks an index of `stored` whole, where one index holds
@@ -4646,27 +4814,22 @@ fn ordering(arena: &Arena, select: &Select, sql: &[u8], sides: &[Side<'_>]) -> O
 /// Costs O(n*m) in the indexes and the columns named.
 fn walked(stored: &Stored, wanted: &[usize]) -> Option<Plan> {
     for kept in &stored.indexes {
-        // A partial index answers fewer entries than the table has rows
-        // and a place over an expression holds a value no column names,
-        // so neither holds its entries in an order over the columns.
+        // A partial index answers fewer entries than the table has rows,
+        // so it holds its entries in no order over the columns.
         if kept.index.filter.is_some() || kept.index.columns.len() < wanted.len() {
             continue;
         }
-        let held = kept.index.columns.iter().zip(wanted).all(|(held, place)| {
-            held.place() == Some(*place)
-                && held.order != crate::ast::Order::Descending
-                && stored
-                    .table
-                    .columns
-                    .get(*place)
-                    .is_some_and(|column| column.collation == held.collation)
-        });
+        let held = wanted
+            .iter()
+            .enumerate()
+            .all(|(at, place)| holds_column(stored, &kept.index, at, *place));
         if held {
             return Some(Plan::Keyed {
                 root: kept.root,
                 key: Vec::new(),
                 collations: Vec::new(),
                 rowid_at: kept.index.columns.len(),
+                bounds: Bounds::default(),
             });
         }
     }
@@ -4746,18 +4909,29 @@ fn ored(
     Some(Plan::Union(plans))
 }
 
-/// What one plan holds a walk of an index to: the tree, the values
-/// every entry begins with, what each compares under, and where the
-/// rowid stands.
+/// What one plan holds a walk of an index to.
+struct Seek {
+    /// The page the index's tree begins at.
+    root: u32,
+    /// The values every entry the walk takes begins with.
+    key: Vec<Value>,
+    /// What each of them compares under, and after them what the column
+    /// the bounds hold compares under.
+    collations: Vec<Collation>,
+    /// Where the rowid stands in an entry.
+    rowid_at: usize,
+    /// What the column after the key is held between.
+    bounds: Bounds,
+}
+
+/// What `plan` holds a walk of an index to.
 ///
 /// A plan that names no index answers nothing, and so does one whose
 /// key a row of the sides before it does not answer, which is what
 /// makes the walk fall back to the whole tree.
 ///
 /// Reading one key costs what the expression it is read from costs.
-type Sought_ = (u32, Vec<Value>, Vec<Collation>, usize);
-
-fn sought(plan: &Plan, cursor: &Cursor<'_>) -> Option<Sought_> {
+fn sought(plan: &Plan, cursor: &Cursor<'_>) -> Option<Seek> {
     match plan {
         Plan::Rows(_, _) | Plan::Union(_) => None,
         Plan::Keyed {
@@ -4765,7 +4939,14 @@ fn sought(plan: &Plan, cursor: &Cursor<'_>) -> Option<Sought_> {
             key,
             collations,
             rowid_at,
-        } => Some((*root, key.clone(), collations.clone(), *rowid_at)),
+            bounds,
+        } => Some(Seek {
+            root: *root,
+            key: key.clone(),
+            collations: collations.clone(),
+            rowid_at: *rowid_at,
+            bounds: bounds.clone(),
+        }),
         Plan::Joined {
             root,
             key,
@@ -4782,12 +4963,13 @@ fn sought(plan: &Plan, cursor: &Cursor<'_>) -> Option<Sought_> {
                 return None;
             }
             crate::value::apply(&mut value, *affinity);
-            Some((
-                *root,
-                alloc::vec![value],
-                alloc::vec![*collation],
-                *rowid_at,
-            ))
+            Some(Seek {
+                root: *root,
+                key: alloc::vec![value],
+                collations: alloc::vec![*collation],
+                rowid_at: *rowid_at,
+                bounds: Bounds::default(),
+            })
         }
     }
 }
@@ -5150,8 +5332,12 @@ struct Sought<'i, 'f> {
     /// `ON` reads once per row of the sides before this one, so the
     /// walk holds them rather than borrowing them from the side.
     key: Vec<Value>,
-    /// What each of them compares under.
+    /// What each of them compares under, and after them what the column
+    /// the bounds hold compares under.
     collations: Vec<Collation>,
+    /// What the column after the key is held between, which ends the
+    /// walk where an entry reaches past the high end.
+    bounds: Bounds,
     /// Where the rowid stands in an entry.
     rowid_at: usize,
     /// What encoding the file keeps its text in.
@@ -5176,6 +5362,28 @@ impl<'i> Sought<'i, '_> {
         }
     }
 
+    /// Whether the entry's column after the key reaches past the high
+    /// end of the bounds, which every entry after it reaches past as
+    /// well, so the walk is read out there.
+    fn is_past(&mut self, entry: &crate::page::Payload<'i>) -> Result<bool, Error> {
+        let Some((wanted, inside)) = self.bounds.high.clone() else {
+            return Ok(false);
+        };
+        let at = self.key.len();
+        let held = value_of_entry(&self.image, entry, at, self.encoding, &mut self.payload)?;
+        let collation = self
+            .collations
+            .get(at)
+            .copied()
+            .unwrap_or(Collation::Binary);
+        let order = compare(&held, &wanted, collation);
+        Ok(if inside {
+            order == core::cmp::Ordering::Greater
+        } else {
+            order != core::cmp::Ordering::Less
+        })
+    }
+
     /// One entry as the row it names, or nothing where the entry no
     /// longer begins with the key.
     fn take(
@@ -5192,6 +5400,9 @@ impl<'i> Sought<'i, '_> {
             &mut self.payload,
         )?;
         if order != core::cmp::Ordering::Equal {
+            return Ok(None);
+        }
+        if self.is_past(&entry)? {
             return Ok(None);
         }
         let rowid = rowid_of(&self.image, &entry, self.rowid_at, &mut self.payload)?;
@@ -5299,6 +5510,39 @@ fn order_of_entry(
         }
     }
     Ok(core::cmp::Ordering::Equal)
+}
+
+/// Whether an entry standing at `order` against the low end of the
+/// bounds comes before that end, where `inside` says an entry holding
+/// the bound is one the walk takes.
+const fn is_before(order: core::cmp::Ordering, inside: bool) -> bool {
+    if inside {
+        matches!(order, core::cmp::Ordering::Less)
+    } else {
+        !matches!(order, core::cmp::Ordering::Greater)
+    }
+}
+
+/// One value of an entry, as the engine holds values.
+///
+/// An entry that runs onto an overflow page is read whole before the
+/// value is taken, because the value may be the part that runs on.
+fn value_of_entry(
+    image: &Image<'_>,
+    entry: &crate::page::Payload<'_>,
+    at: usize,
+    encoding: Encoding,
+    scratch: &mut Vec<u8>,
+) -> Result<Value, Error> {
+    let held;
+    let record = if entry.is_whole() {
+        record::Record::parse(entry.local)?
+    } else {
+        read_payload(image, entry, scratch)?;
+        held = scratch;
+        record::Record::parse(held)?
+    };
+    held_value(&record, at, encoding)
 }
 
 /// The rowid an entry ends with, which is the value after every column

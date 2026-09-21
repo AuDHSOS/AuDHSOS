@@ -282,3 +282,141 @@ fn a_term_that_carries_a_collate_names_no_key_of_an_index() {
     );
     assert_eq!(rows, [Value::Int(1), Value::Int(3)]);
 }
+
+#[test]
+fn a_walk_of_an_index_is_held_between_the_bounds_the_terms_name() {
+    // `mpq` holds `p` and then `q`, so a term over `p` holds the walk
+    // to a range of it and a second term over `q` holds the key.
+    for (sql, wanted) in [
+        (
+            b"SELECT rowid FROM m WHERE p>=2".as_slice(),
+            [3, 4, 5].as_slice(),
+        ),
+        (b"SELECT rowid FROM m WHERE p>2", &[5]),
+        (b"SELECT rowid FROM m WHERE p<=1", &[1, 2]),
+        (b"SELECT rowid FROM m WHERE p<2", &[1, 2]),
+        (b"SELECT rowid FROM m WHERE p>1 AND p<3", &[3, 4]),
+        (b"SELECT rowid FROM m WHERE p>=1 AND p<=2", &[1, 2, 3, 4]),
+        (b"SELECT rowid FROM m WHERE p=2 AND q='c'", &[4]),
+        (b"SELECT rowid FROM m WHERE p=2 AND q>'b'", &[4]),
+    ] {
+        let rows = keys(super::INDEXED, sql);
+        let held: Vec<Value> = wanted.iter().map(|key| Value::Int(*key)).collect();
+        assert_eq!(
+            rows,
+            held,
+            "{}",
+            alloc::string::String::from_utf8_lossy(sql)
+        );
+    }
+}
+
+#[test]
+fn what_index_no_term_reaches_a_key_or_a_bound_of() {
+    // `mr` holds its entries backwards, `ea` holds what an expression
+    // answers, `ec` holds its entries under another collation, and `eb`
+    // holds fewer rows than the table has.
+    assert_eq!(
+        keys(super::INDEXED, b"SELECT rowid FROM m WHERE r>20"),
+        [Value::Int(3), Value::Int(5)]
+    );
+    assert_eq!(
+        keys(super::INDEXED, b"SELECT rowid FROM e WHERE a>1"),
+        [Value::Int(2), Value::Int(3)]
+    );
+    assert_eq!(
+        keys(super::INDEXED, b"SELECT rowid FROM e WHERE b>0"),
+        [Value::Int(1), Value::Int(3)]
+    );
+    // A statement that names a column no index begins with reads the
+    // table, and one that names none reads it as well.
+    assert_eq!(
+        keys(super::INDEXED, b"SELECT rowid FROM m WHERE q>'b'"),
+        [Value::Int(4)]
+    );
+    assert_eq!(
+        keys(super::INDEXED, b"SELECT rowid FROM m WHERE r IS NULL"),
+        [Value::Int(4)]
+    );
+}
+
+#[test]
+fn a_walk_held_to_a_key_answers_the_order_of_the_columns_after_it() {
+    // `mpq` holds `p` and then `q`, so a walk held to one `p` answers
+    // its entries in the order of `q`, and one held to a range of `p`
+    // answers them in the order of `p` and then `q`.
+    for (sql, wanted) in [
+        (
+            b"SELECT rowid FROM m WHERE p=2 ORDER BY q".as_slice(),
+            [3, 4].as_slice(),
+        ),
+        (b"SELECT rowid FROM m WHERE p=2 ORDER BY p, q", &[3, 4]),
+        (b"SELECT rowid FROM m WHERE p>=2 ORDER BY p, q", &[3, 4, 5]),
+        (b"SELECT rowid FROM m WHERE p=2 ORDER BY q DESC", &[4, 3]),
+        (b"SELECT rowid FROM m WHERE p>=2 ORDER BY q", &[5, 3, 4]),
+    ] {
+        let rows = keys(super::INDEXED, sql);
+        let held: Vec<Value> = wanted.iter().map(|key| Value::Int(*key)).collect();
+        assert_eq!(
+            rows,
+            held,
+            "{}",
+            alloc::string::String::from_utf8_lossy(sql)
+        );
+    }
+}
+
+#[test]
+fn an_entry_that_runs_onto_an_overflow_page_is_read_whole_to_be_bounded() {
+    // The index `ot` holds one entry of eight thousand letters, which no
+    // page holds, so the value the high end of the bounds is compared
+    // against is read off the chain that follows.
+    let rows = answers(super::INDEXED, b"SELECT a FROM o WHERE t<'z'").unwrap();
+    assert_eq!(
+        rows,
+        [alloc::vec![Value::Int(2)], alloc::vec![Value::Int(1)]]
+    );
+}
+
+#[test]
+fn a_column_of_real_affinity_reaches_no_key_and_no_bound() {
+    use crate::change::Writer;
+    use crate::header::Encoding;
+    // A whole number stands in the row and in the entry as itself, and
+    // `OP_RealAffinity` reads it out of the row as the real nearest it,
+    // which is a larger number: an entry held to the whole number would
+    // leave the row out.
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t0(c0 REAL UNIQUE)".as_slice(),
+        b"INSERT INTO t0(c0) VALUES (3175546974276630385)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let bytes = writer.written();
+    assert_eq!(
+        answers(&bytes, b"SELECT 1 FROM t0 WHERE 3175546974276630385 < c0").unwrap(),
+        [alloc::vec![Value::Int(1)]]
+    );
+    assert_eq!(
+        answers(&bytes, b"SELECT 1 FROM t0 WHERE c0 = 3175546974276630528").unwrap(),
+        [alloc::vec![Value::Int(1)]]
+    );
+}
+
+#[test]
+fn a_bound_the_affinity_of_the_column_changes_is_widened() {
+    // `a` is a whole number and the bound is text, so the affinity of
+    // the column makes the bound a number: the walk begins at the entry
+    // holding it rather than at the one after it, which is one row the
+    // term leaves out and the `WHERE` reads again.
+    let rows = answers(
+        super::INDEXED,
+        b"SELECT count(*), min(a) FROM k WHERE a > '5'",
+    )
+    .unwrap();
+    assert_eq!(rows, [alloc::vec![Value::Int(95), Value::Int(6)]]);
+    // A column that compares as text and a bound that is a number reach
+    // no row, because a number stands before every text.
+    assert!(keys(super::INDEXED, b"SELECT rowid FROM m WHERE p>'1'").is_empty());
+}

@@ -959,6 +959,9 @@ Size: L.
      branch. Built, which D-364 records.
 109. The `ORDER BY` a walk answers without a sort, and what the walks
      and the sorts of a statement count. Built, which D-365 records.
+110. The key of as many leading columns as the terms name, and the
+     bounds the column after them is held between. Built, which D-366
+     records.
 
 ### Done when
 
@@ -968,8 +971,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 117 006 cases in 847 files, 105 884
-pass, 4084 answer differently, and 7038 name something the engine
+under the `tclsh` of the machine. Of 117 040 cases in 847 files, 105 982
+pass, 4020 answer differently, and 7038 name something the engine
 refuses or a command that needs the C library's internals. The files
 that answer for tens of thousands of rows reach the three-minute
 deadline and are counted with the cases they ran by then. One run over
