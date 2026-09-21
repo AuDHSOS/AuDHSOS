@@ -974,6 +974,7 @@ Size: L.
      entry. Built, which D-373 records.
 116. The collation a term of an `ORDER BY` compares under. Built,
      which D-374 records.
+117. `EXPLAIN QUERY PLAN`. Built, which D-375 records.
 
 ### Done when
 

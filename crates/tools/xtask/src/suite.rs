@@ -3201,6 +3201,13 @@ fn reads(sql: &str) -> bool {
     if first.eq_ignore_ascii_case("select") || first.eq_ignore_ascii_case("values") {
         return true;
     }
+    // `EXPLAIN QUERY PLAN` answers the plan of the statement under it
+    // and writes nothing, so the reader answers it.
+    if first.eq_ignore_ascii_case("explain") {
+        let second = words.get(1).map_or("", String::as_str);
+        let third = words.get(2).map_or("", String::as_str);
+        return second.eq_ignore_ascii_case("query") && third.eq_ignore_ascii_case("plan");
+    }
     // A `WITH` clause stands in front of a statement that writes as
     // well, and the statement after it is what says which connection
     // runs the whole.

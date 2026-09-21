@@ -3434,6 +3434,26 @@ pub fn blank(sql: &[u8]) -> bool {
     parser.peek().is_none()
 }
 
+/// Where the statement under an `EXPLAIN QUERY PLAN` begins, and
+/// nothing where `sql` opens with other words.
+///
+/// `sqlite3Parse` reads the two words after `EXPLAIN` as one prefix of
+/// the statement, which every statement may carry. Reading them costs
+/// O(1). A bare `EXPLAIN` names the program the statement compiles to,
+/// which this crate does not write, so it is left to the parser to
+/// refuse.
+#[must_use]
+pub fn query_plan(sql: &[u8]) -> Option<usize> {
+    let mut parser = Parser::new(sql);
+    if !parser.eat_keyword(Keyword::Explain)
+        || !parser.eat_keyword(Keyword::Query)
+        || !parser.eat_keyword(Keyword::Plan)
+    {
+        return None;
+    }
+    Some(parser.peek()?.start)
+}
+
 /// Reads one statement out of `sql` and answers the tree it built.
 ///
 /// # Errors

@@ -1693,6 +1693,9 @@ pub struct Database<'a> {
     /// answered through a shared reference, so the cell is what carries
     /// them out to the answer.
     stepped: core::cell::Cell<Stepped>,
+    /// The lines an `EXPLAIN QUERY PLAN` collects while the statement
+    /// under it runs, and nothing where no such statement runs.
+    planned: core::cell::RefCell<Option<Vec<Explained>>>,
     /// What the connection has written, which `changes()`,
     /// `total_changes()` and `last_insert_rowid()` answer.
     counted: crate::func::Counted,
@@ -1933,6 +1936,7 @@ impl<'a> Database<'a> {
             asking: None,
             ignored: core::cell::RefCell::new(Vec::new()),
             stepped: core::cell::Cell::new(Stepped::default()),
+            planned: core::cell::RefCell::new(None),
             counted: crate::func::Counted::default(),
             naming: Naming::default(),
             defined: &[],
@@ -2986,6 +2990,9 @@ impl<'a> Database<'a> {
         if let Ok(asked) = parse::pragma(sql) {
             return self.pragma(&asked, sql);
         }
+        if let Some(at) = parse::query_plan(sql) {
+            return self.explaining(sql.get(at..).unwrap_or_default());
+        }
         let (arena, root) = parse::statement(sql)?;
         eval::rows_placed(&arena)?;
         crate::schema::collations(&arena, sql, self.collating)?;
@@ -3001,6 +3008,63 @@ impl<'a> Database<'a> {
             views: 0,
         };
         Ok(self.statement(&arena, root, sql, scope)?.answer)
+    }
+
+    /// The plan of the statement under an `EXPLAIN QUERY PLAN`, as the
+    /// four columns `sqlite3_prepare` answers for one: the line, the
+    /// line it hangs under, a column no statement reads, and what the
+    /// line says.
+    ///
+    /// The statement is read and its plan chosen as it would be to
+    /// answer rows, which is what `sqlite3Select` does for
+    /// `SQLITE_QueryFlattener`; the rows it answers are left, and the
+    /// counters the loops of it moved are put back, because the plan
+    /// names loops that were not run.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the statement under it refuses.
+    fn explaining(&self, sql: &[u8]) -> Result<Answer, Error> {
+        *self.planned.borrow_mut() = Some(Vec::new());
+        let answered = self.queried(sql);
+        let lines = self.planned.borrow_mut().take().unwrap_or_default();
+        answered?;
+        self.stepped.set(Stepped::default());
+        let mut rows = Vec::new();
+        for (at, (parent, detail)) in lines.iter().enumerate() {
+            rows.push(alloc::vec![
+                Value::Int(i64::try_from(at.saturating_add(1)).unwrap_or(i64::MAX)),
+                Value::Int(i64::try_from(*parent).unwrap_or(i64::MAX)),
+                Value::Int(0),
+                Value::Text(detail.clone()),
+            ]);
+        }
+        Ok(Answer {
+            names: alloc::vec![
+                b"id".to_vec(),
+                b"parent".to_vec(),
+                b"notused".to_vec(),
+                b"detail".to_vec(),
+            ],
+            declared: alloc::vec![Vec::new(); 4],
+            rows,
+            stepped: Stepped::default(),
+        })
+    }
+
+    /// Writes the lines one core of a statement adds to the plan under
+    /// an `EXPLAIN QUERY PLAN`.
+    fn explain(&self, sides: &[Side<'_>], sorted: bool) {
+        let mut held = self.planned.borrow_mut();
+        let Some(lines) = held.as_mut() else {
+            return;
+        };
+        for side in sides {
+            detailed(side, &side.plan, lines, 0);
+        }
+        if sorted {
+            lines.push((0, b"USE TEMP B-TREE FOR ORDER BY".to_vec()));
+        }
     }
 
     /// Whether the function the connection was told ignored a read of
@@ -3325,6 +3389,7 @@ impl<'a> Database<'a> {
                     collating: self.collating,
                 },
             );
+        self.explain(&sides, !select.order.is_empty() && !walked);
         let mut rows: Vec<Sorted> = Vec::new();
         if !overs.is_empty() {
             // A window function reads the rows a statement has already
@@ -4996,6 +5061,150 @@ fn in_order(
         }
     }
     true
+}
+
+/// One line of an `EXPLAIN QUERY PLAN`: which line it hangs under,
+/// counting from one, and what it says.
+type Explained = (usize, Vec<u8>);
+
+/// Writes the lines one side of a statement adds to the plan, hanging
+/// them under the line at `parent`, counting from one.
+///
+/// `sqlite3WhereExplainOneScan` of `research/sqlite/src/where.c` writes
+/// one line per loop: `SCAN` where the loop reads every row, `SEARCH`
+/// where a key or a bound holds it, and the columns the key and the
+/// bounds name in brackets.
+fn detailed(side: &Side<'_>, plan: &Plan, lines: &mut Vec<Explained>, parent: usize) {
+    // A side that reads what another statement answers names no index,
+    // which is the `SCAN` `sqlite3SelectNew` writes for a co-routine.
+    let Source::Table(stored) = &side.source else {
+        lines.push((parent, scanned(&side.name, b"")));
+        return;
+    };
+    match plan {
+        Plan::Rows(None, None) => lines.push((parent, scanned(&side.name, b""))),
+        Plan::Rows(low, high) => {
+            let mut held = b"SEARCH ".to_vec();
+            held.extend_from_slice(&side.name);
+            held.extend_from_slice(b" USING INTEGER PRIMARY KEY (");
+            let mut terms: Vec<&[u8]> = Vec::new();
+            if low == high {
+                terms.push(b"rowid=?");
+            } else {
+                if low.is_some() {
+                    terms.push(b"rowid>?");
+                }
+                if high.is_some() {
+                    terms.push(b"rowid<?");
+                }
+            }
+            anded(&mut held, &terms);
+            held.push(b')');
+            lines.push((parent, held));
+        }
+        Plan::Keyed {
+            root, key, bounds, ..
+        } => {
+            let mut terms: Vec<Vec<u8>> = Vec::new();
+            for at in 0..key.len() {
+                terms.push(term_of(stored, *root, at, b"=?"));
+            }
+            if bounds.low.is_some() {
+                terms.push(term_of(stored, *root, key.len(), b">?"));
+            }
+            if bounds.high.is_some() {
+                terms.push(term_of(stored, *root, key.len(), b"<?"));
+            }
+            lines.push((
+                parent,
+                searched(&side.name, &named_index(stored, *root), &terms),
+            ));
+        }
+        Plan::Joined { root, .. } => {
+            let terms = alloc::vec![term_of(stored, *root, 0, b"=?")];
+            lines.push((
+                parent,
+                searched(&side.name, &named_index(stored, *root), &terms),
+            ));
+        }
+        Plan::Union(branches) => {
+            lines.push((parent, b"MULTI-INDEX OR".to_vec()));
+            let held = lines.len();
+            for (at, branch) in branches.iter().enumerate() {
+                let mut named = b"INDEX ".to_vec();
+                named.extend_from_slice(&crate::number::integer_text(
+                    i64::try_from(at.saturating_add(1)).unwrap_or(i64::MAX),
+                ));
+                lines.push((held, named));
+                let under = lines.len();
+                detailed(side, branch, lines, under);
+            }
+        }
+    }
+}
+
+/// `SCAN t`, with the index the walk reads where `index` names one.
+fn scanned(name: &[u8], index: &[u8]) -> Vec<u8> {
+    let mut held = b"SCAN ".to_vec();
+    held.extend_from_slice(name);
+    if !index.is_empty() {
+        held.extend_from_slice(b" USING INDEX ");
+        held.extend_from_slice(index);
+    }
+    held
+}
+
+/// `SEARCH t USING INDEX i (a=? AND b>?)`, which is `SCAN t USING
+/// INDEX i` where no term holds the walk to part of the index.
+fn searched(name: &[u8], index: &[u8], terms: &[Vec<u8>]) -> Vec<u8> {
+    if terms.is_empty() {
+        return scanned(name, index);
+    }
+    let mut held = b"SEARCH ".to_vec();
+    held.extend_from_slice(name);
+    held.extend_from_slice(b" USING INDEX ");
+    held.extend_from_slice(index);
+    held.extend_from_slice(b" (");
+    let spans: Vec<&[u8]> = terms.iter().map(alloc::vec::Vec::as_slice).collect();
+    anded(&mut held, &spans);
+    held.push(b')');
+    held
+}
+
+/// Writes the terms into `held`, `AND` between each two.
+fn anded(held: &mut Vec<u8>, terms: &[&[u8]]) {
+    for (at, term) in terms.iter().enumerate() {
+        if at > 0 {
+            held.extend_from_slice(b" AND ");
+        }
+        held.extend_from_slice(term);
+    }
+}
+
+/// The name of the index of `stored` whose tree begins at `root`, and
+/// no bytes where the plan names an index the table does not carry.
+fn named_index(stored: &Stored, root: u32) -> Vec<u8> {
+    stored
+        .indexes
+        .iter()
+        .find(|kept| kept.root == root)
+        .map_or_else(Vec::new, |kept| kept.index.name.clone())
+}
+
+/// One term of the brackets: the column the index holds at `at`, and
+/// the comparison written after it.
+fn term_of(stored: &Stored, root: u32, at: usize, how: &[u8]) -> Vec<u8> {
+    let named = stored
+        .indexes
+        .iter()
+        .find(|kept| kept.root == root)
+        .and_then(|kept| kept.index.columns.get(at))
+        .and_then(crate::schema::Keyed::place)
+        .and_then(|place| stored.table.columns.get(place))
+        .map(|column| column.name.clone());
+    let mut held = named.unwrap_or_default();
+    held.extend_from_slice(how);
+    held
 }
 
 /// What the walk of the one side answers of the `ORDER BY`.

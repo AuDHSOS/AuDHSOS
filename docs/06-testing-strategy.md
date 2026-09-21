@@ -6754,3 +6754,13 @@ Document 16 step Q8.
   index place holds.
 - A `COLLATE` over the rowid, and one naming a collation the connection
   does not define.
+
+### 6.6.259 The plan an `EXPLAIN QUERY PLAN` names (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A walk of a whole table, of a whole index, held to a key, held between
+  bounds, and held to a range of rowids.
+- A side under an alias, a side that reads what another statement
+  answers, and a side read by one walk per branch of an `OR`.
+- A sort the walk does not answer.

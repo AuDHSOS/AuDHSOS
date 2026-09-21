@@ -726,3 +726,128 @@ fn a_walk_of_a_tall_index_held_between_bounds_is_read_backwards_as_well() {
         assert_eq!(answer.rows, backwards);
     }
 }
+
+/// The lines `EXPLAIN QUERY PLAN` answers for `sql`.
+fn planned(bytes: &[u8], sql: &[u8]) -> alloc::string::String {
+    Database::open(bytes)
+        .unwrap()
+        .query(sql)
+        .unwrap()
+        .rows
+        .iter()
+        .map(|row| match row.get(3) {
+            Some(Value::Text(text)) => alloc::string::String::from_utf8_lossy(text).into_owned(),
+            _ => alloc::string::String::new(),
+        })
+        .collect::<Vec<_>>()
+        .join("|")
+}
+
+#[test]
+fn explain_query_plan_names_the_walk_of_every_side() {
+    assert_eq!(
+        planned(super::INDEXED, b"EXPLAIN QUERY PLAN SELECT * FROM m"),
+        "SCAN m"
+    );
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT * FROM m WHERE q='b'"
+        ),
+        "SEARCH m USING INDEX mq (q=?)"
+    );
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT * FROM m WHERE p=1 AND q>'a'"
+        ),
+        "SEARCH m USING INDEX mpq (p=? AND q>?)"
+    );
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT * FROM m WHERE rowid>2"
+        ),
+        "SEARCH m USING INTEGER PRIMARY KEY (rowid>?)"
+    );
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT * FROM m WHERE rowid=2"
+        ),
+        "SEARCH m USING INTEGER PRIMARY KEY (rowid=?)"
+    );
+    assert_eq!(
+        planned(super::INDEXED, b"EXPLAIN QUERY PLAN SELECT * FROM m AS z"),
+        "SCAN z"
+    );
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT * FROM m ORDER BY q"
+        ),
+        "SCAN m USING INDEX mq"
+    );
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT * FROM m ORDER BY r+1"
+        ),
+        "SCAN m|USE TEMP B-TREE FOR ORDER BY"
+    );
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT * FROM m WHERE q='b' OR p=2"
+        ),
+        "MULTI-INDEX OR|INDEX 1|SEARCH m USING INDEX mq (q=?)|INDEX 2|SEARCH m USING INDEX mpq (p=?)"
+    );
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT * FROM m WHERE rowid<3"
+        ),
+        "SEARCH m USING INTEGER PRIMARY KEY (rowid<?)"
+    );
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT * FROM m WHERE rowid>1 AND rowid<4"
+        ),
+        "SEARCH m USING INTEGER PRIMARY KEY (rowid>? AND rowid<?)"
+    );
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT * FROM m, k ON k.a=m.p"
+        ),
+        "SCAN m|SEARCH k USING INDEX ka (a=?)"
+    );
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT * FROM (SELECT * FROM m)"
+        ),
+        "SCAN m|SCAN "
+    );
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT * FROM m WHERE q<'c'"
+        ),
+        "SEARCH m USING INDEX mq (q<?)"
+    );
+}
+
+#[test]
+fn what_words_no_explain_query_plan_stands_in() {
+    // A bare `EXPLAIN` names the program the statement compiles to, and
+    // the two words after it are read as one prefix or as none.
+    for sql in [
+        b"EXPLAIN SELECT 1".as_slice(),
+        b"EXPLAIN QUERY SELECT 1",
+        b"EXPLAIN QUERY PLAN",
+    ] {
+        assert!(Database::open(super::INDEXED).unwrap().query(sql).is_err());
+    }
+}
