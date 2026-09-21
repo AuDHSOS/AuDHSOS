@@ -964,6 +964,7 @@ Size: L.
      records.
 111. The rowid range a branch of an `OR` names, and the bounds a `LIKE`
      or a `GLOB` names. Built, which D-368 records.
+112. The two bounds a `BETWEEN` names. Built, which D-369 records.
 
 ### Done when
 
@@ -973,8 +974,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 117 258 cases in 847 files, 106 240
-pass, 3980 answer differently, and 7038 name something the engine
+under the `tclsh` of the machine. Of 118 441 cases in 847 files, 107 870
+pass, 3533 answer differently, and 7038 name something the engine
 refuses or a command that needs the C library's internals. The files
 that answer for tens of thousands of rows reach the three-minute
 deadline and are counted with the cases they ran by then. One run over

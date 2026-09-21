@@ -547,3 +547,44 @@ fn a_branch_of_an_or_that_names_the_rowid_is_read_out_of_the_tables_own_tree() {
         [Value::Int(101)]
     );
 }
+
+#[test]
+fn a_between_holds_the_column_at_both_ends() {
+    assert_eq!(
+        listed(
+            super::INDEXED,
+            b"SELECT rowid FROM m WHERE rowid BETWEEN 2 AND 4"
+        ),
+        "2,3,4"
+    );
+    assert_eq!(
+        listed(
+            super::INDEXED,
+            b"SELECT rowid FROM m WHERE p BETWEEN 2 AND 3"
+        ),
+        "3,4,5"
+    );
+    // A `BETWEEN` written after `NOT`, one over a value that is no
+    // column, and one whose end is a column read no key and no bound.
+    assert_eq!(
+        listed(
+            super::INDEXED,
+            b"SELECT rowid FROM m WHERE q NOT BETWEEN 'a' AND 'b'"
+        ),
+        "4"
+    );
+    assert_eq!(
+        keys(
+            super::INDEXED,
+            b"SELECT count(*) FROM m WHERE 1 BETWEEN 0 AND 2"
+        ),
+        [Value::Int(5)]
+    );
+    assert_eq!(
+        listed(
+            super::INDEXED,
+            b"SELECT rowid FROM m WHERE p BETWEEN q AND 3"
+        ),
+        ""
+    );
+}

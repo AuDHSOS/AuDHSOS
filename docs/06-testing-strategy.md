@@ -6700,3 +6700,6 @@ Document 16 step Q8.
   is of no text affinity.
 - A branch of an `OR` that names the rowid, a range of rowids, a rowid
   compared against text, and a rowid of another side.
+- A `BETWEEN` over the rowid and one over a column, and a `BETWEEN`
+  written after `NOT`, over a value that is no column, or whose end is a
+  column.

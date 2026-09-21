@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` reads `x BETWEEN a AND b` as the two bounds `x >= a` and
+  `x <= b`, so a walk is held at both ends and a branch of an `OR` that
+  writes one reaches a walk. D-369 records it. `where7.test` goes from
+  348 cases passing to 1978, which is every case of the file but 41.
+
 - `db-sqlite` reads a branch of a top-level `OR` that names the rowid out
   of the table's own tree, and holds a column a `LIKE` or a `GLOB` names
   between the bounds the prefix of the pattern names. D-368 records it.

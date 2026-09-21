@@ -4508,6 +4508,21 @@ fn terms_of(
             }
             continue;
         }
+        // `sqlite3ExprCodeBetween` reads `x BETWEEN a AND b` as
+        // `x >= a AND x <= b`, and a term of each holds the walk.
+        if let Some(Node::Between {
+            value,
+            low,
+            high,
+            negated,
+        }) = arena.node(id)
+        {
+            if !negated {
+                out.extend(bounded(arena, value, low, BinaryOp::Ge, sql, sides));
+                out.extend(bounded(arena, value, high, BinaryOp::Le, sql, sides));
+            }
+            continue;
+        }
         let Some(Node::Binary { op, left, right }) = arena.node(id) else {
             continue;
         };
@@ -4554,6 +4569,30 @@ fn terms_of(
         }
     }
     out
+}
+
+/// The term one end of a `BETWEEN` holds the column at, and nothing
+/// where the value is no column of a side or the end is no value the
+/// walk can read without a row.
+///
+/// Reading one end costs what the expression it is read from costs.
+fn bounded(
+    arena: &Arena,
+    value: ExprId,
+    end: ExprId,
+    op: BinaryOp,
+    sql: &[u8],
+    sides: &[Side<'_>],
+) -> Option<Bound> {
+    let (at, reached) = reached(arena, value, sql, sides)?;
+    let held = evaluate_row(arena, end, sql, &eval::NoRow(None)).ok()?;
+    Some(Bound {
+        at,
+        reached,
+        op,
+        value: held,
+        needs: None,
+    })
 }
 
 /// The two bounds a `LIKE` or a `GLOB` over a column holds that column
