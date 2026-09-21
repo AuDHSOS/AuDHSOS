@@ -985,6 +985,8 @@ Size: L.
      column an `IS` holds. Built, which D-380 records.
 122. The index whose key the terms name the most columns of. Built,
      which D-381 records.
+123. The database a statement of a trigger's body writes. Built,
+     which D-383 records.
 
 ### Done when
 

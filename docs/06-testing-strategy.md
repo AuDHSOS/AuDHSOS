@@ -6807,3 +6807,12 @@ Document 16 step Q8.
 
 - Two indexes the terms name one and two columns of.
 - Two indexes the terms name as many columns of, made in either order.
+
+### 6.6.265 The database a trigger's body writes (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A trigger of the temp schema whose body names a table of `main` and
+  one of the temp schema.
+- A trigger of `main` whose body names a table two databases hold.
+- An `INSERT`, an `UPDATE`, a `DELETE` and a `SELECT` in one body.

@@ -5230,36 +5230,96 @@ impl Writer {
     }
 
     /// Runs the statements of one trigger's body.
+    ///
+    /// A trigger of the temp schema is fixed to no database, which
+    /// `sqlite3FixInit` of `research/sqlite/src/attach.c:547` leaves
+    /// alone where `bTemp` is one, so a statement of its body names its
+    /// table the way a statement outside a trigger does: the temp
+    /// schema first and then the databases in turn. Every other trigger
+    /// writes the database it stands in.
     fn body(&mut self, trigger: &crate::db::Trigger, row: &Fired<'_>) -> Result<(), Error> {
         let arena = &trigger.arena;
         let sql = &trigger.sql;
+        let loose = self.called.name.eq_ignore_ascii_case(b"temp");
         for step in arena.steps(trigger.written.body) {
-            match *step {
-                crate::ast::TriggerStep::Insert(statement) => {
-                    let changed = self.insert(arena, &statement, sql, Some(row))?;
-                    self.counts_step(changed);
-                }
-                crate::ast::TriggerStep::Update(statement) => {
-                    let changed = self.update(arena, &statement, sql, Some(row))?;
-                    self.counts_step(changed);
-                }
-                crate::ast::TriggerStep::Delete(statement) => {
-                    let changed = self.delete(arena, &statement, sql, Some(row))?;
-                    self.counts_step(changed);
-                }
-                // A statement that answers rows runs for what it reads
-                // and answers nothing, which is what a `SELECT` of a
-                // body is for: it carries the `RAISE`.
-                crate::ast::TriggerStep::Select(select) => {
-                    let bytes = self.images();
-                    let database = self
-                        .reading_beside(&bytes)?
-                        .seeded(self.random.word())
-                        .defining(self.defined)
-                        .grouping(self.grouped)
-                        .counting(self.counted);
-                    database.rows_under(arena, select, sql, Some(row))?;
-                }
+            let at = if loose {
+                self.stepping_at(step, sql)?
+            } else {
+                None
+            };
+            if let Some(held) = at {
+                self.switch(held);
+            }
+            let answered = self.stepped(step, arena, sql, row);
+            if let Some(held) = at {
+                self.switch(held);
+            }
+            answered?;
+        }
+        Ok(())
+    }
+
+    /// Which database of the list one statement of a trigger's body
+    /// writes, and nothing where it writes the one the connection
+    /// already writes.
+    ///
+    /// A statement of a body writes no schema in front of its table,
+    /// which `sqlite3TriggerInsertStep` refuses, so the name is read
+    /// the way a bare name is read anywhere.
+    ///
+    /// # Errors
+    ///
+    /// Whatever reading the schemas refuses.
+    fn stepping_at(
+        &self,
+        step: &crate::ast::TriggerStep,
+        sql: &[u8],
+    ) -> Result<Option<usize>, Error> {
+        let named = match *step {
+            crate::ast::TriggerStep::Insert(ref statement) => Some(statement.name),
+            crate::ast::TriggerStep::Update(ref statement) => Some(statement.name),
+            crate::ast::TriggerStep::Delete(ref statement) => Some(statement.name),
+            // A statement that answers rows names its tables in the
+            // reader, which reads every database of the connection.
+            crate::ast::TriggerStep::Select(_) => None,
+        };
+        self.holding_at(named, sql)
+    }
+
+    /// Runs one statement of a trigger's body against the database the
+    /// connection writes.
+    fn stepped(
+        &mut self,
+        step: &crate::ast::TriggerStep,
+        arena: &Arena,
+        sql: &[u8],
+        row: &Fired<'_>,
+    ) -> Result<(), Error> {
+        match *step {
+            crate::ast::TriggerStep::Insert(statement) => {
+                let changed = self.insert(arena, &statement, sql, Some(row))?;
+                self.counts_step(changed);
+            }
+            crate::ast::TriggerStep::Update(statement) => {
+                let changed = self.update(arena, &statement, sql, Some(row))?;
+                self.counts_step(changed);
+            }
+            crate::ast::TriggerStep::Delete(statement) => {
+                let changed = self.delete(arena, &statement, sql, Some(row))?;
+                self.counts_step(changed);
+            }
+            // A statement that answers rows runs for what it reads
+            // and answers nothing, which is what a `SELECT` of a
+            // body is for: it carries the `RAISE`.
+            crate::ast::TriggerStep::Select(select) => {
+                let bytes = self.images();
+                let database = self
+                    .reading_beside(&bytes)?
+                    .seeded(self.random.word())
+                    .defining(self.defined)
+                    .grouping(self.grouped)
+                    .counting(self.counted);
+                database.rows_under(arena, select, sql, Some(row))?;
             }
         }
         Ok(())

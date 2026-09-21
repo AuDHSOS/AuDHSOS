@@ -27,6 +27,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` names the table of a statement of a trigger's body the way
+  a statement outside a trigger names one where the trigger stands in
+  the temp schema, so a body that writes a table of `main` no longer
+  writes the temp table the trigger is on. D-383 records it. Catalog
+  6.6.265. `trigger2.test` goes from 86 cases passing to 96 and
+  `without_rowid4.test` from 80 to 89.
+
 - `db-sqlite` builds a plan from the index whose key the terms name the
   most columns of, and takes two indexes of one length in the order the
   schema carries them, the index made last first. D-381 records it.

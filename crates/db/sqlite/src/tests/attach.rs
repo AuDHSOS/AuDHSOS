@@ -753,3 +753,83 @@ fn what_lock_every_database_of_a_connection_is_held_under() {
         ]
     );
 }
+
+/// A trigger of the temp schema is fixed to no database, so a statement
+/// of its body names its table the way a statement outside a trigger
+/// does: the temp schema first and then the databases in turn.
+#[test]
+fn a_trigger_of_the_temp_schema_names_its_tables_as_a_statement_outside_one_does() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE rlog(x)".as_slice(),
+        b"CREATE TEMP TABLE tbl(a, b)",
+        b"CREATE TEMP TABLE clog(x)",
+        b"INSERT INTO tbl VALUES(1, 2)",
+        b"INSERT INTO clog VALUES(7)",
+        b"CREATE TRIGGER bu BEFORE UPDATE ON tbl FOR EACH ROW BEGIN \
+          INSERT INTO rlog VALUES(old.a); \
+          UPDATE clog SET x = old.b; \
+          DELETE FROM clog WHERE x = 99; \
+          SELECT 1; END",
+        b"UPDATE tbl SET a = 9",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    // `rlog` stands in `main` alone, so the body of a trigger of the
+    // temp schema reaches it; `clog` stands in the temp schema, which
+    // is read before the databases.
+    let held = writer.written();
+    let temp = writer.attached_written(b"temp").unwrap();
+    let database = crate::db::Database::open(&held)
+        .unwrap()
+        .attaching(b"temp", &temp)
+        .unwrap();
+    assert_eq!(
+        database.query(b"SELECT x FROM main.rlog").unwrap().rows,
+        [alloc::vec![Value::Int(1)]]
+    );
+    assert_eq!(
+        database.query(b"SELECT x FROM temp.clog").unwrap().rows,
+        [alloc::vec![Value::Int(2)]]
+    );
+    assert_eq!(
+        database.query(b"SELECT a, b FROM temp.tbl").unwrap().rows,
+        [alloc::vec![Value::Int(9), Value::Int(2)]]
+    );
+}
+
+/// A trigger of a database other than the temp schema writes the
+/// database it stands in, which a table of the temp schema under the
+/// same name does not reach.
+#[test]
+fn a_trigger_of_main_writes_the_database_it_stands_in() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE tbl(a)".as_slice(),
+        b"CREATE TABLE rlog(x)",
+        b"CREATE TEMP TABLE rlog(x)",
+        b"INSERT INTO tbl VALUES(1)",
+        b"CREATE TRIGGER bu BEFORE UPDATE ON tbl FOR EACH ROW BEGIN \
+          INSERT INTO rlog VALUES(old.a); END",
+        b"UPDATE tbl SET a = 9",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let held = writer.written();
+    let temp = writer.attached_written(b"temp").unwrap();
+    let database = crate::db::Database::open(&held)
+        .unwrap()
+        .attaching(b"temp", &temp)
+        .unwrap();
+    assert_eq!(
+        database.query(b"SELECT x FROM main.rlog").unwrap().rows,
+        [alloc::vec![Value::Int(1)]]
+    );
+    assert!(
+        database
+            .query(b"SELECT x FROM temp.rlog")
+            .unwrap()
+            .rows
+            .is_empty()
+    );
+}
