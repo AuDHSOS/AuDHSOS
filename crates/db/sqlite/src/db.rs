@@ -3263,7 +3263,7 @@ impl<'a> Database<'a> {
             return listed(arena, &select, sql, &cursor);
         }
         let mut sides = self.sides(arena, &select, sql, scope)?;
-        planned(arena, select.filter, sql, &mut sides);
+        planned(arena, select.filter, sql, &mut sides, self.sensitive);
         let shape = shape(arena, &select, sql, &sides, self.naming, self.collating)?;
         let collations = self.collations(&shape);
         let names: Vec<Vec<u8>> = shape
@@ -3939,7 +3939,7 @@ impl<'a> Database<'a> {
         if let Plan::Union(plans) = &side.plan {
             let feeds: Option<Vec<Feed<'a, 'f>>> = plans
                 .iter()
-                .map(|plan| sought(plan, cursor).and_then(|held| self.keyed(stored, held)))
+                .map(|plan| self.branch(stored, plan, cursor))
                 .collect();
             return match feeds {
                 Some(feeds) => Feed::Union(Box::new(Union {
@@ -3958,6 +3958,21 @@ impl<'a> Database<'a> {
         // A plan that names an index and could not be walked falls back
         // to the whole tree, which answers the same rows.
         self.scanned(side, stored)
+    }
+
+    /// The walk one branch of an `OR` is read by: the table's own tree
+    /// where the branch names a rowid range, and the index the branch
+    /// names a key of otherwise.
+    fn branch<'f>(
+        &self,
+        stored: &'f Stored,
+        plan: &Plan,
+        cursor: &Cursor<'_>,
+    ) -> Option<Feed<'a, 'f>> {
+        if let Plan::Rows(first, last) = plan {
+            return Some(self.ranged(stored, (*first, *last)));
+        }
+        sought(plan, cursor).and_then(|held| self.keyed(stored, held))
     }
 
     /// The walk of one index, held to the key the plan names, and
@@ -4018,10 +4033,16 @@ impl<'a> Database<'a> {
     /// side with no plan and a side whose plan could not be walked both
     /// answer.
     fn scanned<'f>(&self, side: &'f Side<'f>, stored: &'f Stored) -> Feed<'a, 'f> {
+        self.ranged(stored, side.range())
+    }
+
+    /// The rows of one table between two rowids, read out of its own
+    /// tree.
+    fn ranged<'f>(&self, stored: &'f Stored, range: (Option<i64>, Option<i64>)) -> Feed<'a, 'f> {
         Feed::Tree(Box::new(Tree {
             image: self.imaged(stored.place),
             stored,
-            walk: self.walk(stored, side.range()),
+            walk: self.walk(stored, range),
             encoding: self.encoding,
             collation: self.collation(),
             payload: Vec::new(),
@@ -4295,8 +4316,16 @@ fn listed(
 /// which rows the statement answers. A row a plan leaves out is a row
 /// one of those terms refuses, so every plan answers what a scan
 /// answers.
-fn planned(arena: &Arena, filter: Option<ExprId>, sql: &[u8], sides: &mut [Side<'_>]) {
-    let terms = filter.map_or_else(Vec::new, |filter| terms_of(arena, filter, sql, sides));
+fn planned(
+    arena: &Arena,
+    filter: Option<ExprId>,
+    sql: &[u8],
+    sides: &mut [Side<'_>],
+    sensitive: bool,
+) {
+    let terms = filter.map_or_else(Vec::new, |filter| {
+        terms_of(arena, filter, sql, sides, sensitive)
+    });
     // A rowid range is what a table's own tree is walked by, and it
     // answers a row where an index answers only where the row is, so it
     // is taken first and never given up for an index.
@@ -4323,7 +4352,9 @@ fn planned(arena: &Arena, filter: Option<ExprId>, sql: &[u8], sides: &mut [Side<
                 // one walk per branch.
                 plan_of(&terms, at, stored)
                     .or_else(|| {
-                        filter.and_then(|filter| union_of(arena, filter, sql, sides, at, stored))
+                        filter.and_then(|filter| {
+                            union_of(arena, filter, sql, sides, at, stored, sensitive)
+                        })
                     })
                     .or_else(|| joined(arena, sql, sides, at, stored))
             }
@@ -4425,6 +4456,22 @@ struct Bound {
     op: BinaryOp,
     /// What the column is compared against.
     value: Value,
+    /// What the term asks of the column, where the term was read out of
+    /// a `LIKE` or a `GLOB` rather than written.
+    needs: Option<Pattern>,
+}
+
+/// What a bound read out of a pattern asks of the column it holds.
+#[derive(Clone, Copy)]
+struct Pattern {
+    /// The collation the pattern matches under, which the column has to
+    /// compare under for the bound to hold.
+    collation: Collation,
+    /// Whether the prefix of the pattern, or the value one past it,
+    /// reads as a number. A column of any affinity but text converts
+    /// such a value to a number and holds it before every text, so the
+    /// bound would reach other rows than the pattern matches.
+    numeric: bool,
 }
 
 /// What a name in a `WHERE` reaches.
@@ -4438,10 +4485,29 @@ enum Reached {
 
 /// Every term a top-level `AND` spine holds that compares a column of
 /// one side against a value no row is needed to read.
-fn terms_of(arena: &Arena, filter: ExprId, sql: &[u8], sides: &[Side<'_>]) -> Vec<Bound> {
+fn terms_of(
+    arena: &Arena,
+    filter: ExprId,
+    sql: &[u8],
+    sides: &[Side<'_>],
+    sensitive: bool,
+) -> Vec<Bound> {
     let mut out = Vec::new();
     let mut spine = alloc::vec![filter];
     while let Some(id) = spine.pop() {
+        if let Some(Node::Like {
+            op,
+            value,
+            pattern,
+            escape,
+            negated,
+        }) = arena.node(id)
+        {
+            if !negated && escape.is_none() {
+                out.extend(liked(arena, op, value, pattern, sql, sides, sensitive));
+            }
+            continue;
+        }
         let Some(Node::Binary { op, left, right }) = arena.node(id) else {
             continue;
         };
@@ -4483,10 +4549,125 @@ fn terms_of(arena: &Arena, filter: ExprId, sql: &[u8], sides: &[Side<'_>]) -> Ve
                 reached,
                 op,
                 value,
+                needs: None,
             });
         }
     }
     out
+}
+
+/// The two bounds a `LIKE` or a `GLOB` over a column holds that column
+/// between, where the pattern begins with characters no wildcard stands
+/// among.
+///
+/// This is `isLikeOrGlob` of `research/sqlite/src/whereexpr.c` and the
+/// terms `exprAnalyze` writes from it: `x LIKE 'abc%'` holds `x` between
+/// `'ABC'` and `'abd'`, the one in capitals and the other in small
+/// letters so that the bounds hold a blob as well. The pattern is still
+/// read for every row the bounds answer, so bounds that answer more rows
+/// than the pattern matches answer the rows the statement answers.
+///
+/// Reading the pattern costs O(n) in its bytes.
+fn liked(
+    arena: &Arena,
+    op: crate::ast::LikeOp,
+    value: ExprId,
+    pattern: ExprId,
+    sql: &[u8],
+    sides: &[Side<'_>],
+    sensitive: bool,
+) -> Vec<Bound> {
+    let wildcards: &[u8] = match op {
+        crate::ast::LikeOp::Like => b"%_",
+        crate::ast::LikeOp::Glob => b"*?[",
+        crate::ast::LikeOp::Regexp | crate::ast::LikeOp::Match => return Vec::new(),
+    };
+    // `sqlite3IsLikeFunction`: `GLOB` tells the letters apart and `LIKE`
+    // does not, except on a connection `PRAGMA case_sensitive_like` set.
+    let nocase = op == crate::ast::LikeOp::Like && !sensitive;
+    let Some((at, reached)) = reached(arena, value, sql, sides) else {
+        return Vec::new();
+    };
+    let Ok(Value::Text(held)) = evaluate_row(arena, pattern, sql, &eval::NoRow(None)) else {
+        return Vec::new();
+    };
+    // Only the bytes below 128 are read as a prefix, because the byte
+    // after one above 127 is part of the same character and incrementing
+    // the one would write over the other.
+    let count = held
+        .iter()
+        .position(|byte| *byte >= 0x80 || wildcards.contains(byte))
+        .unwrap_or(held.len());
+    let Some(prefix) = held.get(..count).filter(|held| !held.is_empty()) else {
+        return Vec::new();
+    };
+    let low: Vec<u8> = prefix
+        .iter()
+        .map(|byte| {
+            if nocase {
+                byte.to_ascii_uppercase()
+            } else {
+                *byte
+            }
+        })
+        .collect();
+    let mut high: Vec<u8> = prefix
+        .iter()
+        .map(|byte| {
+            if nocase {
+                byte.to_ascii_lowercase()
+            } else {
+                *byte
+            }
+        })
+        .collect();
+    // The last character of the prefix is incremented, which is what
+    // makes the high end one past every value the prefix begins.
+    for last in high.iter_mut().rev().take(1) {
+        *last = last.saturating_add(1);
+    }
+    // A blob the pattern matches stands after every text, so the high
+    // end is a blob: the walk then reaches the text the prefix begins
+    // and the blobs it begins both, which is what the two passes of the
+    // loop `sqlite3WhereBegin` writes for `WHERE_LIKEOPT` reach.
+    // `isLikeOrGlob` refuses a prefix that reads as a number, and a
+    // lone minus with it, where the column is not one of text affinity,
+    // because the column converts such a value to a number.
+    let mut bumped = prefix.to_vec();
+    for last in bumped.iter_mut().rev().take(1) {
+        *last = last.saturating_add(1);
+    }
+    let needs = Pattern {
+        collation: if nocase {
+            Collation::NoCase
+        } else {
+            Collation::Binary
+        },
+        numeric: prefix == b"-" || is_number(prefix) || is_number(&bumped),
+    };
+    alloc::vec![
+        Bound {
+            at,
+            reached,
+            op: BinaryOp::Ge,
+            value: Value::Text(low),
+            needs: Some(needs),
+        },
+        Bound {
+            at,
+            reached,
+            op: BinaryOp::Lt,
+            value: Value::Blob(high),
+            needs: Some(needs),
+        },
+    ]
+}
+
+/// Whether the bytes read as a number, which is what `sqlite3AtoF`
+/// answers above nought for.
+fn is_number(bytes: &[u8]) -> bool {
+    let read = crate::number::real(bytes);
+    read.number() && read.complete()
 }
 
 /// Which side an expression names a column of, and which column.
@@ -4584,6 +4765,16 @@ fn plan_of(terms: &[Bound], at: usize, stored: &Stored) -> Option<Plan> {
                             // against `NULL` reaches, which is what
                             // `NULL = NULL` answering nothing means.
                             && term.value != Value::Null
+                            // A bound read out of a pattern holds only
+                            // where the column compares under the
+                            // collation the pattern matches under, and
+                            // only where the column holds text: a
+                            // column that converts its values to
+                            // numbers holds them before every text.
+                            && term.needs.is_none_or(|wanted| {
+                                wanted.collation == column.collation
+                                    && (column.affinity == Affinity::Text || !wanted.numeric)
+                            })
                     })
                     .map(|term| {
                         // An entry holds what the table's affinity left
@@ -4853,6 +5044,7 @@ fn union_of(
     sides: &[Side<'_>],
     at: usize,
     stored: &Stored,
+    sensitive: bool,
 ) -> Option<Plan> {
     let mut spine = alloc::vec![filter];
     while let Some(id) = spine.pop() {
@@ -4868,7 +5060,7 @@ fn union_of(
             Some(Node::Binary {
                 op: BinaryOp::Or, ..
             }) => {
-                if let Some(plan) = ored(arena, id, sql, sides, at, stored) {
+                if let Some(plan) = ored(arena, id, sql, sides, at, stored, sensitive) {
                     return Some(plan);
                 }
             }
@@ -4889,6 +5081,7 @@ fn ored(
     sides: &[Side<'_>],
     at: usize,
     stored: &Stored,
+    sensitive: bool,
 ) -> Option<Plan> {
     let mut plans = Vec::new();
     let mut spine = alloc::vec![id];
@@ -4903,10 +5096,35 @@ fn ored(
             spine.push(left);
             continue;
         }
-        let terms = terms_of(arena, held, sql, sides);
-        plans.push(plan_of(&terms, at, stored)?);
+        let terms = terms_of(arena, held, sql, sides, sensitive);
+        // A branch that names the rowid is read out of the table's own
+        // tree, which is the `OP_SeekRowid` loop `sqlite3WhereBegin`
+        // writes for `WHERE_IPK`.
+        let plan = plan_of(&terms, at, stored).or_else(|| ranged_of(&terms, at))?;
+        plans.push(plan);
     }
     Some(Plan::Union(plans))
+}
+
+/// The walk of the table's own tree the terms hold to a range of its
+/// rowids, and nothing where no term names the rowid.
+///
+/// Reading the terms costs O(n) in them.
+fn ranged_of(terms: &[Bound], at: usize) -> Option<Plan> {
+    let mut range = (None, None);
+    for term in terms {
+        let Value::Int(bound) = term.value else {
+            continue;
+        };
+        if term.at != at || term.reached != Reached::Key {
+            continue;
+        }
+        narrow(&mut range.0, &mut range.1, term.op, bound);
+    }
+    if range == (None, None) {
+        return None;
+    }
+    Some(Plan::Rows(range.0, range.1))
 }
 
 /// What one plan holds a walk of an index to.

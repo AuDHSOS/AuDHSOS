@@ -6682,3 +6682,21 @@ Document 16 step Q8.
 - A bound the affinity of the column changes is widened to hold the
   value itself.
 - A column of real affinity reaches no key and no bound.
+
+### 6.6.253 The bounds a pattern names (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A `GLOB` over a column that compares under `BINARY` and a `LIKE` over
+  one that compares under `NOCASE` each hold the column between two
+  bounds.
+- A `GLOB` over a column that compares under `NOCASE`, and a `LIKE` over
+  one that compares under `BINARY`, hold it between none.
+- A pattern that begins with a wildcard, one that begins with a
+  character past the first 128, one written after `NOT`, one with an
+  `ESCAPE`, and one that is no text of its own each name no bound.
+- A prefix that reads as a number, a lone minus, and a prefix the value
+  one past which reads as a number each name no bound where the column
+  is of no text affinity.
+- A branch of an `OR` that names the rowid, a range of rowids, a rowid
+  compared against text, and a rowid of another side.

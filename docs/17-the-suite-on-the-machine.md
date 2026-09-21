@@ -55,9 +55,9 @@ Before this track the harness read nine commands of a file and counted
 every other command as one it could not run: 1171 files held 17 724
 cases it knew about, and 13 086 of them were refused because a step
 before them was such a command. Running the files under `tclsh` makes
-117 040 cases of 847 files: 105 982 pass, 4020 answer differently and
+117 258 cases of 847 files: 106 240 pass, 3980 answer differently and
 7038 are refused. `where7.test` reaches the three-minute deadline after
-629 of its 2020 cases, which is why the count of cases is lower than it
+842 of its 2020 cases, which is why the count of cases is lower than it
 was before D-365.
 
 What the 7038 refusals are for, most first: `sqlite3_memdebug_fail`
@@ -77,7 +77,7 @@ What each answers, over the same files:
 
 | Configuration | Passed | Answered differently | Refused |
 |---------------|-------:|---------------------:|--------:|
-| `utf8-4096-delete` | 105 982 | 4020 | 7038 |
+| `utf8-4096-delete` | 106 240 | 3980 | 7038 |
 | `utf16le-4096-delete` | 61 214 | 2392 | 9500 |
 | `utf16be-4096-delete` | 61 229 | 2392 | 9500 |
 | `utf8-512-delete` | 61 073 | 2452 | 9435 |

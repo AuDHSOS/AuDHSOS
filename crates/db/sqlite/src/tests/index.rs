@@ -420,3 +420,130 @@ fn a_bound_the_affinity_of_the_column_changes_is_widened() {
     // no row, because a number stands before every text.
     assert!(keys(super::INDEXED, b"SELECT rowid FROM m WHERE p>'1'").is_empty());
 }
+
+/// The rowids of `sql` over the fixture, as one text.
+fn listed(bytes: &[u8], sql: &[u8]) -> alloc::string::String {
+    keys(bytes, sql)
+        .iter()
+        .map(|key| match key {
+            Value::Int(number) => alloc::format!("{number}"),
+            other => alloc::format!("{other:?}"),
+        })
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+#[test]
+fn a_pattern_that_begins_with_characters_holds_the_column_between_two_bounds() {
+    // `ot` compares under `BINARY`, which `GLOB` matches under, and `mq`
+    // under `NOCASE`, which `LIKE` matches under.
+    assert_eq!(
+        listed(super::INDEXED, b"SELECT a FROM o WHERE t GLOB 'sh*'"),
+        "2"
+    );
+    assert_eq!(
+        listed(super::INDEXED, b"SELECT rowid FROM m WHERE q LIKE 'a%'"),
+        "1,3"
+    );
+    assert_eq!(
+        keys(super::INDEXED, b"SELECT count(*) FROM k WHERE b GLOB 'v1*'"),
+        [Value::Int(12)]
+    );
+    // A blob the pattern matches stands after every text, and the high
+    // end of the bounds is a blob so that the walk reaches it.
+    assert_eq!(
+        listed(super::INDEXED, b"SELECT a FROM o WHERE t GLOB '12*'"),
+        ""
+    );
+}
+
+#[test]
+fn what_pattern_holds_the_column_between_no_bounds() {
+    for (sql, wanted) in [
+        // `LIKE` matches under `NOCASE` and `ot` compares under
+        // `BINARY`; `GLOB` matches under `BINARY` and `mq` compares
+        // under `NOCASE`.
+        (b"SELECT a FROM o WHERE t LIKE 'sh%'".as_slice(), "2"),
+        (b"SELECT rowid FROM m WHERE q GLOB 'A*'", "1,3"),
+        // A pattern that begins with a wildcard, one that begins with a
+        // character past the first 128, one written after `NOT`, one
+        // with an `ESCAPE`, and one that is no text of its own.
+        (b"SELECT a FROM o WHERE t GLOB '*x'", ""),
+        (b"SELECT a FROM o WHERE t GLOB '\xc3\xa9*'", ""),
+        (b"SELECT rowid FROM m WHERE q NOT LIKE 'a%'", "2,4"),
+        (b"SELECT a FROM o WHERE t LIKE 'sh%' ESCAPE '\\'", "2"),
+        (
+            b"SELECT rowid FROM m WHERE q LIKE q ORDER BY rowid",
+            "1,2,3,4",
+        ),
+        (
+            b"SELECT rowid FROM m WHERE 'abc' LIKE 'a%' ORDER BY rowid",
+            "1,2,3,4,5",
+        ),
+        // A prefix that reads as a number, and a lone minus with it,
+        // where the column is of no text affinity.
+        (b"SELECT rowid FROM e WHERE a GLOB '1*'", ""),
+        (b"SELECT rowid FROM e WHERE a GLOB '-*'", "1"),
+        (
+            b"SELECT a FROM k WHERE a GLOB '1*'",
+            "1,10,11,12,13,14,15,16,17,18,19,100",
+        ),
+        (b"SELECT a FROM k WHERE a GLOB 'x1*'", ""),
+        // A prefix that is no number and the value one past it that is,
+        // and a prefix that begins as a number and is none.
+        (b"SELECT rowid FROM e WHERE a GLOB '/*'", ""),
+        (b"SELECT a FROM k WHERE a GLOB '1x*'", ""),
+    ] {
+        assert_eq!(
+            listed(super::INDEXED, sql),
+            wanted,
+            "{}",
+            alloc::string::String::from_utf8_lossy(sql)
+        );
+    }
+}
+
+#[test]
+fn a_pattern_no_index_matches_under_is_refused_where_no_function_answers_it() {
+    assert_eq!(
+        answers(super::INDEXED, b"SELECT rowid FROM m WHERE q REGEXP 'a'"),
+        Err(crate::db::Error::Eval(crate::eval::Error::NoFunction(
+            b"REGEXP".to_vec()
+        )))
+    );
+}
+
+#[test]
+fn a_branch_of_an_or_that_names_the_rowid_is_read_out_of_the_tables_own_tree() {
+    assert_eq!(
+        listed(
+            super::INDEXED,
+            b"SELECT rowid FROM m WHERE rowid=2 OR q='c'"
+        ),
+        "2,4"
+    );
+    assert_eq!(
+        listed(
+            super::INDEXED,
+            b"SELECT rowid FROM m WHERE rowid>3 OR q='b'"
+        ),
+        "4,5,2"
+    );
+    // A rowid the term compares against text names no range, so the
+    // table is scanned.
+    assert_eq!(
+        listed(
+            super::INDEXED,
+            b"SELECT rowid FROM m WHERE rowid='x' OR q='b'"
+        ),
+        "2"
+    );
+    // A term about another side names no range of this one.
+    assert_eq!(
+        keys(
+            super::INDEXED,
+            b"SELECT count(*) FROM m, k WHERE (m.rowid=2 AND k.a=1) OR m.q='c'"
+        ),
+        [Value::Int(101)]
+    );
+}

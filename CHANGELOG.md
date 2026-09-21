@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` reads a branch of a top-level `OR` that names the rowid out
+  of the table's own tree, and holds a column a `LIKE` or a `GLOB` names
+  between the bounds the prefix of the pattern names. D-368 records it.
+  Catalog 6.6.253. `where7.test` goes from 96 cases passing to 348.
+
 - `db-sqlite` holds the key of a plan to as many leading columns of an
   index as the terms name with `=`, and the column after them to the
   bounds a `<`, `<=`, `>` or `>=` term names, and a walk already held to
