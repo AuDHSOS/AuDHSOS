@@ -645,6 +645,10 @@ struct Session {
     /// What the last statement of each connection counted, which
     /// `db status` answers.
     stepped: BTreeMap<String, db_sqlite::db::Stepped>,
+    /// How many times the last statement of the run, on whichever
+    /// connection, sorted, which `sqlite3_sort_count` counts and
+    /// `::sqlite_sort_count` answers.
+    sorted: u64,
     /// What each connection was told for the pragmas it keeps a value
     /// for, which belong to a connection and not to the file.
     pragmas: BTreeMap<String, Kept>,
@@ -695,6 +699,7 @@ impl Session {
             counters: BTreeMap::new(),
             owners: BTreeMap::new(),
             stepped: BTreeMap::new(),
+            sorted: 0,
             pragmas: BTreeMap::new(),
             collations: BTreeMap::new(),
             functions: BTreeMap::new(),
@@ -827,6 +832,8 @@ impl Session {
             }
             // `db status (step|sort|autoindex|vmstep)`.
             "status" => self.status(first, second),
+            // `sqlite3_sort_count` of `vdbe.c:79`.
+            "sorts" => Ok(alloc_one(&self.sorted.to_string())),
             "clock" => self.ticks(first),
             // `sqlite3_set_authorizer`, `sqlite3_commit_hook`,
             // `sqlite3_rollback_hook` and `sqlite3_update_hook`.
@@ -1884,8 +1891,9 @@ impl Session {
         } else {
             self.owners.remove(&path);
         }
-        self.stepped
-            .insert(name.to_owned(), STEPPED.with(core::cell::Cell::take));
+        let stepped = STEPPED.with(core::cell::Cell::take);
+        self.sorted = stepped.sorts;
+        self.stepped.insert(name.to_owned(), stepped);
         self.counters.insert(name.to_owned(), counted);
         self.pragmas.insert(name.to_owned(), kept);
         self.mirror(&path, files);

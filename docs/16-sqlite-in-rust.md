@@ -967,6 +967,9 @@ Size: L.
 112. The two bounds a `BETWEEN` names. Built, which D-369 records.
 113. The entries of an index written `DESC`, held from the largest
      value down and read that way. Built, which D-371 records.
+114. The walk of an index read from its last entry to its first, and
+     an `ORDER BY` whose terms run in two directions. Built, which
+     D-372 records.
 
 ### Done when
 

@@ -1916,6 +1916,16 @@ set ::sqlite_current_time 0
 trace add variable ::sqlite_current_time write harness_clock
 proc harness_clock {args} { harness_send clock $::sqlite_current_time }
 
+# sqlite3_sort_count of vdbe.c:79: how many times the last statement
+# sorted, which a file reads to see whether an index answered an
+# ORDER BY. The harness holds the count, so reading the variable asks
+# for it.
+set ::sqlite_sort_count 0
+proc harness_sort_count {args} {
+  set ::sqlite_sort_count [lindex [harness_send sorts] 0]
+}
+trace add variable ::sqlite_sort_count read harness_sort_count
+
 
 # save_prng_state, restore_prng_state: the state random and randomblob
 # draw from next, which a test holds to draw the same words again.

@@ -210,6 +210,14 @@ impl<'a> Image<'a> {
         Entries::new(*self, root)
     }
 
+    /// The entries of the index whose tree begins at `root`, from the
+    /// last of them to the first, which is the walk `OP_Last` and
+    /// `OP_Prev` of `research/sqlite/src/vdbe.c` read an index by.
+    #[must_use]
+    pub const fn entries_back(&self, root: u32) -> Entries<'a> {
+        Entries::backwards(*self, root)
+    }
+
     /// The same, beginning at the first entry `before` does not answer
     /// for.
     ///
@@ -607,9 +615,18 @@ pub struct Entries<'a> {
     done: bool,
     /// The page the walk stands on, and which page it is.
     held: Option<(u32, Page<'a>)>,
+    /// Whether the walk reads the entries from the last to the first.
+    /// A frame of such a walk counts how many positions of its page are
+    /// left, so zero is the page read out, and [`Entries::UNPLACED`]
+    /// stands for a page the walk has not parsed yet.
+    backwards: bool,
 }
 
 impl<'a> Entries<'a> {
+    /// What the `next` of a frame of a backwards walk holds until the
+    /// walk parses the page and counts its positions.
+    const UNPLACED: usize = usize::MAX;
+
     /// A walk that has not begun, over the tree at `root`.
     const fn new(image: Image<'a>, root: u32) -> Self {
         Entries {
@@ -621,6 +638,22 @@ impl<'a> Entries<'a> {
             depth: 1,
             done: false,
             held: None,
+            backwards: false,
+        }
+    }
+
+    /// The same, from the last entry of the tree to the first.
+    const fn backwards(image: Image<'a>, root: u32) -> Self {
+        Entries {
+            image,
+            stack: [Frame {
+                number: root,
+                next: Self::UNPLACED,
+            }; MAX_DEPTH],
+            depth: 1,
+            done: false,
+            held: None,
+            backwards: true,
         }
     }
 
@@ -660,12 +693,52 @@ impl<'a> Entries<'a> {
         self.stack.iter_mut().take(self.depth).last()
     }
 
-    /// Moves the top frame on one step.
+    /// Moves the top frame on one step, which for a backwards walk
+    /// leaves one position fewer of the page to read.
     fn bump(&mut self) {
         let index = self.depth.saturating_sub(1);
+        let backwards = self.backwards;
         for frame in self.stack.iter_mut().skip(index).take(1) {
-            frame.next = frame.next.saturating_add(1);
+            frame.next = if backwards {
+                frame.next.saturating_sub(1)
+            } else {
+                frame.next.saturating_add(1)
+            };
         }
+    }
+
+    /// Counts the positions of the page a backwards walk has reached,
+    /// which is the number of entries of a leaf and one per subtree and
+    /// entry of an interior page.
+    fn place(&mut self, cells: usize, interior: bool) {
+        let index = self.depth.saturating_sub(1);
+        let held = if interior {
+            cells.saturating_mul(2).saturating_add(1)
+        } else {
+            cells
+        };
+        for frame in self.stack.iter_mut().skip(index).take(1) {
+            frame.next = held;
+        }
+    }
+
+    /// Which position of the page the walk acts on, or nothing where
+    /// the page is read out. A leaf holds one position per entry; an
+    /// interior page holds one per subtree and one per entry, the even
+    /// ones naming a subtree and the odd ones an entry.
+    const fn standing(&self, next: usize, cells: usize, interior: bool) -> Option<usize> {
+        if self.backwards {
+            return next.checked_sub(1);
+        }
+        let held = if interior {
+            cells.saturating_mul(2).saturating_add(1)
+        } else {
+            cells
+        };
+        if next >= held {
+            return None;
+        }
+        Some(next)
     }
 
     /// Descends into `child`.
@@ -673,7 +746,7 @@ impl<'a> Entries<'a> {
         let slot = self.stack.get_mut(self.depth).ok_or(Error::Depth)?;
         *slot = Frame {
             number: child,
-            next: 0,
+            next: if self.backwards { Self::UNPLACED } else { 0 },
         };
         self.depth = self.depth.saturating_add(1);
         Ok(())
@@ -691,38 +764,41 @@ impl<'a> Iterator for Entries<'a> {
                 Err(error) => return Some(Err(self.stop(error))),
             };
             let cells = page.cells();
-            match page.kind() {
-                Kind::LeafIndex if frame.next < cells => {
-                    self.bump();
-                    return Some(self.carried(page.entry(frame.next)));
-                }
-                // An interior page alternates: the subtree before an
-                // entry, then the entry, and the right-most subtree
-                // after the last of them.
-                Kind::InteriorIndex if frame.next <= cells.saturating_mul(2) => {
-                    let at = frame.next / 2;
-                    self.bump();
-                    if frame.next % 2 == 1 {
-                        return Some(self.carried(page.entry(at)));
-                    }
-                    let child = if at == cells {
-                        page.right_most().ok_or(Error::Overrun)
-                    } else {
-                        page.child(at)
-                    };
-                    match child.and_then(|child| self.push(child)) {
-                        Ok(()) => {}
-                        Err(error) => return Some(Err(self.stop(error))),
-                    }
-                }
+            let interior = match page.kind() {
+                Kind::LeafIndex => false,
+                Kind::InteriorIndex => true,
+                // An index tree holds no table page; a root that leads
+                // to one is a root of the wrong tree.
                 Kind::InteriorTable | Kind::LeafTable => {
-                    // An index tree holds no table page; a root that
-                    // leads to one is a root of the wrong tree.
                     return Some(Err(self.stop(Error::PageKind(page.kind().byte()))));
                 }
-                Kind::InteriorIndex | Kind::LeafIndex => {
-                    self.depth = self.depth.saturating_sub(1);
-                }
+            };
+            if self.backwards && frame.next == Self::UNPLACED {
+                self.place(cells, interior);
+                continue;
+            }
+            let Some(at) = self.standing(frame.next, cells, interior) else {
+                self.depth = self.depth.saturating_sub(1);
+                continue;
+            };
+            self.bump();
+            if !interior {
+                return Some(self.carried(page.entry(at)));
+            }
+            // An interior page alternates: the subtree before an entry,
+            // then the entry, and the right-most subtree after the last
+            // of them.
+            let held = at / 2;
+            if at % 2 == 1 {
+                return Some(self.carried(page.entry(held)));
+            }
+            let child = if held == cells {
+                page.right_most().ok_or(Error::Overrun)
+            } else {
+                page.child(held)
+            };
+            if let Err(error) = child.and_then(|child| self.push(child)) {
+                return Some(Err(self.stop(error)));
             }
         }
         None

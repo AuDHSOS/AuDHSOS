@@ -58,14 +58,37 @@ fn an_order_by_the_walk_of_an_index_answers_needs_no_sort() {
 }
 
 #[test]
+fn an_order_by_the_walk_of_an_index_read_backwards_answers_needs_no_sort() {
+    // `mq` holds `q` forwards and `mr` holds `r` backwards, so each
+    // answers the other order read from its last entry to its first.
+    assert_eq!(pair(b"SELECT * FROM m ORDER BY q DESC"), (4, 0));
+    assert_eq!(pair(b"SELECT * FROM m ORDER BY r"), (4, 0));
+    assert_eq!(pair(b"SELECT * FROM m ORDER BY p DESC, q DESC"), (4, 0));
+    assert_eq!(pair(b"SELECT * FROM m ORDER BY q DESC, rowid DESC"), (4, 0));
+}
+
+#[test]
+fn what_a_term_over_the_rowid_after_the_columns_answers() {
+    // The rowid stands after every column of the index and runs from
+    // the smallest up.
+    assert_eq!(pair(b"SELECT * FROM m WHERE p=1 ORDER BY q, rowid"), (0, 0));
+    assert_eq!(
+        pair(b"SELECT * FROM m WHERE p=1 ORDER BY q, rowid DESC"),
+        (0, 1)
+    );
+    assert_eq!(pair(b"SELECT * FROM m ORDER BY q, rowid DESC"), (4, 1));
+    // `mpq` holds `q` after `p`, so the rowid does not come next, and
+    // a walk of it held between bounds reaches no further.
+    assert_eq!(pair(b"SELECT * FROM m ORDER BY p, rowid"), (4, 1));
+    assert_eq!(pair(b"SELECT * FROM m WHERE p>1 ORDER BY p, rowid"), (0, 1));
+}
+
+#[test]
 fn what_order_by_the_walk_does_not_answer() {
-    // `mr` holds its entries backwards, and no index holds `q` and `r`
-    // in one order.
-    assert_eq!(pair(b"SELECT * FROM m ORDER BY r"), (4, 1));
+    // No index holds `q` and `r` in one order.
     assert_eq!(pair(b"SELECT * FROM m ORDER BY q, r"), (4, 1));
-    // A term written backwards, with its nulls moved, over an
-    // expression, or over a column under a collation of its own.
-    assert_eq!(pair(b"SELECT * FROM m ORDER BY q DESC"), (4, 1));
+    // A term with its nulls moved, over an expression, or over a column
+    // under a collation of its own.
     assert_eq!(pair(b"SELECT * FROM m ORDER BY q NULLS LAST"), (4, 1));
     // Two terms running in two directions, and a rowid read backwards.
     assert_eq!(pair(b"SELECT * FROM m ORDER BY p, q DESC"), (4, 1));

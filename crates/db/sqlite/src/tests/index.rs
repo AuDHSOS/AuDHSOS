@@ -609,3 +609,45 @@ fn a_between_holds_the_column_at_both_ends() {
         ""
     );
 }
+
+#[test]
+fn an_index_read_from_its_last_entry_answers_the_order_the_other_way_round() {
+    // `mq` holds `q` forwards and `mr` holds `r` backwards, so each
+    // answers the other order read backwards, and the rows come as the
+    // C library answers them.
+    assert_eq!(
+        listed(super::INDEXED, b"SELECT rowid FROM m ORDER BY q DESC"),
+        "4,2,3,1,5"
+    );
+    assert_eq!(
+        listed(super::INDEXED, b"SELECT rowid FROM m ORDER BY r"),
+        "4,1,2,3,5"
+    );
+    assert_eq!(
+        listed(
+            super::INDEXED,
+            b"SELECT rowid FROM m ORDER BY p DESC, q DESC"
+        ),
+        "5,4,3,2,1"
+    );
+}
+
+#[test]
+fn an_index_tall_enough_to_carry_interior_pages_is_read_backwards_as_well() {
+    // The tree of `ts` carries interior pages, so the walk descends
+    // into the right-most subtree of each of them and reads the entries
+    // of every page from the last to the first.
+    let answer = Database::open(super::TALL_INDEX)
+        .unwrap()
+        .query(b"SELECT s FROM t ORDER BY s DESC")
+        .unwrap();
+    let forwards = Database::open(super::TALL_INDEX)
+        .unwrap()
+        .query(b"SELECT s FROM t ORDER BY s")
+        .unwrap();
+    assert_eq!(answer.rows.len(), 600);
+    assert_eq!(answer.stepped.sorts, 0);
+    let mut backwards = forwards.rows;
+    backwards.reverse();
+    assert_eq!(answer.rows, backwards);
+}

@@ -6723,3 +6723,14 @@ Document 16 step Q8.
 - A walk of an index held backwards between one bound, between two, and
   between none.
 - An `ORDER BY` a place held backwards answers, and one it does not.
+
+### 6.6.256 The walk of an index read backwards (`db-sqlite`)
+
+Document 16 step Q8.
+
+- An index read from its last entry to its first, over a tree of one
+  leaf and over one that carries interior pages.
+- An `ORDER BY` whose terms run in two directions, against an index
+  whose places run in two directions.
+- A term over the rowid at the end of the terms, running each way, and
+  one the terms before it do not reach the last column for.

@@ -452,6 +452,8 @@ Size: S.
 32. A statement of a connection that did not begin the transaction open
     on its path reads the file as that transaction found it, which
     D-370 records.
+33. `::sqlite_sort_count`, which `cksort` reads, is answered from the
+    sorts the last statement counted, which D-372 records.
 
 ### Produces
 

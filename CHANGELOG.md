@@ -7,6 +7,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` reads the entries of an index from the last to the first
+  where that answers the `ORDER BY`, and reads each term of an
+  `ORDER BY` with its own direction, so an index whose places run in two
+  directions answers an order that runs in two directions. The suite
+  harness answers `::sqlite_sort_count` from the sorts the last
+  statement counted. D-372 records it. Catalog 6.6.256. `descidx1.test`
+  goes from 35 cases passing to 42 and `where.test` from 133 to 142.
+
 - `db-sqlite` writes the entries of an index a `CREATE INDEX` wrote
   `DESC` from the largest value down and reads them that way, which
   `sqlite3CreateIndex` honors on a file of schema format 4 and ignores
