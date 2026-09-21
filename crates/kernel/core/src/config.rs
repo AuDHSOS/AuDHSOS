@@ -31,8 +31,8 @@ use audhsos_abi::layout::{KERNEL_STACK_SLOTS, PAGE_SIZE, REGIONS_PER_PROCESS as 
 // name its own sizes. They are re-exported here, where the rest of the
 // kernel has always looked for them.
 pub use kernel_objects::config::{
-    ENDPOINTS, HANDLE_ENTRIES, HANDLES_PER_PROCESS, INTERRUPTS, IO_PORT_RANGES, MEMORY_OBJECTS,
-    NOTIFICATIONS, OBJECTS, PROCESSES, REPLIES, THREADS,
+    CPUS, ENDPOINTS, HANDLE_ENTRIES, HANDLES_PER_PROCESS, INTERRUPTS, IO_PORT_RANGES,
+    MEMORY_OBJECTS, NOTIFICATIONS, OBJECTS, PROCESSES, REPLIES, THREADS,
 };
 
 /// Number of kernel stacks the machine holds, one per thread.

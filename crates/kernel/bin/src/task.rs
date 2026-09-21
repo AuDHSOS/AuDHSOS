@@ -13,6 +13,8 @@
 //! returns through, the switch of the stacks, and the task state segment
 //! that says where a trap from user mode lands.
 
+use crate::runtime::{with_machine, with_memory};
+use crate::switching::{executing, record_executing, saved_context};
 use audhsos_abi::WallClockSource;
 use audhsos_abi::layout::{
     BOOT_STACK_TOP, KERNEL_STACK_PAGES, KERNEL_STACK_SLOT_PAGES, KERNEL_STACKS_BASE, PAGE_SIZE,
@@ -21,11 +23,12 @@ use core::sync::atomic::{AtomicI64, AtomicU32, AtomicU64, Ordering};
 use kernel_core::memory::KernelMemory;
 use kernel_core::root::{self, Grants, RootTask};
 use kernel_core::syscall::{KernelEnvironment, handle_syscall, reap, schedule, store_context};
-use kernel_core::{memory, println, with_machine, with_memory};
+use kernel_core::{memory, println};
 use kernel_hal_x86_64::bootinfo::X86Platform;
 use kernel_hal_x86_64::console::SerialConsole;
-use kernel_hal_x86_64::paging::{AddressSpaces, LocalTlb, X86Entry};
+use kernel_hal_x86_64::paging::{AddressSpaces, X86Entry};
 use kernel_hal_x86_64::ports::DeviceAccess;
+use kernel_hal_x86_64::remote::SharedTlb;
 use kernel_hal_x86_64::window::PhysicalWindow;
 
 use kernel_hal_x86_64::{context, descriptors, entry};
@@ -71,7 +74,7 @@ pub(crate) fn start(platform: &X86Platform) -> bool {
     let built = with_memory(|memory| {
         with_machine(|machine| {
             let mut tables = window();
-            let mut tlb = LocalTlb;
+            let mut tlb = SharedTlb::new();
             let mut environment = environment(memory, &mut tables, &mut tlb);
             let grants = Grants {
                 boot_image: image_frames,
@@ -93,7 +96,7 @@ pub(crate) fn start(platform: &X86Platform) -> bool {
     if !prepare(&task) {
         return false;
     }
-    idle_thread();
+    idle_thread(BOOT_SLOT);
     with_machine(|machine| {
         let _started = machine
             .scheduler
@@ -139,7 +142,7 @@ fn prepare(task: &RootTask) -> bool {
 /// The frame `page` of the kernel half is mapped to.
 fn translate(page: kernel_types::Page) -> Option<PhysFrame> {
     let mut tables = window();
-    let mut tlb = LocalTlb;
+    let mut tlb = SharedTlb::new();
     with_memory(|memory| {
         let root = memory.root();
         let mut frames = *memory.frames();
@@ -157,7 +160,7 @@ fn translate(page: kernel_types::Page) -> Option<PhysFrame> {
 /// The kernel's own process and the idle thread, which is this image: the
 /// thread the kernel switches back into when nothing else can run. Its
 /// context is written by the first switch away from it.
-fn idle_thread() {
+pub(crate) fn idle_thread(slot: u32) {
     let Some(root) = with_memory(|memory| memory.root()) else {
         return;
     };
@@ -173,41 +176,21 @@ fn idle_thread() {
         )) else {
             return;
         };
-        let Ok(thread) = Thread::new(process, 0, 0, BOOT_SLOT, root) else {
+        let Ok(mut thread) = Thread::new(process, 0, 0, slot, root) else {
             return;
         };
+        thread.cpu = machine.scheduler.caller();
         let Ok(idle) = machine.objects.threads.allocate(thread) else {
             return;
         };
         machine.scheduler.set_idle(idle);
         // The kernel is that thread: it is what the first switch leaves.
         machine.scheduler.adopt(idle);
+        record_executing(idle);
     });
 }
 
-/// Whether the thread that would leave the processor holds none of the
-/// kernel's cells: not the memory, not the machine, not the console.
-///
-/// The kernel is not inside a gate for the whole of its own bring-up. The
-/// timer runs from [`take_interrupts`](crate::take_interrupts) on, and
-/// `task::start` builds the root task after that, with interrupts on: it
-/// takes the memory and the machine out of their cells for the length of
-/// real work, and it writes its last line with the console out of its own.
-/// A switch from any of those leaves the cell borrowed by a thread that is
-/// no longer running, and nothing gets it back.
-///
-/// The console is the one this cost a morning on. `root task at ...` is
-/// printed after the root task is ready, so a tick between the borrow and
-/// the end of the line switched into it and left the console held for
-/// good: the machine ran on, and every line it had left to say — the
-/// servers' own, a fault, a panic — went nowhere. A run that has stopped
-/// saying anything and a run that has stopped look the same from outside.
-///
-/// A tick that finds a cell held switches nobody and lets the next tick
-/// try, a millisecond later. The test harness has carried the first two of
-/// these since the `ipc` image wedged on them about one run in six; it has
-/// no third to check, because its commentary builds a console value rather
-/// than borrowing one (D-133).
+/// Refuses a same-processor nested borrow before switching stacks.
 fn nothing_is_held() -> bool {
     with_memory(|_| ()).is_some()
         && with_machine(|_| ()).is_some()
@@ -228,6 +211,7 @@ pub(crate) fn run(standing_on: Option<kernel_objects::object::ThreadId>) {
         return;
     }
     let Some((from, to, top)) = next_switch(standing_on) else {
+        sweep();
         return;
     };
     // A thread that has ended has nowhere to keep a context any more, and
@@ -238,10 +222,8 @@ pub(crate) fn run(standing_on: Option<kernel_objects::object::ThreadId>) {
     if descriptors::set_kernel_stack(top.as_u64()).is_err() {
         return;
     }
-    // SAFETY: `from` points at the context word of the thread that is
-    // running, which lives in the `static` cell of the machine and stays
-    // where it is; `to` is a context the kernel wrote, of a thread whose
-    // kernel stack is mapped in every address space.
+    // SAFETY: the fixed-home context slot is independent of the machine cell;
+    // only this processor accesses it, and both stacks remain mapped.
     unsafe {
         context::switch_to(from, to);
     }
@@ -253,11 +235,11 @@ pub(crate) fn run(standing_on: Option<kernel_objects::object::ThreadId>) {
 /// Gives back what every thread that has ended held.
 pub(crate) fn sweep() {
     let mut tables = window();
-    let mut tlb = LocalTlb;
+    let mut tlb = SharedTlb::new();
     with_memory(|memory| {
         with_machine(|machine| {
             let mut environment = environment(memory, &mut tables, &mut tlb);
-            let running = machine.scheduler.current();
+            let running = executing();
             let _cleared = reap(
                 &mut machine.objects,
                 &mut machine.scheduler,
@@ -275,11 +257,10 @@ pub(crate) fn sweep() {
 /// no other call minds.
 pub(crate) fn answer(
     caller: kernel_objects::object::ThreadId,
-    bytes: &mut [u8; audhsos_abi::ipc_buffer::SIZE],
     devices: Option<&mut DeviceAccess<'_>>,
 ) -> bool {
     let mut tables = window();
-    let mut tlb = LocalTlb;
+    let mut tlb = SharedTlb::new();
     let mut devices = devices;
     // The console goes in: `debug_log` is what the root task says anything
     // through until it has handed the serial port to the console driver,
@@ -287,6 +268,16 @@ pub(crate) fn answer(
     entry::with_console(|console| {
         with_memory(|memory| {
             with_machine(|machine| {
+                let Ok(thread) = machine.objects.threads.get(caller) else {
+                    return true;
+                };
+                if thread.state != audhsos_abi::ThreadState::Running {
+                    return true;
+                }
+                let mut buffer_window = window();
+                let Some(bytes) = buffer_window.frame_bytes_mut(thread.ipc_buffer) else {
+                    return true;
+                };
                 let mut environment =
                     KernelEnvironment::<X86Entry, _, _, _, DeviceAccess<'_>>::new(
                         memory,
@@ -331,26 +322,20 @@ pub(crate) fn deliver_fault(
     faulted: kernel_objects::object::ThreadId,
     fault: audhsos_abi::Fault,
 ) -> bool {
-    let frame = with_machine(|machine| {
-        machine
-            .objects
-            .threads
-            .get(faulted)
-            .ok()
-            .map(|thread| thread.ipc_buffer)
-    })
-    .flatten();
-    let Some(frame) = frame else {
-        return false;
-    };
-    let mut buffer_window = window();
-    let Some(bytes) = PhysicalWindow::frame_bytes_mut(&mut buffer_window, frame) else {
-        return false;
-    };
     let mut tables = window();
-    let mut tlb = LocalTlb;
+    let mut tlb = SharedTlb::new();
     with_memory(|memory| {
         with_machine(|machine| {
+            let Ok(thread) = machine.objects.threads.get(faulted) else {
+                return true;
+            };
+            if thread.state != audhsos_abi::ThreadState::Running {
+                return true;
+            }
+            let mut buffer_window = window();
+            let Some(bytes) = buffer_window.frame_bytes_mut(thread.ipc_buffer) else {
+                return true;
+            };
             let mut environment = environment(memory, &mut tables, &mut tlb);
             let mut syscall = kernel_syscall::dispatch::Machine {
                 objects: &mut machine.objects,
@@ -379,16 +364,19 @@ fn next_switch(
             stack_top_of,
         );
         let switch = next.switch?;
-        let leaving = switch.from.or(standing_on);
+        let leaving = executing().or(switch.from).or(standing_on);
+        if leaving == Some(switch.to) {
+            return None;
+        }
         let pointer = leaving.and_then(|from| {
-            machine
-                .objects
-                .threads
-                .get_mut(from)
-                .ok()
-                .map(|thread| &raw mut thread.context)
+            let initial = machine.objects.threads.get(from).ok()?.context;
+            Some(saved_context(from, initial)?.as_ptr().cast::<VirtAddr>())
         });
-        Some((pointer, switch.context, switch.kernel_stack_top))
+        let context =
+            VirtAddr::new(saved_context(switch.to, switch.context)?.load(Ordering::Relaxed))
+                .ok()?;
+        record_executing(switch.to);
+        Some((pointer, context, switch.kernel_stack_top))
     })
     .flatten()
 }
@@ -440,8 +428,8 @@ fn grants(platform: &X86Platform) -> Option<(PhysFrameRange, heapless::Regions)>
 fn environment<'a>(
     memory: &'a mut KernelMemory,
     tables: &'a mut PhysicalWindow,
-    tlb: &'a mut LocalTlb,
-) -> KernelEnvironment<'a, X86Entry, PhysicalWindow, LocalTlb, SerialConsole, DeviceAccess<'a>> {
+    tlb: &'a mut SharedTlb,
+) -> KernelEnvironment<'a, X86Entry, PhysicalWindow, SharedTlb, SerialConsole, DeviceAccess<'a>> {
     KernelEnvironment::new(
         memory,
         tables,
@@ -522,6 +510,9 @@ pub(crate) mod heapless {
             for (slot, range) in regions.items.iter_mut().zip(map.iter()) {
                 *slot = range;
                 regions.len = regions.len.wrapping_add(1);
+            }
+            if let Some(used) = regions.items.get_mut(..regions.len) {
+                used.sort_unstable_by_key(|range| core::cmp::Reverse(range.count()));
             }
             regions
         }

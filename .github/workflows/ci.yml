@@ -10,6 +10,11 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        processors: [1, 4]
+    env:
+      AUDHSOS_PROCESSORS: ${{ matrix.processors }}
     steps:
       - uses: actions/checkout@v4
       - name: Install the pinned toolchain from rust-toolchain.toml

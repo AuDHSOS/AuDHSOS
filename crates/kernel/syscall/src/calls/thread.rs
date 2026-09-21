@@ -114,7 +114,8 @@ pub fn create<
             return Err(error);
         }
     };
-    let mut thread = Thread::new(target, priority, max_priority, stack_area.slot, ipc_buffer)?;
+    let mut thread = Thread::new(target, priority, max_priority, stack_area.slot, ipc_buffer)?
+        .on_processor(machine.scheduler.assign());
     if let Some((object, _)) = supplied {
         thread = thread.with_buffer_object(object);
     }
@@ -146,8 +147,7 @@ pub fn create<
 
     // The buffer is the one page of the address space the thread does not
     // ask for: the kernel maps it and hands the thread its address.
-    let placed = map_buffer(machine, target, slot, ipc_buffer);
-    let ipc_address = match placed {
+    let ipc_address = match map_buffer(machine, target, slot, ipc_buffer) {
         Ok(address) => address,
         Err(error) => {
             forget_thread(machine, target, id);

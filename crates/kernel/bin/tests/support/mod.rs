@@ -21,22 +21,27 @@
 
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
-use audhsos_sync::{Global, UncontendedToken};
+use audhsos_sync::Global;
+use kernel_hal_x86_64::processor::KernelToken;
 
 use audhsos_abi::layout::{
     BOOT_STACK_TOP, KERNEL_STACK_PAGES, KERNEL_STACK_SLOT_PAGES, KERNEL_STACKS_BASE, PAGE_SIZE,
     TICKS_PER_SECOND,
 };
 use audhsos_abi::{Handle, Rights, ThreadState, ipc_buffer};
-use kernel_core::machine::with_machine;
-use kernel_core::memory::{self, with_memory};
+#[path = "../../src/runtime.rs"]
+pub(crate) mod runtime;
+#[path = "../../src/switching.rs"]
+mod switching;
+use kernel_core::memory;
 use kernel_core::state::KernelState;
 use kernel_core::syscall::{KernelEnvironment, handle_syscall, reap, schedule, store_context};
 use kernel_core::trap::{Exception, Response};
 use kernel_hal_api::paging::FrameAccess;
 use kernel_hal_x86_64::console::SerialConsole;
-use kernel_hal_x86_64::paging::{AddressSpaces, LocalTlb, X86Entry, active_root};
+use kernel_hal_x86_64::paging::{AddressSpaces, X86Entry, active_root};
 use kernel_hal_x86_64::ports::DeviceAccess;
+use kernel_hal_x86_64::remote::SharedTlb;
 use kernel_hal_x86_64::traps::TrapReport;
 use kernel_hal_x86_64::window::PhysicalWindow;
 use kernel_hal_x86_64::{context, descriptors, instructions, interrupts, testing, traps, vectors};
@@ -50,6 +55,8 @@ use kernel_objects::quota::Quota;
 use kernel_syscall::environment::{Environment, KernelStack};
 use kernel_syscall::fault;
 use kernel_types::{Alignment, Page, PhysFrame, PhysFrameRange, VirtAddr};
+pub(crate) use runtime::{with_machine, with_memory};
+use switching::{executing, record_executing, saved_context};
 
 /// Where a program is linked and mapped. The linker script of the user
 /// test programs and the xtask both name this address.
@@ -206,7 +213,7 @@ pub(crate) fn bring_up() {
         testing::fail(format_args!("the page table root is not addressable"));
     };
     let mut tables = window();
-    let mut tlb = LocalTlb;
+    let mut tlb = SharedTlb::new();
     let brought_up = testing::with_platform(|platform| {
         memory::initialize::<X86Entry, _, _, _>(platform, root, &mut tables, &mut tlb, 0)
     });
@@ -224,6 +231,11 @@ pub(crate) fn bring_up() {
 /// itself: the thread the kernel switches back into when no user thread
 /// can run. Its context is written by the first switch away from it.
 pub(crate) fn idle_thread() -> ThreadId {
+    idle_on(BOOT_SLOT)
+}
+
+/// Adopts the already-running stack of this processor.
+pub(crate) fn idle_on(slot: u32) -> ThreadId {
     let root = with_memory(|memory| memory.root()).unwrap_or_else(|| {
         testing::fail(format_args!("the kernel memory is not reachable"));
     });
@@ -245,13 +257,15 @@ pub(crate) fn idle_thread() -> ThreadId {
             .objects
             .threads
             .allocate(
-                Thread::new(process, 0, 0, BOOT_SLOT, root)
-                    .unwrap_or_else(|_| testing::fail(format_args!("the idle thread is not one"))),
+                Thread::new(process, 0, 0, slot, root)
+                    .unwrap_or_else(|_| testing::fail(format_args!("the idle thread is not one")))
+                    .on_processor(machine.scheduler.caller()),
             )
             .unwrap_or_else(|_| testing::fail(format_args!("no slot for the idle thread")));
         machine.scheduler.set_idle(thread);
         // The kernel is that thread: it is what the first switch leaves.
         machine.scheduler.adopt(thread);
+        record_executing(thread);
         thread
     })
     .unwrap_or_else(|| testing::fail(format_args!("the machine is not reachable")))
@@ -284,7 +298,7 @@ pub(crate) struct Spawned {
 /// Builds a process with `program` mapped at [`USER_BASE`].
 pub(crate) fn create_process(program: &[u8]) -> UserProcess {
     let mut tables = window();
-    let mut tlb = LocalTlb;
+    let mut tlb = SharedTlb::new();
     let root = with_memory(|memory| {
         let mut environment = environment(memory, &mut tables, &mut tlb);
         let root = environment
@@ -325,7 +339,7 @@ pub(crate) fn add_thread(process: &mut UserProcess, priority: u8) -> Spawned {
     process.threads = process.threads.saturating_add(1);
     let stack_top = stack_top_for(index);
     let mut tables = window();
-    let mut tlb = LocalTlb;
+    let mut tlb = SharedTlb::new();
     let (stack, buffer) = with_memory(|memory| {
         let mut environment = environment(memory, &mut tables, &mut tlb);
         map_stack(&mut environment, process.root, stack_top);
@@ -520,7 +534,7 @@ pub(crate) fn map_memory(process: &UserProcess, object: MemoryObjectId, address:
     })
     .unwrap_or_else(|| testing::fail(format_args!("the machine is not reachable")));
     let mut tables = window();
-    let mut tlb = LocalTlb;
+    let mut tlb = SharedTlb::new();
     with_memory(|memory| {
         let mut environment = environment(memory, &mut tables, &mut tlb);
         for index in 0..frames.count() {
@@ -568,7 +582,7 @@ pub(crate) fn set_fault_handler(process: ProcessId, endpoint: EndpointId) {
 /// was the last one, which is what the close of a handle does.
 pub(crate) fn release(object: AnyObjectId) -> bool {
     let mut tables = window();
-    let mut tlb = LocalTlb;
+    let mut tlb = SharedTlb::new();
     with_memory(|memory| {
         with_machine(|machine| {
             let mut environment = environment(memory, &mut tables, &mut tlb);
@@ -657,7 +671,7 @@ pub(crate) fn memory_object(frames: u64) -> MemoryObjectId {
 /// threads of the process wrote there.
 pub(crate) fn share_page(process: &UserProcess) -> PhysFrame {
     let mut tables = window();
-    let mut tlb = LocalTlb;
+    let mut tlb = SharedTlb::new();
     with_memory(|memory| {
         let mut environment = environment(memory, &mut tables, &mut tlb);
         let frame = environment
@@ -688,8 +702,8 @@ pub(crate) fn share_page(process: &UserProcess) -> PhysFrame {
 fn environment<'a>(
     memory: &'a mut kernel_core::memory::KernelMemory,
     tables: &'a mut PhysicalWindow,
-    tlb: &'a mut LocalTlb,
-) -> KernelEnvironment<'a, X86Entry, PhysicalWindow, LocalTlb, SerialConsole, DeviceAccess<'a>> {
+    tlb: &'a mut SharedTlb,
+) -> KernelEnvironment<'a, X86Entry, PhysicalWindow, SharedTlb, SerialConsole, DeviceAccess<'a>> {
     KernelEnvironment::new(
         memory,
         tables,
@@ -741,7 +755,14 @@ fn stack_top_for(index: u64) -> u64 {
 /// Copies the program into frames of the reserve and maps them read and
 /// execute at [`USER_BASE`].
 fn map_program<A>(
-    environment: &mut KernelEnvironment<'_, X86Entry, A, LocalTlb, SerialConsole, DeviceAccess<'_>>,
+    environment: &mut KernelEnvironment<
+        '_,
+        X86Entry,
+        A,
+        SharedTlb,
+        SerialConsole,
+        DeviceAccess<'_>,
+    >,
     root: PhysFrame,
     program: &[u8],
 ) where
@@ -793,7 +814,14 @@ fn copy_page(frame: PhysFrame, program: &[u8], index: u64) {
 
 /// Maps the stack that ends at `top`, read and write.
 fn map_stack<A>(
-    environment: &mut KernelEnvironment<'_, X86Entry, A, LocalTlb, SerialConsole, DeviceAccess<'_>>,
+    environment: &mut KernelEnvironment<
+        '_,
+        X86Entry,
+        A,
+        SharedTlb,
+        SerialConsole,
+        DeviceAccess<'_>,
+    >,
     root: PhysFrame,
     top: u64,
 ) where
@@ -862,7 +890,7 @@ fn build(
 
     // The buffer of the thread, at the top of its own address space.
     let mut tables = window();
-    let mut tlb = LocalTlb;
+    let mut tlb = SharedTlb::new();
     with_memory(|memory| {
         let mut environment = environment(memory, &mut tables, &mut tlb);
         let page = Page::from_start(buffer_address)
@@ -918,7 +946,7 @@ fn stack_frame_below(top: VirtAddr) -> PhysFrame {
     let page = Page::from_start(address)
         .unwrap_or_else(|_| testing::fail(format_args!("the kernel stack is not page aligned")));
     let mut tables = window();
-    let mut tlb = LocalTlb;
+    let mut tlb = SharedTlb::new();
     with_memory(|memory| {
         let root = memory.root();
         let mapper = kernel_mm::mapper::Mapper::<'_, X86Entry, _, _, _>::new(
@@ -980,6 +1008,7 @@ pub(crate) fn run_threads(standing_on: Option<ThreadId>) {
         return;
     }
     let Some((from, to, top)) = next_switch(standing_on) else {
+        sweep();
         return;
     };
     // A thread that has ended has nowhere to keep a context any more, and
@@ -990,10 +1019,8 @@ pub(crate) fn run_threads(standing_on: Option<ThreadId>) {
     if descriptors::set_kernel_stack(top.as_u64()).is_err() {
         testing::fail(format_args!("the task state segment is not reachable"));
     }
-    // SAFETY: `from` points at the context word of the thread that is
-    // running, which lives in the `static` cell of the machine and stays
-    // where it is; `to` is a context the kernel wrote, of a thread whose
-    // kernel stack is mapped in every address space.
+    // SAFETY: only this processor uses the independent saved-context slot;
+    // both kernel stacks remain mapped across the switch.
     unsafe {
         context::switch_to(from, to);
     }
@@ -1005,7 +1032,7 @@ pub(crate) fn run_threads(standing_on: Option<ThreadId>) {
 /// Gives back what every thread that has ended held.
 pub(crate) fn sweep() {
     let mut tables = window();
-    let mut tlb = LocalTlb;
+    let mut tlb = SharedTlb::new();
     with_memory(|memory| {
         with_machine(|machine| {
             let mut environment =
@@ -1021,7 +1048,7 @@ pub(crate) fn sweep() {
             // The kernel stands on the stack of the thread it just
             // switched to, which is the one the scheduler now calls
             // current.
-            let running = machine.scheduler.current();
+            let running = executing();
             reap(
                 &mut machine.objects,
                 &mut machine.scheduler,
@@ -1047,16 +1074,19 @@ fn next_switch(
             stack_top_of,
         );
         let switch = next.switch?;
-        let leaving = switch.from.or(standing_on);
+        let leaving = executing().or(switch.from).or(standing_on);
+        if leaving == Some(switch.to) {
+            return None;
+        }
         let pointer = leaving.and_then(|from| {
-            machine
-                .objects
-                .threads
-                .get_mut(from)
-                .ok()
-                .map(|thread| &raw mut thread.context)
+            let initial = machine.objects.threads.get(from).ok()?.context;
+            Some(saved_context(from, initial)?.as_ptr().cast::<VirtAddr>())
         });
-        Some((pointer, switch.context, switch.kernel_stack_top))
+        let context =
+            VirtAddr::new(saved_context(switch.to, switch.context)?.load(Ordering::Relaxed))
+                .ok()?;
+        record_executing(switch.to);
+        Some((pointer, context, switch.kernel_stack_top))
     })
     .flatten()
 }
@@ -1080,35 +1110,22 @@ fn stack_top_of(slot: u32) -> VirtAddr {
 /// that made it, answer, clear away what ended, and switch if the answer
 /// asks for it.
 fn on_syscall() {
-    let caller = with_machine(|machine| machine.scheduler.current()).flatten();
+    let caller = switching::executing();
     let Some(caller) = caller else {
         return;
     };
-    let frame = with_machine(|machine| {
-        machine
-            .objects
-            .threads
-            .get(caller)
-            .ok()
-            .map(|thread| thread.ipc_buffer)
+    let number = with_machine(|machine| {
+        let thread = machine.objects.threads.get(caller).ok()?;
+        let mut buffer_window = window();
+        let bytes = buffer_window.frame_bytes_mut(thread.ipc_buffer)?;
+        Some(ipc_buffer::Buffer::new(bytes).syscall_number())
     })
-    .flatten();
-    let Some(frame) = frame else {
-        return;
-    };
-
-    // Two views of the window: one for the buffer of the thread, one for
-    // the page tables. They never name the same frame, and this image is
-    // the only writer of either.
-    let mut buffer_window = window();
-    let Some(bytes) = buffer_window.frame_bytes_mut(frame) else {
-        return;
-    };
-    let number = ipc_buffer::Buffer::new(bytes).syscall_number();
+    .flatten()
+    .unwrap_or(0);
     watch(number);
     // The hook is copied out before it runs, as every other hook of this
     // image is, so that no borrow of the cell is alive while it works.
-    let hook = CALL_HOOK.borrow(&UncontendedToken).ok().map(|hook| *hook);
+    let hook = CALL_HOOK.borrow(&KernelToken).ok().map(|hook| *hook);
     if let Some(hook) = hook {
         hook(number);
     }
@@ -1116,11 +1133,11 @@ fn on_syscall() {
     // up. Holding the controller turns interrupts off for the length of the
     // call, which is what the calls that touch it need.
     let reschedule = if DEVICES.load(Ordering::SeqCst) == 0 {
-        answer(caller, bytes, None)
+        answer(caller, None)
     } else {
         interrupts::with_controller(|apics| {
             let mut devices = DeviceAccess::new(apics).with_entropy();
-            answer(caller, bytes, Some(&mut devices))
+            answer(caller, Some(&mut devices))
         })
         .unwrap_or(false)
     };
@@ -1141,16 +1158,22 @@ fn of(exception: Exception) -> audhsos_abi::Fault {
 }
 
 /// Answers the system call of `caller` and clears away what ended.
-fn answer(
-    caller: ThreadId,
-    bytes: &mut [u8; ipc_buffer::SIZE],
-    devices: Option<&mut DeviceAccess<'_>>,
-) -> bool {
+fn answer(caller: ThreadId, devices: Option<&mut DeviceAccess<'_>>) -> bool {
     let mut tables = window();
-    let mut tlb = LocalTlb;
+    let mut tlb = SharedTlb::new();
     let mut devices = devices;
     let outcome = with_memory(|memory| {
         with_machine(|machine| {
+            let Ok(thread) = machine.objects.threads.get(caller) else {
+                return true;
+            };
+            if thread.state != ThreadState::Running {
+                return true;
+            }
+            let mut buffer_window = window();
+            let Some(bytes) = buffer_window.frame_bytes_mut(thread.ipc_buffer) else {
+                return true;
+            };
             let mut environment =
                 KernelEnvironment::<X86Entry, _, _, SerialConsole, DeviceAccess<'_>>::new(
                     memory,
@@ -1308,7 +1331,7 @@ fn on_trap(report: TrapReport) {
     LAST_ADDRESS.store(exception.cr2, Ordering::SeqCst);
     LAST_IP.store(exception.ip, Ordering::SeqCst);
 
-    let Some(faulted) = with_machine(|machine| machine.scheduler.current()).flatten() else {
+    let Some(faulted) = switching::executing() else {
         testing::fail(format_args!(
             "a user thread faulted and the kernel holds none"
         ));
@@ -1316,24 +1339,20 @@ fn on_trap(report: TrapReport) {
     // The message a fault handler receives is built in the buffer of the
     // thread that faulted, which the kernel reaches the way the system call
     // gate does.
-    let frame = with_machine(|machine| {
-        machine
-            .objects
-            .threads
-            .get(faulted)
-            .ok()
-            .map(|thread| thread.ipc_buffer)
-    })
-    .flatten();
-    let mut buffer_window = window();
     let mut tables = window();
-    let mut tlb = LocalTlb;
-    let bytes = frame.and_then(|frame| buffer_window.frame_bytes_mut(frame));
-    let Some(bytes) = bytes else {
-        testing::fail(format_args!("the buffer of a faulting thread is gone"));
-    };
+    let mut tlb = SharedTlb::new();
     let reschedule = with_memory(|memory| {
         with_machine(|machine| {
+            let Ok(thread) = machine.objects.threads.get(faulted) else {
+                return true;
+            };
+            if thread.state != ThreadState::Running {
+                return true;
+            }
+            let mut buffer_window = window();
+            let Some(bytes) = buffer_window.frame_bytes_mut(thread.ipc_buffer) else {
+                return true;
+            };
             let mut environment =
                 KernelEnvironment::<X86Entry, _, _, SerialConsole, DeviceAccess<'_>>::new(
                     memory,
@@ -1472,7 +1491,7 @@ const IDLE_LIMIT: u64 = 200_000;
 /// uncached, out of the address space the memory bring-up left.
 fn map_device(frames: PhysFrameRange) -> Option<VirtAddr> {
     let mut tables = window();
-    let mut tlb = LocalTlb;
+    let mut tlb = SharedTlb::new();
     with_memory(|kernel| {
         kernel
             .map_device::<X86Entry, _, _>(&mut tables, &mut tlb, frames)
@@ -1486,6 +1505,16 @@ fn map_device(frames: PhysFrameRange) -> Option<VirtAddr> {
 /// then give the image its turn, charge the running thread's time slice,
 /// and switch when either asks for it.
 fn on_interrupt(vector: u8) {
+    if vector == vectors::INVALIDATE {
+        interrupts::acknowledge(vector);
+        kernel_hal_x86_64::remote::poll();
+        return;
+    }
+    if vector == vectors::RESCHEDULE {
+        interrupts::acknowledge(vector);
+        run_threads(None);
+        return;
+    }
     if vector != vectors::TIMER {
         forward_interrupt(vector);
         return;
@@ -1493,9 +1522,9 @@ fn on_interrupt(vector: u8) {
     interrupts::acknowledge(vector);
     record_turn();
     let ticks = interrupts::ticks();
-    let hook = TICK_HOOK.borrow(&UncontendedToken).ok().map(|hook| *hook);
+    let hook = TICK_HOOK.borrow(&KernelToken).ok().map(|hook| *hook);
     let asked = hook.is_some_and(|hook| hook(ticks));
-    let woken = wake_deadlines();
+    let woken = kernel_hal_x86_64::processor::processor() == Some(0) && wake_deadlines();
     let expired = with_machine(|machine| {
         machine
             .scheduler
@@ -1519,14 +1548,15 @@ fn wake_deadlines() -> bool {
     let mut switch = false;
     loop {
         let woken = with_machine(|machine| {
-            kernel_ipc::expire(&mut machine.objects, &mut machine.scheduler, now)
+            let outcome = kernel_ipc::expire(&mut machine.objects, &mut machine.scheduler, now);
+            if let Some(wakeup) = outcome.and_then(|outcome| outcome.wakeup) {
+                write_wakeup(machine, wakeup);
+            }
+            outcome
         });
         let Some(Some(outcome)) = woken else {
             break;
         };
-        if let Some(wakeup) = outcome.wakeup {
-            write_wakeup(wakeup);
-        }
         switch |= outcome.reschedule;
     }
     switch
@@ -1557,15 +1587,16 @@ fn forward_interrupt(vector: u8) {
     }
     interrupts::acknowledge(vector);
     let outcome = with_machine(|machine| {
-        kernel_ipc::deliver(&mut machine.objects, &mut machine.scheduler, vector)
+        let outcome = kernel_ipc::deliver(&mut machine.objects, &mut machine.scheduler, vector);
+        if let Some(wakeup) = outcome.and_then(|outcome| outcome.wakeup) {
+            write_wakeup(machine, wakeup);
+        }
+        outcome
     })
     .flatten();
     let Some(outcome) = outcome else {
         return;
     };
-    if let Some(wakeup) = outcome.wakeup {
-        write_wakeup(wakeup);
-    }
     if outcome.reschedule {
         run_threads(None);
     }
@@ -1573,16 +1604,13 @@ fn forward_interrupt(vector: u8) {
 
 /// Writes the status word and the return words a thread that a device
 /// interrupt woke finds in its buffer.
-fn write_wakeup(wakeup: kernel_ipc::Wakeup) {
-    let frame = with_machine(|machine| {
-        machine
-            .objects
-            .threads
-            .get(wakeup.thread)
-            .ok()
-            .map(|thread| thread.ipc_buffer)
-    })
-    .flatten();
+fn write_wakeup(machine: &kernel_core::machine::Machine, wakeup: kernel_ipc::Wakeup) {
+    let frame = machine
+        .objects
+        .threads
+        .get(wakeup.thread)
+        .ok()
+        .map(|thread| thread.ipc_buffer);
     let Some(frame) = frame else {
         return;
     };

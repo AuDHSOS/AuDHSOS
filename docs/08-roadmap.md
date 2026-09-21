@@ -24,6 +24,7 @@ XL) and describe effort, not calendar time.
 | 13 | PCI and the bus | M | a userland program enumerates the PCI bus and reports the virtio-net device and its registers |
 | 14 | The network on the machine | XL | the system leases an address, resolves a name, and completes an HTTP request over a real device |
 | 15 | TLS over the network | M | an HTTPS request from a program of the image, with the certificate path validated |
+| SMP | More than one processor | XL | fixed-home queues, AP startup, remote preemption and TLB invalidation; document 16 and D-192 |
 
 Every phase has the same definition of done: all catalog items for the
 components in the phase have tests, `sh tools/xtask-check.sh` is green, the
@@ -530,9 +531,9 @@ permission bitmaps; kernel-object memory donation; an interface
 definition language for protocols; recursive capability revocation; a
 tickless timer; long file names in the disk image writer.
 
-SMP with per-CPU run queues left this list and has a plan of its own:
+SMP with per-CPU run queues is implemented:
 [document 16](16-more-than-one-processor.md) specifies it in eleven
-steps, off the phases the way document 15 is. Nothing of it is built.
+steps. D-192 records acceptance, budgets and the per-object locking follow-up.
 
 ## 8.19 Risks
 

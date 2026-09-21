@@ -199,3 +199,47 @@ Status values: `decided` (stated by the project owner), `proposed`
 | D-189 | The `sshd` of the Secure Shell interop run admits a public key of `root` where the check runs as `root`, and refuses `root` otherwise: `xtask::ssh::configuration` writes `PermitRootLogin prohibit-password` where `ssh::account` answers `root` and `PermitRootLogin no` where it answers anything else. This settles one point D-146 left to the default of `sshd` and changes nothing else about it. 1. Reason: the run authenticates the account that started the check (D-146), and a container of the cloud runner starts it as `root`, where `PermitRootLogin no` refuses the one account the client may use and the run fails at `publickey` with a server that is otherwise correct. 2. Reason: `prohibit-password` admits the public key alone, and the configuration already carries `PasswordAuthentication no` and `KbdInteractiveAuthentication no`, so the directive widens the run by nothing. 3. Reason: the server listens on the loopback, takes a port per run, holds a host key of this checkout, and admits one authorized key, so the account it authenticates reaches no further than the checkout already does. Rejected: an account `audhsos` made by the check, which needs `useradd`, therefore the privileges the run otherwise does without, and leaves a user on the machine after the run. | decided | 2026-09-20 |
 | D-190 | `Choice` and `Scalar` carry no `PartialEq`, and every `Choice` constructor that derives its byte from a value passes that byte through `core::hint::black_box`. Three reasons: (1) a derived `==` on `Scalar` compares limb by limb and returns at the first difference, which is the leak `Secret<N>` withholds `==` to prevent (D-36), and a scalar is the secret of every Ed25519 signature under D-135; (2) `choice == Choice::YES` is `Choice::is_true` without the name that marks the exit from constant time, so the comparison that reads as ordinary equality is the one that should read as a decision; (3) a `Choice` is a byte the compiler can prove is `0` or `1`, and a mask over such a byte is a conditional move or a branch at the compiler's discretion, so the barrier withholds the proof from `Choice::from_lsb`, `Choice::is_zero_u8`, `Choice::is_zero_u64` and `From<bool>`. `Scalar::ct_eq` folds all four limbs and answers a `Choice`; `Scalar::is_zero` answers a `Choice` in place of the `bool` it answered. `Choice::YES`, `Choice::NO` and the operators keep no barrier of their own, because a choice the source names is public and an operator keeps the opacity of its operands. The option not taken, keeping both derives and documenting on each type that `==` is for public values, costs the same reader who mistakes the two the leak the type can refuse outright. What the barrier gives is what D-135 gives: a property of the source, not a claim about emitted code, which is why a test reads the source for each barrier rather than the assembly. | decided | 2026-09-20 |
 | D-191 | `Event::Preempt` becomes `Event::SliceExpired` and `Event::Displaced`, and `Scheduler::pick_next` places the outgoing thread by which of the two it applies: a thread whose slice ran out goes to the tail of its queue with no ticks left, a thread that still holds ticks and loses the processor to a higher priority goes to the head of its queue and keeps them. The pick hands out `DEFAULT_TIME_SLICE_TICKS` only to a thread whose slice is zero. Three reasons: (1) one event served both cases, so every displacement rotated the queue of the displaced priority and discarded the remaining ticks, and a thread of higher priority that wakes once per tick cut the effective slice of three peers to one tick each, whatever `DEFAULT_TIME_SLICE_TICKS` says (issue #54); (2) the round robin of section 2.5.3 of document 2 measures a slice in timer ticks, which holds only if a displacement neither spends the ticks nor gives the turn away; (3) the two cases are distinguished by what the scheduler already holds, the thread's remaining ticks and the highest ready priority, so no caller passes a flag and no thread carries a field. A slice that ends on the same tick that wakes a higher priority is a slice expiry, because the thread has no ticks to keep. `Scheduler::set_priority` spends the slice of a thread whose priority changes, so that the ticks earned at the priority it left buy it no place at the head of the queue it enters. The option not taken, keeping the tail placement and preserving `time_slice` alone, still hands the processor to a peer on every displacement and leaves the effective slice at the period of the displacing thread. | decided | 2026-09-20 |
+
+| D-192 | SMP uses fixed-home scheduling, owner-aware cells, synchronous invalidation and root retirement; the measurements and unsafe budgets follow below. | decided | 2026-09-21 |
+
+## D-192: SMP implementation and measurement
+
+SMP uses fixed-home queues and the controller → console → memory → machine
+lock order. Zero denotes a free owner word; held words encode `owner + 1`,
+preserving zero-initialized kernel pools. The parser retains sixteen distinct
+processor records and reports overflow, reconciling S3 with D7 of document 16.
+Only the home processor reclaims an ended thread; independent context slots
+protect assembly context saves after the machine borrow ends. Address-space
+teardown switches every active processor to the shared kernel root before
+freeing page tables. Idle processors also reap ended threads without a switch.
+
+The console clears the UART interrupt-enable register while handling received
+bytes and reenables reception after unmasking the I/O APIC line. SLLS597E,
+pp. 34–35, specifies timeout reassertion and IER gating; otherwise a timeout
+edge during a slow cross-processor IPC send leaves the reader asleep.
+
+The unsafe budgets are 174/31 unsafe/asm for `kernel-hal-x86_64`, 40/0 for
+`audhsos-kernel`, and 114/2 for `user-test-programs`. Document 16, section 16.12
+names the reviewed sites. `audhsos-sync` remains 4/0. The alternative of
+putting hardware operations in logic crates violates the dependency boundary.
+
+Measurements: QEMU 11.1.0, x86_64 Linux, q35, TCG, qemu64 with rdrand/rdseed,
+256 MiB, nightly-2026-08-25, unoptimized kernel. Round trips are medians of
+10,000 samples. Wait fractions use the largest per-processor acquisition wait
+sum divided by elapsed TSC over 1,000 yields per processor. Other build work
+ran on the host; these measurements describe the emulator workload.
+
+| Measurement | 1 processor | 2 processors | 4 processors |
+|-------------|-------------|--------------|--------------|
+| Yield round trip, TSC ticks | 540292 | 602782 | 757294 |
+| Call/reply round trip, TSC ticks | 3424248 | 5031286 | 6655452 |
+| Maximum machine-cell wait / elapsed | 0 / 629541394 | 180916282 / 1101026716 | 1006377690 / 2704043780 |
+| Maximum machine-cell wait fraction | 0% | 16.43% | 37.22% |
+| Shared-page unmap, TSC ticks, one observation | 12420540 | 25197998 | 36621306 |
+| Root retirement, TSC ticks, one observation | 12039180 | 11743630 | 24571888 |
+
+The four-processor wait exceeds the predeclared 25% threshold. Per-object
+locking is warranted as follow-up work; the current SMP implementation keeps
+the validated global cell while that separate ownership design is developed.
+The alternative of treating boot success as sufficient would leave this
+contention unmeasured. User threads still execute concurrently.

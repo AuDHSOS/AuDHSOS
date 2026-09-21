@@ -17,7 +17,7 @@ use kernel_objects::handle_table::HandleList;
 use kernel_objects::object::{Process, Thread};
 use kernel_objects::quota::Quota;
 use kernel_objects::store::Objects;
-use kernel_sched::Scheduler;
+use kernel_sched::Processors as Scheduler;
 use kernel_syscall::environment::Environment;
 use kernel_types::{CachePolicy, Page, PhysAddr, PhysFrame, VirtAddr};
 

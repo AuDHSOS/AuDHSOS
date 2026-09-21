@@ -817,3 +817,60 @@ fn a_map_that_did_not_fit_leaves_the_aperture_as_the_only_way_in() {
         "a frame the kernel cannot say anything about is no window"
     );
 }
+
+#[test]
+fn startup_reservation_maps_one_supervisor_page_and_removes_its_identity_alias() {
+    let mut machine = Machine::full();
+    let mut tlb = RecordingTlb::new();
+    let platform = platform().region(address(MIB), PAGE_SIZE, MemoryRegionKind::Reserved);
+    let mut memory =
+        bring_up::<X86Entry, _, _, _>(&platform, machine.root, &mut machine.access, &mut tlb, 0)
+            .unwrap();
+    let before = memory.free().total_frames();
+    let startup = memory
+        .startup_page::<X86Entry, _, _>(&mut machine.access, &mut tlb)
+        .unwrap()
+        .unwrap();
+    assert!(startup.number() > 0 && startup.number() < 256);
+    assert_eq!(memory.free().total_frames(), before - 1);
+    let identity = page(startup.start().as_u64());
+    {
+        let mapper = Mapper::<X86Entry, _, _, _>::new(
+            memory.root(),
+            &mut machine.access,
+            &mut tlb,
+            memory.frames_mut(),
+        );
+        let (physical, permissions) = mapper.translate(identity).unwrap();
+        assert_eq!(physical, startup);
+        assert!(permissions.write && permissions.execute && !permissions.user);
+    }
+    memory
+        .finish_startup::<X86Entry, _, _>(&mut machine.access, &mut tlb, startup)
+        .unwrap();
+    let mapper = Mapper::<X86Entry, _, _, _>::new(
+        memory.root(),
+        &mut machine.access,
+        &mut tlb,
+        memory.frames_mut(),
+    );
+    assert!(mapper.translate(identity).is_none());
+    assert_eq!(memory.free().total_frames(), before - 1);
+}
+
+#[test]
+fn startup_without_low_memory_leaves_the_free_map_unchanged() {
+    let mut machine = Machine::full();
+    let mut tlb = RecordingTlb::new();
+    let mut memory =
+        bring_up::<X86Entry, _, _, _>(&platform(), machine.root, &mut machine.access, &mut tlb, 0)
+            .unwrap();
+    let before = *memory.free();
+    assert_eq!(
+        memory
+            .startup_page::<X86Entry, _, _>(&mut machine.access, &mut tlb)
+            .unwrap(),
+        None
+    );
+    assert!(memory.free().iter().eq(before.iter()));
+}

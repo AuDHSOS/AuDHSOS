@@ -2064,8 +2064,26 @@ pub(crate) fn qemu_runner(root: &Path, options: &[String]) -> Result<(), Error> 
     let name = fs::file_name(kernel).to_owned();
     let path = write_run_image(root, &name, &image)?;
     let machine = Machine::locate()?;
-    let run = machine.run_captured(&path, &qemu::Options::plain())?;
-    report_tests(&name, &run, &machine, Some(kernel))
+    let selected = [machine.processors()];
+    let counts: &[u32] = if name.starts_with("smp-") || name.starts_with("bench-") {
+        &[1, 2, 4]
+    } else {
+        &selected
+    };
+    for &processors in counts {
+        let options = qemu::Options {
+            processors: Some(processors),
+            ..qemu::Options::plain()
+        };
+        let run = machine.run_captured(&path, &options)?;
+        report_tests(
+            &format!("{name}-smp{processors}"),
+            &run,
+            &machine,
+            Some(kernel),
+        )?;
+    }
+    Ok(())
 }
 
 /// What a test image has to write on the serial port beyond the

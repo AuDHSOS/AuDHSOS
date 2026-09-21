@@ -180,3 +180,20 @@ fn the_caller_says_which_stack_the_kernel_is_standing_on() {
     assert_eq!(reap(&mut fixture.machine(), None), 1);
     assert!(fixture.objects.threads.get(running).is_err());
 }
+
+#[test]
+fn a_remote_exit_keeps_its_stack_until_the_home_processor_reaps() {
+    let mut fixture = Fixture::new();
+    let id = fixture.thread;
+    fixture
+        .scheduler
+        .exit(&mut fixture.objects.threads, id)
+        .unwrap();
+    fixture.scheduler.online(1);
+    fixture.scheduler.select(1);
+    assert_eq!(reap(&mut fixture.machine(), None), 0);
+    assert!(fixture.objects.threads.get(id).is_ok());
+    fixture.scheduler.select(0);
+    assert_eq!(reap(&mut fixture.machine(), Some(id)), 0);
+    assert_eq!(reap(&mut fixture.machine(), None), 1);
+}

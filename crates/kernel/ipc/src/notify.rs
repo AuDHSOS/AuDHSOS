@@ -12,7 +12,7 @@
 use audhsos_abi::Error;
 use kernel_objects::object::{Notification, NotificationId, ThreadId, Wait};
 use kernel_objects::store::Objects;
-use kernel_sched::Scheduler;
+use kernel_sched::Processors as Scheduler;
 use kernel_sched::transition::Event;
 
 use crate::outcome::{Outcome, Wakeup, block, wake};

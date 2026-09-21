@@ -13,6 +13,13 @@ SECTIONS {
         *(.text .text.*)
     }
 
+    .apstart : ALIGN(4096) {
+        __apstart_start = .;
+        KEEP(*(.apstart))
+        __apstart_end = .;
+    }
+    ASSERT(__apstart_end - __apstart_start < 0xF00, "AP startup code overlaps parameters")
+
     .rodata : ALIGN(4096) {
         *(.rodata .rodata.*)
     }

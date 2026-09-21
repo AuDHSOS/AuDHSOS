@@ -15,7 +15,7 @@
 use audhsos_abi::Error;
 use kernel_objects::object::{InterruptId, NotificationId};
 use kernel_objects::store::Objects;
-use kernel_sched::Scheduler;
+use kernel_sched::Processors as Scheduler;
 
 use crate::notify::deliver_word;
 use crate::outcome::Outcome;

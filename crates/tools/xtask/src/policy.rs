@@ -696,8 +696,9 @@ pub(crate) const CRATES: &[Crate] = &[
         // the unsafe function that finds it, the window borrow inside it,
         // and the call at the entry (Phase 13).
         kind: Kind::Adapter {
-            unsafe_budget: 152,
-            asm_budget: 30,
+            // D-192: per-processor tables, startup trampoline and PIT delays.
+            unsafe_budget: 174,
+            asm_budget: 31,
         },
         deps: &[
             "kernel-acpi",
@@ -717,7 +718,8 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "audhsos-kernel",
         path: "crates/kernel/bin",
         kind: Kind::Adapter {
-            unsafe_budget: 33,
+            // D-192: AP startup and the shared atomic-page acceptance test.
+            unsafe_budget: 40,
             asm_budget: 0,
         },
         deps: &[
@@ -872,7 +874,8 @@ pub(crate) const CRATES: &[Crate] = &[
         // carries its own naked entry point, because a compiled one may
         // overwrite a register before its first statement runs.
         kind: Kind::Adapter {
-            unsafe_budget: 112,
+            // D-192: concurrent atomic-counter user program.
+            unsafe_budget: 114,
             asm_budget: 2,
         },
         deps: &["audhsos-abi", "user-rt", "user-sys-x86_64"],

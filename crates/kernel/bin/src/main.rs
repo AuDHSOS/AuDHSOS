@@ -7,6 +7,9 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![doc = include_str!("../README.md")]
 
+mod runtime;
+mod smp;
+mod switching;
 mod task;
 
 use core::panic::PanicInfo;
@@ -46,7 +49,7 @@ fn run(platform: &X86Platform) {
     let outcome = entry::with_console(|console| {
         boot::run(platform, console)?;
         take_memory(platform)?;
-        memory::with_memory(|memory| memory::report(memory, console));
+        runtime::with_memory(|memory| memory::report(memory, console));
         Ok(())
     });
     match outcome {
@@ -66,6 +69,7 @@ fn run(platform: &X86Platform) {
     }
 
     traps::set_syscall_handler(on_syscall);
+    smp::start();
     if !task::start(platform) {
         entry::with_console(|console| {
             println!(console, "[boot] there is no root task to start");
@@ -81,31 +85,12 @@ fn run(platform: &X86Platform) {
 /// something can.
 fn idle() -> ! {
     loop {
-        // The borrow of the machine is only ever held with interrupts off,
-        // and this is the one place that would hold it otherwise: every
-        // other holder is a trap handler, and an interrupt gate clears the
-        // flag for it. An interrupt that arrived while the borrow stood
-        // would find the machine busy and be dropped, and a device whose
-        // line is edge-triggered never raises that edge again.
-        //
-        // SAFETY: the flag goes back on below, before anything can wait for
-        // it: the only path out of here that does not reach the `sti` is a
-        // switch into another thread, and that thread returns to user mode
-        // through `iretq`, which restores the flag from its own frame.
+        // SAFETY: every borrow ends before interrupts are restored below.
         unsafe {
             instructions::disable_interrupts();
         }
         task::run(None);
-        // A switch carries no interrupt flag either: the six words it saves
-        // are the callee-saved registers and nothing else. So this thread
-        // comes back from a switch with interrupts off, and every thread
-        // but this one turns them back on by returning to user mode. This
-        // one returns nowhere; it halts. Halting with interrupts off stops
-        // the machine for good, so they go back on here first.
-        //
-        // SAFETY: nothing of the machine is borrowed here — `task::run`
-        // gave every borrow back — and this is the boot processor, whose
-        // descriptor tables carry a handler for every vector.
+        // SAFETY: this processor has loaded gates and holds no kernel cell.
         unsafe {
             instructions::enable_interrupts();
         }
@@ -117,27 +102,7 @@ fn idle() -> ! {
 /// that made it, answer, clear away what ended, and switch if the answer
 /// asks for it.
 fn on_syscall() {
-    let Some(Some(caller)) = kernel_core::with_machine(|machine| machine.scheduler.current())
-    else {
-        return;
-    };
-    let frame = kernel_core::with_machine(|machine| {
-        machine
-            .objects
-            .threads
-            .get(caller)
-            .ok()
-            .map(|thread| thread.ipc_buffer)
-    })
-    .flatten();
-    let Some(frame) = frame else {
-        return;
-    };
-    // SAFETY: the kernel tables are active, so the window maps every
-    // physical frame read and write, and this is the only writer of the
-    // buffer while the call runs.
-    let mut buffer_window = unsafe { PhysicalWindow::kernel() };
-    let Some(bytes) = PhysicalWindow::frame_bytes_mut(&mut buffer_window, frame) else {
+    let Some(caller) = switching::executing() else {
         return;
     };
     // The interrupt controller and the ports, which the calls that touch a
@@ -145,7 +110,7 @@ fn on_syscall() {
     // of the call.
     let reschedule = interrupts::with_controller(|apics| {
         let mut devices = kernel_hal_x86_64::ports::DeviceAccess::new(apics).with_entropy();
-        task::answer(caller, bytes, Some(&mut devices))
+        task::answer(caller, Some(&mut devices))
     })
     .unwrap_or(false);
     if reschedule {
@@ -195,7 +160,7 @@ fn map_device(frames: PhysFrameRange) -> Option<VirtAddr> {
     // physical frame read and write, and the kernel is the only writer.
     let mut window = unsafe { PhysicalWindow::kernel() };
     let mut tlb = LocalTlb::new();
-    memory::with_memory(|kernel| {
+    runtime::with_memory(|kernel| {
         kernel
             .map_device::<X86Entry, _, _>(&mut window, &mut tlb, frames)
             .ok()
@@ -207,10 +172,20 @@ fn map_device(frames: PhysFrameRange) -> Option<VirtAddr> {
 /// holds the interrupt object of its vector, and acknowledges it at the
 /// hardware.
 fn on_interrupt(vector: u8) {
-    let counted = kernel_core::with_state(|state| {
+    if vector == vectors::INVALIDATE {
+        interrupts::acknowledge(vector);
+        kernel_hal_x86_64::remote::poll();
+        return;
+    }
+    if vector == vectors::RESCHEDULE {
+        interrupts::acknowledge(vector);
+        task::run(None);
+        return;
+    }
+    let counted = runtime::with_state(|state| {
         state.record_interrupt();
         match vector {
-            vectors::TIMER => {
+            vectors::TIMER if kernel_hal_x86_64::processor::processor() == Some(0) => {
                 tick::on_tick(state);
             }
             vectors::SPURIOUS => state.record_spurious(),
@@ -234,26 +209,25 @@ fn on_interrupt(vector: u8) {
 /// passed, charge the running thread one tick of its time slice, and switch
 /// when either asks for it.
 ///
-/// The walk stops at the first entry that has not passed, so a tick that
-/// wakes nobody costs one comparison. A tick that arrives while the kernel
-/// holds a cell of its own finds it busy and changes nothing; the next one
-/// is a millisecond later.
+/// The boot processor scans deadlines in O(CPUS); each processor charges
+/// its own running thread.
 fn on_timer_tick() {
     let now = kernel_core::tick::micros(interrupts::ticks());
     let mut switch = false;
-    loop {
-        let woken = kernel_core::with_machine(|machine| {
-            kernel_ipc::expire(&mut machine.objects, &mut machine.scheduler, now)
+    while kernel_hal_x86_64::processor::processor() == Some(0) {
+        let woken = runtime::with_machine(|machine| {
+            let outcome = kernel_ipc::expire(&mut machine.objects, &mut machine.scheduler, now);
+            if let Some(wakeup) = outcome.and_then(|outcome| outcome.wakeup) {
+                announce(machine, wakeup);
+            }
+            outcome
         });
         let Some(Some(outcome)) = woken else {
             break;
         };
-        if let Some(wakeup) = outcome.wakeup {
-            announce(wakeup);
-        }
         switch |= outcome.reschedule;
     }
-    let spent = kernel_core::with_machine(|machine| {
+    let spent = runtime::with_machine(|machine| {
         machine
             .scheduler
             .tick(&mut machine.objects.threads)
@@ -280,7 +254,7 @@ fn on_timer_tick() {
 /// driver that the interrupt made runnable takes the processor from
 /// whatever was on it, which is the whole point of waking it.
 fn forward(vector: u8) {
-    let line = kernel_core::with_machine(|machine| {
+    let line = runtime::with_machine(|machine| {
         kernel_ipc::interrupt_for(&machine.objects, vector).and_then(|id| {
             machine
                 .objects
@@ -298,16 +272,17 @@ fn forward(vector: u8) {
         });
     }
     interrupts::acknowledge(vector);
-    let outcome = kernel_core::with_machine(|machine| {
-        kernel_ipc::deliver(&mut machine.objects, &mut machine.scheduler, vector)
+    let outcome = runtime::with_machine(|machine| {
+        let outcome = kernel_ipc::deliver(&mut machine.objects, &mut machine.scheduler, vector);
+        if let Some(wakeup) = outcome.and_then(|outcome| outcome.wakeup) {
+            announce(machine, wakeup);
+        }
+        outcome
     })
     .flatten();
     let Some(outcome) = outcome else {
         return;
     };
-    if let Some(wakeup) = outcome.wakeup {
-        announce(wakeup);
-    }
     if outcome.reschedule {
         task::run(None);
     }
@@ -315,16 +290,13 @@ fn forward(vector: u8) {
 
 /// Writes the status word and the return words a thread that a device
 /// interrupt woke finds in its buffer.
-fn announce(wakeup: kernel_ipc::Wakeup) {
-    let frame = kernel_core::with_machine(|machine| {
-        machine
-            .objects
-            .threads
-            .get(wakeup.thread)
-            .ok()
-            .map(|thread| thread.ipc_buffer)
-    })
-    .flatten();
+fn announce(machine: &kernel_core::machine::Machine, wakeup: kernel_ipc::Wakeup) {
+    let frame = machine
+        .objects
+        .threads
+        .get(wakeup.thread)
+        .ok()
+        .map(|thread| thread.ipc_buffer);
     let Some(frame) = frame else {
         return;
     };
@@ -404,8 +376,7 @@ fn on_trap(report: TrapReport) {
     if reported.is_none() {
         entry::fail(b"[trap] the console is not reachable\n");
     }
-    let Some(Some(faulted)) = kernel_core::with_machine(|machine| machine.scheduler.current())
-    else {
+    let Some(faulted) = switching::executing() else {
         entry::fail(b"[trap] a user thread faulted and the kernel holds none\n");
     };
     let fault = exception.fault().unwrap_or(audhsos_abi::Fault {

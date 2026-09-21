@@ -156,6 +156,7 @@ fn the_command_line_is_the_one_the_target_platform_document_prescribes() {
 #[test]
 fn what_a_run_asks_for_beyond_the_reference_machine_is_appended_to_it() {
     let options = Options {
+        processors: Some(4),
         display: false,
         qmp: Some(std::path::PathBuf::from("/tmp/qmp.sock")),
         no_vga: true,
@@ -168,6 +169,7 @@ fn what_a_run_asks_for_beyond_the_reference_machine_is_appended_to_it() {
         "{line}"
     );
     assert!(line.contains("-display none"), "{line}");
+    assert!(line.contains("-smp 4"), "{line}");
     assert!(line.contains("-vga none -no-reboot"), "{line}");
     assert!(!line.contains("-device VGA,"), "{line}");
     assert!(!line.contains("-fw_cfg"), "{line}");

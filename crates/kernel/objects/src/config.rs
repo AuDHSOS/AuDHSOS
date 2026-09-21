@@ -68,3 +68,6 @@ const _: () = assert!(HANDLE_ENTRIES >= 2 * OBJECTS);
 const _: () = assert!(HANDLES_PER_PROCESS <= HANDLE_ENTRIES);
 // The memory server holds one handle per object it hands out.
 const _: () = assert!(HANDLES_PER_PROCESS >= MEMORY_OBJECTS);
+
+/// Maximum logical processors.
+pub const CPUS: usize = 16;

@@ -337,14 +337,20 @@ a panic.
   again; or a higher priority took the CPU while it still held ticks, and it
   enters the head of its queue and keeps them (D-191).
 - The idle thread has the lowest priority and never blocks. Its kernel stack
-  is the boot stack the loader provided.
+  is the loader stack on the boot processor and a reserved kernel stack on
+  each application processor.
 - A thread may only create threads with priority up to its own maximum
   priority, which the creator sets at creation.
 - Interface (pure logic): `enqueue`, `dequeue`, `pick_next`, `tick`,
   `yield_now`, `set_priority`, `on_block`, `on_wake`.
-- The first release has one CPU. The SMP path is fixed: per-CPU run queues,
-  a per-CPU current-thread pointer, a big kernel lock first, per-object
-  locks only after measurement.
+- Up to sixteen xAPIC processors have private queues, idle threads, TSS,
+  GDT, double-fault stacks and timers. New threads receive fixed homes in
+  round robin over online processors. Higher priorities preempt on the home
+  processor; remote wakeups send a reschedule IPI after releasing the machine
+  cell. Queue operations are O(1); deadline expiry examines O(CPUS) queues.
+- Only the boot processor advances the global clock and expires deadlines.
+  The machine cell serializes object and scheduler mutations. D-192 records
+  the measurement that warrants a separate per-object locking follow-up.
 
 ### 2.5.4 Kernel execution model
 
@@ -361,6 +367,14 @@ real work. A switch from there would leave a cell borrowed by a thread that
 is no longer running, and nothing would give it back. A tick that finds one
 held therefore switches nobody and lets the next tick try, a millisecond
 later (D-133).
+
+Cross-processor cell acquisition waits with acquire/release ordering;
+a nested acquisition by the same processor is refused. Lock order:
+controller, console, memory, machine. A lock waiter polls remote TLB requests
+with interrupts disabled. Page-table edits wait for matching active roots;
+kernel mappings invalidate on every online processor. Fixed-home context
+slots outlive the machine borrow, and only the home processor reclaims an
+ended thread's stack after switching away from that stack.
 
 ### 2.5.5 Context switch and entry paths
 

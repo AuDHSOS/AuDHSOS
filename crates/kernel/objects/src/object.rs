@@ -364,6 +364,8 @@ impl Links {
 /// A thread of a process.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Thread {
+    /// Fixed home processor.
+    pub cpu: u8,
     /// The process the thread belongs to.
     pub process: ProcessId,
     /// What the thread is doing.
@@ -440,6 +442,7 @@ impl Thread {
             return Err(Error::InvalidArgument);
         }
         Ok(Thread {
+            cpu: 0,
             process,
             state: ThreadState::Inactive,
             priority,
@@ -459,6 +462,13 @@ impl Thread {
             deadline_links: Links::UNLINKED,
             fault: None,
         })
+    }
+
+    /// Assigns this thread to a fixed home processor.
+    #[must_use]
+    pub const fn on_processor(mut self, cpu: u8) -> Self {
+        self.cpu = cpu;
+        self
     }
 
     /// The same thread, with its IPC buffer taken out of `object` rather

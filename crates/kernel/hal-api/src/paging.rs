@@ -49,6 +49,15 @@ pub trait FrameBytes {
 
 /// Invalidates translation lookaside buffer entries.
 pub trait TlbControl {
+    /// Selects the root whose translations the following edits affect.
+    fn target(&mut self, _root: PhysFrame) {}
+
+    /// Moves processors using `root` to the shared kernel `replacement`
+    /// before the caller frees the old tables. The caller prevents reuse.
+    fn retire(&mut self, _root: PhysFrame, _replacement: PhysFrame) {
+        self.flush_all();
+    }
+
     /// Invalidates the translation of one page.
     fn flush_page(&mut self, page: Page);
 

@@ -88,6 +88,9 @@ name = "tick_window"
 [[test]]
 name = "clock"
 
+[[test]]
+name = "smp"
+
 [dependencies]
 audhsos-abi.workspace = true
 kernel-core.workspace = true

@@ -101,6 +101,7 @@ subcommands:
                    when it fails
 
 environment:
+  AUDHSOS_PROCESSORS processors for QEMU runs (1..=16; default 1)
   AUDHSOS_TEST_JOBS  maximum parallel host, coverage, and regression
                     processes (default: available CPU count)
   RUST_TEST_THREADS override the host test harness threads per process

@@ -32,6 +32,11 @@ impl LocalTlb {
 }
 
 impl TlbControl for LocalTlb {
+    fn retire(&mut self, root: PhysFrame, replacement: PhysFrame) {
+        if active_root() == Ok(root) {
+            replace_retired_root(replacement);
+        }
+    }
     fn flush_page(&mut self, page: Page) {
         // SAFETY: the caller changed the tables before asking for the
         // flush, which is what `invalidate_page` requires.
@@ -48,6 +53,13 @@ impl TlbControl for LocalTlb {
             crate::instructions::write_page_table_root(root);
         }
     }
+}
+
+/// The caller serializes teardown and supplies the shared kernel root.
+pub(crate) fn replace_retired_root(replacement: PhysFrame) {
+    // SAFETY: retirement uses the kernel root, which retains every kernel
+    // stack and mapping needed until the next scheduling decision.
+    unsafe { activate(replacement) };
 }
 
 /// The frame the active page tables are rooted in.
@@ -68,6 +80,10 @@ pub fn active_root() -> Result<PhysFrame, Error> {
 /// The tables must be complete: they must map the code, the stack, and the
 /// data the caller uses after the switch.
 pub unsafe fn activate(root: PhysFrame) {
+    if let Some(cpu) = crate::processor::processor() {
+        crate::processor::slot(&crate::remote::ROOTS, usize::from(cpu))
+            .store(root.start().as_u64(), core::sync::atomic::Ordering::SeqCst);
+    }
     // SAFETY: the caller promises that the tables are complete.
     unsafe {
         crate::instructions::write_page_table_root(root.start().as_u64());

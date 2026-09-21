@@ -15,7 +15,7 @@ use kernel_objects::object::{
 };
 use kernel_objects::quota::Quota;
 use kernel_objects::store::Objects;
-use kernel_sched::Scheduler;
+use kernel_sched::Processors as Scheduler;
 use kernel_types::{CachePolicy, PhysAddr, PhysFrame, PhysFrameRange};
 
 /// A machine of a handful of slots, which a test can hold on its stack.

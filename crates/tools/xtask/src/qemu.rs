@@ -203,6 +203,8 @@ impl Run {
 /// to it, and each is asked for by exactly one caller.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Options {
+    /// Logical processors presented to the guest.
+    pub(crate) processors: Option<u32>,
     /// Open QEMU's own window instead of running headless.
     pub(crate) display: bool,
     /// Where the machine protocol listens, for a run the runner talks to.
@@ -290,6 +292,7 @@ pub(crate) struct Machine {
     firmware: PathBuf,
     accelerator: String,
     timeout: Duration,
+    processors: u32,
 }
 
 impl Machine {
@@ -333,7 +336,16 @@ impl Machine {
                 firmware.display()
             )));
         }
+        let processors = match std::env::var("AUDHSOS_PROCESSORS") {
+            Ok(value) => value
+                .parse::<u32>()
+                .ok()
+                .filter(|count| (1..=16).contains(count))
+                .ok_or_else(|| Error::Usage("AUDHSOS_PROCESSORS must be 1..=16".to_owned()))?,
+            Err(_) => 1,
+        };
         Ok(Machine {
+            processors,
             qemu,
             firmware,
             accelerator,
@@ -344,7 +356,14 @@ impl Machine {
     /// The command line of the reference machine for `image`. `display`
     /// opens QEMU's own window instead of running headless.
     pub(crate) fn arguments(&self, image: &Path, options: &Options) -> Vec<String> {
-        arguments(&self.firmware, image, &self.accelerator, options)
+        let mut options = options.clone();
+        options.processors = Some(options.processors.unwrap_or(self.processors));
+        arguments(&self.firmware, image, &self.accelerator, &options)
+    }
+
+    /// Processor count selected for ordinary runs.
+    pub(crate) const fn processors(&self) -> u32 {
+        self.processors
     }
 
     /// The QEMU binary of the reference machine.
@@ -460,7 +479,7 @@ pub(crate) fn arguments(
         "-cpu".to_owned(),
         CPU_MODEL.to_owned(),
         "-smp".to_owned(),
-        "1".to_owned(),
+        options.processors.unwrap_or(1).to_string(),
         "-m".to_owned(),
         "256M".to_owned(),
         "-drive".to_owned(),

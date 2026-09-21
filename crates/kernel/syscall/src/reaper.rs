@@ -70,7 +70,11 @@ fn next_ended<
         .objects
         .threads
         .iter()
-        .find(|(id, thread)| thread.state == ThreadState::Exited && Some(*id) != spared)
+        .find(|(id, thread)| {
+            thread.state == ThreadState::Exited
+                && Some(*id) != spared
+                && thread.cpu == machine.scheduler.caller()
+        })
         .map(|(id, _)| id)
 }
 

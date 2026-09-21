@@ -150,3 +150,22 @@ fn the_reserve_is_removed_from_the_middle_of_the_map_without_disturbing_the_rest
     assert_eq!(starts, vec![MIB, 24 * MIB, 512 * MIB]);
     assert!(rest.is_sorted_and_disjoint());
 }
+
+#[test]
+fn startup_frame_excludes_zero_and_the_one_mebibyte_boundary() {
+    use crate::reserve::select_startup;
+    let map = map_of(&[usable(0, 3 * PAGE_SIZE), usable(MIB, MIB)]);
+    let (frame, rest) = select_startup(&map).unwrap().unwrap();
+    assert_eq!(frame.number(), 1);
+    assert_eq!(rest.total_frames(), map.total_frames() - 1);
+    assert!(rest.is_sorted_and_disjoint());
+    assert!(
+        select_startup(&map_of(&[usable(0, PAGE_SIZE), usable(MIB, MIB)]))
+            .unwrap()
+            .is_none()
+    );
+    let (frame, _) = select_startup(&map_of(&[usable(MIB - PAGE_SIZE, PAGE_SIZE)]))
+        .unwrap()
+        .unwrap();
+    assert_eq!(frame.start().as_u64(), MIB - PAGE_SIZE);
+}

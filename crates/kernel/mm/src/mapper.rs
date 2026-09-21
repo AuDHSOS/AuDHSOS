@@ -93,6 +93,7 @@ where
 {
     /// A mapper over the tables rooted in `root`.
     pub fn new(root: PhysFrame, access: &'a mut A, tlb: &'a mut T, frames: &'a mut S) -> Self {
+        tlb.target(root);
         Mapper {
             root,
             access,

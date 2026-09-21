@@ -32,6 +32,9 @@ pub const MADT_HEADER_LEN: usize = SDT_HEADER_LEN + 8;
 /// Number of I/O APICs this kernel holds.
 pub const MAX_IO_APICS: usize = 4;
 
+/// Maximum number of usable firmware processor entries.
+pub const MAX_PROCESSORS: usize = 16;
+
 /// Number of interrupt source overrides this kernel holds.
 pub const MAX_OVERRIDES: usize = 16;
 
@@ -151,6 +154,17 @@ pub struct Routing {
     pub trigger: Trigger,
 }
 
+/// A usable processor from ACPI 6.6, tables 5.22 and 5.34.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Processor {
+    /// Firmware processor identifier.
+    pub uid: u32,
+    /// Hardware local APIC identifier.
+    pub apic_id: u32,
+    /// Whether firmware enabled this processor.
+    pub enabled: bool,
+}
+
 /// What the table says about the interrupt hardware of the machine.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Madt {
@@ -159,9 +173,10 @@ pub struct Madt {
     pub lapic_address: PhysAddr,
     /// The flags of the table; [`PCAT_COMPAT`] is the only one defined.
     pub flags: u32,
-    /// Number of processor local APIC entries, which this release counts
-    /// and does nothing else with.
-    pub processors: usize,
+    /// Usable processors in firmware order.
+    pub processors: [Option<Processor>; MAX_PROCESSORS],
+    /// Usable records beyond the fixed processor capacity.
+    pub omitted_processors: u32,
     /// The I/O APICs, in the order the table names them.
     pub io_apics: [Option<IoApic>; MAX_IO_APICS],
     /// The interrupt source overrides, in the order the table names them.
@@ -251,7 +266,8 @@ pub fn parse(bytes: &[u8]) -> Result<Madt, AcpiError> {
     let mut madt = Madt {
         lapic_address: address(u64::from(lapic))?,
         flags,
-        processors: 0,
+        processors: [None; MAX_PROCESSORS],
+        omitted_processors: 0,
         io_apics: [None; MAX_IO_APICS],
         overrides: [None; MAX_OVERRIDES],
     };
@@ -284,7 +300,25 @@ fn read_entry(
     match kind {
         ENTRY_LOCAL_APIC => {
             expect_length(kind, announced, LOCAL_APIC_LEN)?;
-            madt.processors = madt.processors.saturating_add(1);
+            let uid = u32::from(
+                u8_at(bytes, offset.saturating_add(2)).ok_or(AcpiError::TooShort(offset))?,
+            );
+            let apic_id = u32::from(
+                u8_at(bytes, offset.saturating_add(3)).ok_or(AcpiError::TooShort(offset))?,
+            );
+            let flags =
+                u32_at(bytes, offset.saturating_add(4)).ok_or(AcpiError::TooShort(offset))?;
+            store_processor(madt, uid, apic_id, flags);
+        }
+        9 => {
+            expect_length(kind, announced, 16)?;
+            let apic_id =
+                u32_at(bytes, offset.saturating_add(4)).ok_or(AcpiError::TooShort(offset))?;
+            let flags =
+                u32_at(bytes, offset.saturating_add(8)).ok_or(AcpiError::TooShort(offset))?;
+            let uid =
+                u32_at(bytes, offset.saturating_add(12)).ok_or(AcpiError::TooShort(offset))?;
+            store_processor(madt, uid, apic_id, flags);
         }
         ENTRY_IO_APIC => {
             expect_length(kind, announced, IO_APIC_LEN)?;
@@ -357,4 +391,29 @@ fn store<T>(slots: &mut [Option<T>], value: T) -> Option<()> {
 /// The address a field names, if it is one the machine can have.
 fn address(raw: u64) -> Result<PhysAddr, AcpiError> {
     PhysAddr::new(raw).map_err(|_| AcpiError::Address(raw))
+}
+
+/// Retains enabled and online-capable processors (ACPI 6.6, table 5.23).
+fn store_processor(madt: &mut Madt, uid: u32, apic_id: u32, flags: u32) {
+    if flags.trailing_zeros() >= 2
+        || madt
+            .processors
+            .iter()
+            .flatten()
+            .any(|cpu| cpu.apic_id == apic_id)
+    {
+        return;
+    }
+    if store(
+        &mut madt.processors,
+        Processor {
+            uid,
+            apic_id,
+            enabled: flags & 1 != 0,
+        },
+    )
+    .is_none()
+    {
+        madt.omitted_processors = madt.omitted_processors.saturating_add(1);
+    }
 }

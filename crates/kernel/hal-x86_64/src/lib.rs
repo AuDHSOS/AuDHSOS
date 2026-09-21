@@ -23,7 +23,10 @@ pub mod memory;
 pub mod paging;
 pub mod pic;
 pub mod ports;
+pub mod processor;
 pub mod random;
+pub mod remote;
+pub mod startup;
 #[cfg(all(feature = "debug-uart", feature = "test-exit"))]
 pub mod testing;
 pub mod timer;

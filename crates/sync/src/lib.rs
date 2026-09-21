@@ -13,7 +13,7 @@
 use core::cell::UnsafeCell;
 use core::fmt;
 use core::ops::{Deref, DerefMut};
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicU32, Ordering};
 
 /// Errors of [`Global`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -39,7 +39,16 @@ impl fmt::Display for Error {
 /// Proof, carried by the caller, that nothing else can run on this CPU while
 /// the borrow lives. The kernel implements it for its interrupt guard; the
 /// userland runtime and tests use [`UncontendedToken`].
-pub trait ExclusiveToken {}
+pub trait ExclusiveToken {
+    /// Processor holding the borrow; `u32::MAX` is reserved.
+    fn owner(&self) -> u32 {
+        0
+    }
+    /// Services pending work while another processor owns the cell.
+    fn wait(&self) {
+        core::hint::spin_loop();
+    }
+}
 
 /// The token for contexts with a single thread of execution.
 #[derive(Clone, Copy, Debug, Default)]
@@ -49,12 +58,12 @@ impl ExclusiveToken for UncontendedToken {}
 
 /// A cell for global state.
 pub struct Global<T> {
-    borrowed: AtomicBool,
+    owner: AtomicU32,
     value: UnsafeCell<Option<T>>,
 }
 
 // SAFETY: the value is reached only through `slot`, which is called only
-// while the caller holds the `borrowed` flag. The flag is taken with an
+// while the caller holds the owner word. The flag is taken with an
 // atomic compare-and-swap, so at most one thread of execution reaches the
 // value at a time, which is the guarantee `Sync` requires. `T: Send` keeps
 // values that must stay on one thread out of the cell.
@@ -65,7 +74,7 @@ impl<T> Global<T> {
     #[must_use]
     pub const fn new() -> Self {
         Global {
-            borrowed: AtomicBool::new(false),
+            owner: AtomicU32::new(0),
             value: UnsafeCell::new(None),
         }
     }
@@ -77,7 +86,7 @@ impl<T> Global<T> {
     /// `AlreadyInitialized` after the first success; `AlreadyBorrowed`
     /// while a borrow is alive.
     pub fn init(&self, value: T) -> Result<(), Error> {
-        self.acquire()?;
+        self.acquire(&UncontendedToken)?;
         let slot = self.slot();
         let result = if slot.is_some() {
             Err(Error::AlreadyInitialized)
@@ -93,10 +102,10 @@ impl<T> Global<T> {
     ///
     /// # Errors
     ///
-    /// `AlreadyBorrowed` while another borrow is alive; `Uninitialized`
+    /// `AlreadyBorrowed` for a nested borrow by the same owner; `Uninitialized`
     /// before `init`.
-    pub fn borrow<'a>(&'a self, _token: &impl ExclusiveToken) -> Result<GlobalRef<'a, T>, Error> {
-        self.acquire()?;
+    pub fn borrow<'a>(&'a self, token: &impl ExclusiveToken) -> Result<GlobalRef<'a, T>, Error> {
+        self.acquire(token)?;
         if let Some(value) = self.slot().as_mut() {
             Ok(GlobalRef { cell: self, value })
         } else {
@@ -108,26 +117,35 @@ impl<T> Global<T> {
     /// `true` while a [`GlobalRef`] is alive.
     #[must_use]
     pub fn is_borrowed(&self) -> bool {
-        self.borrowed.load(Ordering::Acquire)
+        self.owner.load(Ordering::Acquire) != 0
     }
 
-    fn acquire(&self) -> Result<(), Error> {
-        self.borrowed
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .map(|_| ())
-            .map_err(|_| Error::AlreadyBorrowed)
+    fn acquire(&self, token: &impl ExclusiveToken) -> Result<(), Error> {
+        let Some(owner) = token.owner().checked_add(1) else {
+            return Err(Error::AlreadyBorrowed);
+        };
+        loop {
+            match self
+                .owner
+                .compare_exchange(0, owner, Ordering::Acquire, Ordering::Relaxed)
+            {
+                Ok(_) => return Ok(()),
+                Err(held) if held == owner => return Err(Error::AlreadyBorrowed),
+                Err(_) => token.wait(),
+            }
+        }
     }
 
     fn release(&self) {
-        self.borrowed.store(false, Ordering::Release);
+        self.owner.store(0, Ordering::Release);
     }
 
-    /// The slot behind the cell. Callers hold the `borrowed` flag, which
+    /// The slot behind the cell. Callers hold the owner word, which
     /// makes them the only code that can reach the slot until they release
     /// it.
     #[expect(
         clippy::mut_from_ref,
-        reason = "interior mutability guarded by the borrowed flag"
+        reason = "interior mutability guarded by the owner word"
     )]
     fn slot(&self) -> &mut Option<T> {
         // SAFETY: `acquire` succeeded for the caller and has not been
@@ -200,12 +218,12 @@ impl<T: fmt::Debug> fmt::Debug for GlobalRef<'_, T> {
 /// Borrowing follows the same rule as [`Global`]: one borrow at a time,
 /// against a token that proves nothing else runs on this CPU.
 pub struct Preset<T> {
-    borrowed: AtomicBool,
+    owner: AtomicU32,
     value: UnsafeCell<T>,
 }
 
 // SAFETY: the value is reached only through `slot`, which is called only
-// while the caller holds the `borrowed` flag. The flag is taken with an
+// while the caller holds the owner word. The flag is taken with an
 // atomic compare-and-swap, so at most one thread of execution reaches the
 // value at a time, which is the guarantee `Sync` requires. `T: Send` keeps
 // values that must stay on one thread out of the cell.
@@ -216,7 +234,7 @@ impl<T> Preset<T> {
     #[must_use]
     pub const fn new(value: T) -> Self {
         Preset {
-            borrowed: AtomicBool::new(false),
+            owner: AtomicU32::new(0),
             value: UnsafeCell::new(value),
         }
     }
@@ -225,9 +243,9 @@ impl<T> Preset<T> {
     ///
     /// # Errors
     ///
-    /// [`Error::AlreadyBorrowed`] while another borrow is alive.
-    pub fn borrow<'a>(&'a self, _token: &impl ExclusiveToken) -> Result<PresetRef<'a, T>, Error> {
-        self.acquire()?;
+    /// [`Error::AlreadyBorrowed`] for a nested borrow by the same owner.
+    pub fn borrow<'a>(&'a self, token: &impl ExclusiveToken) -> Result<PresetRef<'a, T>, Error> {
+        self.acquire(token)?;
         Ok(PresetRef {
             cell: self,
             value: self.slot(),
@@ -237,7 +255,7 @@ impl<T> Preset<T> {
     /// `true` while a [`PresetRef`] is alive.
     #[must_use]
     pub fn is_borrowed(&self) -> bool {
-        self.borrowed.load(Ordering::Acquire)
+        self.owner.load(Ordering::Acquire) != 0
     }
 
     /// The value, when nothing can be borrowing it because the caller owns
@@ -246,22 +264,31 @@ impl<T> Preset<T> {
         self.value.get_mut()
     }
 
-    fn acquire(&self) -> Result<(), Error> {
-        self.borrowed
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .map(|_| ())
-            .map_err(|_| Error::AlreadyBorrowed)
+    fn acquire(&self, token: &impl ExclusiveToken) -> Result<(), Error> {
+        let Some(owner) = token.owner().checked_add(1) else {
+            return Err(Error::AlreadyBorrowed);
+        };
+        loop {
+            match self
+                .owner
+                .compare_exchange(0, owner, Ordering::Acquire, Ordering::Relaxed)
+            {
+                Ok(_) => return Ok(()),
+                Err(held) if held == owner => return Err(Error::AlreadyBorrowed),
+                Err(_) => token.wait(),
+            }
+        }
     }
 
     fn release(&self) {
-        self.borrowed.store(false, Ordering::Release);
+        self.owner.store(0, Ordering::Release);
     }
 
-    /// The value behind the cell. Callers hold the `borrowed` flag, which
+    /// The value behind the cell. Callers hold the owner word, which
     /// makes them the only code that can reach it until they release it.
     #[expect(
         clippy::mut_from_ref,
-        reason = "interior mutability guarded by the borrowed flag"
+        reason = "interior mutability guarded by the owner word"
     )]
     fn slot(&self) -> &mut T {
         // SAFETY: `acquire` succeeded for the caller and has not been

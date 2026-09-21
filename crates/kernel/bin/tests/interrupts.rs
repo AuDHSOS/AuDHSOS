@@ -210,7 +210,12 @@ fn raise<const VECTOR: u8>() -> u32 {
 #[test_case]
 fn the_bring_up_finds_the_interrupt_hardware_and_turns_it_on() {
     ensure_ready();
-    let counts = interrupts::with_madt(|madt| (madt.io_apic_count(), madt.processors));
+    let counts = interrupts::with_madt(|madt| {
+        (
+            madt.io_apic_count(),
+            madt.processors.iter().flatten().count(),
+        )
+    });
     let Some((io_apics, processors)) = counts else {
         testing::fail(format_args!("the controller is not reachable"));
     };

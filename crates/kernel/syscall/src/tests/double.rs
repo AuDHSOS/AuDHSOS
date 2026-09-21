@@ -14,7 +14,7 @@ use kernel_objects::object::{
 };
 use kernel_objects::quota::Quota;
 use kernel_objects::store::Objects;
-use kernel_sched::{Outcome, Scheduler};
+use kernel_sched::{Outcome, Processors as Scheduler};
 use kernel_types::{CachePolicy, Page, PhysAddr, PhysFrame, PhysFrameRange, VirtAddr};
 
 use crate::dispatch::Machine;
