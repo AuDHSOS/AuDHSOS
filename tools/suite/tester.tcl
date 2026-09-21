@@ -1227,7 +1227,12 @@ proc append_graph {prefix dxname cxname level} {
 
 proc do_eqp_test {name sql res} {
   if {[regexp {^\s+QUERY PLAN\n} $res]} {
-    set query_plan [query_plan_graph $sql]
+    # A statement this engine names no plan for refuses here, and the
+    # case is reported as refused by the `do_test` below rather than
+    # stopping the file.
+    if {[catch { query_plan_graph $sql } query_plan]} {
+      set query_plan ""
+    }
     if {[list {*}$query_plan]==[list {*}$res]} {
       uplevel [list do_test $name [list set {} ok] ok]
     } else {

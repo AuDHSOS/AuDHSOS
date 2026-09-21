@@ -3410,6 +3410,13 @@ impl<'a> Database<'a> {
             );
         covered(arena, &select, sql, &mut sides);
         self.explain(&sides, !select.order.is_empty() && !walked);
+        // `EXPLAIN QUERY PLAN` names the plan of the statement and runs
+        // no loop of it, so the walks are left where they stand and the
+        // statement answers no row: `sqlite3_step` over such a
+        // statement reads the rows of the plan and not of the table.
+        if self.planned.borrow().is_some() {
+            return Ok(shaped(shown, shape, Vec::new()));
+        }
         let mut rows: Vec<Sorted> = Vec::new();
         if !overs.is_empty() {
             // A window function reads the rows a statement has already
@@ -3444,19 +3451,7 @@ impl<'a> Database<'a> {
             let cursor = Cursor::new(self.collation(), self.encoding, reach);
             limit(arena, &select, sql, &mut rows, &cursor)?;
         }
-        Ok(Answered {
-            answer: Answer {
-                names: shown,
-                declared: shape
-                    .columns
-                    .iter()
-                    .map(|column| column.declared.clone())
-                    .collect(),
-                rows,
-                stepped: Stepped::default(),
-            },
-            shape,
-        })
+        Ok(shaped(shown, shape, rows))
     }
 
     /// The sides of a `FROM` clause, and how each attaches to the ones
@@ -5217,6 +5212,24 @@ fn covering_of(side: &Side<'_>, read: &[usize]) -> Option<Vec<Option<usize>>> {
         return Some(places);
     }
     None
+}
+
+/// What one core of a statement answers: the names it was asked under,
+/// the types the schema declares for its columns, and its rows.
+fn shaped(shown: Vec<Vec<u8>>, shape: Shape, rows: Vec<Vec<Value>>) -> Answered {
+    Answered {
+        answer: Answer {
+            names: shown,
+            declared: shape
+                .columns
+                .iter()
+                .map(|column| column.declared.clone())
+                .collect(),
+            rows,
+            stepped: Stepped::default(),
+        },
+        shape,
+    }
 }
 
 /// One line of an `EXPLAIN QUERY PLAN`: which line it hangs under,

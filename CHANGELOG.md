@@ -19,8 +19,8 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   from 79 to 88.
 
 - `db-sqlite` answers `EXPLAIN QUERY PLAN`, which names the walk of every
-  side of the statement under it as `sqlite3WhereExplainOneScan` writes
-  it: `SCAN`, `SEARCH` with the columns the key and the bounds name, and
+  side of the statement under it and runs no loop of it, as
+  `sqlite3WhereExplainOneScan` writes it: `SCAN`, `SEARCH` with the columns the key and the bounds name, and
   `MULTI-INDEX OR` over one branch per index. D-375 records it. Catalog
   6.6.259. `like.test` goes from 54 cases passing to 66, `where2.test`
   from 34 to 49 and `skipscan1.test` from 18 to 30.

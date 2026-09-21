@@ -461,8 +461,9 @@ Size: S.
     descents and the steps the last statement took, which D-378
     records.
 36. `do_eqp_test` draws the rows of an `EXPLAIN QUERY PLAN` as the tree
-    the shell draws and compares it against what the file writes, which
-    D-379 records.
+    the shell draws and compares it against what the file writes, and
+    reports a statement the engine names no plan for as one case
+    refused, which D-379 records.
 
 ### Produces
 
