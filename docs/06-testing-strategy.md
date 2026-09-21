@@ -6850,3 +6850,11 @@ Document 16 step Q8.
 - A term written backwards, one with its nulls moved, one over an
   expression, and a count of terms the `GROUP BY` does not name.
 - A statement that groups nothing.
+
+### 6.6.270 The groups a walk gathers (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A `GROUP BY` one index answers the order of, and one no index does.
+- The groups a walk gathers against the groups a sorter gathers, over a
+  column that holds a null.

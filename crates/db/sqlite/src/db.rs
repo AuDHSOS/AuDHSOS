@@ -3417,20 +3417,13 @@ impl<'a> Database<'a> {
                     collating: self.collating,
                 },
             );
+        let gathered = overs.is_empty() && self.gathers(arena, &select, sql, &mut sides);
         // A statement that gathers its rows into groups answers them in
         // the order of the groups, so an `ORDER BY` that names the
         // `GROUP BY` terms is answered by that order and sorts nothing
         // of its own.
         let held = walked || (overs.is_empty() && grouped_order(arena, &select, sql, &sides));
-        covered(arena, &select, sql, &mut sides);
-        self.explain(
-            &sides,
-            Sorting {
-                grouped: !select.group.is_empty(),
-                distinct: select.distinct == Distinct::Distinct,
-                ordered: !select.order.is_empty() && !held,
-            },
-        );
+        self.described(arena, &select, sql, &mut sides, (gathered, held));
         // `EXPLAIN QUERY PLAN` names the plan of the statement and runs
         // no loop of it, so the walks are left where they stand and the
         // statement answers no row: `sqlite3_step` over such a
@@ -3456,7 +3449,11 @@ impl<'a> Database<'a> {
                 Ok(())
             })?;
         } else {
-            for group in self.groups(arena, &select, sql, &sides, &calls, reach)? {
+            let gathering = Grouping {
+                calls: &calls,
+                ordered: gathered,
+            };
+            for group in self.groups(arena, &select, sql, &sides, gathering, reach)? {
                 rows.push(sorted(arena, &select, sql, &group, &keys)?);
             }
         }
@@ -4314,7 +4311,17 @@ impl<'a> Database<'a> {
         reach: Reach<'b>,
     ) -> Result<Vec<Cursor<'b>>, Error> {
         if !calls.is_empty() || !select.group.is_empty() {
-            return self.groups(arena, select, sql, sides, calls, reach);
+            return self.groups(
+                arena,
+                select,
+                sql,
+                sides,
+                Grouping {
+                    calls,
+                    ordered: false,
+                },
+                reach,
+            );
         }
         let mut out = Vec::new();
         self.scan(sides, arena, sql, reach, &mut |cursor: &Cursor<'b>| {
@@ -4332,6 +4339,46 @@ impl<'a> Database<'a> {
         Ok(out)
     }
 
+    /// Marks the sides an index covers and writes the lines this core
+    /// adds under an `EXPLAIN QUERY PLAN`.
+    ///
+    /// `held` says whether the walk gathers the groups and whether it
+    /// answers the `ORDER BY`, each of which leaves one tree unbuilt.
+    fn described(
+        &self,
+        arena: &Arena,
+        select: &Select,
+        sql: &[u8],
+        sides: &mut [Side<'_>],
+        held: (bool, bool),
+    ) {
+        let (gathered, ordered) = held;
+        covered(arena, select, sql, sides);
+        self.explain(
+            sides,
+            Sorting {
+                grouped: !select.group.is_empty() && !gathered,
+                distinct: select.distinct == Distinct::Distinct,
+                ordered: !select.order.is_empty() && !ordered,
+            },
+        );
+    }
+
+    /// Whether the walk of the one side gathers the groups of the
+    /// statement one after another, which leaves the sorter unbuilt.
+    fn gathers(&self, arena: &Arena, select: &Select, sql: &[u8], sides: &mut [Side<'_>]) -> bool {
+        in_order_of(
+            arena,
+            select,
+            sql,
+            sides,
+            Settling {
+                format: self.schema_format(),
+                collating: self.collating,
+            },
+        )
+    }
+
     /// The groups a statement that aggregates answers: one cursor each,
     /// in the order the `GROUP BY` terms collate in, which is the order
     /// the sorter of `src/select.c` puts them in.
@@ -4341,9 +4388,10 @@ impl<'a> Database<'a> {
         select: &Select,
         sql: &[u8],
         sides: &'b [Side<'b>],
-        calls: &[Call],
+        gathering: Grouping<'_>,
         reach: Reach<'b>,
     ) -> Result<Vec<Cursor<'b>>, Error> {
+        let Grouping { calls, ordered } = gathering;
         let terms = grouping(arena, select, sql, sides)?;
         let mut groups: Vec<Group<'b>> = Vec::new();
         self.scan(sides, arena, sql, reach, &mut |cursor: &Cursor<'b>| {
@@ -4354,7 +4402,18 @@ impl<'a> Database<'a> {
             for term in &terms {
                 key.push(grouped(*term, arena, sql, cursor)?);
             }
-            let found = groups.iter().position(|group| alike(&group.key, &key));
+            // A walk that answers the terms in their order answers the
+            // rows of one group one after another, so the group a row
+            // belongs to is the one before it or a new one: O(n) over
+            // the rows, where a walk of every group is O(n²).
+            let found = if ordered {
+                groups
+                    .len()
+                    .checked_sub(1)
+                    .filter(|at| groups.get(*at).is_some_and(|group| alike(&group.key, &key)))
+            } else {
+                groups.iter().position(|group| alike(&group.key, &key))
+            };
             let group = if let Some(at) = found {
                 groups.get_mut(at)
             } else {
@@ -4371,7 +4430,9 @@ impl<'a> Database<'a> {
             // over an empty table is.
             groups.push(Group::new(Vec::new(), calls));
         }
-        groups.sort_by(|left, right| order_of_keys(&left.key, &right.key));
+        if !ordered {
+            groups.sort_by(|left, right| order_of_keys(&left.key, &right.key));
+        }
         let mut out = Vec::new();
         for group in &groups {
             let mut answers = Vec::new();
@@ -5156,6 +5217,31 @@ fn in_order(
     true
 }
 
+/// Whether the walk of the one side answers the rows in the order the
+/// `GROUP BY` asks for, reading that side by an index where one index
+/// holds its entries in that order.
+///
+/// Costs what [`grouping_order`] costs.
+fn in_order_of(
+    arena: &Arena,
+    select: &Select,
+    sql: &[u8],
+    sides: &mut [Side<'_>],
+    settling: Settling,
+) -> bool {
+    let plan = match grouping_order(arena, select, sql, sides, settling) {
+        Ordering::Sorted => return false,
+        Ordering::Walked => None,
+        Ordering::Index(plan) => Some(plan),
+    };
+    for side in sides.iter_mut().take(1) {
+        if let Some(plan) = plan.clone() {
+            side.plan = plan;
+        }
+    }
+    true
+}
+
 /// Marks each side whose index holds every column the statement reads
 /// of it, so the row is built from the entry and the table's tree is
 /// not descended.
@@ -5280,6 +5366,16 @@ fn grouped_order(arena: &Arena, select: &Select, sql: &[u8], sides: &[Side<'_>])
 fn named_alike(arena: &Arena, one: ExprId, other: ExprId, sql: &[u8], sides: &[Side<'_>]) -> bool {
     let held = reached(arena, one, sql, sides);
     held.is_some() && held == reached(arena, other, sql, sides)
+}
+
+/// How the groups of a statement are gathered: the calls it aggregates
+/// and whether the walk answers the rows of one group one after another.
+#[derive(Clone, Copy)]
+struct Grouping<'c> {
+    /// The aggregates the statement calls.
+    calls: &'c [Call],
+    /// Whether the walk answers the groups one after another.
+    ordered: bool,
 }
 
 /// Which trees a statement sorts its rows in, each of which
@@ -5477,39 +5573,100 @@ fn ordering(
             return Ordering::Sorted;
         }
         let descending = term.order == crate::ast::Order::Descending;
-        // A term that counts or names a column of the answer sorts by
-        // what that column answers, which `resolveOrderGroupBy` of
-        // `research/sqlite/src/resolve.c` matches before it reads the
-        // term against the row.
-        let named = counted_to(arena, select, sql, term.expr).unwrap_or(term.expr);
-        // A `COLLATE` names what the term compares under and leaves the
-        // column it is written on, which `sqlite3ExprSkipCollate` reads
-        // through.
-        let held = uncollated(arena, named);
-        let Some((_, reached)) = reached(arena, held, sql, sides) else {
-            return Ordering::Sorted;
-        };
-        let place = match reached {
-            Reached::Key => None,
-            Reached::Column(place) => Some(place),
-        };
-        // A `COLLATE` on the term is the collation the sort uses; where
-        // the term carries none, the column of the answer it counts to
-        // carries it.
-        let under = if matches!(arena.node(term.expr), Some(Node::Collate { .. })) {
-            term.expr
-        } else {
-            named
-        };
-        let Some(collation) = sorted_under(arena, under, sql, settling, stored, place) else {
-            return Ordering::Sorted;
-        };
-        places.push(Termed {
-            place,
+        let held = termed(
+            arena,
+            select,
+            sql,
+            sides,
+            (settling, stored),
+            term.expr,
             descending,
-            collation,
-        });
+        );
+        let Some(held) = held else {
+            return Ordering::Sorted;
+        };
+        places.push(held);
     }
+    placed(side, stored, places, settling.format)
+}
+
+/// What the walk of the one side answers of the `GROUP BY`.
+///
+/// The terms of a `GROUP BY` run forwards and put their nulls where that
+/// order puts them, so a walk that answers them in that order answers
+/// the groups one after another and the rows need no sorter, which is
+/// `sqlite3Select` writing `groupBySort` for the walk it has.
+fn grouping_order(
+    arena: &Arena,
+    select: &Select,
+    sql: &[u8],
+    sides: &[Side<'_>],
+    settling: Settling,
+) -> Ordering {
+    let terms = arena.children(select.group);
+    let [side] = sides else {
+        return Ordering::Sorted;
+    };
+    let Source::Table(stored) = &side.source else {
+        return Ordering::Sorted;
+    };
+    if terms.is_empty() || stored.table.without_rowid {
+        return Ordering::Sorted;
+    }
+    let mut places: Vec<Termed> = Vec::new();
+    for term in terms {
+        let Some(held) = termed(arena, select, sql, sides, (settling, stored), *term, false) else {
+            return Ordering::Sorted;
+        };
+        places.push(held);
+    }
+    placed(side, stored, places, settling.format)
+}
+
+/// One term of an `ORDER BY` or a `GROUP BY` as the column it names and
+/// what it compares under, and nothing where it names no column of the
+/// one side.
+fn termed(
+    arena: &Arena,
+    select: &Select,
+    sql: &[u8],
+    sides: &[Side<'_>],
+    held: (Settling, &Stored),
+    expr: ExprId,
+    descending: bool,
+) -> Option<Termed> {
+    let (settling, stored) = held;
+    // A term that counts or names a column of the answer sorts by what
+    // that column answers, which `resolveOrderGroupBy` of
+    // `research/sqlite/src/resolve.c` matches before it reads the term
+    // against the row.
+    let named = counted_to(arena, select, sql, expr).unwrap_or(expr);
+    // A `COLLATE` names what the term compares under and leaves the
+    // column it is written on, which `sqlite3ExprSkipCollate` reads
+    // through.
+    let (_, reached) = reached(arena, uncollated(arena, named), sql, sides)?;
+    let place = match reached {
+        Reached::Key => None,
+        Reached::Column(place) => Some(place),
+    };
+    // A `COLLATE` on the term is the collation the sort uses; where the
+    // term carries none, the column of the answer it counts to carries
+    // it.
+    let under = if matches!(arena.node(expr), Some(Node::Collate { .. })) {
+        expr
+    } else {
+        named
+    };
+    let collation = sorted_under(arena, under, sql, settling, stored, place)?;
+    Some(Termed {
+        place,
+        descending,
+        collation,
+    })
+}
+
+/// What the walk of the one side answers of the terms at `places`.
+fn placed(side: &Side<'_>, stored: &Stored, mut places: Vec<Termed>, format: u32) -> Ordering {
     // A rowid stands once in the table, so no term after one decides
     // anything, and the table's own tree holds its rows from the
     // smallest rowid up.
@@ -5534,7 +5691,6 @@ fn ordering(
         return Ordering::Sorted;
     }
     let wanted = places;
-    let format = settling.format;
     // A side already held to a key by an index answers its entries in
     // that index's order, so the key is kept where that order is the one
     // the terms name.

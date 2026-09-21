@@ -32,6 +32,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` gathers the groups of a `GROUP BY` out of a walk that
+  answers the terms in their order, which costs O(n) over the rows where
+  a walk of every group costs O(n²). D-389 records it. Catalog 6.6.270.
+  `orderbyA.test` goes from 60 cases passing to 80.
+
 - `db-sqlite` answers an `ORDER BY` that names the `GROUP BY` terms out
   of the order the groups come in, so the rows are sorted once and not
   twice. D-388 records it. Catalog 6.6.269. `orderbyA.test` goes from 56

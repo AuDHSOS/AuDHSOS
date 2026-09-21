@@ -1031,6 +1031,68 @@ fn explain_query_plan_names_every_tree_the_rows_are_sorted_in() {
 }
 
 #[test]
+fn a_walk_that_answers_the_group_by_gathers_the_groups_without_a_sorter() {
+    // `mpq` holds `p` first and `mq` holds `q`, so each answers the
+    // groups one after another; `mr` holds `r` and no index holds what
+    // `r+1` answers.
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT p, count(*) FROM m GROUP BY p"
+        ),
+        "SCAN m USING COVERING INDEX mpq"
+    );
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT q, count(*) FROM m GROUP BY q"
+        ),
+        "SCAN m USING COVERING INDEX mq"
+    );
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT r+1, count(*) FROM m GROUP BY r+1"
+        ),
+        "SCAN m|USE TEMP B-TREE FOR GROUP BY"
+    );
+    // The groups a walk gathers are the groups a sorter gathers.
+    let rows = |sql: &[u8]| {
+        Database::open(super::INDEXED)
+            .unwrap()
+            .query(sql)
+            .unwrap()
+            .rows
+    };
+    assert_eq!(
+        rows(b"SELECT p, count(*) FROM m GROUP BY p"),
+        [
+            alloc::vec![Value::Int(1), Value::Int(2)],
+            alloc::vec![Value::Int(2), Value::Int(2)],
+            alloc::vec![Value::Int(3), Value::Int(1)]
+        ]
+    );
+    // A table that keeps its rows in the key's own tree answers no walk
+    // of an index, so its groups are gathered by the sorter.
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT a, count(*) FROM u GROUP BY a"
+        ),
+        "SCAN u|USE TEMP B-TREE FOR GROUP BY"
+    );
+    assert_eq!(
+        rows(b"SELECT q, count(*) FROM m GROUP BY q"),
+        [
+            alloc::vec![Value::Null, Value::Int(1)],
+            alloc::vec![Value::Text(b"A".to_vec()), Value::Int(2)],
+            alloc::vec![Value::Text(b"b".to_vec()), Value::Int(1)],
+            alloc::vec![Value::Text(b"c".to_vec()), Value::Int(1)]
+        ]
+    );
+}
+
+#[test]
 fn what_words_no_explain_query_plan_stands_in() {
     // A bare `EXPLAIN` names the program the statement compiles to, and
     // the two words after it are read as one prefix or as none.

@@ -993,6 +993,8 @@ Size: L.
      D-387 records.
 126. The `ORDER BY` the order of the groups answers. Built, which
      D-388 records.
+127. The groups a walk gathers without a sorter. Built, which D-389
+     records.
 
 ### Done when
 
