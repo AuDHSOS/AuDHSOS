@@ -5458,8 +5458,9 @@ impl Writer {
                 )
             }
         };
-        if let Definition::Index(_) = definition {
+        if let Definition::Index(index) = definition {
             self.indexable(&over)?;
+            windowless(arena, &index, sql)?;
         }
         if self.may_name((&name, written_name), already, &definition)? {
             return Ok(());
@@ -9694,6 +9695,36 @@ fn capped(most: i64) -> u32 {
 
 /// The name of a table under the schema it stands in, which is `main`
 /// for every table this crate holds.
+/// Raises where a term of a `CREATE INDEX` or the `WHERE` of a partial
+/// index calls a window function.
+///
+/// `sqlite3ResolveExprNames` of `research/sqlite/src/resolve.c` reads
+/// the expressions of an index with `NC_AllowWin` clear, so a window
+/// there is a misuse: an index holds one value per row and a window
+/// function reads the rows of a frame.
+///
+/// Reading the tree costs O(n) in its nodes.
+///
+/// # Errors
+///
+/// [`crate::eval::Error::NoWindow`] names the function.
+fn windowless(arena: &Arena, index: &crate::ast::CreateIndex, sql: &[u8]) -> Result<(), Error> {
+    let mut held = alloc::vec::Vec::new();
+    for term in arena.orders(index.columns) {
+        held.extend(arena.node(term.expr));
+    }
+    held.extend(index.filter.and_then(|id| arena.node(id)));
+    while let Some(node) = held.pop() {
+        if let crate::ast::Node::Over { name, .. } = node {
+            return Err(
+                crate::eval::Error::NoWindow(crate::schema::dequote(name.text(sql))).into(),
+            );
+        }
+        arena.under(node, |child| held.extend(arena.node(child)));
+    }
+    Ok(())
+}
+
 fn schema_named_as(name: &[u8]) -> Vec<u8> {
     let mut out = b"main.".to_vec();
     out.extend_from_slice(name);

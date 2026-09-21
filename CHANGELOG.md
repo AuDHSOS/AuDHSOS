@@ -32,6 +32,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` refuses a `CREATE INDEX` whose term or partial `WHERE`
+  calls a window function, which an index holding one value per row has
+  no frame for. D-387 records it. Catalog 6.6.268. `window1.test` goes
+  from 289 cases passing to 293.
+
 - `db-sqlite` answers `Writer::inside`, the file as the connection that
   writes it reads it, and the suite harness reads a statement of that
   connection through it, so a connection in write-ahead logging reads

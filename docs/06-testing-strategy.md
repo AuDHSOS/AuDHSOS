@@ -6833,3 +6833,11 @@ Document 16 step Q8.
 
 - A statement that writes a `GROUP BY`, a `DISTINCT` and an `ORDER BY`
   together, and each of the three on its own.
+
+### 6.6.268 The window function a `CREATE INDEX` may not call (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A window function in a term of the index, under a call in a term, and
+  in the `WHERE` of a partial index.
+- A term that calls no window function, which the index holds.

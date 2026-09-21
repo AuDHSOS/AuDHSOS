@@ -447,3 +447,33 @@ fn the_index_the_terms_name_the_most_columns_of_is_taken() {
         [alloc::vec![Value::Int(3)]]
     );
 }
+
+/// A term of a `CREATE INDEX` and the `WHERE` of a partial index each
+/// hold one value per row, so a window function there is a misuse.
+#[test]
+fn a_window_function_in_a_create_index_is_refused() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t6(a, b, c)").unwrap();
+    for (sql, message) in [
+        (
+            b"CREATE INDEX t6i ON t6(a) WHERE sum(b) OVER ()".as_slice(),
+            "misuse of window function sum()",
+        ),
+        (
+            b"CREATE INDEX t6i ON t6(a) WHERE lead(b) OVER ()",
+            "misuse of window function lead()",
+        ),
+        (
+            b"CREATE INDEX t6i ON t6(sum(b) OVER ())",
+            "misuse of window function sum()",
+        ),
+        (
+            b"CREATE INDEX t6i ON t6(abs(lead(b) OVER ()))",
+            "misuse of window function lead()",
+        ),
+    ] {
+        assert_eq!(refused(&mut writer, sql), message);
+    }
+    // A term that calls no window function is one the index holds.
+    writer.run(b"CREATE INDEX t6i ON t6(abs(a))").unwrap();
+}

@@ -989,6 +989,8 @@ Size: L.
      which D-383 records.
 124. The trees a statement sorts its rows in, which
      `EXPLAIN QUERY PLAN` names. Built, which D-386 records.
+125. The window function a `CREATE INDEX` may not call. Built, which
+     D-387 records.
 
 ### Done when
 
