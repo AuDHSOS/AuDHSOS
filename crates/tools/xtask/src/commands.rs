@@ -184,6 +184,23 @@ pub(crate) fn test(root: &Path, options: &[String]) -> Result<(), Error> {
 /// that on a machine where the emulator translates every instruction.
 const E2E_TIMEOUT: Duration = Duration::from_secs(180);
 
+/// Bound each loading stage before waiting on lower-priority applications.
+/// TCG SMP can take longer than one deadline to load the complete userland.
+const BOOT_PROGRESS: [(&str, &str); 3] = [
+    (
+        "[init] started server-display",
+        "boot stopped before the display server",
+    ),
+    (
+        "[init] started app-canvas",
+        "boot stopped before the drawing application",
+    ),
+    (
+        "[init] started server-net",
+        "boot stopped before the network server",
+    ),
+];
+
 /// What the run has to see, in this order, for the system to have worked.
 ///
 /// Each line is written by a different part of it, so the first one that
@@ -480,7 +497,7 @@ fn test_e2e(root: &Path, options: &[String]) -> Result<(), Error> {
     let mut session = Session::start(&machine, &path, &run)?;
 
     let mut violations = Vec::new();
-    for (needle, complaint) in E2E_LINES {
+    for (needle, complaint) in BOOT_PROGRESS.into_iter().chain(E2E_LINES) {
         if !session.wait_for(needle, E2E_TIMEOUT) {
             violations.push((*complaint).to_owned());
             break;
@@ -625,7 +642,8 @@ fn test_the_tls_client(machine: &Machine, path: &Path, root: &Path) -> Result<()
     )?;
 
     let mut violations = Vec::new();
-    for (needle, complaint) in tls_lines(server.port(), root)? {
+    let progress = BOOT_PROGRESS.map(|(line, complaint)| (line.to_owned(), complaint.to_owned()));
+    for (needle, complaint) in progress.into_iter().chain(tls_lines(server.port(), root)?) {
         if !session.wait_for(&needle, E2E_TIMEOUT) {
             violations.push(complaint);
             break;
@@ -719,7 +737,8 @@ fn test_the_secure_shell_client(machine: &Machine, path: &Path, root: &Path) -> 
     )?;
 
     let mut violations = Vec::new();
-    for (needle, complaint) in ssh_lines() {
+    let progress = BOOT_PROGRESS.map(|(line, complaint)| (line.to_owned(), complaint));
+    for (needle, complaint) in progress.into_iter().chain(ssh_lines()) {
         if !session.wait_for(&needle, E2E_TIMEOUT) {
             violations.push(complaint.to_owned());
             break;

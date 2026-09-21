@@ -218,6 +218,15 @@ list confirms no AP candidate. This avoids MMIO on every kernel-cell borrow
 when every caller must be the boot processor. CI retains both processor-count
 results when one matrix entry fails.
 
+End-to-end, SSH and TLS runs check display, drawing-application and network
+startup separately before application output. QEMU 8.2.2 TCG with four
+processors exceeded the old whole-boot wait while still loading programs.
+Each stage retains the 180-second deadline and all application assertions.
+
+The root task grants the unused bootstrap-region remainder to the memory
+server. Selecting the largest region for bootstrap otherwise withheld most
+RAM and made framebuffer allocations fail under CI's firmware memory map.
+
 The console clears the UART interrupt-enable register while handling received
 bytes and reenables reception after unmasking the I/O APIC line. SLLS597E,
 pp. 34–35, specifies timeout reassertion and IER gating; otherwise a timeout

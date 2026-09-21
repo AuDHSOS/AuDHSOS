@@ -623,8 +623,8 @@ fn start_everything(gate: &mut Gate, startup: &Startup, world: &mut World, image
     };
     let archive = Archive::new(archive);
 
-    // One region kept back, so that the memory server can be brought up out
-    // of it; every other region goes to the memory server.
+    // Bootstrap from one region, then grant its remainder and every other
+    // region to the memory server.
     let mut reserve = startup.ram.iter().copied().next();
     for program in PROGRAMS {
         // The boot set comes out of the archive; everything else the file
@@ -927,10 +927,12 @@ fn start(
 
     let buffer = take(gate, world, reserve, PAGE_SIZE, PAGE_SIZE).map_err(at("buffer"))?;
     let badge = world.badge();
-    install_all(
-        gate, startup, world, program, child, endpoint, badge, buffer,
-    )
-    .map_err(at("handles"))?;
+    let ram = reserve
+        .iter()
+        .copied()
+        .chain(startup.ram.iter().skip(1).copied());
+    install_all(gate, ram, world, program, child, endpoint, badge, buffer)
+        .map_err(at("handles"))?;
 
     let handler = badged(gate, world.faults, badge).map_err(at("handler"))?;
     gate.process_set_fault_handler(child, Some(handler))
@@ -970,7 +972,7 @@ struct Failure {
 )]
 fn install_all(
     gate: &mut Gate,
-    startup: &Startup,
+    ram: impl Iterator<Item = MemoryHandle>,
     world: &mut World,
     program: &Program,
     child: ProcessHandle,
@@ -1066,7 +1068,7 @@ fn install_all(
         let handle = gate.process_install_handle(child, marked.handle(), ObjectRights::SEND)?;
         push(&mut given, &mut count, Role::Log, handle)?;
     }
-    grant(gate, startup, world, program, child, &mut given, &mut count)?;
+    grant(gate, ram, world, program, child, &mut given, &mut count)?;
 
     let mut writer = Writer::new();
     {
@@ -1091,7 +1093,7 @@ fn install_all(
 /// endpoints every program gets.
 fn grant(
     gate: &mut Gate,
-    startup: &Startup,
+    ram: impl Iterator<Item = MemoryHandle>,
     world: &mut World,
     program: &Program,
     child: ProcessHandle,
@@ -1101,7 +1103,7 @@ fn grant(
     match program.grant {
         Grant::None => {}
         Grant::Ram => {
-            for region in startup.ram.iter().skip(1) {
+            for region in ram {
                 let handle =
                     gate.process_install_handle(child, region.handle(), ObjectRights::MEMORY)?;
                 push(given, count, Role::Ram, handle)?;
