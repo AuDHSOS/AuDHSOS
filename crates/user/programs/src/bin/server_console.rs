@@ -382,6 +382,9 @@ unsafe extern "sysv64" fn second(ipc_buffer: u64) -> ! {
         if ports.gate.notification_wait(notification).is_err() {
             ports.gate.thread_exit()
         }
+        // SLLS597E pp. 34–35: keep a FIFO timeout from raising an edge
+        // while the I/O APIC masks the line across the IPC send.
+        ports.write(Register::InterruptEnable, 0);
         // The controller says whether a byte is there; a 16550 raises one
         // interrupt for several reasons.
         if ports.read(Register::LineStatus) & 1 != 0 {
@@ -395,6 +398,10 @@ unsafe extern "sysv64" fn second(ipc_buffer: u64) -> ! {
             let _sent = ports.gate.ipc_send(endpoint);
         }
         let _acknowledged = ports.gate.interrupt_ack(interrupt);
+        ports.write(
+            Register::InterruptEnable,
+            driver_uart16550::uart::INTERRUPT_RECEIVE,
+        );
     }
 }
 

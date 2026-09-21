@@ -28,6 +28,11 @@ pub const PIC_LAST: u8 = 0x2F;
 
 /// The vector of the local APIC timer.
 pub const TIMER: u8 = 0x30;
+/// Wake a remote run queue.
+pub const RESCHEDULE: u8 = 0x31;
+/// Service a remote translation invalidation.
+pub const INVALIDATE: u8 = 0x32;
+const _: () = assert!(TIMER < RESCHEDULE && RESCHEDULE < INVALIDATE && INVALIDATE < IOAPIC_BASE);
 
 /// The first vector an I/O APIC line is routed to; line `gsi` goes to
 /// `IOAPIC_BASE + gsi`.

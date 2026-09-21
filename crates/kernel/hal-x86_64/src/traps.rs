@@ -7,7 +7,8 @@
 //! the frame the processor pushed and hands it to the function the kernel
 //! registered; the double fault handler runs on its own stack.
 
-use audhsos_sync::{Global, UncontendedToken};
+use crate::processor::KernelToken;
+use audhsos_sync::Global;
 
 use kernel_x86_tables::gdt::KERNEL_CODE_SELECTOR;
 use kernel_x86_tables::idt::{
@@ -111,7 +112,7 @@ pub fn set_syscall_handler(handler: SyscallHandler) {
 /// is ready would see; no such thread exists.
 fn call_kernel() {
     let handler = SYSCALL_HANDLER
-        .borrow(&UncontendedToken)
+        .borrow(&KernelToken)
         .ok()
         .map(|handler| *handler);
     if let Some(handler) = handler {
@@ -133,10 +134,7 @@ fn dispatch(report: TrapReport) {
     // faulted user thread switches away from it and leaves this frame
     // standing on its kernel stack for good; a borrow held across the
     // call would stay alive there and make the next trap unreportable.
-    let handler = HANDLER
-        .borrow(&UncontendedToken)
-        .ok()
-        .map(|handler| *handler);
+    let handler = HANDLER.borrow(&KernelToken).ok().map(|handler| *handler);
     let Some(handler) = handler else {
         crate::instructions::halt_forever();
     };
@@ -152,7 +150,7 @@ fn dispatch(report: TrapReport) {
 /// then is one the kernel has not turned on yet, and the machine goes on.
 fn deliver(vector: u8) {
     let handler = DEVICE_HANDLER
-        .borrow(&UncontendedToken)
+        .borrow(&KernelToken)
         .ok()
         .map(|handler| *handler);
     if let Some(handler) = handler {
@@ -241,7 +239,7 @@ macro_rules! device_handlers {
 device_handlers! {
     device_20 = 0x20, device_21 = 0x21, device_22 = 0x22, device_23 = 0x23, device_24 = 0x24, device_25 = 0x25,
     device_26 = 0x26, device_27 = 0x27, device_28 = 0x28, device_29 = 0x29, device_2a = 0x2A, device_2b = 0x2B,
-    device_2c = 0x2C, device_2d = 0x2D, device_2e = 0x2E, device_2f = 0x2F, device_30 = 0x30, device_40 = 0x40,
+    device_2c = 0x2C, device_2d = 0x2D, device_2e = 0x2E, device_2f = 0x2F, device_30 = 0x30, device_31 = 0x31, device_32 = 0x32, device_40 = 0x40,
     device_41 = 0x41, device_42 = 0x42, device_43 = 0x43, device_44 = 0x44, device_45 = 0x45, device_46 = 0x46,
     device_47 = 0x47, device_48 = 0x48, device_49 = 0x49, device_4a = 0x4A, device_4b = 0x4B, device_4c = 0x4C,
     device_4d = 0x4D, device_4e = 0x4E, device_4f = 0x4F, device_50 = 0x50, device_51 = 0x51, device_52 = 0x52,

@@ -14,8 +14,9 @@ use core::arch::asm;
 use core::fmt;
 use core::panic::PanicInfo;
 
+use crate::processor::KernelToken;
 use audhsos_abi::layout::BOOT_STACK_TOP;
-use audhsos_sync::{Global, UncontendedToken};
+use audhsos_sync::Global;
 use kernel_hal_api::console::DebugConsole;
 use kernel_hal_api::exit::{ExitStatus, TestExit};
 use kernel_hal_api::platform::Platform;
@@ -109,15 +110,17 @@ pub fn run_tests(tests: &[&dyn Testable]) {
 
 /// Names the test that is running, without writing anything.
 fn set_current(name: &'static str) {
-    if let Ok(mut current) = CURRENT.borrow(&UncontendedToken) {
+    let _guard = crate::instructions::InterruptGuard::new();
+    if let Ok(mut current) = CURRENT.borrow(&KernelToken) {
         current.name = name;
     }
 }
 
 /// The name of the test that is running.
 fn current() -> &'static str {
+    let _guard = crate::instructions::InterruptGuard::new();
     CURRENT
-        .borrow(&UncontendedToken)
+        .borrow(&KernelToken)
         .map_or(OUTSIDE, |current| current.name)
 }
 
@@ -169,14 +172,16 @@ pub fn finish() -> ! {
 /// The number of memory regions the loader reported.
 #[must_use]
 pub fn platform_regions() -> usize {
+    let _guard = crate::instructions::InterruptGuard::new();
     PLATFORM
-        .borrow(&UncontendedToken)
+        .borrow(&KernelToken)
         .map_or(0, |platform| platform.memory_regions().len())
 }
 
 /// Runs `body` with the machine the loader described, if it is reachable.
 pub fn with_platform<R>(body: impl FnOnce(&X86Platform) -> R) -> Option<R> {
-    let platform = PLATFORM.borrow(&UncontendedToken).ok()?;
+    let _guard = crate::instructions::InterruptGuard::new();
+    let platform = PLATFORM.borrow(&KernelToken).ok()?;
     Some(body(&platform))
 }
 
@@ -190,7 +195,8 @@ pub fn set_trap_hook(hook: TrapHook) {
 /// another borrow is alive, which is what a trap inside a report looks
 /// like.
 fn with_harness<R>(body: impl FnOnce(&mut Harness<SerialConsole, QemuExit>) -> R) -> Option<R> {
-    let mut harness = HARNESS.borrow(&UncontendedToken).ok()?;
+    let _guard = crate::instructions::InterruptGuard::new();
+    let mut harness = HARNESS.borrow(&KernelToken).ok()?;
     Some(body(&mut harness))
 }
 
@@ -209,7 +215,7 @@ pub fn on_panic(info: &PanicInfo<'_>) -> ! {
 
 /// Hands a trap to the image's hook, or reports it as a failure.
 fn on_trap(report: TrapReport) {
-    let hook = HOOK.borrow(&UncontendedToken).ok().map(|hook| *hook);
+    let hook = HOOK.borrow(&KernelToken).ok().map(|hook| *hook);
     match hook {
         Some(hook) => hook(report),
         None => fail(format_args!(

@@ -13,7 +13,7 @@ use audhsos_abi::{Error, ThreadState};
 use kernel_objects::object::{Thread, ThreadId, Wait};
 use kernel_objects::pool::Pool;
 use kernel_objects::wait_queue::WaitQueue;
-use kernel_sched::Scheduler;
+use kernel_sched::Processors as Scheduler;
 use kernel_sched::transition::Event;
 
 /// What a thread finds in its buffer when it wakes, and which thread that

@@ -16,7 +16,7 @@ use audhsos_abi::layout::MAX_RESULT_WORDS;
 use audhsos_abi::{Error, FirstArgument, Handle, Rights, Syscall};
 use kernel_objects::object::{ProcessId, ThreadId};
 use kernel_objects::store::Objects;
-use kernel_sched::{Outcome, Scheduler};
+use kernel_sched::{Outcome, Processors as Scheduler};
 
 use crate::calls;
 use crate::environment::Environment;

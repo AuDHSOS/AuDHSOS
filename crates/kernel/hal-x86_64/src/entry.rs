@@ -8,8 +8,9 @@
 //! tables are loaded, the trap handlers report through the function the
 //! caller registered, and the debug console is programmed.
 
+use crate::processor::KernelToken;
 use audhsos_abi::Ecam;
-use audhsos_sync::{Global, UncontendedToken};
+use audhsos_sync::Global;
 use kernel_hal_api::console::DebugConsole;
 use kernel_hal_api::exit::{ExitStatus, TestExit};
 
@@ -77,7 +78,8 @@ where
 /// another borrow is alive, which is what a trap inside a report looks
 /// like.
 pub fn with_console<R>(body: impl FnOnce(&mut SerialConsole) -> R) -> Option<R> {
-    let mut console = CONSOLE.borrow(&UncontendedToken).ok()?;
+    let _guard = crate::instructions::InterruptGuard::new();
+    let mut console = CONSOLE.borrow(&KernelToken).ok()?;
     Some(body(&mut console))
 }
 

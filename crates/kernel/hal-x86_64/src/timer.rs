@@ -112,7 +112,7 @@ pub unsafe fn calibrate(local: &mut LocalApic) -> Result<u32, CalibrationError> 
     // SAFETY: the caller promises that the interval timer belongs to the
     // kernel; the sequence arms channel two without connecting it to the
     // speaker and starts it on the rising edge of its gate.
-    let gate = unsafe { arm_interval_timer() };
+    let gate = unsafe { arm_interval_timer(CALIBRATION_COUNT) };
     local.set_timer_count(u32::MAX);
     // SAFETY: the same port, read only.
     let finished = unsafe { wait_for_interval_timer() };
@@ -138,7 +138,7 @@ pub unsafe fn calibrate(local: &mut LocalApic) -> Result<u32, CalibrationError> 
 /// # Safety
 ///
 /// The interval timer must belong to the kernel.
-unsafe fn arm_interval_timer() -> u8 {
+unsafe fn arm_interval_timer(count: u16) -> u8 {
     // SAFETY: the caller promises that the ports belong to the kernel.
     let gate = unsafe { read_port_u8(PIT_GATE) };
     let quiet = (gate & !SPEAKER_ENABLE) & !GATE_ENABLE;
@@ -151,7 +151,7 @@ unsafe fn arm_interval_timer() -> u8 {
     unsafe {
         write_port_u8(PIT_COMMAND, PIT_ONE_SHOT);
     }
-    let [low, high] = CALIBRATION_COUNT.to_le_bytes();
+    let [low, high] = count.to_le_bytes();
     // SAFETY: the low byte of the count, which the channel expects first.
     unsafe {
         write_port_u8(PIT_CHANNEL2, low);
@@ -198,5 +198,32 @@ pub fn initial_count(ticks_per_ms: u32, ticks_per_second: u32) -> Result<u32, Ti
     match lapic::count_for_rate(ticks_per_ms, ticks_per_second) {
         Some(count) => Ok(count),
         None => Err(TimerError::UnsupportedFrequency(ticks_per_second)),
+    }
+}
+
+/// Waits at most 50 ms using PIT channel two.
+///
+/// # Errors
+/// The PIT failed to finish, or the interval exceeds the counter.
+///
+/// # Safety
+/// The caller exclusively owns PIT channel two for this interval.
+pub unsafe fn wait_micros(micros: u32) -> Result<(), CalibrationError> {
+    let count = u16::try_from((u64::from(micros) * 1_193_182).div_ceil(1_000_000))
+        .ok()
+        .filter(|count| *count != 0)
+        .ok_or(CalibrationError::IntervalTimerSilent)?;
+    // SAFETY: the caller owns the PIT throughout the wait.
+    let gate = unsafe { arm_interval_timer(count) };
+    // SAFETY: reads the channel owned by the caller.
+    let finished = unsafe { wait_for_interval_timer() };
+    // SAFETY: restores the original gate state.
+    unsafe {
+        write_port_u8(PIT_GATE, gate);
+    }
+    if finished {
+        Ok(())
+    } else {
+        Err(CalibrationError::IntervalTimerSilent)
     }
 }

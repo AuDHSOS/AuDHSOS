@@ -148,6 +148,76 @@ pub struct KernelMemory {
 }
 
 impl KernelMemory {
+    /// Reserves and identity-maps the AP startup page, executable and writable.
+    ///
+    /// # Errors
+    /// Memory-map and page-table errors.
+    pub fn startup_page<F, A, T>(
+        &mut self,
+        access: &mut A,
+        tlb: &mut T,
+    ) -> Result<Option<PhysFrame>, MemoryError>
+    where
+        F: EntryFormat,
+        A: FrameAccess<PageTable<F>>,
+        T: TlbControl,
+    {
+        let Some((frame, remaining)) = kernel_mm::reserve::select_startup(&self.free)? else {
+            return Ok(None);
+        };
+        let page = kernel_types::Page::from_start(
+            VirtAddr::new(frame.start().as_u64()).map_err(|_| MemoryError::Address)?,
+        )
+        .map_err(|_| MemoryError::Address)?;
+        let mut mapper = Mapper::<'_, F, A, T, BitmapFrameAllocator>::new(
+            self.root,
+            access,
+            tlb,
+            &mut self.frames,
+        );
+        mapper.map(
+            page,
+            frame,
+            kernel_mm::page_table::Permissions {
+                write: true,
+                execute: true,
+                user: false,
+            },
+            kernel_types::CachePolicy::WriteBack,
+        )?;
+        self.free = remaining;
+        Ok(Some(frame))
+    }
+
+    /// Removes the startup identity mapping after processors enter the kernel.
+    ///
+    /// # Errors
+    /// Page-table errors.
+    pub fn finish_startup<F, A, T>(
+        &mut self,
+        access: &mut A,
+        tlb: &mut T,
+        frame: PhysFrame,
+    ) -> Result<(), MemoryError>
+    where
+        F: EntryFormat,
+        A: FrameAccess<PageTable<F>>,
+        T: TlbControl,
+    {
+        let page = kernel_types::Page::from_start(
+            VirtAddr::new(frame.start().as_u64()).map_err(|_| MemoryError::Address)?,
+        )
+        .map_err(|_| MemoryError::Address)?;
+        let mut mapper = Mapper::<'_, F, A, T, BitmapFrameAllocator>::new(
+            self.root,
+            access,
+            tlb,
+            &mut self.frames,
+        );
+        mapper.unmap(page)?;
+        Ok(())
+    }
+
     /// The frame the kernel page tables are rooted in.
     #[must_use]
     pub const fn root(&self) -> PhysFrame {
@@ -854,7 +924,15 @@ where
 /// Runs `body` with the kernel memory, if the bring-up has run and nothing
 /// else is holding it.
 pub fn with_memory<R>(body: impl FnOnce(&mut KernelMemory) -> R) -> Option<R> {
-    let mut memory = MEMORY.borrow(&UncontendedToken).ok()?;
+    with_memory_on(&UncontendedToken, body)
+}
+
+/// Runs `body` while the supplied processor token owns the cell.
+pub fn with_memory_on<R>(
+    token: &impl audhsos_sync::ExclusiveToken,
+    body: impl FnOnce(&mut KernelMemory) -> R,
+) -> Option<R> {
+    let mut memory = MEMORY.borrow(token).ok()?;
     Some(body(&mut memory))
 }
 

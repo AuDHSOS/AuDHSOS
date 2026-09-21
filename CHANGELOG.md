@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- SMP on up to sixteen xAPIC processors: serial AP startup, private descriptor
+  tables and timers, fixed-home scheduling, remote preemption, and synchronous
+  TLB invalidation. Owner-aware cells preserve same-processor reentry refusal.
+  QEMU acceptance and measurements run on 1, 2 and 4 processors (D-192).
+
 - `.gitattributes`: GitHub Linguist detection is off for every path and on
   again for `*.rs`. The repository reported Shell, JavaScript and Linker
   Script beside Rust, from build scripts, test fixtures, the fuzzer corpus and

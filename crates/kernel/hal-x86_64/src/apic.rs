@@ -75,7 +75,7 @@ impl LocalApic {
     ///
     /// `base` must be the address of the local APIC register window, one
     /// page long, mapped read and write and uncached for as long as this
-    /// value exists, and this must be the only value that reaches it.
+    /// value exists. Callers serialize register sequences on each processor.
     #[must_use]
     pub const unsafe fn new(base: VirtAddr) -> Self {
         LocalApic { base }
@@ -133,6 +133,26 @@ impl LocalApic {
     /// finished.
     pub fn end_of_interrupt(&mut self) {
         self.write_register(lapic::EOI, 0);
+    }
+
+    /// Sends an IPI; interrupts must remain off across the register pair.
+    pub fn send(&mut self, command: lapic::Command) -> bool {
+        if !self.wait_delivery() {
+            return false;
+        }
+        self.write_register(lapic::ICR_HIGH, command.high);
+        self.write_register(lapic::ICR_LOW, command.low);
+        self.wait_delivery()
+    }
+
+    fn wait_delivery(&self) -> bool {
+        for _ in 0..1_000_000 {
+            if self.read_register(lapic::ICR_LOW) & lapic::ICR_PENDING == 0 {
+                return true;
+            }
+            core::hint::spin_loop();
+        }
+        false
     }
 
     /// The identifier of this local APIC, which is the destination an I/O
@@ -538,3 +558,6 @@ impl Timer for Apics {
         timer::ticks()
     }
 }
+
+/// IPI command encoding.
+pub use kernel_x86_tables::lapic::Command;

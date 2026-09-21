@@ -43,6 +43,30 @@ use kernel_objects::object::AnyObjectId;
 use crate::support::say;
 
 mod support;
+use support::runtime;
+#[path = "../src/smp.rs"]
+mod smp;
+mod task {
+    pub(crate) fn idle_thread(slot: u32) {
+        crate::support::idle_on(slot);
+    }
+}
+fn idle() -> ! {
+    loop {
+        support::run_until_idle();
+        kernel_hal_x86_64::instructions::halt();
+    }
+}
+static READY: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+fn prepare_processors() {
+    if READY.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    support::bring_up();
+    support::idle_thread();
+    support::start_timer(|_| false);
+    smp::start();
+}
 
 kernel_hal_x86_64::test_kernel!();
 
@@ -261,14 +285,14 @@ fn report(name: &str, len: usize) {
 /// times, with nothing in between.
 #[test_case]
 fn a_system_call_round_trip_takes_the_ticks_it_takes() {
-    support::bring_up();
+    prepare_processors();
     support::set_call_hook(on_call);
     let mut process = support::create_process(BENCH_YIELD);
     let spawned = support::add_thread(&mut process, support::DEFAULT_PRIORITY);
     support::set_buffer_word(spawned.buffer, 0, rounds());
     measuring(Syscall::ThreadYield);
     support::start(spawned.thread);
-    support::run_until(|| taken() >= SAMPLES);
+    support::idle_until(|| taken() >= SAMPLES);
     let len = measured();
     report("bench::syscall_round_trip", len);
 }
@@ -277,12 +301,22 @@ fn a_system_call_round_trip_takes_the_ticks_it_takes() {
 /// and the two switches between them.
 #[test_case]
 fn an_ipc_round_trip_takes_the_ticks_it_takes() {
-    support::bring_up();
+    prepare_processors();
     support::set_call_hook(on_call);
     let endpoint = support::endpoint();
 
     let mut replier = support::create_process(BENCH_REPLIER);
     let answering = support::add_thread(&mut replier, support::DEFAULT_PRIORITY);
+    if kernel_hal_x86_64::processor::ONLINE[1].load(Ordering::Acquire) != 0 {
+        runtime::with_machine(|machine| {
+            machine
+                .objects
+                .threads
+                .get_mut(answering.thread)
+                .unwrap()
+                .cpu = 1
+        });
+    }
     let received = support::install(replier.id, AnyObjectId::of(endpoint), ANSWERING);
     support::set_buffer_word(answering.buffer, 0, received.raw());
 
@@ -295,7 +329,59 @@ fn an_ipc_round_trip_takes_the_ticks_it_takes() {
     measuring(Syscall::IpcCall);
     support::start(answering.thread);
     support::start(calling.thread);
-    support::run_until(|| taken() >= SAMPLES);
+    support::idle_until(|| taken() >= SAMPLES);
     let len = measured();
     report("bench::ipc_round_trip", len);
+}
+
+/// Concurrent yields measure machine-cell wait against elapsed processor time.
+#[test_case]
+fn concurrent_yields_measure_machine_wait() {
+    prepare_processors();
+    WANTED.store(NO_CALL, Ordering::Relaxed);
+    let count = kernel_hal_x86_64::processor::ONLINE
+        .iter()
+        .filter(|cpu| cpu.load(Ordering::Acquire) != 0)
+        .count();
+    let mut threads = [None; kernel_hal_x86_64::processor::CPUS];
+    for (cpu, slot) in threads.iter_mut().enumerate().take(count) {
+        let mut process = support::create_process(BENCH_YIELD);
+        let spawned = support::add_thread(&mut process, support::DEFAULT_PRIORITY);
+        runtime::with_machine(|machine| {
+            machine.objects.threads.get_mut(spawned.thread).unwrap().cpu =
+                u8::try_from(cpu).unwrap()
+        });
+        support::set_buffer_word(spawned.buffer, 0, 1_000);
+        *slot = Some(spawned.thread);
+    }
+    for wait in &runtime::measured::WAIT_TICKS {
+        wait.store(0, Ordering::Relaxed);
+    }
+    let start = read_tsc();
+    support::without_ticks(|| {
+        for thread in threads.iter().flatten() {
+            support::start(*thread);
+        }
+    });
+    support::idle_until(|| {
+        threads.iter().flatten().all(|thread| {
+            support::state_of(*thread).is_none_or(|state| state == audhsos_abi::ThreadState::Exited)
+        })
+    });
+    let elapsed = read_tsc().wrapping_sub(start);
+    let maximum = runtime::measured::WAIT_TICKS
+        .iter()
+        .take(count)
+        .map(|wait| wait.load(Ordering::Relaxed))
+        .max()
+        .unwrap_or(0);
+    testing::measure("bench::machine_wait_max", maximum, 1);
+    testing::measure("bench::machine_wait_elapsed", elapsed, 1);
+    say!(
+        "{count} processors: maximum machine wait {} basis points",
+        maximum
+            .saturating_mul(10_000)
+            .checked_div(elapsed)
+            .unwrap_or(0)
+    );
 }

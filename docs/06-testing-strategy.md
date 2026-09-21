@@ -3585,3 +3585,17 @@ feature-reference work limits, tab shaping barriers, and BCP-47 extensions.
 
 PCI inspection regressions check unchanged command/BAR registers, 32/64-bit
 and I/O addresses, upper-register consumption, truncation, and read failures.
+
+## SMP acceptance
+
+- Host: processor records, disabled and online-capable entries, x2APIC IDs,
+  capacity limits, literal ICR commands, owner contention, same-owner refusal,
+  low startup-frame selection, queue routing, deadlines and home-only reaping.
+- QEMU: `smp.rs` runs at 1, 2 and 4 processors. Tests exercise AP timers,
+  invalidation while a target waits for the machine cell, simultaneous user
+  counters, remote priority preemption, faults after shared-page unmap, and
+  page-table reclamation after every active processor replaces its root.
+- Measurement: `bench.rs` runs at 1, 2 and 4 processors. The test-only token
+  measures machine-cell acquisition waits; production tokens carry no counters.
+- CI: full checks with `AUDHSOS_PROCESSORS=1` and `AUDHSOS_PROCESSORS=4`.
+  Dedicated SMP tests retain their explicit 1/2/4 configurations in both jobs.

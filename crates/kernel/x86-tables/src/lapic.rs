@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Manuel Baesler and contributors
 
-//! The register block of the local APIC: the offsets the specification
-//! gives and the encoding of the local vector table entries.
+//! Local APIC registers: Intel SDM 325462-092US, Vol. 3A, 13.4–13.6.
 //!
 //! Invariant: an entry this module builds names its vector, its delivery
 //! mode, and its mask bit and sets nothing else; the reserved bits stay
@@ -126,4 +125,55 @@ pub fn count_for_rate(ticks_per_ms: u32, ticks_per_second: u32) -> Option<u32> {
         return None;
     }
     u32::try_from(count).ok()
+}
+
+/// Interrupt command registers (Intel SDM Vol. 3A, 13.6.1).
+pub const ICR_LOW: usize = 0x300;
+/// Physical destination register.
+pub const ICR_HIGH: usize = 0x310;
+/// Delivery pending (ICR bit 12).
+pub const ICR_PENDING: u32 = 1 << 12;
+
+/// Physical, edge-triggered IPI, with reserved bits clear.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Command {
+    /// Vector, delivery mode, and asserted level.
+    pub low: u32,
+    /// Physical APIC destination.
+    pub high: u32,
+}
+
+impl Command {
+    /// INIT (Intel SDM Vol. 3A, 11.4.4.1).
+    #[must_use]
+    pub const fn init(destination: u8) -> Self {
+        Self {
+            low: 0x4500,
+            high: (destination as u32) << 24,
+        }
+    }
+    /// STARTUP with the physical page number below 1 MiB.
+    #[must_use]
+    pub const fn startup(destination: u8, page: u8) -> Self {
+        Self {
+            low: 0x4600 | page as u32,
+            high: (destination as u32) << 24,
+        }
+    }
+    /// Fixed-vector delivery.
+    #[must_use]
+    pub const fn fixed(destination: u8, vector: u8) -> Self {
+        Self {
+            low: 0x4000 | vector as u32,
+            high: (destination as u32) << 24,
+        }
+    }
+    /// Broadcast excluding the sending processor.
+    #[must_use]
+    pub const fn excluding_self(self) -> Self {
+        Self {
+            low: self.low | 0xC0000,
+            high: 0,
+        }
+    }
 }

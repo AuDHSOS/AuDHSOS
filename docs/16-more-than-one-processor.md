@@ -48,6 +48,8 @@ At the end of the track, five things are true that are not true now:
 
 ## 16.3 What is already built
 
+Sections 16.3–16.4 record the pre-SMP baseline; step statuses record completion.
+
 Nine pieces of the SMP path exist and need no change.
 
 | Piece | What it gives | Where |
@@ -124,6 +126,11 @@ because reaching a `LocalApic` value means borrowing a cell; that read is
 the seventeenth `unsafe` site D8 names. The cost lands on every borrow of
 a kernel cell, because the token of D5 carries the number; measurement 1
 of S11 is what reads it.
+
+When the published identifier list contains only the boot processor,
+`processor()` returns zero without MMIO. The list is complete before the
+APIC window is published, so an AP candidate disables this fast path before
+any AP starts.
 
 **The option not taken: `GS_BASE` and `swapgs`.** A per-processor pointer
 in `IA32_KERNEL_GS_BASE`, swapped at every entry from user mode, is one
@@ -279,7 +286,7 @@ cells D6 lists are every cell of the kernel image a second processor can
 reach, and S6 gives each of them the kernel's token. The kernel test
 image holds two more, which D6 names.
 Result: `borrowed: AtomicBool` becomes `owner: AtomicU32` with
-`u32::MAX` for free. The wait is a compare-and-exchange loop that calls
+`0` for free and `owner + 1` while held. Zero preserves the kernel pools in `.bss`. The wait is a compare-and-exchange loop that calls
 `ExclusiveToken::wait`, whose default is `core::hint::spin_loop` — a safe
 function that emits `pause` and costs no `asm!` site.
 
@@ -415,57 +422,36 @@ the object pools.
 
 ## 16.12 Decision D8: the `unsafe` and `asm!` budgets
 
-This decision must be made before S6 starts. Three crates stand exactly at
-their budget today, so the first commit of S6 fails
-`sh tools/xtask.sh unsafe-budget` before it does anything else.
+D-192 records the implemented budgets and the reviewed sites.
 
-| Crate | Now | After | Where the budget stands |
-|-------|-----|-------|-------------------------|
-| `audhsos-sync` | 4 unsafe, 0 asm | 4 unsafe, 0 asm | `crates/tools/xtask/src/policy.rs`, line 462 |
-| `kernel-hal-x86_64` | 152 unsafe, 30 asm | 174 unsafe, 31 asm | `crates/tools/xtask/src/policy.rs`, line 699 |
-| `audhsos-kernel` | 33 unsafe, 0 asm | 37 unsafe, 0 asm | `crates/tools/xtask/src/policy.rs`, line 720 |
+| Crate | Before | Implemented | Site changes |
+|-------|--------|-------------|--------------|
+| `audhsos-sync` | 4 unsafe, 0 asm | 4 unsafe, 0 asm | Existing cell access; atomic owner protocol. |
+| `kernel-hal-x86_64` | 152 unsafe, 30 asm | 174 unsafe, 31 asm | `timer.rs` +4; `processor.rs` +4; `descriptors.rs` +5; `startup.rs` +7; `interrupts.rs` +1; `paging.rs` +1. |
+| `audhsos-kernel` | 33 unsafe, 0 asm | 40 unsafe, 0 asm | Seven startup operations, one removed syscall window borrow, one atomic shared-page test borrow. |
+| `user-test-programs` | 112 unsafe, 2 asm | 114 unsafe, 2 asm | Worker IPC-buffer access and shared atomic-counter access. |
 
-`audhsos-sync` gains nothing: the wait replaces one compare-and-exchange
-with a loop around it and reaches the value through the `slot` that is
-already there.
-
-The twenty-two new `unsafe` sites of `kernel-hal-x86_64`:
-
-| Sites | Step | What they do |
-|-------|------|--------------|
-| 3 | S4 | Write `0x310`, write `0x300`, read the delivery status bit. |
-| 4 | S6 | Build a per-processor task state segment, load it, load the per-processor global descriptor table, load the interrupt descriptor table on an application processor. |
-| 2 | S6 | Construct a second `LocalApic` over the window the boot processor mapped, and enable it. |
-| 1 | S6 | Read the local APIC identifier register through `APIC_WINDOW`, which is `processor()` of D1. |
-| 6 | S7 | Copy the start-up code into the page, write the parameter block, read the two section symbols, take the address of the Rust entry, enter the kernel from the start-up page, and the `#[unsafe(naked)]` attribute of D2, which the counter reads as an `unsafe` keyword (`crates/tools/xtask/src/unsafe_budget.rs`, line 50). |
-| 4 | S7 | The wait of a given length: the function, the call that arms channel two, the call that waits for it, and the write that puts the gate back. |
-| 2 | S10 | Invalidate a page named by another processor; read the request word of this processor. |
-
-The one new `asm!` site is the `naked_asm!` of D2, in S7.
-
-The four new `unsafe` sites of `audhsos-kernel` are the entry an
-application processor lands on, the switch into its idle thread, and the
-two calls that turn interrupts on and off around them.
-
-**The option not taken: a budget stated as a total rather than site by
-site.** A named count is checkable: a twenty-third site in
-`kernel-hal-x86_64` is a change to this decision and not to a number.
+The HAL startup section contains the additional `naked_asm!`. IPI sends
+reuse the existing volatile register helpers; remote invalidation reuses
+`LocalTlb`. The trampoline uses seven unsafe sites: the naked and section
+attributes, the function, the linker-symbol declaration, the preparation
+function, the code slice, and the physical window.
 
 ## 16.13 The order of the steps
 
 | Step | Name | Status | Depends on | Size |
 |------|------|--------|------------|------|
-| S1 | The manual on the disk | not built | nothing | S |
-| S2 | The machine carries more than one processor | not built | nothing | S |
-| S3 | The processor list | not built | S1 | M |
-| S4 | The interrupt command register | not built | S1 | M |
-| S5 | The borrow that waits | not built | D5 (16.9), D6 (16.10) | M |
-| S6 | Per-processor data | not built | S3, S5, D1 (16.5), D3 (16.7), D8 (16.12) | L |
-| S7 | The start-up page and the first application processor | not built | S2, S4, S6, D2 (16.6) | XL |
-| S8 | The application processor idles | not built | S5, S7 | L |
-| S9 | Per-processor run queues | not built | S8, D4 (16.8), D7 (16.11) | XL |
-| S10 | Remote invalidation | not built | S8 | L |
-| S11 | Measurement, and what it decides | not built | S9, S10 | M |
+| S1 | The manual on the disk | implemented | nothing | S |
+| S2 | The machine carries more than one processor | implemented | nothing | S |
+| S3 | The processor list | implemented | S1 | M |
+| S4 | The interrupt command register | implemented | S1 | M |
+| S5 | The borrow that waits | implemented | D5 (16.9), D6 (16.10) | M |
+| S6 | Per-processor data | implemented | S3, S5, D1 (16.5), D3 (16.7), D8 (16.12) | L |
+| S7 | The start-up page and the first application processor | implemented | S2, S4, S6, D2 (16.6) | XL |
+| S8 | The application processor idles | implemented | S5, S7 | L |
+| S9 | Per-processor run queues | implemented | S8, D4 (16.8), D7 (16.11) | XL |
+| S10 | Remote invalidation | implemented | S8 | L |
+| S11 | Measurement, and what it decides | implemented | S9, S10 | M |
 
 S1 and S2 depend on nothing. S3 and S4 depend only on S1 and may be
 built in either order. S6 depends on S5 because the token S6 installs at
@@ -474,7 +460,7 @@ other and may be built at the same time.
 
 ## 16.14 S1. The manual on the disk
 
-Status: not built.
+Status: implemented.
 Depends on: nothing.
 Size: S.
 
@@ -540,7 +526,7 @@ of a copy — except that here the copy is on the disk.
 
 ## 16.15 S2. The machine carries more than one processor
 
-Status: not built.
+Status: implemented.
 Depends on: nothing.
 Size: S.
 
@@ -573,7 +559,7 @@ Size: S.
 
 ## 16.16 S3. The processor list
 
-Status: not built.
+Status: implemented.
 Depends on: S1.
 Size: M.
 
@@ -605,9 +591,9 @@ Size: M.
    processor with both bits clear, which the same table calls unusable.
 5. Keep the order the table gives. The processor number is the position
    in the list.
-6. Answer `TooManyProcessors` for a table with more than `MAX_PROCESSORS`
-   usable entries, and not a truncated list — the same rule the I/O APICs
-   already follow.
+6. Retain the first `MAX_PROCESSORS` distinct usable identifiers and count
+   additional records in `omitted_processors`. Report the capacity limit at
+   boot and leave excess processors offline, as D7 requires.
 
 The walk stays O(entries) and the storage stays a fixed array.
 
@@ -630,7 +616,7 @@ the length of the list.
 3. A host test parses a table with a type 9 entry and reads a 32-bit
    identifier.
 4. A host test parses a table with `MAX_PROCESSORS + 1` usable entries
-   and reads `TooManyProcessors`.
+   and reads a full list plus one omitted processor.
 5. A host test parses a table whose type 0 entry has `Enabled` clear and
    `Online Capable` set, and keeps a processor that is not startable.
 6. The fuzz target of `kernel-acpi` runs against the new entry types.
@@ -640,7 +626,7 @@ the length of the list.
 
 ## 16.17 S4. The interrupt command register
 
-Status: not built.
+Status: implemented.
 Depends on: S1.
 Size: M.
 
@@ -706,7 +692,7 @@ numbers.
 
 ## 16.18 S5. The borrow that waits
 
-Status: not built.
+Status: implemented.
 Depends on: D5 (16.9), D6 (16.10).
 Size: M.
 
@@ -723,7 +709,7 @@ Size: M.
 1. `ExclusiveToken` gains two provided methods: `fn owner(&self) -> u32`,
    default `0`, and `fn wait(&self)`, default `core::hint::spin_loop()`.
 2. `Global::borrowed` and `Preset::borrowed` become
-   `owner: AtomicU32`, free being `u32::MAX`.
+   `owner: AtomicU32`, free being zero and an owner encoded as `owner + 1`.
 3. `acquire` takes the owner and loops: compare-and-exchange free to
    owner; on failure, answer `AlreadyBorrowed` when the value read is
    this owner, and call `ExclusiveToken::wait` otherwise.
@@ -756,7 +742,7 @@ is always `0` and which therefore can never find a second owner.
 
 ## 16.19 S6. Per-processor data
 
-Status: not built.
+Status: implemented.
 Depends on: S3, S5, D1 (16.5), D3 (16.7), D8 (16.12).
 Size: L.
 
@@ -838,7 +824,7 @@ an end-of-interrupt that costs one MMIO write and no wait.
 
 ## 16.20 S7. The start-up page and the first application processor
 
-Status: not built.
+Status: implemented.
 Depends on: S2, S4, S6, D2 (16.6).
 Size: XL.
 
@@ -939,7 +925,7 @@ and the first Rust function an application processor reaches.
 
 ## 16.21 S8. The application processor idles
 
-Status: not built.
+Status: implemented.
 Depends on: S5, S7.
 Size: L.
 
@@ -987,7 +973,7 @@ is what S9 and S10 are built on.
 
 ## 16.22 S9. Per-processor run queues
 
-Status: not built.
+Status: implemented.
 Depends on: S8, D4 (16.8), D7 (16.11).
 Size: XL.
 
@@ -1053,7 +1039,7 @@ queue it lands in.
 
 ## 16.23 S10. Remote invalidation
 
-Status: not built.
+Status: implemented.
 Depends on: S8.
 Size: L.
 
@@ -1124,7 +1110,7 @@ process teardown needs.
 
 ## 16.24 S11. Measurement, and what it decides
 
-Status: not built.
+Status: implemented; measurements in D-192.
 Depends on: S9, S10.
 Size: M.
 

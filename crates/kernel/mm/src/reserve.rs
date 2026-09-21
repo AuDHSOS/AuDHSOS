@@ -82,3 +82,24 @@ pub fn select_reserve(
     let remaining = map.without(reserve)?;
     Ok((reserve, remaining))
 }
+
+/// Reserves the lowest usable startup frame in `[0x1000, 0x100000)`.
+///
+/// # Errors
+/// Map fragmentation or an invalid physical address.
+pub fn select_startup(
+    map: &NormalizedMap,
+) -> Result<Option<(kernel_types::PhysFrame, NormalizedMap)>, MapError> {
+    for range in map.iter() {
+        let start = range.start().start().as_u64().max(PAGE_SIZE);
+        if start >= 0x10_0000 || start / PAGE_SIZE >= range.end_number() {
+            continue;
+        }
+        let frame = kernel_types::PhysAddr::new(start)
+            .and_then(kernel_types::PhysFrame::from_start)
+            .map_err(MapError::Address)?;
+        let reserved = PhysFrameRange::new(frame, 1).map_err(MapError::Address)?;
+        return Ok(Some((frame, map.without(reserved)?)));
+    }
+    Ok(None)
+}

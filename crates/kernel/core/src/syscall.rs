@@ -27,7 +27,7 @@ use kernel_mm::mapper::Mapper;
 use kernel_mm::page_table::{EntryFormat, PageTable, Permissions};
 use kernel_objects::object::{ProcessId, ThreadId};
 use kernel_objects::store::Objects;
-use kernel_sched::Scheduler;
+use kernel_sched::Processors as Scheduler;
 use kernel_syscall::dispatch::Machine as SyscallMachine;
 use kernel_syscall::environment::{Environment, KernelStack};
 use kernel_syscall::{dispatch, reaper};
@@ -185,12 +185,12 @@ where
         if root == kernel {
             return;
         }
+        self.tlb.retire(root, kernel);
         kernel_half::free_user_half::<F, A, BitmapFrameAllocator>(
             self.access,
             self.memory.frames_mut(),
             root,
         );
-        self.tlb.flush_all();
     }
 
     fn map(

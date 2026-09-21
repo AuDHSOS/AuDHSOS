@@ -37,7 +37,7 @@ fn a_table_of_one_processor_and_one_io_apic_is_read_in_full() {
         PhysAddr::new(u64::from(LAPIC)).unwrap()
     );
     assert!(parsed.has_legacy_pic());
-    assert_eq!(parsed.processors, 1);
+    assert_eq!(parsed.processors.iter().flatten().count(), 1);
     assert_eq!(parsed.io_apic_count(), 1);
     assert_eq!(
         parsed.io_apics[0],
@@ -60,7 +60,7 @@ fn a_table_without_the_legacy_flag_reports_no_legacy_controllers() {
 fn a_table_with_no_io_apic_names_none() {
     let bytes = madt(LAPIC, 0, &[local_apic(0, 0), local_apic(1, 1)]);
     let parsed = parse(&bytes).expect("the table is well formed");
-    assert_eq!(parsed.processors, 2);
+    assert_eq!(parsed.processors.iter().flatten().count(), 2);
     assert_eq!(parsed.io_apic_count(), 0);
     assert_eq!(parsed.io_apic_for(0), None);
 }
@@ -258,4 +258,44 @@ fn an_interrupt_below_every_base_belongs_to_no_io_apic() {
     let bytes = madt(LAPIC, 0, &[io_apic(0, IOAPIC, 8)]);
     let parsed = parse(&bytes).expect("the table is well formed");
     assert_eq!(parsed.io_apic_for(0), None);
+}
+
+#[test]
+fn usable_processors_preserve_firmware_order_and_startability() {
+    let mut disabled = local_apic(1, 7);
+    disabled[4..8].copy_from_slice(&0u32.to_le_bytes());
+    let mut online = local_apic(2, 9);
+    online[4..8].copy_from_slice(&2u32.to_le_bytes());
+    let mut extended = vec![9, 16, 0, 0];
+    extended.extend_from_slice(&0x1234u32.to_le_bytes());
+    extended.extend_from_slice(&1u32.to_le_bytes());
+    extended.extend_from_slice(&0x5678u32.to_le_bytes());
+    let table = madt(LAPIC, 0, &[local_apic(0, 3), disabled, online, extended]);
+    let parsed = parse(&table).unwrap();
+    let processors = parsed
+        .processors
+        .iter()
+        .flatten()
+        .copied()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        processors.iter().map(|cpu| cpu.apic_id).collect::<Vec<_>>(),
+        [3, 9, 0x1234]
+    );
+    assert!(processors[0].enabled);
+    assert!(!processors[1].enabled);
+    assert_eq!(processors[2].uid, 0x5678);
+}
+
+#[test]
+fn processor_capacity_is_checked_for_both_entry_formats() {
+    let entries = (0..=crate::madt::MAX_PROCESSORS)
+        .map(|id| local_apic(id as u8, id as u8))
+        .collect::<Vec<_>>();
+    let parsed = parse(&madt(LAPIC, 0, &entries)).unwrap();
+    assert_eq!(
+        parsed.processors.iter().flatten().count(),
+        crate::madt::MAX_PROCESSORS
+    );
+    assert_eq!(parsed.omitted_processors, 1);
 }

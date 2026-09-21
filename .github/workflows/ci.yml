@@ -6,10 +6,17 @@ name: ci
 on:
   push:
   pull_request:
+  merge_group:
 
 jobs:
   check:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        processors: [1, 4]
+    env:
+      AUDHSOS_PROCESSORS: ${{ matrix.processors }}
     steps:
       - uses: actions/checkout@v4
       - name: Install the pinned toolchain from rust-toolchain.toml
@@ -26,3 +33,19 @@ jobs:
           done
       - name: Run every check
         run: cargo xtask check
+
+  push:
+    needs: check
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the complete processor matrix
+        run: test "${{ needs.check.result }}" = success
+
+  pull_request:
+    needs: check
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the complete processor matrix
+        run: test "${{ needs.check.result }}" = success

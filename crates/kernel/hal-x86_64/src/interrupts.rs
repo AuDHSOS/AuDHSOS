@@ -10,9 +10,12 @@
 //! lives in one cell that a handler borrows for as long as one
 //! acknowledgement takes.
 
+use crate::processor::{APIC_WINDOW, IDENTIFIERS};
 use core::fmt;
+use core::sync::atomic::Ordering;
 
-use audhsos_sync::{Global, UncontendedToken};
+use crate::processor::KernelToken;
+use audhsos_sync::Global;
 use kernel_acpi::madt::Madt;
 use kernel_hal_api::timer::{Timer, TimerError};
 use kernel_types::{PhysAddr, PhysFrame, PhysFrameRange, VirtAddr};
@@ -121,6 +124,23 @@ where
             pic::disable();
         }
     }
+    IDENTIFIERS[0].store(u32::from(local.id()), Ordering::Relaxed);
+    let mut next = 1usize;
+    for cpu in madt.processors.iter().flatten() {
+        if cpu.enabled
+            && cpu.apic_id < 255
+            && cpu.apic_id != u32::from(local.id())
+            && next < IDENTIFIERS.len()
+        {
+            crate::processor::slot(&IDENTIFIERS, next).store(cpu.apic_id, Ordering::Relaxed);
+            next = next.saturating_add(1);
+        }
+    }
+    APIC_WINDOW.store(local_base.as_u64(), Ordering::Release);
+    // SAFETY: this function requires loaded gates and disabled interrupts.
+    unsafe {
+        crate::processor::install_local();
+    }
     let mut apics = Apics::new(local, io, madt);
     // SAFETY: the caller promises that the descriptor table carries a
     // handler for the spurious vector.
@@ -153,14 +173,14 @@ where
 /// no-op, because an interrupt gate has already turned interrupts off.
 pub fn with_controller<R>(body: impl FnOnce(&mut Apics) -> R) -> Option<R> {
     let _guard = InterruptGuard::new();
-    let mut controller = CONTROLLER.borrow(&UncontendedToken).ok()?;
+    let mut controller = CONTROLLER.borrow(&KernelToken).ok()?;
     Some(body(&mut controller))
 }
 
 /// The table the routing follows, if the controller is in place.
 pub fn with_madt<R>(body: impl FnOnce(&Madt) -> R) -> Option<R> {
     let _guard = InterruptGuard::new();
-    let controller = CONTROLLER.borrow(&UncontendedToken).ok()?;
+    let controller = CONTROLLER.borrow(&KernelToken).ok()?;
     Some(body(controller.madt()))
 }
 
@@ -194,12 +214,17 @@ pub unsafe fn start_timer(ticks_per_second: u32) -> Result<(), ApicError> {
 /// no source, and it expects no end-of-interrupt for it.
 pub fn acknowledge(vector: u8) {
     if vector == vectors::TIMER {
-        crate::timer::record_tick();
+        let cpu = usize::from(crate::processor::processor().unwrap_or(0));
+        crate::processor::slot(&crate::processor::TICKS, cpu)
+            .fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        if cpu == 0 {
+            crate::timer::record_tick();
+        }
     }
     if vector == vectors::SPURIOUS {
         return;
     }
-    with_controller(|apics| apics.local_mut().end_of_interrupt());
+    crate::processor::with_local(LocalApic::end_of_interrupt);
 }
 
 /// The number of ticks the timer has delivered.

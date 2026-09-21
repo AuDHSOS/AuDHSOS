@@ -65,6 +65,14 @@ pub static KERNEL: Global<KernelState> = Global::new();
 /// the boot sequence has stored it, and not while another borrow is alive,
 /// which is what an interrupt inside a system call looks like.
 pub fn with_state<R>(body: impl FnOnce(&mut KernelState) -> R) -> Option<R> {
-    let mut state = KERNEL.borrow(&UncontendedToken).ok()?;
+    with_state_on(&UncontendedToken, body)
+}
+
+/// Runs `body` while the supplied processor token owns the cell.
+pub fn with_state_on<R>(
+    token: &impl audhsos_sync::ExclusiveToken,
+    body: impl FnOnce(&mut KernelState) -> R,
+) -> Option<R> {
+    let mut state = KERNEL.borrow(token).ok()?;
     Some(body(&mut state))
 }

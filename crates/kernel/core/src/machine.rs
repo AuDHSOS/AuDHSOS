@@ -12,7 +12,7 @@
 
 use audhsos_sync::{Preset, UncontendedToken};
 use kernel_objects::MachineObjects;
-use kernel_sched::Scheduler;
+use kernel_sched::Processors as Scheduler;
 
 /// Everything the kernel keeps about objects and about who runs.
 #[derive(Debug)]
@@ -47,6 +47,15 @@ pub static MACHINE: Preset<Machine> = Preset::new(Machine::new());
 /// They are not while another borrow is alive, which is what an interrupt
 /// inside a system call looks like.
 pub fn with_machine<R>(body: impl FnOnce(&mut Machine) -> R) -> Option<R> {
-    let mut machine = MACHINE.borrow(&UncontendedToken).ok()?;
+    with_machine_on(&UncontendedToken, body)
+}
+
+/// Runs `body` while the supplied processor token owns the cell.
+pub fn with_machine_on<R>(
+    token: &impl audhsos_sync::ExclusiveToken,
+    body: impl FnOnce(&mut Machine) -> R,
+) -> Option<R> {
+    let mut machine = MACHINE.borrow(token).ok()?;
+    machine.scheduler.select(u8::try_from(token.owner()).ok()?);
     Some(body(&mut machine))
 }

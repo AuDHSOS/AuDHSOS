@@ -86,3 +86,21 @@ fn a_rate_the_timer_cannot_produce_has_no_count() {
         "a count beyond the register"
     );
 }
+
+#[test]
+fn ipi_commands_match_the_manual_and_leave_reserved_bits_zero() {
+    use crate::lapic::Command;
+    assert_eq!(Command::init(7).excluding_self().low, 0x000c_4500);
+    assert_eq!(Command::startup(7, 0x12).excluding_self().low, 0x000c_4612);
+    for (command, mode, vector) in [
+        (Command::init(7), 5, 0),
+        (Command::startup(7, 0x12), 6, 0x12),
+        (Command::fixed(7, 0x31), 0, 0x31),
+    ] {
+        assert_eq!(command.high, 7 << 24);
+        assert_eq!(command.low & 0xff, vector);
+        assert_eq!((command.low >> 8) & 7, mode);
+        assert_eq!(command.low & !0x47ff, 0);
+        assert_eq!(command.low & (1 << 14), 1 << 14);
+    }
+}

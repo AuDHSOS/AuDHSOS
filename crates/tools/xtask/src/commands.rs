@@ -184,6 +184,23 @@ pub(crate) fn test(root: &Path, options: &[String]) -> Result<(), Error> {
 /// that on a machine where the emulator translates every instruction.
 const E2E_TIMEOUT: Duration = Duration::from_secs(180);
 
+/// Bound each loading stage before waiting on lower-priority applications.
+/// TCG SMP can take longer than one deadline to load the complete userland.
+const BOOT_PROGRESS: [(&str, &str); 3] = [
+    (
+        "[init] started server-display",
+        "boot stopped before the display server",
+    ),
+    (
+        "[init] started app-canvas",
+        "boot stopped before the drawing application",
+    ),
+    (
+        "[init] started server-net",
+        "boot stopped before the network server",
+    ),
+];
+
 /// What the run has to see, in this order, for the system to have worked.
 ///
 /// Each line is written by a different part of it, so the first one that
@@ -278,8 +295,8 @@ const E2E_LINES: [(&str, &str); 25] = [
         "the program that uses a socket did not start",
     ),
     (
-        "[tls-app] anchors=",
-        "the program that reads the trust anchors reported none",
+        "[tls-app] trust anchors=",
+        "the program that reads the trust anchors did not finish",
     ),
     (
         "[faulter] about to write to nowhere",
@@ -294,6 +311,16 @@ const E2E_LINES: [(&str, &str); 25] = [
 /// The four structures a driver of the network device needs, which the bus
 /// walk has to have read off the device itself.
 const VIRTIO_STRUCTURES: [&str; 4] = ["common", "notify", "isr", "device"];
+
+/// Wait for each checkpoint and report the first missing line.
+fn wait_for_lines(session: &mut Session, lines: &[(&str, &str)]) -> Vec<String> {
+    for (needle, complaint) in lines {
+        if !session.wait_for(needle, E2E_TIMEOUT) {
+            return vec![(*complaint).to_owned()];
+        }
+    }
+    Vec::new()
+}
 
 /// What the line about the virtio device does not say.
 ///
@@ -479,27 +506,20 @@ fn test_e2e(root: &Path, options: &[String]) -> Result<(), Error> {
     let forwarded = run.network;
     let mut session = Session::start(&machine, &path, &run)?;
 
-    let mut violations = Vec::new();
-    for (needle, complaint) in E2E_LINES {
-        if !session.wait_for(needle, E2E_TIMEOUT) {
-            violations.push((*complaint).to_owned());
-            break;
-        }
+    let mut violations = wait_for_lines(&mut session, &BOOT_PROGRESS);
+    // Connect before waiting for later programs: the listener's deadline
+    // starts while the root task is still loading those programs on SMP.
+    if violations.is_empty() {
+        violations.extend(exchange_over_the_network(forwarded, &mut session));
+    }
+    if violations.is_empty() {
+        violations.extend(wait_for_lines(&mut session, &E2E_LINES));
     }
     if violations.is_empty() {
         violations.extend(virtio_lines(&session.output()));
     }
     if violations.is_empty() {
         violations.extend(block_lines(&session.output()));
-    }
-    // The network, before anything else this run drives: the program of
-    // the image takes the connection the forwarded port opens, sends back
-    // what it was sent, and then makes an HTTP request over the same
-    // connection, which this answers. It waits for the connection with a
-    // deadline of its own, so the runner opens it as soon as the program
-    // says it is listening.
-    if violations.is_empty() {
-        violations.extend(exchange_over_the_network(forwarded, &mut session));
     }
     if violations.is_empty() {
         violations.extend(network_lines(&session.output()));
@@ -625,7 +645,8 @@ fn test_the_tls_client(machine: &Machine, path: &Path, root: &Path) -> Result<()
     )?;
 
     let mut violations = Vec::new();
-    for (needle, complaint) in tls_lines(server.port(), root)? {
+    let progress = BOOT_PROGRESS.map(|(line, complaint)| (line.to_owned(), complaint.to_owned()));
+    for (needle, complaint) in progress.into_iter().chain(tls_lines(server.port(), root)?) {
         if !session.wait_for(&needle, E2E_TIMEOUT) {
             violations.push(complaint);
             break;
@@ -719,7 +740,8 @@ fn test_the_secure_shell_client(machine: &Machine, path: &Path, root: &Path) -> 
     )?;
 
     let mut violations = Vec::new();
-    for (needle, complaint) in ssh_lines() {
+    let progress = BOOT_PROGRESS.map(|(line, complaint)| (line.to_owned(), complaint));
+    for (needle, complaint) in progress.into_iter().chain(ssh_lines()) {
         if !session.wait_for(&needle, E2E_TIMEOUT) {
             violations.push(complaint.to_owned());
             break;
@@ -2064,8 +2086,26 @@ pub(crate) fn qemu_runner(root: &Path, options: &[String]) -> Result<(), Error> 
     let name = fs::file_name(kernel).to_owned();
     let path = write_run_image(root, &name, &image)?;
     let machine = Machine::locate()?;
-    let run = machine.run_captured(&path, &qemu::Options::plain())?;
-    report_tests(&name, &run, &machine, Some(kernel))
+    let selected = [machine.processors()];
+    let counts: &[u32] = if name.starts_with("smp-") || name.starts_with("bench-") {
+        &[1, 2, 4]
+    } else {
+        &selected
+    };
+    for &processors in counts {
+        let options = qemu::Options {
+            processors: Some(processors),
+            ..qemu::Options::plain()
+        };
+        let run = machine.run_captured(&path, &options)?;
+        report_tests(
+            &format!("{name}-smp{processors}"),
+            &run,
+            &machine,
+            Some(kernel),
+        )?;
+    }
+    Ok(())
 }
 
 /// What a test image has to write on the serial port beyond the
