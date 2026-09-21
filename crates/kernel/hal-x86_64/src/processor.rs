@@ -24,7 +24,9 @@ pub static TICKS: [AtomicU64; CPUS] = [const { AtomicU64::new(0) }; CPUS];
 #[must_use]
 pub fn processor() -> Option<u8> {
     let base = APIC_WINDOW.load(Ordering::Acquire);
-    if base == 0 {
+    // Bring-up publishes the complete identifier list before the window.
+    // With no AP candidate, every caller is the boot processor.
+    if base == 0 || IDENTIFIERS[1].load(Ordering::Relaxed) == u32::MAX {
         return Some(0);
     }
     let address = usize::try_from(base.checked_add(0x20)?).ok()?;

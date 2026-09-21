@@ -127,6 +127,11 @@ the seventeenth `unsafe` site D8 names. The cost lands on every borrow of
 a kernel cell, because the token of D5 carries the number; measurement 1
 of S11 is what reads it.
 
+When the published identifier list contains only the boot processor,
+`processor()` returns zero without MMIO. The list is complete before the
+APIC window is published, so an AP candidate disables this fast path before
+any AP starts.
+
 **The option not taken: `GS_BASE` and `swapgs`.** A per-processor pointer
 in `IA32_KERNEL_GS_BASE`, swapped at every entry from user mode, is one
 register read instead of one uncached MMIO read. It costs a `swapgs` in

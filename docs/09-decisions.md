@@ -213,6 +213,11 @@ protect assembly context saves after the machine borrow ends. Address-space
 teardown switches every active processor to the shared kernel root before
 freeing page tables. Idle processors also reap ended threads without a switch.
 
+Single-processor boots skip APIC identity reads once the published identifier
+list confirms no AP candidate. This avoids MMIO on every kernel-cell borrow
+when every caller must be the boot processor. CI retains both processor-count
+results when one matrix entry fails.
+
 The console clears the UART interrupt-enable register while handling received
 bytes and reenables reception after unmasking the I/O APIC line. SLLS597E,
 pp. 34–35, specifies timeout reassertion and IER gating; otherwise a timeout
