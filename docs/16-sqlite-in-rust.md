@@ -983,6 +983,8 @@ Size: L.
      Built, which D-378 records.
 121. The key of an index taken over a range of rowids, and the
      column an `IS` holds. Built, which D-380 records.
+122. The index whose key the terms name the most columns of. Built,
+     which D-381 records.
 
 ### Done when
 

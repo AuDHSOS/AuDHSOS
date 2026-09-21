@@ -6800,3 +6800,10 @@ Document 16 step Q8.
 - A range naming one rowid, a range with one end, and a range no index
   key stands beside.
 - An `IS` over a value that is not null, and one over null.
+
+### 6.6.264 The index a plan is built from (`db-sqlite`)
+
+Document 16 step Q8.
+
+- Two indexes the terms name one and two columns of.
+- Two indexes the terms name as many columns of, made in either order.

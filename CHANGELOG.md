@@ -27,6 +27,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` builds a plan from the index whose key the terms name the
+  most columns of, and takes two indexes of one length in the order the
+  schema carries them, the index made last first. D-381 records it.
+  Catalog 6.6.264. `where.test` goes from 211 cases passing to 226.
+
 - `db-sqlite` takes a walk held to a key of an index over a range of
   rowids, keeps a range that names one rowid, and holds a column at the
   value an `IS` names. D-380 records it. Catalog 6.6.263. `where.test`

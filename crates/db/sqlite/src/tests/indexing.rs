@@ -400,3 +400,50 @@ fn a_covering_index_answers_the_column_the_rowid_names() {
         [alloc::vec![Value::Int(7), Value::Text(b"z".to_vec())]]
     );
 }
+
+/// The index whose key the terms name the most columns of answers the
+/// fewest rows, and two indexes the terms name as many columns of are
+/// taken in the order `pTab->pIndex` carries them, which is the index
+/// made last first.
+#[test]
+fn the_index_the_terms_name_the_most_columns_of_is_taken() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t(a,b,c)".as_slice(),
+        b"CREATE INDEX tab ON t(a,b)",
+        b"CREATE INDEX ta ON t(a)",
+        b"INSERT INTO t VALUES(1,2,3),(1,3,4),(2,2,5)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let bytes = writer.written();
+    let database = crate::db::Database::open(&bytes).unwrap();
+    let plan = |sql: &[u8]| {
+        database
+            .query(sql)
+            .unwrap()
+            .rows
+            .iter()
+            .filter_map(|row| match row.get(3) {
+                Some(Value::Text(text)) => Some(String::from_utf8_lossy(text).into_owned()),
+                _ => None,
+            })
+            .collect::<alloc::vec::Vec<_>>()
+            .join("|")
+    };
+    assert_eq!(
+        plan(b"EXPLAIN QUERY PLAN SELECT c FROM t WHERE a=1 AND b=2"),
+        "SEARCH t USING INDEX tab (a=? AND b=?)"
+    );
+    assert_eq!(
+        plan(b"EXPLAIN QUERY PLAN SELECT c FROM t WHERE a=1"),
+        "SEARCH t USING INDEX ta (a=?)"
+    );
+    assert_eq!(
+        database
+            .query(b"SELECT c FROM t WHERE a=1 AND b=2")
+            .unwrap()
+            .rows,
+        [alloc::vec![Value::Int(3)]]
+    );
+}

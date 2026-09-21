@@ -4940,7 +4940,15 @@ fn plan_of(
     format: u32,
     wants_key: bool,
 ) -> Option<Plan> {
-    for kept in &stored.indexes {
+    // The index whose key the terms name the most columns of answers
+    // the fewest rows, which is what `whereLoopAddBtree` of
+    // `research/sqlite/src/where.c` costs an index by: one value of a
+    // column divides the entries and a bound only ends the walk.
+    let mut best: Option<(usize, Plan)> = None;
+    // `pTab->pIndex` carries the index made last first, which is the
+    // order `whereLoopAddBtree` reads them in and so the order two
+    // indexes the terms name as many columns of are taken in.
+    for kept in stored.indexes.iter().rev() {
         // A partial index answers fewer entries than the table has rows,
         // so a statement planned against one would read fewer rows than
         // it must.
@@ -5043,17 +5051,24 @@ fn plan_of(
         if key.is_empty() && (wants_key || bounds.is_empty()) {
             continue;
         }
-        return Some(Plan::Keyed {
-            root: kept.root,
-            key,
-            collations,
-            rowid_at: kept.index.columns.len(),
-            bounds,
-            backwards,
-            reversed: false,
-        });
+        let reached = key.len();
+        if best.as_ref().is_some_and(|(held, _)| *held >= reached) {
+            continue;
+        }
+        best = Some((
+            reached,
+            Plan::Keyed {
+                root: kept.root,
+                key,
+                collations,
+                rowid_at: kept.index.columns.len(),
+                bounds,
+                backwards,
+                reversed: false,
+            },
+        ));
     }
-    None
+    best.map(|(_, plan)| plan)
 }
 
 /// Whether the walk of this side reads a whole table or a whole index,
