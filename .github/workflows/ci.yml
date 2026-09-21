@@ -6,6 +6,7 @@ name: ci
 on:
   push:
   pull_request:
+  merge_group:
 
 jobs:
   check:
@@ -32,3 +33,19 @@ jobs:
           done
       - name: Run every check
         run: cargo xtask check
+
+  push:
+    needs: check
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the complete processor matrix
+        run: test "${{ needs.check.result }}" = success
+
+  pull_request:
+    needs: check
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the complete processor matrix
+        run: test "${{ needs.check.result }}" = success
