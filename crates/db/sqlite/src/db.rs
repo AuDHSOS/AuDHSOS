@@ -5233,10 +5233,15 @@ fn ordering(
             return Ordering::Sorted;
         }
         let descending = term.order == crate::ast::Order::Descending;
+        // A term that counts or names a column of the answer sorts by
+        // what that column answers, which `resolveOrderGroupBy` of
+        // `research/sqlite/src/resolve.c` matches before it reads the
+        // term against the row.
+        let named = counted_to(arena, select, sql, term.expr).unwrap_or(term.expr);
         // A `COLLATE` names what the term compares under and leaves the
         // column it is written on, which `sqlite3ExprSkipCollate` reads
         // through.
-        let held = uncollated(arena, term.expr);
+        let held = uncollated(arena, named);
         let Some((_, reached)) = reached(arena, held, sql, sides) else {
             return Ordering::Sorted;
         };
@@ -5244,7 +5249,15 @@ fn ordering(
             Reached::Key => None,
             Reached::Column(place) => Some(place),
         };
-        let Some(collation) = sorted_under(arena, term.expr, sql, settling, stored, place) else {
+        // A `COLLATE` on the term is the collation the sort uses; where
+        // the term carries none, the column of the answer it counts to
+        // carries it.
+        let under = if matches!(arena.node(term.expr), Some(Node::Collate { .. })) {
+            term.expr
+        } else {
+            named
+        };
+        let Some(collation) = sorted_under(arena, under, sql, settling, stored, place) else {
             return Ordering::Sorted;
         };
         places.push(Termed {
@@ -5311,6 +5324,44 @@ fn ordering(
     match walked(stored, &wanted, tail, format) {
         Some(plan) => Ordering::Index(plan),
         None => Ordering::Sorted,
+    }
+}
+
+/// The expression one term of an `ORDER BY` names among the answered
+/// columns, and nothing where it names none.
+///
+/// `resolveOrderGroupBy` of `research/sqlite/src/resolve.c` reads a
+/// whole number as a count of the answered columns from one and a bare
+/// name as the name one of them is answered under, before it reads the
+/// term against the row. A `*` answers as many columns as its table has
+/// columns, so a number counts to a column no result column of the
+/// statement stands for and the term is left as it stands.
+fn counted_to(arena: &Arena, select: &Select, sql: &[u8], id: ExprId) -> Option<ExprId> {
+    let results = arena.results(select.columns);
+    if let Some(place) = whole_number(arena, id, sql) {
+        if results.iter().any(|held| expression_of(held).is_none()) {
+            return None;
+        }
+        let at = usize::try_from(place.checked_sub(1)?).ok()?;
+        return expression_of(results.get(at)?);
+    }
+    let named = dequote(column_named(arena, uncollated(arena, id))?.text(sql));
+    results.iter().find_map(|held| match held {
+        crate::ast::ResultColumn::Expr {
+            expr,
+            alias: Some(alias),
+            ..
+        } if dequote(alias.text(sql)).eq_ignore_ascii_case(&named) => Some(*expr),
+        _ => None,
+    })
+}
+
+/// The expression one result column answers, and nothing for a `*`,
+/// which answers as many columns as its table has columns.
+const fn expression_of(held: &crate::ast::ResultColumn) -> Option<ExprId> {
+    match held {
+        crate::ast::ResultColumn::Expr { expr, .. } => Some(*expr),
+        crate::ast::ResultColumn::Star | crate::ast::ResultColumn::TableStar(_) => None,
     }
 }
 

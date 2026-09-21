@@ -68,6 +68,24 @@ fn an_order_by_the_walk_of_an_index_read_backwards_answers_needs_no_sort() {
 }
 
 #[test]
+fn what_column_of_the_answer_a_term_of_an_order_by_counts_to() {
+    // A whole number counts the answered columns from one, and a name
+    // one of them is answered under names it.
+    assert_eq!(pair(b"SELECT q FROM m ORDER BY 1"), (4, 0));
+    assert_eq!(pair(b"SELECT q AS z FROM m ORDER BY z"), (4, 0));
+    assert_eq!(pair(b"SELECT p, q FROM m ORDER BY 1, 2"), (4, 0));
+    // A `*` answers as many columns as its table has, so the number
+    // counts to a column no result column stands for.
+    assert_eq!(pair(b"SELECT *, q FROM m ORDER BY 4"), (4, 1));
+    // The name answers what the alias names and not the column of that
+    // name, so `mr` and not `mq` answers this order.
+    assert_eq!(pair(b"SELECT r AS q FROM m ORDER BY q"), (4, 0));
+    // A name no alias of the statement spells is the column of that
+    // name.
+    assert_eq!(pair(b"SELECT q AS z, p FROM m ORDER BY p"), (4, 0));
+}
+
+#[test]
 fn what_collation_a_term_of_an_order_by_compares_under() {
     // `q` compares under `NOCASE` and `mq` holds it under that
     // collation, so a term naming it answers the walk.

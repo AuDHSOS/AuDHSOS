@@ -16,6 +16,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` plans a term of an `ORDER BY` that counts or names a
+  column of the answer against what that column answers, so
+  `ORDER BY 1` reaches the walk of an index and `SELECT r AS q FROM m
+  ORDER BY q` is answered by the index over `r`, which the walk answered
+  wrongly before. D-376 records it. Catalog 6.6.260.
+
 - `db-sqlite` reads the collation a term of an `ORDER BY` compares under
   from the outermost `COLLATE` written on it, and from the column's own
   collation where the term carries none, so the walk of an index answers

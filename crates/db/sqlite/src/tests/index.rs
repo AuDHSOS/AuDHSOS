@@ -840,6 +840,14 @@ fn explain_query_plan_names_the_walk_of_every_side() {
 }
 
 #[test]
+fn an_order_by_that_names_an_alias_answers_what_the_alias_names() {
+    assert_eq!(
+        listed(super::INDEXED, b"SELECT r AS q FROM m ORDER BY q"),
+        "Null,10,20,30,50"
+    );
+}
+
+#[test]
 fn what_words_no_explain_query_plan_stands_in() {
     // A bare `EXPLAIN` names the program the statement compiles to, and
     // the two words after it are read as one prefix or as none.

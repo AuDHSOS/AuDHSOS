@@ -6764,3 +6764,11 @@ Document 16 step Q8.
 - A side under an alias, a side that reads what another statement
   answers, and a side read by one walk per branch of an `OR`.
 - A sort the walk does not answer.
+
+### 6.6.260 The column an `ORDER BY` term counts to (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A whole number counting to one answered column and to several.
+- A name one column is answered under, over a column of another name.
+- A number written where the statement carries a `*`.

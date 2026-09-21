@@ -975,6 +975,8 @@ Size: L.
 116. The collation a term of an `ORDER BY` compares under. Built,
      which D-374 records.
 117. `EXPLAIN QUERY PLAN`. Built, which D-375 records.
+118. The column of the answer a term of an `ORDER BY` counts or
+     names. Built, which D-376 records.
 
 ### Done when
 
