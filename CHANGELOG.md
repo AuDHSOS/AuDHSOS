@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The suite harness runs `do_eqp_test`, which draws the rows of an
+  `EXPLAIN QUERY PLAN` as the tree the shell draws and compares it
+  against what the file writes. D-379 records it. `where.test` goes from
+  197 cases passing to 203 and `analyze3.test` from 51 to 58.
+
 - `db-sqlite` counts the descents and the steps of the walks of a
   statement, which `sqlite3_search_count` counts and
   `::sqlite_search_count` answers. D-378 records it. Catalog 6.6.262.

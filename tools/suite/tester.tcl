@@ -1186,7 +1186,60 @@ proc execpresql {args} {}
 proc explain {args} {}
 proc explain_i {args} {}
 proc explain_no_trace {args} { return {} }
-proc do_eqp_test {args} {}
+# query_plan_graph, append_graph and do_eqp_test of tester.tcl:1048 of
+# the suite's own tester, which draw the rows of an
+# EXPLAIN QUERY PLAN as the tree the shell draws and compare it against
+# what the test writes.
+proc query_plan_graph {sql} {
+  db eval "EXPLAIN QUERY PLAN $sql" {
+    set dx($id) $detail
+    lappend cx($parent) $id
+  }
+  set a "\n  QUERY PLAN\n"
+  append a [append_graph "  " dx cx 0]
+  regsub -all {SUBQUERY 0x[A-F0-9]+\y} $a {SUBQUERY xxxxxx} a
+  regsub -all {(MATERIALIZE|CO-ROUTINE|SUBQUERY) \d+\y} $a {\1 xxxxxx} a
+  regsub -all {\((join|subquery)-\d+\)} $a {(\1-xxxxxx)} a
+  return $a
+}
+
+proc append_graph {prefix dxname cxname level} {
+  upvar $dxname dx $cxname cx
+  set a ""
+  set x $cx($level)
+  set n [llength $x]
+  for {set i 0} {$i<$n} {incr i} {
+    set id [lindex $x $i]
+    if {$i==$n-1} {
+      set p1 "`--"
+      set p2 "   "
+    } else {
+      set p1 "|--"
+      set p2 "|  "
+    }
+    append a $prefix$p1$dx($id)\n
+    if {[info exists cx($id)]} {
+      append a [append_graph "$prefix$p2" dx cx $id]
+    }
+  }
+  return $a
+}
+
+proc do_eqp_test {name sql res} {
+  if {[regexp {^\s+QUERY PLAN\n} $res]} {
+    set query_plan [query_plan_graph $sql]
+    if {[list {*}$query_plan]==[list {*}$res]} {
+      uplevel [list do_test $name [list set {} ok] ok]
+    } else {
+      uplevel [list do_test $name [list query_plan_graph $sql] $res]
+    }
+  } else {
+    if {[string index $res 0]!="/"} {
+      set res "/*$res*/"
+    }
+    uplevel do_execsql_test $name [list "EXPLAIN QUERY PLAN $sql"] [list $res]
+  }
+}
 proc do_select_tests {args} {}
 proc query_plan {args} { return {} }
 proc memdebug_log_sql {args} {}

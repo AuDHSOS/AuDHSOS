@@ -460,6 +460,9 @@ Size: S.
 35. `::sqlite_search_count`, which `count` reads, is answered from the
     descents and the steps the last statement took, which D-378
     records.
+36. `do_eqp_test` draws the rows of an `EXPLAIN QUERY PLAN` as the tree
+    the shell draws and compares it against what the file writes, which
+    D-379 records.
 
 ### Produces
 
