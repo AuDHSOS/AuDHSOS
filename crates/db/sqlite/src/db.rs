@@ -3417,13 +3417,18 @@ impl<'a> Database<'a> {
                     collating: self.collating,
                 },
             );
+        // A statement that gathers its rows into groups answers them in
+        // the order of the groups, so an `ORDER BY` that names the
+        // `GROUP BY` terms is answered by that order and sorts nothing
+        // of its own.
+        let held = walked || (overs.is_empty() && grouped_order(arena, &select, sql, &sides));
         covered(arena, &select, sql, &mut sides);
         self.explain(
             &sides,
             Sorting {
                 grouped: !select.group.is_empty(),
                 distinct: select.distinct == Distinct::Distinct,
-                ordered: !select.order.is_empty() && !walked,
+                ordered: !select.order.is_empty() && !held,
             },
         );
         // `EXPLAIN QUERY PLAN` names the plan of the statement and runs
@@ -3455,7 +3460,7 @@ impl<'a> Database<'a> {
                 rows.push(sorted(arena, &select, sql, &group, &keys)?);
             }
         }
-        if !keys.is_empty() && !walked {
+        if !keys.is_empty() && !held {
             self.sort();
             rows.sort_by(|left, right| order_of(&left.keys, &right.keys, &keys));
         }
@@ -5246,6 +5251,35 @@ fn shaped(shown: Vec<Vec<u8>>, shape: Shape, rows: Vec<Vec<Value>>) -> Answered 
         },
         shape,
     }
+}
+
+/// Whether the order the groups come in answers the `ORDER BY`.
+///
+/// The groups are ordered by the `GROUP BY` terms, so an `ORDER BY` that
+/// names those terms in that order, forwards and with its nulls where
+/// that order puts them, is answered without a sort of its own, which is
+/// `sqlite3Select` reading `sSort.pOrderBy` out of the sorter the
+/// `GROUP BY` writes.
+///
+/// Costs O(n) in the terms.
+fn grouped_order(arena: &Arena, select: &Select, sql: &[u8], sides: &[Side<'_>]) -> bool {
+    let group = arena.children(select.group);
+    let order = arena.orders(select.order);
+    if group.is_empty() || group.len() != order.len() {
+        return false;
+    }
+    group.iter().zip(order).all(|(held, term)| {
+        term.order != crate::ast::Order::Descending
+            && term.nulls == crate::ast::Nulls::Unspecified
+            && named_alike(arena, *held, term.expr, sql, sides)
+    })
+}
+
+/// Whether two terms name one column of one side, which a term over an
+/// expression and a term under a `COLLATE` are neither of.
+fn named_alike(arena: &Arena, one: ExprId, other: ExprId, sql: &[u8], sides: &[Side<'_>]) -> bool {
+    let held = reached(arena, one, sql, sides);
+    held.is_some() && held == reached(arena, other, sql, sides)
 }
 
 /// Which trees a statement sorts its rows in, each of which

@@ -149,7 +149,7 @@ fn what_order_by_the_walk_does_not_answer() {
     assert_eq!(pair(b"SELECT * FROM u ORDER BY a"), (1, 1));
     assert_eq!(pair(b"SELECT * FROM (SELECT * FROM m) ORDER BY p"), (4, 1));
     assert_eq!(pair(b"SELECT m.p FROM m, k ORDER BY m.p"), (499, 1));
-    assert_eq!(pair(b"SELECT p FROM m GROUP BY p ORDER BY p"), (4, 1));
+    assert_eq!(pair(b"SELECT p FROM m GROUP BY p, q ORDER BY q, p"), (4, 1));
     assert_eq!(pair(b"SELECT count(*) OVER () FROM m ORDER BY 1"), (4, 1));
 }
 
@@ -160,6 +160,25 @@ fn an_index_that_holds_fewer_entries_than_the_table_has_rows_answers_no_order() 
     // collation than the column compares under.
     assert_eq!(pair(b"SELECT * FROM e ORDER BY a"), (2, 1));
     assert_eq!(pair(b"SELECT * FROM e ORDER BY b"), (2, 1));
+}
+
+#[test]
+fn the_order_the_groups_come_in_answers_an_order_by_that_names_them() {
+    // The groups are ordered by the `GROUP BY` terms, so an `ORDER BY`
+    // that names those terms in that order sorts nothing of its own.
+    assert_eq!(pair(b"SELECT p FROM m GROUP BY p ORDER BY p"), (4, 0));
+    assert_eq!(pair(b"SELECT p FROM m GROUP BY p, q ORDER BY p, q"), (4, 0));
+    // A term written backwards, one with its nulls moved, one over an
+    // expression, and a count of terms the `GROUP BY` does not name.
+    assert_eq!(pair(b"SELECT p FROM m GROUP BY p ORDER BY p DESC"), (4, 1));
+    assert_eq!(
+        pair(b"SELECT p FROM m GROUP BY p ORDER BY p NULLS LAST"),
+        (4, 1)
+    );
+    assert_eq!(pair(b"SELECT p FROM m GROUP BY p ORDER BY p+1"), (4, 1));
+    assert_eq!(pair(b"SELECT p FROM m GROUP BY p, q ORDER BY p"), (4, 1));
+    // A statement that groups nothing answers no order of groups.
+    assert_eq!(pair(b"SELECT count(*) FROM m ORDER BY 1"), (4, 1));
 }
 
 #[test]

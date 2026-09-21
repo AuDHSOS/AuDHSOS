@@ -32,6 +32,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` answers an `ORDER BY` that names the `GROUP BY` terms out
+  of the order the groups come in, so the rows are sorted once and not
+  twice. D-388 records it. Catalog 6.6.269. `orderbyA.test` goes from 56
+  cases passing to 60.
+
 - `db-sqlite` refuses a `CREATE INDEX` whose term or partial `WHERE`
   calls a window function, which an index holding one value per row has
   no frame for. D-387 records it. Catalog 6.6.268. `window1.test` goes

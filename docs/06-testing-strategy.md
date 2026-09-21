@@ -6841,3 +6841,12 @@ Document 16 step Q8.
 - A window function in a term of the index, under a call in a term, and
   in the `WHERE` of a partial index.
 - A term that calls no window function, which the index holds.
+
+### 6.6.269 The `ORDER BY` the groups answer (`db-sqlite`)
+
+Document 16 step Q8.
+
+- An `ORDER BY` naming one `GROUP BY` term and naming two.
+- A term written backwards, one with its nulls moved, one over an
+  expression, and a count of terms the `GROUP BY` does not name.
+- A statement that groups nothing.

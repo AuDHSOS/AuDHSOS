@@ -991,6 +991,8 @@ Size: L.
      `EXPLAIN QUERY PLAN` names. Built, which D-386 records.
 125. The window function a `CREATE INDEX` may not call. Built, which
      D-387 records.
+126. The `ORDER BY` the order of the groups answers. Built, which
+     D-388 records.
 
 ### Done when
 
