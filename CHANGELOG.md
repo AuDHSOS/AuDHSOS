@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` keys a side by the columns of an index the sides read
+  before it answer with `=`, out of the `ON` and out of the `WHERE`
+  alike, which costs one descent per row of those sides where a walk per
+  row costs O(m*n). D-390 records it. Catalog 6.6.271. `where.test` goes
+  from 231 cases passing to 241 and `where2.test` from 49 to 51.
+
 - `db-sqlite` names one line per tree a statement sorts its rows in
   under `EXPLAIN QUERY PLAN`: the groups, the rows that differ, and the
   order the statement asks for. D-386 records it. Catalog 6.6.267.

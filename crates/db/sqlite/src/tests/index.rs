@@ -1104,3 +1104,167 @@ fn what_words_no_explain_query_plan_stands_in() {
         assert!(Database::open(super::INDEXED).unwrap().query(sql).is_err());
     }
 }
+
+#[test]
+fn a_side_is_keyed_by_what_the_sides_before_it_answer() {
+    // `mpq` holds `p` and `q`, which the terms of the `WHERE` hold to the
+    // columns of `k`, so the walk of `m` is one descent per row of `k`.
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT m.p FROM k, m WHERE m.p=k.a AND m.q=k.b"
+        ),
+        "SCAN k|SEARCH m USING COVERING INDEX mpq (p=? AND q=?)"
+    );
+    // A term against an expression of the sides before names a key as a
+    // term against a column of them does.
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT m.r FROM k, m WHERE m.p=k.a+1"
+        ),
+        "SCAN k|SEARCH m USING INDEX mpq (p=?)"
+    );
+    // A term holding the rowid answers one row, which no key of an index
+    // answers fewer of.
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT m.p FROM k, m WHERE m.p=k.a AND m.rowid=k.a"
+        ),
+        "SCAN k|SEARCH m USING INTEGER PRIMARY KEY (rowid=?)"
+    );
+    // A key a side answers is taken over a range of rowids the terms
+    // bound, which answers every row between two.
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT m.p FROM k, m WHERE m.p=k.a AND m.q=k.b AND m.rowid>2"
+        ),
+        "SCAN k|SEARCH m USING COVERING INDEX mpq (p=? AND q=?)"
+    );
+    // An `ON` names a key where the statement writes no `WHERE`.
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT m.p FROM k LEFT JOIN m ON m.p=k.a"
+        ),
+        "SCAN k|SEARCH m USING COVERING INDEX mpq (p=?)"
+    );
+}
+
+#[test]
+fn what_names_no_key_of_a_side_the_sides_before_it_answer() {
+    // A `COLLATE` on the other side of the comparison compares both
+    // under the collation it names, so the entries the key reaches are
+    // not the rows the term is true of.
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT m.q FROM k, m WHERE m.q=k.b COLLATE BINARY"
+        ),
+        "SCAN k|SCAN m"
+    );
+    // A column standing right of the comparison compares under the
+    // collation of what stands left of it, read through a `CAST` and a
+    // unary `+`.
+    for sql in [
+        b"EXPLAIN QUERY PLAN SELECT m.q FROM k, m WHERE k.b=m.q".as_slice(),
+        b"EXPLAIN QUERY PLAN SELECT m.q FROM k, m WHERE CAST(k.b AS TEXT)=m.q",
+        b"EXPLAIN QUERY PLAN SELECT m.q FROM k, m WHERE +k.b=m.q",
+    ] {
+        assert_eq!(planned(super::INDEXED, sql), "SCAN k|SCAN m");
+    }
+    // A column of a statement written inside the `FROM` compares under
+    // `BINARY`, which `q` does not compare under.
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT m.q FROM (SELECT b FROM k) AS s, m WHERE s.b=m.q"
+        ),
+        "SCAN k|SCAN s|SCAN m"
+    );
+    // `ea` is over an expression, `eb` holds fewer entries than the table
+    // has rows, and `ec` compares under another collation than the column
+    // does.
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT e.a FROM k, e WHERE e.a=k.a AND e.b=k.a"
+        ),
+        "SCAN k|SCAN e"
+    );
+    // `mr` holds its entries from the largest value down.
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT m.r FROM k, m WHERE m.r=k.a"
+        ),
+        "SCAN k|SCAN m"
+    );
+    // A `RIGHT` join is walked twice and both walks answer the rows in
+    // one order, so a term of the `WHERE` names no key of a side of such
+    // a statement.
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT m.p FROM k RIGHT JOIN m ON m.r=1 WHERE m.p=k.a"
+        ),
+        "SCAN k|SCAN m"
+    );
+}
+
+#[test]
+fn a_column_of_real_affinity_names_no_key_a_side_answers() {
+    use crate::change::Writer;
+    use crate::header::Encoding;
+    // A whole number stands in the entry as itself and `OP_RealAffinity`
+    // reads it out of the row as the real nearest it, so an entry
+    // compares against a key as the row does not.
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE s(v REAL)".as_slice(),
+        b"CREATE INDEX sv ON s(v)",
+        b"CREATE TABLE n(v)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let bytes = writer.written();
+    assert_eq!(
+        planned(
+            &bytes,
+            b"EXPLAIN QUERY PLAN SELECT s.v FROM n, s WHERE s.v=n.v"
+        ),
+        "SCAN n|SCAN s"
+    );
+}
+
+#[test]
+fn a_walk_held_to_a_rowid_a_side_answers_reads_the_row_that_rowid_names() {
+    // `OP_SeekRowid` reads the value as a number and takes no row where
+    // it is not a whole one, which text that names no number and a real
+    // between two whole numbers both are.
+    let rows = |sql: &[u8]| {
+        Database::open(super::INDEXED)
+            .unwrap()
+            .query(sql)
+            .unwrap()
+            .rows
+    };
+    assert_eq!(
+        rows(b"SELECT m.p FROM k, m WHERE m.rowid=k.a AND k.a=1"),
+        [alloc::vec![Value::Int(1)]]
+    );
+    assert_eq!(
+        rows(b"SELECT m.p FROM k, m WHERE m.rowid=k.b AND k.a=1"),
+        Vec::<Vec<Value>>::new()
+    );
+    assert_eq!(
+        rows(b"SELECT m.p FROM k, m WHERE m.rowid=k.a+0.5 AND k.a=1"),
+        Vec::<Vec<Value>>::new()
+    );
+    assert_eq!(
+        rows(b"SELECT m.p FROM k, m WHERE m.rowid=NULL AND k.a=1"),
+        Vec::<Vec<Value>>::new()
+    );
+}

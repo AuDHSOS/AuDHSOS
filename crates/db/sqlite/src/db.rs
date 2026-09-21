@@ -1432,22 +1432,34 @@ enum Plan {
     /// an `OR` whose every branch names a key is read by. It is not the
     /// `UNION` of the grammar.
     Union(Vec<Plan>),
-    /// The rows an index names, which an `ON` holds to the key a side
-    /// already read answers, so the key is a value per row of that side
-    /// and not one value for the statement.
+    /// The rows an index names, which an `ON` or a `WHERE` holds to the
+    /// key a side already read answers, so the key is a value per row of
+    /// that side and not one value for the statement.
     Joined {
         /// The page the index's tree begins at.
         root: u32,
-        /// What the key is read from, once per row of the sides before
-        /// this one.
-        key: ExprId,
-        /// What the key compares under.
-        collation: Collation,
-        /// What the column of the index converts a value under.
-        affinity: Affinity,
+        /// The first columns of the index, each held to what a side
+        /// before this one answers.
+        keys: Vec<Keying>,
         /// Where the rowid stands in an entry.
         rowid_at: usize,
     },
+    /// The one row of the table whose rowid a side the walk reads before
+    /// this one answers, which is `OP_SeekRowid`.
+    Rowid(ExprId),
+}
+
+/// One column of an index held to what a side the walk reads before this
+/// one answers.
+#[derive(Clone, Debug)]
+struct Keying {
+    /// What the value is read from, once per row of the sides before
+    /// this one.
+    key: ExprId,
+    /// What the column compares under.
+    collation: Collation,
+    /// What the column converts a value under.
+    affinity: Affinity,
 }
 
 impl Side<'_> {
@@ -1455,7 +1467,9 @@ impl Side<'_> {
     const fn range(&self) -> (Option<i64>, Option<i64>) {
         match self.plan {
             Plan::Rows(first, last) => (first, last),
-            Plan::Keyed { .. } | Plan::Joined { .. } | Plan::Union(_) => (None, None),
+            Plan::Keyed { .. } | Plan::Joined { .. } | Plan::Rowid(_) | Plan::Union(_) => {
+                (None, None)
+            }
         }
     }
 
@@ -4082,6 +4096,22 @@ impl<'a> Database<'a> {
                 None => self.scanned(side, stored),
             };
         }
+        if let Plan::Rowid(id) = &side.plan {
+            // `OP_SeekRowid` reads the value as a number and takes no row
+            // where it is not a whole one.
+            let reach = cursor.reach;
+            let mut value =
+                evaluate_row(reach.arena, *id, reach.sql, cursor).unwrap_or(Value::Null);
+            crate::value::apply(&mut value, Affinity::Numeric);
+            let rowid = match value {
+                Value::Int(rowid) => Some(rowid),
+                Value::Null | Value::Real(_) | Value::Text(_) | Value::Blob(_) => None,
+            };
+            return match rowid {
+                Some(rowid) => self.ranged(stored, (Some(rowid), Some(rowid))),
+                None => Feed::Rows(NO_ROWS.iter()),
+            };
+        }
         if let Some(held) = sought(&side.plan, side.covering.as_deref(), cursor)
             && let Some(feed) = self.keyed(stored, held)
         {
@@ -4573,29 +4603,29 @@ fn planned(
                 // row between two, so a key is taken over a range and a
                 // walk the terms only bound is not.
                 let held = plan_of(&terms, at, stored, format, between);
-                if between {
-                    held
-                } else {
-                    // A key the statement writes out is read once; a key
-                    // a side already read answers is read per row of
-                    // that side, so the first is taken where both are
-                    // there. An `OR` is read last, because one index
-                    // costs less than one walk per branch.
-                    held.or_else(|| {
-                        filter.and_then(|filter| {
-                            union_of(
-                                arena,
-                                filter,
-                                sql,
-                                sides,
-                                at,
-                                stored,
-                                Settled { sensitive, format },
-                            )
-                        })
+                let answered = joined(arena, sql, sides, at, (stored, filter));
+                // A key the statement writes out is read once, where a
+                // key a side already read answers is read per row of
+                // that side, so the first is taken where both hold as
+                // many columns.
+                let better = answered
+                    .filter(|answered| keys_of(answered) > held.as_ref().map_or(0, keys_of));
+                // An `OR` is read last, because one index costs less
+                // than one walk per branch, and a side already held to a
+                // range of rowids reads no branch at all.
+                better.or(held).or_else(|| {
+                    filter.filter(|_| !between).and_then(|filter| {
+                        union_of(
+                            arena,
+                            filter,
+                            sql,
+                            sides,
+                            at,
+                            stored,
+                            Settled { sensitive, format },
+                        )
                     })
-                    .or_else(|| joined(arena, sql, sides, at, stored))
-                }
+                })
             }
             Source::Table(_) | Source::Rows(_) => None,
         };
@@ -5148,6 +5178,25 @@ fn plan_of(
     best.map(|(_, plan)| plan)
 }
 
+/// The rows of a walk that names no row, which a plan held to a rowid
+/// nothing answers is read as.
+const NO_ROWS: &[Vec<Value>] = &[];
+
+/// How many columns of an index a plan holds at one value, which is what
+/// `whereLoopAddBtree` of `research/sqlite/src/where.c` costs a plan by:
+/// one value of a column divides the entries where a bound only ends the
+/// walk.
+const fn keys_of(plan: &Plan) -> usize {
+    match plan {
+        Plan::Keyed { key, .. } => key.len(),
+        Plan::Joined { keys, .. } => keys.len(),
+        // A walk held to one rowid answers one row, which no key of an
+        // index answers fewer of.
+        Plan::Rowid(_) => usize::MAX,
+        Plan::Rows(_, _) | Plan::Union(_) => 0,
+    }
+}
+
 /// Whether the walk of this side reads a whole table or a whole index,
 /// which is the loop `wherecode.c` counts the steps of: a loop no term
 /// holds to a key.
@@ -5156,7 +5205,7 @@ const fn whole_walk(side: &Side<'_>) -> bool {
         && match &side.plan {
             Plan::Rows(None, None) => true,
             Plan::Keyed { key, bounds, .. } => key.is_empty() && bounds.is_empty(),
-            Plan::Rows(_, _) | Plan::Joined { .. } | Plan::Union(_) => false,
+            Plan::Rows(_, _) | Plan::Joined { .. } | Plan::Rowid(_) | Plan::Union(_) => false,
         }
 }
 
@@ -5305,7 +5354,11 @@ fn covered(arena: &Arena, select: &Select, sql: &[u8], sides: &mut [Side<'_>]) {
 /// is reached as the rowid and stands in no reading, because the rowid
 /// is what every entry ends with.
 fn covering_of(side: &Side<'_>, read: &[usize]) -> Option<Vec<Option<usize>>> {
-    let (Plan::Keyed { root, .. }, Source::Table(stored)) = (&side.plan, &side.source) else {
+    let root = match &side.plan {
+        Plan::Keyed { root, .. } | Plan::Joined { root, .. } => root,
+        Plan::Rows(_, _) | Plan::Rowid(_) | Plan::Union(_) => return None,
+    };
+    let Source::Table(stored) = &side.source else {
         return None;
     };
     let kept = stored.indexes.iter().find(|kept| kept.root == *root)?;
@@ -5414,9 +5467,6 @@ fn detailed(side: &Side<'_>, plan: &Plan, lines: &mut Vec<Explained>, parent: us
     match plan {
         Plan::Rows(None, None) => lines.push((parent, scanned(&side.name, b"", false))),
         Plan::Rows(low, high) => {
-            let mut held = b"SEARCH ".to_vec();
-            held.extend_from_slice(&side.name);
-            held.extend_from_slice(b" USING INTEGER PRIMARY KEY (");
             let mut terms: Vec<&[u8]> = Vec::new();
             if low == high {
                 terms.push(b"rowid=?");
@@ -5428,10 +5478,9 @@ fn detailed(side: &Side<'_>, plan: &Plan, lines: &mut Vec<Explained>, parent: us
                     terms.push(b"rowid<?");
                 }
             }
-            anded(&mut held, &terms);
-            held.push(b')');
-            lines.push((parent, held));
+            lines.push((parent, by_rowid(&side.name, &terms)));
         }
+        Plan::Rowid(_) => lines.push((parent, by_rowid(&side.name, &[b"rowid=?"]))),
         Plan::Keyed {
             root, key, bounds, ..
         } => {
@@ -5450,8 +5499,10 @@ fn detailed(side: &Side<'_>, plan: &Plan, lines: &mut Vec<Explained>, parent: us
                 searched(&side.name, &named_index(stored, *root), &terms, covering),
             ));
         }
-        Plan::Joined { root, .. } => {
-            let terms = alloc::vec![term_of(stored, *root, 0, b"=?")];
+        Plan::Joined { root, keys, .. } => {
+            let terms: Vec<Vec<u8>> = (0..keys.len())
+                .map(|at| term_of(stored, *root, at, b"=?"))
+                .collect();
             lines.push((
                 parent,
                 searched(&side.name, &named_index(stored, *root), &terms, covering),
@@ -5492,6 +5543,18 @@ const fn using(covering: bool) -> &'static [u8] {
     } else {
         b" USING INDEX "
     }
+}
+
+/// `SEARCH t USING INTEGER PRIMARY KEY (rowid=?)`, which is what
+/// `sqlite3WhereExplainOneScan` writes for a walk of the table's own
+/// tree that a term holds to a rowid.
+fn by_rowid(name: &[u8], terms: &[&[u8]]) -> Vec<u8> {
+    let mut held = b"SEARCH ".to_vec();
+    held.extend_from_slice(name);
+    held.extend_from_slice(b" USING INTEGER PRIMARY KEY (");
+    anded(&mut held, terms);
+    held.push(b')');
+    held
 }
 
 /// `SEARCH t USING INDEX i (a=? AND b>?)`, which is `SCAN t USING
@@ -6073,7 +6136,7 @@ struct Seek {
 /// Reading one key costs what the expression it is read from costs.
 fn sought(plan: &Plan, covering: Option<&[Option<usize>]>, cursor: &Cursor<'_>) -> Option<Seek> {
     match plan {
-        Plan::Rows(_, _) | Plan::Union(_) => None,
+        Plan::Rows(_, _) | Plan::Rowid(_) | Plan::Union(_) => None,
         Plan::Keyed {
             root,
             key,
@@ -6094,49 +6157,58 @@ fn sought(plan: &Plan, covering: Option<&[Option<usize>]>, cursor: &Cursor<'_>) 
         }),
         Plan::Joined {
             root,
-            key,
-            collation,
-            affinity,
+            keys,
             rowid_at,
         } => {
             let reach = cursor.reach;
-            let mut value = evaluate_row(reach.arena, *key, reach.sql, cursor).ok()?;
-            // An index holds no entry a `=` against `NULL` reaches, and
-            // it holds what the affinity of the column left of a value,
-            // which is what the key is compared as.
-            if value == Value::Null {
-                return None;
+            let mut key = Vec::with_capacity(keys.len());
+            for keying in keys {
+                let mut value = evaluate_row(reach.arena, keying.key, reach.sql, cursor).ok()?;
+                // An index holds no entry a `=` against `NULL` reaches,
+                // and it holds what the affinity of the column left of a
+                // value, which is what the key is compared as.
+                if value == Value::Null {
+                    return None;
+                }
+                crate::value::apply(&mut value, keying.affinity);
+                key.push(value);
             }
-            crate::value::apply(&mut value, *affinity);
             Some(Seek {
                 root: *root,
-                key: alloc::vec![value],
-                collations: alloc::vec![*collation],
+                key,
+                collations: keys.iter().map(|keying| keying.collation).collect(),
                 rowid_at: *rowid_at,
                 bounds: Bounds::default(),
                 backwards: false,
                 reversed: false,
-                covering: None,
+                covering: covering.map(<[Option<usize>]>::to_vec),
             })
         }
     }
 }
 
-/// The index of side `at` whose first column an `ON` compares against a
-/// column of a side the walk reads before it, which is the key that
-/// side answers per row.
+/// The index of side `at` whose longest run of first columns an `ON` or
+/// a `WHERE` compares against columns of the sides the walk reads before
+/// it, which is the key those sides answer per row.
 ///
-/// The `ON` is read again for every row the descent answers, so a plan
+/// The terms are read again for every row the descent answers, so a plan
 /// that answers more rows than the key names is still the rows the
 /// statement answers; a plan that answers fewer would not be.
 ///
-/// Reading the terms costs O(t) in them and O(i) in the indexes.
+/// The key holds a run of columns and not one, because an index over two
+/// columns reaches the rows a term about each one names in one descent:
+/// O(log n) over the entries, where a key of one column answers every
+/// entry the first column names and the second term is read over each of
+/// them.
+///
+/// Reading the terms costs O(t) in them and O(i * k) in the places of
+/// the indexes.
 fn joined(
     arena: &Arena,
     sql: &[u8],
     sides: &[Side<'_>],
     at: usize,
-    stored: &Stored,
+    (stored, filter): (&Stored, Option<ExprId>),
 ) -> Option<Plan> {
     let side = sides.get(at)?;
     // A `RIGHT` or a `FULL` join is walked twice, and the second walk
@@ -6147,51 +6219,124 @@ fn joined(
     if matches!(side.kind, JoinKind::Right | JoinKind::Full) {
         return None;
     }
-    let on = side.on?;
+    // A term of the `WHERE` is read on the level of the last `RIGHT` or
+    // `FULL` join, which is above the level a key would hold, and a row
+    // that level does not read is one the join marks as matched by
+    // nothing, so a statement holding such a join keys by its `ON` alone.
+    let outer = sides
+        .iter()
+        .any(|held| matches!(held.kind, JoinKind::Right | JoinKind::Full));
+    let roots: Vec<ExprId> = side
+        .on
+        .into_iter()
+        .chain(filter.filter(|_| !outer))
+        .collect();
+    if roots.is_empty() {
+        return None;
+    }
+    // A term holding the rowid answers one row, which no key of an index
+    // answers fewer of, so it is taken over every index.
+    if let Some(key) = keyed_rowid(arena, &roots, sql, sides, at) {
+        return Some(Plan::Rowid(key));
+    }
+    let mut best: Option<Plan> = None;
+    let mut held = 0;
     for kept in &stored.indexes {
-        // An index over an expression, and a partial index, answer
-        // fewer entries than their places say.
-        let found = kept.index.first_keyed().and_then(|(place, first)| {
-            stored
-                .table
-                .columns
-                .get(place)
-                .map(|column| (place, first, column))
-        });
-        let Some((place, first, column)) = found else {
-            continue;
-        };
-        // An index held in another order, or under another collation
-        // than the column compares under, answers its entries in an
-        // order the terms do not ask about.
-        if first.order == crate::ast::Order::Descending || first.collation != column.collation {
+        // A partial index answers fewer entries than its places say.
+        if kept.index.filter.is_some() {
             continue;
         }
-        let Some(key) = keyed_by(arena, on, sql, sides, at, place) else {
-            continue;
-        };
-        return Some(Plan::Joined {
-            root: kept.root,
-            key,
-            collation: first.collation,
-            affinity: column.affinity,
-            rowid_at: kept.index.columns.len(),
-        });
+        let mut keys: Vec<Keying> = Vec::new();
+        for keyed in &kept.index.columns {
+            // An index over an expression holds a value no term of a
+            // statement names.
+            let found = keyed.place().and_then(|place| {
+                stored
+                    .table
+                    .columns
+                    .get(place)
+                    .map(|column| (place, column))
+            });
+            let Some((place, column)) = found else {
+                break;
+            };
+            // An index held in another order, or under another collation
+            // than the column compares under, answers its entries in an
+            // order the terms do not ask about.
+            if keyed.order == crate::ast::Order::Descending || keyed.collation != column.collation {
+                break;
+            }
+            // A column of real affinity holds a whole number as a whole
+            // number, which `OP_RealAffinity` reads back as a real, so an
+            // entry compares against a key as the row does not.
+            if column.affinity == Affinity::Real {
+                break;
+            }
+            let Some(key) = keyed_by(arena, &roots, sql, sides, at, (place, keyed.collation))
+            else {
+                break;
+            };
+            keys.push(Keying {
+                key,
+                collation: keyed.collation,
+                affinity: column.affinity,
+            });
+        }
+        // An index whose first column no term names reaches every entry,
+        // and a shorter key names more entries than a longer one.
+        if keys.len() > held {
+            held = keys.len();
+            best = Some(Plan::Joined {
+                root: kept.root,
+                keys,
+                rowid_at: kept.index.columns.len(),
+            });
+        }
     }
-    None
+    best
 }
 
-/// What the column `column` of side `at` is held equal to by the `AND`
-/// spine of `on`, where a side the walk reads before `at` answers it.
-fn keyed_by(
+/// What the rowid of side `at` is held equal to by the `AND` spine of
+/// `roots`, where a side the walk reads before `at` answers it.
+fn keyed_rowid(
     arena: &Arena,
-    on: ExprId,
+    roots: &[ExprId],
     sql: &[u8],
     sides: &[Side<'_>],
     at: usize,
-    column: usize,
 ) -> Option<ExprId> {
-    let mut spine = alloc::vec![on];
+    keyed_to(arena, roots, sql, sides, (at, Reached::Key), None)
+}
+
+/// What the column `column` of side `at` is held equal to by the `AND`
+/// spine of `roots`, where a side the walk reads before `at` answers it.
+fn keyed_by(
+    arena: &Arena,
+    roots: &[ExprId],
+    sql: &[u8],
+    sides: &[Side<'_>],
+    at: usize,
+    column: (usize, Collation),
+) -> Option<ExprId> {
+    let (place, collation) = column;
+    let wanted = (at, Reached::Column(place));
+    keyed_to(arena, roots, sql, sides, wanted, Some(collation))
+}
+
+/// What `wanted` is held equal to by the `AND` spine of `roots`, where a
+/// side the walk reads before the one `wanted` names answers it.
+///
+/// Walking the spine costs O(n) in its nodes.
+fn keyed_to(
+    arena: &Arena,
+    roots: &[ExprId],
+    sql: &[u8],
+    sides: &[Side<'_>],
+    wanted: (usize, Reached),
+    collating: Option<Collation>,
+) -> Option<ExprId> {
+    let (at, reach) = wanted;
+    let mut spine = roots.to_vec();
     while let Some(id) = spine.pop() {
         let Some(Node::Binary { op, left, right }) = arena.node(id) else {
             continue;
@@ -6204,14 +6349,32 @@ fn keyed_by(
         if op != BinaryOp::Eq {
             continue;
         }
-        for (mine, theirs) in [(left, right), (right, left)] {
-            if reached(arena, mine, sql, sides) != Some((at, Reached::Column(column))) {
+        for (at_right, (mine, theirs)) in [(left, right), (right, left)].into_iter().enumerate() {
+            if reached(arena, mine, sql, sides) != Some((at, reach)) {
                 continue;
             }
-            // Only a column of a side the walk has already read is a
+            // A `COLLATE` anywhere on the other side of the comparison
+            // compares both under the collation it names, which
+            // `sqlite3BinaryCompareCollSeq` of
+            // `research/sqlite/src/expr.c` reads, so the entries the key
+            // reaches are not the rows the term is true of.
+            if collates(arena, theirs) != Some(false) {
+                continue;
+            }
+            // The same function reads the collation off the left operand
+            // and off the right only where the left names none, so a
+            // column standing right compares under the collation of what
+            // stands left of it.
+            if at_right == 1
+                && let Some(collating) = collating
+                && collating_of(arena, theirs, sql, sides).is_some_and(|held| held != collating)
+            {
+                continue;
+            }
+            // Only what the sides the walk has already read answer is a
             // key it can answer: a column of this side or of one after
             // it is not read yet.
-            let Some((other, Reached::Column(_))) = reached(arena, theirs, sql, sides) else {
+            let Some(other) = answerable(arena, theirs, sql, sides) else {
                 continue;
             };
             if other < at {
@@ -6220,6 +6383,61 @@ fn keyed_by(
         }
     }
     None
+}
+
+/// Whether a `COLLATE` stands anywhere in `id`, which `EP_Collate` of
+/// `research/sqlite/src/sqliteInt.h` marks a node and its parents with,
+/// and nothing where a node of the expression is missing.
+///
+/// Walking the expression costs O(n) in its nodes.
+fn collates(arena: &Arena, id: ExprId) -> Option<bool> {
+    let mut stack = alloc::vec![id];
+    while let Some(id) = stack.pop() {
+        let node = arena.node(id)?;
+        if matches!(node, Node::Collate { .. }) {
+            return Some(true);
+        }
+        arena.under(node, |child| stack.push(child));
+    }
+    Some(false)
+}
+
+/// The collation `sqlite3ExprCollSeq` of `research/sqlite/src/expr.c`
+/// reads off an expression: the collation of the column it names, read
+/// through a `CAST` and a unary `+`, and nothing where it names none,
+/// which is every expression that is not a column and the rowid, a
+/// number no collation compares.
+///
+/// Walking the expression costs O(n) in its nodes.
+fn collating_of(arena: &Arena, id: ExprId, sql: &[u8], sides: &[Side<'_>]) -> Option<Collation> {
+    let mut held = id;
+    loop {
+        match arena.node(held)? {
+            Node::Cast { value, .. } => held = value,
+            Node::Unary {
+                op: crate::ast::UnaryOp::Identity,
+                operand,
+            } => held = operand,
+            Node::Column { .. } => {
+                let (at, Reached::Column(place)) = reached(arena, held, sql, sides)? else {
+                    return None;
+                };
+                // A column of a statement written inside the `FROM`
+                // compares under `BINARY`, which is what this reader
+                // compares text under where no `COLLATE` names another.
+                let collation = match sides.get(at).map(|side| &side.source) {
+                    Some(Source::Table(stored)) => stored
+                        .table
+                        .columns
+                        .get(place)
+                        .map_or(Collation::Binary, |column| column.collation),
+                    _ => Collation::Binary,
+                };
+                return Some(collation);
+            }
+            _ => return None,
+        }
+    }
 }
 
 /// The operator that says the same thing with its operands the other way

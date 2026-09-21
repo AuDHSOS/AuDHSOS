@@ -6858,3 +6858,19 @@ Document 16 step Q8.
 - A `GROUP BY` one index answers the order of, and one no index does.
 - The groups a walk gathers against the groups a sorter gathers, over a
   column that holds a null.
+
+### 6.6.271 The key of a side the sides before it answer (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A key of one column and one of two, against a column and against an
+  expression.
+- The rowid a side answers, over a key of an index and over a range of
+  rowids.
+- What names no key: a `COLLATE` on the other side, a column standing
+  right of one that collates otherwise, a column of a statement written
+  inside the `FROM`, an index over an expression, a partial index, an
+  index under another collation, an index held backwards, a column of
+  real affinity, and a statement holding a `RIGHT` join.
+- A rowid a side answers as text that names no number, as a real between
+  two whole numbers, and as a null.
