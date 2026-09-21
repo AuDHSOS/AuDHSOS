@@ -27,6 +27,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- The suite harness reads a database of the connection's own for a path
+  of no bytes and for `:memory:`, fresh at every opening and read by no
+  other connection. D-384 records it. `temptable2.test` goes from 136
+  cases passing to 251.
+
 - The suite harness opens under `utf8-1024-delete`, which is the page
   size `testfixture` is built with, and lets one file run five minutes
   rather than three. D-382 records it. The run goes from 108 595 cases

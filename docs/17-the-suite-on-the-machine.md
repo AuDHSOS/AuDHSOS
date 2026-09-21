@@ -467,6 +467,9 @@ Size: S.
 37. A run opens under `utf8-1024-delete`, which is the page size
     `testfixture` is built with, and one file may run five minutes
     rather than three, which D-382 records.
+38. A connection opened over a path of no bytes or `:memory:` reads a
+    database of its own that no other connection reads and that is
+    fresh at every opening, which D-384 records.
 
 ### Produces
 

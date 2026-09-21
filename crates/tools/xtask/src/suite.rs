@@ -678,6 +678,9 @@ struct Session {
     /// How many statements the tester has prepared, which names the next
     /// one.
     prepared: u64,
+    /// How many databases of a connection's own this run has opened,
+    /// which names the next one.
+    opened: u64,
     /// What `save_prng_state` held, which `restore_prng_state` hands
     /// back to every writer.
     prng: u64,
@@ -716,6 +719,7 @@ impl Session {
             hooked: BTreeMap::new(),
             statements: BTreeMap::new(),
             prepared: 0,
+            opened: 0,
             prng: 0,
             clock: None,
             repeated: (String::new(), 0),
@@ -1172,8 +1176,21 @@ impl Session {
 
     /// Opens a connection over a path, making the database where no
     /// connection has opened that path yet.
+    ///
+    /// A path of no bytes and `:memory:` each name a database of the
+    /// connection's own, which `sqlite3BtreeOpen` of
+    /// `research/sqlite/src/btree.c:2170` makes fresh for every
+    /// connection and no other connection reads, so the harness holds
+    /// one under a name no file has.
     fn open(&mut self, name: &str, path: &str) {
         let under = configured();
+        let held = if path.is_empty() || path.eq_ignore_ascii_case(":memory:") {
+            self.opened = self.opened.saturating_add(1);
+            format!("{path}\0{name}\0{}", self.opened)
+        } else {
+            path.to_owned()
+        };
+        let path = held.as_str();
         if !self.held.contains_key(path)
             && let Ok(mut writer) = Writer::new(under.page, 0, under.encoding)
         {
