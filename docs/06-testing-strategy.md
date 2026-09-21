@@ -6826,3 +6826,10 @@ Document 16 step Q8.
 - The same connection reading inside a transaction that took the row
   out, and after the rollback.
 - The file the pragma left, which holds neither the table nor the row.
+
+### 6.6.267 The trees a statement sorts its rows in (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A statement that writes a `GROUP BY`, a `DISTINCT` and an `ORDER BY`
+  together, and each of the three on its own.

@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` names one line per tree a statement sorts its rows in
+  under `EXPLAIN QUERY PLAN`: the groups, the rows that differ, and the
+  order the statement asks for. D-386 records it. Catalog 6.6.267.
+  `eqp.test` goes from 15 cases passing to 20.
+
 - The suite harness runs `do_eqp_test`, which draws the rows of an
   `EXPLAIN QUERY PLAN` as the tree the shell draws and compares it
   against what the file writes. D-379 records it. `where.test` goes from

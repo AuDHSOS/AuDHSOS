@@ -3073,7 +3073,7 @@ impl<'a> Database<'a> {
 
     /// Writes the lines one core of a statement adds to the plan under
     /// an `EXPLAIN QUERY PLAN`.
-    fn explain(&self, sides: &[Side<'_>], sorted: bool) {
+    fn explain(&self, sides: &[Side<'_>], sorting: Sorting) {
         let mut held = self.planned.borrow_mut();
         let Some(lines) = held.as_mut() else {
             return;
@@ -3081,8 +3081,17 @@ impl<'a> Database<'a> {
         for side in sides {
             detailed(side, &side.plan, lines, 0);
         }
-        if sorted {
-            lines.push((0, b"USE TEMP B-TREE FOR ORDER BY".to_vec()));
+        // `sqlite3Select` writes one line per tree it sorts the rows in,
+        // in the order it builds them: the groups, then the rows that
+        // differ, then the order the statement asks for.
+        for (held, named) in [
+            (sorting.grouped, b"USE TEMP B-TREE FOR GROUP BY".as_slice()),
+            (sorting.distinct, b"USE TEMP B-TREE FOR DISTINCT"),
+            (sorting.ordered, b"USE TEMP B-TREE FOR ORDER BY"),
+        ] {
+            if held {
+                lines.push((0, named.to_vec()));
+            }
         }
     }
 
@@ -3409,7 +3418,14 @@ impl<'a> Database<'a> {
                 },
             );
         covered(arena, &select, sql, &mut sides);
-        self.explain(&sides, !select.order.is_empty() && !walked);
+        self.explain(
+            &sides,
+            Sorting {
+                grouped: !select.group.is_empty(),
+                distinct: select.distinct == Distinct::Distinct,
+                ordered: !select.order.is_empty() && !walked,
+            },
+        );
         // `EXPLAIN QUERY PLAN` names the plan of the statement and runs
         // no loop of it, so the walks are left where they stand and the
         // statement answers no row: `sqlite3_step` over such a
@@ -5230,6 +5246,18 @@ fn shaped(shown: Vec<Vec<u8>>, shape: Shape, rows: Vec<Vec<Value>>) -> Answered 
         },
         shape,
     }
+}
+
+/// Which trees a statement sorts its rows in, each of which
+/// `EXPLAIN QUERY PLAN` names one line for.
+#[derive(Clone, Copy)]
+struct Sorting {
+    /// Whether a `GROUP BY` gathers the rows into groups.
+    grouped: bool,
+    /// Whether a `DISTINCT` keeps the rows that differ.
+    distinct: bool,
+    /// Whether an `ORDER BY` sorts the rows the walk left.
+    ordered: bool,
 }
 
 /// One line of an `EXPLAIN QUERY PLAN`: which line it hangs under,

@@ -1003,6 +1003,34 @@ fn an_order_by_that_names_an_alias_answers_what_the_alias_names() {
 }
 
 #[test]
+fn explain_query_plan_names_every_tree_the_rows_are_sorted_in() {
+    // The groups, then the rows that differ, then the order the
+    // statement asks for, which is the order `sqlite3Select` builds
+    // them in. A walk of `m` reads no index for any of the three.
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT DISTINCT r+1 FROM m GROUP BY r+1 ORDER BY r+2"
+        ),
+        "SCAN m|USE TEMP B-TREE FOR GROUP BY|USE TEMP B-TREE FOR DISTINCT|USE TEMP B-TREE FOR ORDER BY"
+    );
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT r+1 FROM m GROUP BY r+1"
+        ),
+        "SCAN m|USE TEMP B-TREE FOR GROUP BY"
+    );
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT DISTINCT r+1 FROM m"
+        ),
+        "SCAN m|USE TEMP B-TREE FOR DISTINCT"
+    );
+}
+
+#[test]
 fn what_words_no_explain_query_plan_stands_in() {
     // A bare `EXPLAIN` names the program the statement compiles to, and
     // the two words after it are read as one prefix or as none.

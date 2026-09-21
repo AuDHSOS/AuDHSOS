@@ -987,6 +987,8 @@ Size: L.
      which D-381 records.
 123. The database a statement of a trigger's body writes. Built,
      which D-383 records.
+124. The trees a statement sorts its rows in, which
+     `EXPLAIN QUERY PLAN` names. Built, which D-386 records.
 
 ### Done when
 
