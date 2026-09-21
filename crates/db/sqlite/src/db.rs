@@ -4485,15 +4485,26 @@ fn planned(
         // An index over a table that keeps its rows in the key's own
         // tree ends its entries with that key and not with a rowid, and
         // a side already held to a rowid range is read by that range.
+        // A range that names one rowid answers one row, which no index
+        // of the table reaches fewer of.
+        let one = range.0.is_some() && range.0 == range.1;
+        let between = *range != (None, None);
         let keyed = match &side.source {
-            Source::Table(stored) if !stored.table.without_rowid && *range == (None, None) => {
-                // A key the statement writes out is read once; a key a
-                // side already read answers is read per row of that
-                // side, so the first is taken where both are there. An
-                // `OR` is read last, because one index costs less than
-                // one walk per branch.
-                plan_of(&terms, at, stored, format)
-                    .or_else(|| {
+            Source::Table(stored) if !stored.table.without_rowid && !one => {
+                // A walk held to a key of an index answers the rows one
+                // value names, where a range of rowids answers every
+                // row between two, so a key is taken over a range and a
+                // walk the terms only bound is not.
+                let held = plan_of(&terms, at, stored, format, between);
+                if between {
+                    held
+                } else {
+                    // A key the statement writes out is read once; a key
+                    // a side already read answers is read per row of
+                    // that side, so the first is taken where both are
+                    // there. An `OR` is read last, because one index
+                    // costs less than one walk per branch.
+                    held.or_else(|| {
                         filter.and_then(|filter| {
                             union_of(
                                 arena,
@@ -4507,6 +4518,7 @@ fn planned(
                         })
                     })
                     .or_else(|| joined(arena, sql, sides, at, stored))
+                }
             }
             Source::Table(_) | Source::Rows(_) => None,
         };
@@ -4683,10 +4695,15 @@ fn terms_of(
         }
         if !matches!(
             op,
-            BinaryOp::Eq | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge
+            BinaryOp::Eq | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge | BinaryOp::Is
         ) {
             continue;
         }
+        // `x IS v` holds the column at `v` where `v` is not null, which
+        // is `WO_IS` of `research/sqlite/src/whereInt.h`; `x IS NULL`
+        // reaches no key, because an index holds no entry a `=`
+        // against null reaches.
+        let op = if op == BinaryOp::Is { BinaryOp::Eq } else { op };
         // `a < 5` and `5 > a` say the same thing about `a`, so the
         // operator turns over with the operands.
         for (op, column, value) in [(op, left, right), (flipped(op), right, left)] {
@@ -4709,6 +4726,12 @@ fn terms_of(
             let Ok(value) = evaluate_row(arena, value, sql, &eval::NoRow(None)) else {
                 continue;
             };
+            // An index holds no entry a comparison against null
+            // reaches, which is what `NULL = NULL` answering nothing
+            // means.
+            if value == Value::Null {
+                continue;
+            }
             out.push(Bound {
                 at,
                 reached,
@@ -4736,6 +4759,11 @@ fn bounded(
 ) -> Option<Bound> {
     let (at, reached) = reached(arena, value, sql, sides)?;
     let held = evaluate_row(arena, end, sql, &eval::NoRow(None)).ok()?;
+    // An index holds no entry a comparison against null reaches, which
+    // is what `NULL = NULL` answering nothing means.
+    if held == Value::Null {
+        return None;
+    }
     Some(Bound {
         at,
         reached,
@@ -4905,7 +4933,13 @@ fn reached(arena: &Arena, id: ExprId, sql: &[u8], sides: &[Side<'_>]) -> Option<
 /// between, which is the loop `sqlite3WhereBegin` writes for
 /// `WHERE_COLUMN_EQ` and `WHERE_COLUMN_RANGE`. Reading the terms costs
 /// O(i*c*t) in the indexes, their columns and the terms.
-fn plan_of(terms: &[Bound], at: usize, stored: &Stored, format: u32) -> Option<Plan> {
+fn plan_of(
+    terms: &[Bound],
+    at: usize,
+    stored: &Stored,
+    format: u32,
+    wants_key: bool,
+) -> Option<Plan> {
     for kept in &stored.indexes {
         // A partial index answers fewer entries than the table has rows,
         // so a statement planned against one would read fewer rows than
@@ -4955,10 +4989,6 @@ fn plan_of(terms: &[Bound], at: usize, stored: &Stored, format: u32) -> Option<P
                         term.at == at
                             && term.op == op
                             && term.reached == reached
-                            // An index holds no entry a comparison
-                            // against `NULL` reaches, which is what
-                            // `NULL = NULL` answering nothing means.
-                            && term.value != Value::Null
                             // A bound read out of a pattern holds only
                             // where the column compares under the
                             // collation the pattern matches under, and
@@ -5010,7 +5040,7 @@ fn plan_of(terms: &[Bound], at: usize, stored: &Stored, format: u32) -> Option<P
             }
             break;
         }
-        if key.is_empty() && bounds.is_empty() {
+        if key.is_empty() && (wants_key || bounds.is_empty()) {
             continue;
         }
         return Some(Plan::Keyed {
@@ -5738,7 +5768,8 @@ fn ored(
         // A branch that names the rowid is read out of the table's own
         // tree, which is the `OP_SeekRowid` loop `sqlite3WhereBegin`
         // writes for `WHERE_IPK`.
-        let plan = plan_of(&terms, at, stored, settled.format).or_else(|| ranged_of(&terms, at))?;
+        let plan =
+            plan_of(&terms, at, stored, settled.format, false).or_else(|| ranged_of(&terms, at))?;
         plans.push(plan);
     }
     Some(Plan::Union(plans))

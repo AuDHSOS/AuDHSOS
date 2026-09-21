@@ -916,6 +916,85 @@ fn a_covering_walk_refuses_an_entry_whose_later_value_it_cannot_read() {
 }
 
 #[test]
+fn a_key_of_an_index_is_taken_over_a_range_of_rowids() {
+    // A range that names one rowid answers one row, and a range with
+    // two ends is given up for a key; a walk the terms only bound is
+    // not.
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT * FROM m WHERE rowid=2 AND q='A'"
+        ),
+        "SEARCH m USING INTEGER PRIMARY KEY (rowid=?)"
+    );
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT * FROM m WHERE rowid>1 AND q='A'"
+        ),
+        "SEARCH m USING INDEX mq (q=?)"
+    );
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT * FROM m WHERE rowid>1 AND r>20"
+        ),
+        "SEARCH m USING INTEGER PRIMARY KEY (rowid>?)"
+    );
+    assert_eq!(
+        listed(
+            super::INDEXED,
+            b"SELECT rowid FROM m WHERE rowid>1 AND q='A'"
+        ),
+        "3"
+    );
+}
+
+#[test]
+fn an_is_holds_a_column_at_a_value_that_is_not_null() {
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT rowid FROM m WHERE q IS 'b'"
+        ),
+        "SEARCH m USING COVERING INDEX mq (q=?)"
+    );
+    assert_eq!(
+        listed(super::INDEXED, b"SELECT rowid FROM m WHERE q IS 'b'"),
+        "2"
+    );
+    // An index holds no entry a `=` against null reaches, so the table
+    // is scanned.
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT rowid FROM m WHERE q IS NULL"
+        ),
+        "SCAN m"
+    );
+    assert_eq!(
+        listed(super::INDEXED, b"SELECT rowid FROM m WHERE q IS NULL"),
+        "5"
+    );
+    // An end of a `BETWEEN` that is null holds the column at no value
+    // either, and the statement answers no row.
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT rowid FROM m WHERE q BETWEEN NULL AND 'c'"
+        ),
+        "SEARCH m USING COVERING INDEX mq (q<?)"
+    );
+    assert_eq!(
+        listed(
+            super::INDEXED,
+            b"SELECT rowid FROM m WHERE q BETWEEN NULL AND 'c'"
+        ),
+        ""
+    );
+}
+
+#[test]
 fn an_order_by_that_names_an_alias_answers_what_the_alias_names() {
     assert_eq!(
         listed(super::INDEXED, b"SELECT r AS q FROM m ORDER BY q"),

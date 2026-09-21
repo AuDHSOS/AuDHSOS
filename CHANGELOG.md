@@ -27,6 +27,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` takes a walk held to a key of an index over a range of
+  rowids, keeps a range that names one rowid, and holds a column at the
+  value an `IS` names. D-380 records it. Catalog 6.6.263. `where.test`
+  goes from 203 cases passing to 211.
+
 - `db-sqlite` answers a row out of the entry of an index that holds
   every column the statement reads, so the table's tree is not
   descended and each row costs O(log n) less. D-377 records it. Catalog

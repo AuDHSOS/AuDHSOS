@@ -981,6 +981,8 @@ Size: L.
      D-377 records.
 120. The descents and the steps the walks of a statement took.
      Built, which D-378 records.
+121. The key of an index taken over a range of rowids, and the
+     column an `IS` holds. Built, which D-380 records.
 
 ### Done when
 

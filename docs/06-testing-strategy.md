@@ -6792,3 +6792,11 @@ Document 16 step Q8.
 - A walk of an index, with and without the row of the table each entry
   names.
 - A sort, which counts one search back.
+
+### 6.6.263 The walk a range of rowids is given up for (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A range naming one rowid, a range with one end, and a range no index
+  key stands beside.
+- An `IS` over a value that is not null, and one over null.
