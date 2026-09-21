@@ -19,7 +19,11 @@ pub const BLOCK_LEN: usize = 64;
 pub const OUTPUT_LEN: usize = 32;
 
 /// Bytes of length the padding appends.
-const LENGTH_LEN: usize = 8;
+pub(crate) const LENGTH_LEN: usize = 8;
+
+/// The zeros the padding draws from, one block so that the longest run
+/// fits in one slice.
+const ZERO_PADDING: [u8; BLOCK_LEN] = [0u8; BLOCK_LEN];
 
 /// Bytes of the longest message SHA-256 is defined for. FIPS 180-4,
 /// section 1, bounds the message at `2^64 - 1` bits, which is what the
@@ -177,9 +181,8 @@ impl Sha256 {
     pub fn finish(mut self) -> [u8; OUTPUT_LEN] {
         let bits = self.length.saturating_mul(8);
         self.absorb(&[0x80]);
-        while self.buffered != BLOCK_LEN.wrapping_sub(LENGTH_LEN) {
-            self.absorb(&[0x00]);
-        }
+        let (zeros, _) = ZERO_PADDING.split_at(zeros_after(self.buffered));
+        self.absorb(zeros);
         self.absorb(&bits.to_be_bytes());
         let mut digest = [0u8; OUTPUT_LEN];
         let (chunks, _) = digest.as_chunks_mut::<4>();
@@ -270,6 +273,19 @@ impl Hash for Sha256 {
 
     fn finish(self) -> [u8; OUTPUT_LEN] {
         Sha256::finish(self)
+    }
+}
+
+/// Zero bytes the padding needs after the `0x80` byte, so that the length
+/// field ends the block: the run wraps into the next block when `buffered`
+/// is already past the start of the length field. Always below
+/// [`BLOCK_LEN`], which is why one block of zeros feeds it.
+pub(crate) const fn zeros_after(buffered: usize) -> usize {
+    let target = BLOCK_LEN.wrapping_sub(LENGTH_LEN);
+    if buffered <= target {
+        target.wrapping_sub(buffered)
+    } else {
+        BLOCK_LEN.wrapping_sub(buffered).wrapping_add(target)
     }
 }
 

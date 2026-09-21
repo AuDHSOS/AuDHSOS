@@ -21,7 +21,18 @@ pub const MAX_BYTES: usize = MAX_LIMBS.saturating_mul(8);
 ///
 /// Limbs at or above `used` are zero, in this value and in every value
 /// derived from it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// The type carries no `Copy`: it is a kibibyte wide whatever the modulus
+/// is, so a copy is written `clone` and a caller that does not want one
+/// passes a reference.
+///
+/// ```compile_fail
+/// use crypto_bignum::Modulus;
+/// fn copied(modulus: Modulus) -> (Modulus, Modulus) {
+///     (modulus, modulus)
+/// }
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Modulus {
     /// The modulus, least significant limb first.
     pub(crate) limbs: [u64; MAX_LIMBS],
@@ -284,22 +295,24 @@ impl Modulus {
             }
         }
 
-        let mut result = [0u64; MAX_LIMBS];
+        // `value` is dead once the base is in Montgomery form, so the
+        // result lands there rather than in a seventh register of
+        // [`MAX_BYTES`] bytes.
+        value = [0u64; MAX_LIMBS];
         montgomery_secret(
             prefix(&power, used),
             prefix(&unit, used),
             modulus,
             self.n0inv,
-            prefix_mut(&mut result, used),
+            prefix_mut(&mut value, used),
         );
-        let written = write_be(prefix(&result, used), out);
+        let written = write_be(prefix(&value, used), out);
         for register in [
             &mut value,
             &mut power,
             &mut ahead,
             &mut product,
             &mut square,
-            &mut result,
         ] {
             wipe_u64(register);
         }

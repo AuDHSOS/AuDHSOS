@@ -315,3 +315,54 @@ fn signing_wipes_its_own_copies_and_not_the_caller_s_secret() {
     assert_eq!(hex(&secret), hex(&[0x9Du8; 32]));
     assert_eq!(hex(&public_key(&secret)), hex(&public_key(&secret)));
 }
+
+/// Regression for issue #50: verification multiplied the base point and
+/// the public key in two separate chains and now runs one shared chain
+/// over `[s]B + [k](-A)`. The joint form has to give what the two separate
+/// multiplications give, including where a scalar is zero, the two points
+/// are equal, or one is the inverse of the other.
+#[test]
+fn the_joint_multiplication_agrees_with_two_separate_chains() {
+    let base = Point::base();
+    let scalars = [
+        Scalar::from_canonical(&[0u8; 32]).expect("zero is below the order"),
+        Scalar::from_canonical(&unhex32(
+            "0100000000000000000000000000000000000000000000000000000000000000",
+        ))
+        .expect("one is below the order"),
+        Scalar::from_canonical(&unhex32(
+            "0200000000000000000000000000000000000000000000000000000000000000",
+        ))
+        .expect("two is below the order"),
+        Scalar::from_canonical(&unhex32(
+            "ffffffffffffffff00000000000000000000000000000000000000000000000f",
+        ))
+        .expect("the value is below the order"),
+    ];
+    let points = [
+        base,
+        base.double(),
+        base.negate(),
+        Point::IDENTITY,
+        base.mul(scalars[3]),
+    ];
+    for point in points {
+        for left in scalars {
+            for right in scalars {
+                let separate = base.mul(left).add(point.mul(right));
+                let joint = base.mul_add(left, point, right);
+                assert_eq!(separate.compress(), joint.compress());
+            }
+        }
+    }
+}
+
+/// Regression for issue #50: negation is the inverse in the group, which
+/// is what lets `[s]B = R + [k]A` be checked as `[s]B + [k](-A) = R`.
+#[test]
+fn a_point_and_its_negation_add_to_the_neutral_element() {
+    for point in [Point::base(), Point::base().double(), Point::IDENTITY] {
+        assert!(point.add(point.negate()).is_identity());
+        assert_eq!(point.negate().negate().compress(), point.compress());
+    }
+}

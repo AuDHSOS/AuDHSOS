@@ -24,7 +24,11 @@ pub const OUTPUT_LEN_512: usize = 64;
 pub const OUTPUT_LEN_384: usize = 48;
 
 /// Bytes of length the padding appends.
-const LENGTH_LEN: usize = 16;
+pub(crate) const LENGTH_LEN: usize = 16;
+
+/// The zeros the padding draws from, one block so that the longest run
+/// fits in one slice.
+const ZERO_PADDING: [u8; BLOCK_LEN] = [0u8; BLOCK_LEN];
 
 /// The SHA-512 initial state: the fractional parts of the square roots of
 /// the first eight primes, as FIPS 180-4, section 5.3.5, prints them.
@@ -204,9 +208,8 @@ impl Core {
     fn finish(mut self) -> [u8; OUTPUT_LEN_512] {
         let bits = u128::from(self.length).saturating_mul(8);
         self.absorb(&[0x80]);
-        while self.buffered != BLOCK_LEN.wrapping_sub(LENGTH_LEN) {
-            self.absorb(&[0x00]);
-        }
+        let (zeros, _) = ZERO_PADDING.split_at(zeros_after(self.buffered));
+        self.absorb(zeros);
         self.absorb(&bits.to_be_bytes());
         let mut digest = [0u8; OUTPUT_LEN_512];
         let (chunks, _) = digest.as_chunks_mut::<8>();
@@ -420,6 +423,19 @@ fn words(block: &[u8; BLOCK_LEN]) -> [u64; 16] {
         *word = u64::from_be_bytes(*chunk);
     }
     schedule
+}
+
+/// Zero bytes the padding needs after the `0x80` byte, so that the length
+/// field ends the block: the run wraps into the next block when `buffered`
+/// is already past the start of the length field. Always below
+/// [`BLOCK_LEN`], which is why one block of zeros feeds it.
+pub(crate) const fn zeros_after(buffered: usize) -> usize {
+    let target = BLOCK_LEN.wrapping_sub(LENGTH_LEN);
+    if buffered <= target {
+        target.wrapping_sub(buffered)
+    } else {
+        BLOCK_LEN.wrapping_sub(buffered).wrapping_add(target)
+    }
 }
 
 /// Advances the rolling window by sixteen words.

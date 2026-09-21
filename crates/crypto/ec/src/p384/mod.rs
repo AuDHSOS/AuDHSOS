@@ -108,9 +108,7 @@ impl PublicKey {
         let u1 = e.mul(w);
         let u2 = r_value.mul(w);
 
-        let combined = Point::generator()
-            .mul(&u1.to_bytes())
-            .add(self.point.mul(&u2.to_bytes()));
+        let combined = Point::generator().mul_add(&u1.to_bytes(), self.point, &u2.to_bytes());
         let (x, _) = combined.to_affine().ok_or(EcError::BadSignature)?;
 
         if Scalar::from_bytes_reduced(&x.to_bytes()) == r_value {

@@ -14,7 +14,16 @@ use crate::window::{head, head_mut};
 
 /// An RSA public key: a modulus, a public exponent, and the width the
 /// pair encodes and verifies at.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// The type carries no `Copy`, because [`Modulus`] carries none.
+///
+/// ```compile_fail
+/// use crypto_rsa::PublicKey;
+/// fn copied(key: PublicKey) -> (PublicKey, PublicKey) {
+///     (key, key)
+/// }
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PublicKey {
     /// The modulus, with the constants Montgomery arithmetic reduces by.
     modulus: Modulus,

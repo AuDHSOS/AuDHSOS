@@ -466,3 +466,27 @@ fn a_secret_exponentiation_wipes_its_registers_and_repeats_its_answer() {
     );
     assert_eq!(hex(&exponent), hex(&unhex(RFC8448_PRIVATE)));
 }
+
+/// Regression for issue #51: the exponentiation dropped one register of
+/// [`MAX_BYTES`] bytes by writing the result where the base had been. The
+/// result has to stay the one the definition gives.
+#[test]
+fn the_exponentiation_writes_the_result_where_the_base_was() {
+    let modulus = Modulus::new(&fixed(1024)).expect("the fixed modulus is well formed");
+    let width = modulus.width();
+    let mut base = vec![0u8; width];
+    if let Some(slot) = base.last_mut() {
+        *slot = 7;
+    }
+    let mut out = vec![0u8; width];
+    modulus
+        .pow_secret(&base, &[0x00, 0x00, 0x00, 0x05], &mut out)
+        .expect("the base is below the modulus");
+
+    // `7^5` is 16807, which is below the modulus, so the reduction leaves
+    // it as it is.
+    let mut expected = vec![0u8; width];
+    let tail = expected.len().saturating_sub(4);
+    expected[tail..].copy_from_slice(&16807u32.to_be_bytes());
+    assert_eq!(out, expected);
+}

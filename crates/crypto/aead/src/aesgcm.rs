@@ -6,6 +6,13 @@
 //! a time, and GHASH over the associated data, the ciphertext, and the two
 //! lengths.
 //!
+//! The block cipher encrypts four lanes for the price of one, so the tag
+//! mask shares a group with message blocks: the first group of a message
+//! holds counters one to four, its first lane is the mask and its other
+//! three lanes are the keystream of the first three blocks. The hash key
+//! is the one block encryption that stands alone, and it is paid once per
+//! key rather than once per message.
+//!
 //! A nonce of any other length would need GHASH to derive the first counter
 //! block. TLS never uses one, so this crate refuses it rather than carrying
 //! a path nothing exercises.
@@ -32,6 +39,12 @@ const TAG_COUNTER: u32 = 1;
 
 /// The counter value of the first block of the message.
 const FIRST_COUNTER: u32 = 2;
+
+/// Message blocks the first group carries, the lanes the tag mask leaves.
+const FIRST_GROUP_BLOCKS: usize = LANES.saturating_sub(1);
+
+/// Bytes of keystream the first group carries for the message.
+const FIRST_GROUP_LEN: usize = BLOCK_LEN.saturating_mul(FIRST_GROUP_BLOCKS);
 
 /// What the two key lengths have in common.
 #[derive(Clone)]
@@ -67,9 +80,25 @@ impl AesGcm {
         block
     }
 
+    /// The group of counter blocks one to four: the tag mask followed by
+    /// the keystream of the first [`FIRST_GROUP_BLOCKS`] message blocks.
+    ///
+    /// A message costs this group whatever its length, which is what
+    /// `open` needs: it verifies the tag before it decrypts, so the mask
+    /// is due before the keystream is applied.
+    fn first_group(&self, nonce: &[u8; NONCE_LEN]) -> [u8; GROUP_LEN] {
+        self.keystream(nonce, TAG_COUNTER)
+    }
+
     /// Exclusive-ors the keystream from [`FIRST_COUNTER`] onward into
-    /// `data`, four blocks at a time.
-    fn apply_keystream(&self, nonce: &[u8; NONCE_LEN], data: &mut [u8]) -> Result<(), AeadError> {
+    /// `data`, four blocks at a time, taking the first
+    /// [`FIRST_GROUP_BLOCKS`] blocks from `first`.
+    fn apply_keystream(
+        &self,
+        nonce: &[u8; NONCE_LEN],
+        data: &mut [u8],
+        first: &[u8; GROUP_LEN],
+    ) -> Result<(), AeadError> {
         let blocks =
             u64::try_from(data.len().div_ceil(BLOCK_LEN)).map_err(|_| AeadError::MessageTooLong)?;
         if let Some(after_first) = blocks.checked_sub(1) {
@@ -81,8 +110,16 @@ impl AesGcm {
             }
         }
 
-        let mut counter = FIRST_COUNTER;
-        let (groups, remainder) = data.as_chunks_mut::<GROUP_LEN>();
+        let (_, head_stream) = first.split_at(BLOCK_LEN);
+        let take = FIRST_GROUP_LEN.min(data.len());
+        let (head, rest) = data.split_at_mut(take);
+        for (byte, key) in head.iter_mut().zip(head_stream) {
+            *byte ^= *key;
+        }
+
+        let mut counter =
+            FIRST_COUNTER.wrapping_add(u32::try_from(FIRST_GROUP_BLOCKS).unwrap_or(0));
+        let (groups, remainder) = rest.as_chunks_mut::<GROUP_LEN>();
         for group in groups {
             let stream = self.keystream(nonce, counter);
             for (byte, key) in group.iter_mut().zip(stream) {
@@ -116,12 +153,13 @@ impl AesGcm {
         stream
     }
 
-    /// The tag over `aad` and `ciphertext`.
+    /// The tag over `aad` and `ciphertext`, masked by the first lane of
+    /// `first`, which is the encryption of counter block [`TAG_COUNTER`].
     fn tag(
         &self,
-        nonce: &[u8; NONCE_LEN],
         aad: &[u8],
         ciphertext: &[u8],
+        first: &[u8; GROUP_LEN],
     ) -> Result<Tag, AeadError> {
         let aad_bits = bit_length(aad.len())?;
         let text_bits = bit_length(ciphertext.len())?;
@@ -143,8 +181,7 @@ impl AesGcm {
         hash.update(&lengths);
         let hashed = hash.finish();
 
-        let mut mask = AesGcm::counter_block(nonce, TAG_COUNTER);
-        self.cipher.encrypt_block(&mut mask);
+        let (mask, _) = first.split_at(BLOCK_LEN);
         let mut tag = [0u8; BLOCK_LEN];
         for (slot, (masked, hashed)) in tag.iter_mut().zip(mask.iter().zip(hashed)) {
             *slot = masked ^ hashed;
@@ -155,8 +192,9 @@ impl AesGcm {
     /// Encrypts in place and returns the tag.
     fn seal(&self, nonce: &[u8], aad: &[u8], in_out: &mut [u8]) -> Result<Tag, AeadError> {
         let nonce: &[u8; NONCE_LEN] = nonce.try_into().map_err(|_| AeadError::NonceLength)?;
-        self.apply_keystream(nonce, in_out)?;
-        self.tag(nonce, aad, in_out)
+        let first = self.first_group(nonce);
+        self.apply_keystream(nonce, in_out, &first)?;
+        self.tag(aad, in_out, &first)
     }
 
     /// Verifies and then decrypts in place.
@@ -168,12 +206,13 @@ impl AesGcm {
         tag: &Tag,
     ) -> Result<(), AeadError> {
         let nonce: &[u8; NONCE_LEN] = nonce.try_into().map_err(|_| AeadError::NonceLength)?;
-        let expected = self.tag(nonce, aad, in_out)?;
+        let first = self.first_group(nonce);
+        let expected = self.tag(aad, in_out, &first)?;
         if !ct_eq(&expected, tag).is_true() {
             wipe(in_out);
             return Err(AeadError::BadTag);
         }
-        self.apply_keystream(nonce, in_out)
+        self.apply_keystream(nonce, in_out, &first)
     }
 }
 

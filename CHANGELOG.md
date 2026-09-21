@@ -888,6 +888,65 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   it, and reports the bit it woke with when the image raises the vector.
   Catalog 6.6.59 and 6.6.60.
 
+### Changed
+
+- `crypto-aead`: GHASH multiplies with three 64-bit carry-less products
+  and one fixed reduction, where it ran 128 masked shift-and-reduce steps
+  over `u128` per block (issue #46). The hash key and the accumulator are
+  held bit-reversed, the order the shifts of a carry-less product assume,
+  so `new` reverses the key, `block` reverses each input block and
+  `finish` reverses the result back into the order of the standard. The
+  Karatsuba split is 3 products of 63 steps each over `u64` words against
+  128 steps over `u128`, and no memory access depends on the key or on the
+  message, which is what the table-free form is for. Two regression tests
+  pin the product to the bit-at-a-time form of NIST SP 800-38D,
+  section 6.3, over 256 generated pairs and over the operand edges.
+
+- `crypto-aead`: the AES-GCM tag mask rides a lane of the first group of a
+  message (issue #47). The bitsliced cipher encrypts four lanes for the
+  price of one, and the mask used to take a group of its own: the first
+  group now holds counter blocks one to four, lane zero is the mask and
+  the other three lanes are the keystream of the first three message
+  blocks. A 100-byte record pays two cipher passes where it paid three.
+  The hash key stays one pass per key, which `new` has no group to share
+  with. Two regression tests seal every length from none to past two
+  groups against the block-at-a-time definition and hold the keystream of
+  a message to be a prefix of the keystream of a longer one.
+
+- `crypto-hash`: `hkdf::expand` builds the keyed HMAC state once and
+  clones it per block, where it called `Hmac::new` in every iteration
+  (issue #48). Each call absorbs two padded blocks, so a 255-block
+  expansion paid 510 compressions for a schedule that does not change. A
+  regression test runs the longest expansion the construction allows
+  against a reference that builds the schedule per block.
+
+- `crypto-hash`: `Sha256::finish` and the SHA-512 core absorb the padding
+  as one slice of zeros (issue #49). The run was one `absorb` call per
+  zero byte, up to 63 or 127 of them with the buffer bookkeeping each
+  time; `zeros_after` computes the count, which wraps into the next block
+  when the buffer is already past the start of the length field. Four
+  regression tests hold the count for every buffer state and every message
+  length up to three blocks for SHA-256, SHA-384 and SHA-512 against an
+  independent implementation.
+
+- `crypto-ec`: ECDSA and Ed25519 verification run one chain of doublings
+  for both scalars, by Shamir's trick (issue #50). `Point::mul_add` on the
+  Jacobian curve and on Ed25519 adds `self`, `other`, or their sum at each
+  position as the bit pair selects, so P-256 and P-384 take 256 and 384
+  doublings where they took 512 and 768. Ed25519 checks `[s]B + [k](-A) =
+  R`, the rearrangement of `[s]B = R + [k]A` that shares the chain, with
+  `Point::negate` as the new inverse. Four regression tests hold the joint
+  form to two separate chains across zero scalars, equal points and a
+  point against its inverse.
+
+- `crypto-bignum`: `Modulus` carries no `Copy`, and `ModpGroup` and
+  `PublicKey` carry none because they embed it (issue #51). The type is a
+  kibibyte wide whatever the modulus is, so a bare use copied the kibibyte
+  and said nothing; `ModpGroup::new` held one such copy. A copy is now
+  written `clone`, and three `compile_fail` doc tests hold the three
+  types. `pow_secret` also writes its result where the base was, which
+  drops one register of `MAX_BYTES` bytes from its frame.
+
 ### Fixed
 
 - `kernel-sched`: `Scheduler::pick_next` applied one event, `Event::Preempt`,
