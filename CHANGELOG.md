@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` reads a `WHERE` whose top-level `OR` names a key of an
+  index for every branch by one walk per branch, one after another, with
+  a row two branches name answered once, and a term that carries a
+  `COLLATE` names no key of an index any more. D-364 records it. Catalog
+  6.6.250. `whereD.test` goes from 23 cases passing to 37.
+
 - `db-sqlite` carries the matcher of `ext/misc/regexp.c` as
   `crate::regexp`, and the suite tester registers `regexp(P,S)` and
   `regexpi(P,S)` on the connection `load_static_extension db regexp`

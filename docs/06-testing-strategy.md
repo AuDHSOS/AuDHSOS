@@ -6631,3 +6631,16 @@ Document 16 step Q8.
 - The bytes every match begins with, which a match skips ahead to.
 - A pattern the matcher refuses, once for each message.
 - A pattern whose program asks for more steps than one holds.
+
+### 6.6.250 The plan of an `OR` over several indexes (`db-sqlite`)
+
+Document 16 step Q8.
+
+- An `OR` whose every branch names a key answers the branches one after
+  another, in the order the `WHERE` writes them.
+- A row two branches name is answered once.
+- An `OR` under an `AND` spine whose other terms name no key.
+- A branch that names no key leaves the table scanned.
+- A branch whose index the descent cannot read leaves the table scanned;
+  one whose index the walk cannot read refuses.
+- A term that carries a `COLLATE` names no key.

@@ -955,6 +955,8 @@ Size: L.
 107. Whether a text holds a run a regular expression matches, which the
      `regexp` extension registers `regexp` and `regexpi` for. Built,
      which D-362 records.
+108. The rows a top-level `OR` names, read by one walk of an index per
+     branch. Built, which D-364 records.
 
 ### Done when
 
@@ -964,8 +966,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 118 303 cases in 847 files, 105 763
-pass, 3387 answer differently, and 9153 name something the engine
+under the `tclsh` of the machine. Of 118 297 cases in 847 files, 105 772
+pass, 3372 answer differently, and 9153 name something the engine
 refuses or a command that needs the C library's internals. The files
 that answer for tens of thousands of rows reach the three-minute
 deadline and are counted with the cases they ran by then. One run over

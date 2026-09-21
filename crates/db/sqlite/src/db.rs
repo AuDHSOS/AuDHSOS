@@ -1393,6 +1393,10 @@ enum Plan {
         /// column the index holds.
         rowid_at: usize,
     },
+    /// The rows of every plan it holds, each row once, which is what
+    /// an `OR` whose every branch names a key is read by. It is not the
+    /// `UNION` of the grammar.
+    Union(Vec<Plan>),
     /// The rows an index names, which an `ON` holds to the key a side
     /// already read answers, so the key is a value per row of that side
     /// and not one value for the statement.
@@ -1416,7 +1420,7 @@ impl Side<'_> {
     const fn range(&self) -> (Option<i64>, Option<i64>) {
         match self.plan {
             Plan::Rows(first, last) => (first, last),
-            Plan::Keyed { .. } | Plan::Joined { .. } => (None, None),
+            Plan::Keyed { .. } | Plan::Joined { .. } | Plan::Union(_) => (None, None),
         }
     }
 
@@ -3857,36 +3861,66 @@ impl<'a> Database<'a> {
             Source::Rows(rows) => return Feed::Rows(rows.iter()),
             Source::Table(stored) => stored,
         };
-        let image = self.imaged(stored.place);
-        if let Some((root, key, collations, rowid_at)) = sought(&side.plan, cursor)
-            // An entry this walk cannot read whole is one it cannot
-            // compare, so the descent gives up and the table is scanned:
-            // the same rows, and only the cost is not the same.
-            && let Ok(walk) = {
-                let mut scratch = Vec::new();
-                image.entries_from(root, &mut |entry| {
-                    let order =
-                        order_of_entry(&image, entry, &key, &collations, self.encoding, &mut scratch)
-                            .map_err(|_| crate::error::Error::Overrun)?;
-                    Ok(order == core::cmp::Ordering::Less)
-                })
-            }
+        if let Plan::Union(plans) = &side.plan {
+            let feeds: Option<Vec<Feed<'a, 'f>>> = plans
+                .iter()
+                .map(|plan| sought(plan, cursor).and_then(|held| self.keyed(stored, held)))
+                .collect();
+            return match feeds {
+                Some(feeds) => Feed::Union(Box::new(Union {
+                    feeds,
+                    at: 0,
+                    seen: Vec::new(),
+                })),
+                None => self.scanned(side, stored),
+            };
+        }
+        if let Some(held) = sought(&side.plan, cursor)
+            && let Some(feed) = self.keyed(stored, held)
         {
-            return Feed::Keyed(Box::new(Sought {
-                image,
-                stored,
-                walk,
-                key,
-                collations,
-                rowid_at,
-                encoding: self.encoding,
-                collation: self.collation(),
-                payload: Vec::new(),
-            }));
+            return feed;
         }
         // A plan that names an index and could not be walked falls back
         // to the whole tree, which answers the same rows.
         self.scanned(side, stored)
+    }
+
+    /// The walk of one index, held to the key the plan names, and
+    /// nothing where the entries cannot be compared against that key.
+    ///
+    /// An entry this walk cannot read whole is one it cannot compare, so
+    /// the descent gives up: a caller that answers no walk reads the
+    /// table's own tree instead, which answers the same rows and only
+    /// the cost is not the same.
+    fn keyed<'f>(&self, stored: &'f Stored, held: Sought_) -> Option<Feed<'a, 'f>> {
+        let (root, key, collations, rowid_at) = held;
+        let image = self.imaged(stored.place);
+        let mut scratch = Vec::new();
+        let walk = image
+            .entries_from(root, &mut |entry| {
+                let order = order_of_entry(
+                    &image,
+                    entry,
+                    &key,
+                    &collations,
+                    self.encoding,
+                    &mut scratch,
+                )
+                .map_err(|_| crate::error::Error::Overrun)?;
+                Ok(order == core::cmp::Ordering::Less)
+            })
+            .ok()?;
+        Some(Feed::Keyed(Box::new(Sought {
+            image,
+            stored,
+            walk,
+            key,
+            collations,
+            rowid_at,
+            encoding: self.encoding,
+            collation: self.collation(),
+            payload: Vec::new(),
+        })))
     }
 
     /// The rows of one table read out of its own tree, which is what a
@@ -4187,8 +4221,14 @@ fn planned(arena: &Arena, filter: Option<ExprId>, sql: &[u8], sides: &mut [Side<
             Source::Table(stored) if !stored.table.without_rowid && *range == (None, None) => {
                 // A key the statement writes out is read once; a key a
                 // side already read answers is read per row of that
-                // side, so the first is taken where both are there.
-                plan_of(&terms, at, stored).or_else(|| joined(arena, sql, sides, at, stored))
+                // side, so the first is taken where both are there. An
+                // `OR` is read last, because one index costs less than
+                // one walk per branch.
+                plan_of(&terms, at, stored)
+                    .or_else(|| {
+                        filter.and_then(|filter| union_of(arena, filter, sql, sides, at, stored))
+                    })
+                    .or_else(|| joined(arena, sql, sides, at, stored))
             }
             Source::Table(_) | Source::Rows(_) => None,
         };
@@ -4325,6 +4365,16 @@ fn terms_of(arena: &Arena, filter: ExprId, sql: &[u8], sides: &[Side<'_>]) -> Ve
             let Some((at, reached)) = reached(arena, column, sql, sides) else {
                 continue;
             };
+            // `sqlite3BinaryCompareCollSeq`: a `COLLATE` on either side
+            // says what the comparison compares under, which need not be
+            // what the column compares under, and an index over the
+            // column then holds its entries in another order than the
+            // term asks about. A `COLLATE` over the column itself is
+            // already no term, because `reached` reads a column and not
+            // a node above one.
+            if matches!(arena.node(value), Some(Node::Collate { .. })) {
+                continue;
+            }
             // A term that names a column is a term about the row, and
             // the row is what is being planned for, so only a value the
             // walk needs no row to read is one it can be held to.
@@ -4427,6 +4477,79 @@ fn plan_of(terms: &[Bound], at: usize, stored: &Stored) -> Option<Plan> {
     None
 }
 
+/// The plans a top-level `OR` of the `WHERE` names, where every branch
+/// of it names a key of an index over this side.
+///
+/// This is the multi-index `OR` optimization of `src/where.c`, which
+/// `whereOrInsert` builds: the branches are walked one after another and
+/// a row is answered once. A branch that names no key leaves the side
+/// scanned, because such a branch holds any row and a walk that left it
+/// out would answer fewer rows than the statement asks for.
+///
+/// Finding the branches costs O(n) in the nodes of the `WHERE`.
+fn union_of(
+    arena: &Arena,
+    filter: ExprId,
+    sql: &[u8],
+    sides: &[Side<'_>],
+    at: usize,
+    stored: &Stored,
+) -> Option<Plan> {
+    let mut spine = alloc::vec![filter];
+    while let Some(id) = spine.pop() {
+        match arena.node(id) {
+            Some(Node::Binary {
+                op: BinaryOp::And,
+                left,
+                right,
+            }) => {
+                spine.push(left);
+                spine.push(right);
+            }
+            Some(Node::Binary {
+                op: BinaryOp::Or, ..
+            }) => {
+                if let Some(plan) = ored(arena, id, sql, sides, at, stored) {
+                    return Some(plan);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The plans the branches of the `OR` at `id` name, in the order the
+/// `WHERE` writes them, and nothing where a branch names no key.
+///
+/// Reading one branch costs what [`plan_of`] costs over its terms.
+fn ored(
+    arena: &Arena,
+    id: ExprId,
+    sql: &[u8],
+    sides: &[Side<'_>],
+    at: usize,
+    stored: &Stored,
+) -> Option<Plan> {
+    let mut plans = Vec::new();
+    let mut spine = alloc::vec![id];
+    while let Some(held) = spine.pop() {
+        if let Some(Node::Binary {
+            op: BinaryOp::Or,
+            left,
+            right,
+        }) = arena.node(held)
+        {
+            spine.push(right);
+            spine.push(left);
+            continue;
+        }
+        let terms = terms_of(arena, held, sql, sides);
+        plans.push(plan_of(&terms, at, stored)?);
+    }
+    Some(Plan::Union(plans))
+}
+
 /// What one plan holds a walk of an index to: the tree, the values
 /// every entry begins with, what each compares under, and where the
 /// rowid stands.
@@ -4440,7 +4563,7 @@ type Sought_ = (u32, Vec<Value>, Vec<Collation>, usize);
 
 fn sought(plan: &Plan, cursor: &Cursor<'_>) -> Option<Sought_> {
     match plan {
-        Plan::Rows(_, _) => None,
+        Plan::Rows(_, _) | Plan::Union(_) => None,
         Plan::Keyed {
             root,
             key,
@@ -4782,6 +4905,41 @@ enum Feed<'i, 'f> {
     /// The rows an index names, read out of the index's tree and then
     /// out of the table's.
     Keyed(Box<Sought<'i, 'f>>),
+    /// The rows of several walks, each row once, which is what an `OR`
+    /// whose every branch names a key is read by.
+    Union(Box<Union<'i, 'f>>),
+}
+
+/// Several walks of one table while they are read one after another.
+struct Union<'i, 'f> {
+    /// The walks, in the order the `OR` writes the branches.
+    feeds: Vec<Feed<'i, 'f>>,
+    /// Which of them the reader stands in.
+    at: usize,
+    /// The rowids already answered, which is what keeps a row two
+    /// branches name from being answered twice. Reading one row costs
+    /// O(n) in the rows already answered.
+    seen: Vec<i64>,
+}
+
+impl Union<'_, '_> {
+    /// The next row no earlier branch answered.
+    fn read(&mut self) -> Option<Read> {
+        loop {
+            let feed = self.feeds.get_mut(self.at)?;
+            let Some(read) = feed.next() else {
+                self.at = self.at.saturating_add(1);
+                continue;
+            };
+            let Ok((Some(rowid), values)) = read else {
+                return Some(read);
+            };
+            if !self.seen.contains(&rowid) {
+                self.seen.push(rowid);
+                return Some(Ok((Some(rowid), values)));
+            }
+        }
+    }
 }
 
 /// An index of a table while its tree is being walked.
@@ -4908,6 +5066,7 @@ impl Iterator for Feed<'_, '_> {
             }
             Feed::Rows(rows) => rows.next().map(|values| Ok((None, values.clone()))),
             Feed::Keyed(sought) => sought.read(),
+            Feed::Union(union) => union.read(),
         }
     }
 }

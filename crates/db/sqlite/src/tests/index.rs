@@ -202,3 +202,83 @@ fn an_entry_that_ends_with_no_rowid_is_refused() {
         Err(crate::db::Error::Image(crate::error::Error::Overrun))
     );
 }
+
+/// The rowids the fixture answers for `sql`.
+fn keys(bytes: &[u8], sql: &[u8]) -> Vec<Value> {
+    answers(bytes, sql)
+        .unwrap()
+        .into_iter()
+        .filter_map(|row| row.first().cloned())
+        .collect()
+}
+
+#[test]
+fn an_or_whose_every_branch_names_a_key_answers_the_branches_one_after_another() {
+    // `q='b'` reaches `mq` and `p=2` reaches `mpq`, so the rows come in
+    // the order the branches are written and not in the table's.
+    let rows = answers(super::INDEXED, b"SELECT rowid, p FROM m WHERE q='b' OR p=2").unwrap();
+    assert_eq!(
+        rows,
+        [
+            alloc::vec![Value::Int(2), Value::Int(1)],
+            alloc::vec![Value::Int(3), Value::Int(2)],
+            alloc::vec![Value::Int(4), Value::Int(2)],
+        ]
+    );
+}
+
+#[test]
+fn a_row_two_branches_of_an_or_name_is_answered_once() {
+    let rows = keys(super::INDEXED, b"SELECT rowid FROM m WHERE p=2 OR q='c'");
+    assert_eq!(rows, [Value::Int(3), Value::Int(4)]);
+}
+
+#[test]
+fn an_or_is_read_where_a_term_of_the_and_spine_above_it_names_no_key() {
+    let rows = keys(
+        super::INDEXED,
+        b"SELECT rowid FROM m WHERE r IS NOT NULL AND (q='b' OR p=2)",
+    );
+    assert_eq!(rows, [Value::Int(2), Value::Int(3)]);
+}
+
+#[test]
+fn an_or_one_branch_of_which_names_no_key_leaves_the_table_scanned() {
+    // `mr` holds its entries in the other order, so no index answers
+    // `r=30` and the branch holds any row.
+    let rows = keys(super::INDEXED, b"SELECT rowid FROM m WHERE q='b' OR r=30");
+    assert_eq!(rows, [Value::Int(2), Value::Int(3)]);
+}
+
+#[test]
+fn a_where_that_holds_no_or_is_read_by_the_table() {
+    let rows = keys(super::INDEXED, b"SELECT rowid FROM m WHERE r>20");
+    assert_eq!(rows, [Value::Int(3), Value::Int(5)]);
+}
+
+#[test]
+fn an_or_whose_branch_names_an_index_the_descent_cannot_read_is_scanned() {
+    let bytes = damaged(b"mq", 1);
+    let rows = keys(&bytes, b"SELECT rowid FROM m WHERE q='A' OR p=3");
+    assert_eq!(rows, [Value::Int(1), Value::Int(3), Value::Int(5)]);
+}
+
+#[test]
+fn an_or_whose_branch_names_an_index_the_walk_cannot_read_refuses() {
+    let bytes = damaged(b"mq", 3);
+    assert_eq!(
+        answers(&bytes, b"SELECT rowid FROM m WHERE q='A' OR p=3"),
+        Err(crate::db::Error::Image(crate::error::Error::Overrun))
+    );
+}
+
+#[test]
+fn a_term_that_carries_a_collate_names_no_key_of_an_index() {
+    // `mq` holds the entries of `q` under `NOCASE`, so a term that
+    // compares under `BINARY` asks about an order the index is not in.
+    let rows = keys(
+        super::INDEXED,
+        b"SELECT rowid FROM m WHERE q='A' COLLATE binary",
+    );
+    assert_eq!(rows, [Value::Int(1), Value::Int(3)]);
+}
