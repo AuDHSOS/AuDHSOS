@@ -6874,3 +6874,14 @@ Document 16 step Q8.
   real affinity, and a statement holding a `RIGHT` join.
 - A rowid a side answers as text that names no number, as a real between
   two whole numbers, and as a null.
+
+### 6.6.272 The index a walk with no key reads (`db-sqlite`)
+
+Document 16 step Q8.
+
+- The narrowest of two indexes that cover, whichever was made last.
+- What leaves the table scanned: a column no index holds, an index over
+  an expression, a partial index, an index holding a place backwards, a
+  table that keeps its rows in the key's own tree, and an `ORDER BY` the
+  walk of the table answers.
+- The searches a walk beginning at `OP_Rewind` counts.

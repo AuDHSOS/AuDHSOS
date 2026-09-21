@@ -3413,12 +3413,13 @@ impl<'a> Database<'a> {
         subqueries(arena, &select)?;
         let calls = aggregates(arena, &select, sql, &sides, self.grouped)?;
         let overs = overs(arena, &select, sql, self.grouped)?;
+        let alone = overs.is_empty();
         // An `ORDER BY` the walk already answers in needs no sort, which
         // is what `sqlite3WhereIsOrdered` answers for the loops
         // `sqlite3WhereBegin` chose. Only the walk of one table answers
         // an order: a join answers the product, a group answers one row
         // per group, and a window reads the rows it was given.
-        let walked = overs.is_empty()
+        let walked = alone
             && calls.is_empty()
             && select.group.is_empty()
             && in_order(
@@ -3431,13 +3432,13 @@ impl<'a> Database<'a> {
                     collating: self.collating,
                 },
             );
-        let gathered = overs.is_empty() && self.gathers(arena, &select, sql, &mut sides);
+        let gathered = alone && self.gathers(arena, &select, sql, &mut sides);
         // A statement that gathers its rows into groups answers them in
         // the order of the groups, so an `ORDER BY` that names the
         // `GROUP BY` terms is answered by that order and sorts nothing
         // of its own.
-        let held = walked || (overs.is_empty() && grouped_order(arena, &select, sql, &sides));
-        self.described(arena, &select, sql, &mut sides, (gathered, held));
+        let held = walked || (alone && grouped_order(arena, &select, sql, &sides));
+        self.described(arena, &select, sql, &mut sides, (gathered, held, alone));
         // `EXPLAIN QUERY PLAN` names the plan of the statement and runs
         // no loop of it, so the walks are left where they stand and the
         // statement answers no row: `sqlite3_step` over such a
@@ -4189,6 +4190,10 @@ impl<'a> Database<'a> {
         } else {
             image.entries_from(root, &mut reached).ok()?
         };
+        // A walk held to no key and between no bounds begins at
+        // `OP_Rewind`, which counts no search, where one the terms hold
+        // begins at `OP_SeekGE`, which counts one.
+        let rewind = key.is_empty() && bounds.is_empty();
         Some(Feed::Keyed(Box::new(Sought {
             image,
             stored,
@@ -4199,6 +4204,7 @@ impl<'a> Database<'a> {
             bounds,
             from_high,
             covering,
+            rewind,
             searched: 0,
             encoding: self.encoding,
             collation: self.collation(),
@@ -4380,10 +4386,17 @@ impl<'a> Database<'a> {
         select: &Select,
         sql: &[u8],
         sides: &mut [Side<'_>],
-        held: (bool, bool),
+        held: (bool, bool, bool),
     ) {
-        let (gathered, ordered) = held;
-        covered(arena, select, sql, sides);
+        let (gathered, ordered, windowless) = held;
+        // A walk of an index answers the rows in the order of the index
+        // and not of the rowids, so a side is read out of one only where
+        // no part of the statement reads the order the walk answers: a
+        // `GROUP BY` the walk gathers the groups of, an `ORDER BY` the
+        // walk answers, and a window function that reads the rows as the
+        // statement left them each read that order.
+        let free = windowless && !gathered && (select.order.is_empty() || !ordered);
+        covered(arena, select, sql, sides, free);
         self.explain(
             sides,
             Sorting {
@@ -5301,7 +5314,7 @@ fn in_order_of(
 ///
 /// Finding what the statement reads costs O(n) in the nodes and O(s) in
 /// the sides for each of them.
-fn covered(arena: &Arena, select: &Select, sql: &[u8], sides: &mut [Side<'_>]) {
+fn covered(arena: &Arena, select: &Select, sql: &[u8], sides: &mut [Side<'_>], free: bool) {
     let mut reading: Vec<Vec<usize>> = alloc::vec![Vec::new(); sides.len()];
     // A `*` answers every column of the side it names, and a column no
     // side of this statement answers is one this reading cannot place,
@@ -5339,7 +5352,70 @@ fn covered(arena: &Arena, select: &Select, sql: &[u8], sides: &mut [Side<'_>]) {
         }
     }
     for (side, read) in sides.iter_mut().zip(reading) {
+        if free {
+            covers(side, &read);
+        }
         side.covering = covering_of(side, &read);
+    }
+}
+
+/// Reads a side no term holds to a key out of the narrowest index that
+/// holds every column of `read`, rather than out of the table.
+///
+/// An entry of such an index is shorter than the row, so the walk reads
+/// fewer bytes for the same rows, which is what `whereLoopAddBtree` of
+/// `research/sqlite/src/where.c` costs `WHERE_IDX_ONLY` below a scan of
+/// the table by. The walk answers the rows in the order of the index and
+/// not of the rowids, which a statement writing no `ORDER BY` asks
+/// nothing about.
+///
+/// Reading the indexes costs O(i * k) in their places.
+fn covers(side: &mut Side<'_>, read: &[usize]) {
+    let Source::Table(stored) = &side.source else {
+        return;
+    };
+    // A table that keeps its rows in the key's own tree ends the entries
+    // of its indexes with that key and not with a rowid.
+    if stored.table.without_rowid || !matches!(side.plan, Plan::Rows(None, None)) {
+        return;
+    }
+    let mut narrowest: Option<&Kept> = None;
+    for kept in stored.indexes.iter().rev() {
+        // A partial index answers fewer entries than the table has rows,
+        // and an index holding a place backwards answers its entries in
+        // an order this walk does not read.
+        if kept.index.filter.is_some()
+            || kept
+                .index
+                .columns
+                .iter()
+                .any(|keyed| keyed.order == crate::ast::Order::Descending)
+        {
+            continue;
+        }
+        let places: Vec<Option<usize>> = kept
+            .index
+            .columns
+            .iter()
+            .map(crate::schema::Keyed::place)
+            .collect();
+        if !read.iter().all(|place| places.contains(&Some(*place))) {
+            continue;
+        }
+        if narrowest.is_none_or(|held| places.len() < held.index.columns.len()) {
+            narrowest = Some(kept);
+        }
+    }
+    if let Some(kept) = narrowest {
+        side.plan = Plan::Keyed {
+            root: kept.root,
+            key: Vec::new(),
+            collations: Vec::new(),
+            rowid_at: kept.index.columns.len(),
+            bounds: Bounds::default(),
+            backwards: false,
+            reversed: false,
+        };
     }
 }
 
@@ -6709,6 +6785,9 @@ struct Sought<'i, 'f> {
     /// Where each place of the index stands in the table, where the row
     /// is built from the entry and the table's tree is not descended.
     covering: Option<Vec<Option<usize>>>,
+    /// Whether the walk begins at `OP_Rewind` and stands before its
+    /// first entry, which counts no search.
+    rewind: bool,
     /// The descents and the steps the walk has taken.
     searched: i64,
     /// Where the rowid stands in an entry.
@@ -6728,8 +6807,13 @@ impl<'i> Sought<'i, '_> {
         let entry = self.walk.next()?;
         // The first entry the walk answers is where the descent stood,
         // which is `OP_SeekGE`; each one after it is a step, which is
-        // `OP_Next`. Both count a search.
-        self.searched = self.searched.saturating_add(1);
+        // `OP_Next`. Both count a search, and a walk that begins at
+        // `OP_Rewind` counts none for its first entry.
+        if self.rewind {
+            self.rewind = false;
+        } else {
+            self.searched = self.searched.saturating_add(1);
+        }
         match self.take(entry) {
             Ok(Some(row)) => Some(Ok(row)),
             // Every entry after this one sorts after it, so the entries

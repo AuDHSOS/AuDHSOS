@@ -252,10 +252,12 @@ fn an_or_one_branch_of_which_names_no_key_leaves_the_table_scanned() {
 
 #[test]
 fn a_where_that_holds_no_or_is_read_by_the_table() {
+    // `mq` holds every column the statement reads, so the walk reads the
+    // entries and answers the rows in the order `q` collates in.
     let rows = keys(super::INDEXED, b"SELECT rowid FROM m WHERE q IS NOT NULL");
     assert_eq!(
         rows,
-        [Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)]
+        [Value::Int(1), Value::Int(3), Value::Int(2), Value::Int(4)]
     );
 }
 
@@ -970,7 +972,7 @@ fn an_is_holds_a_column_at_a_value_that_is_not_null() {
             super::INDEXED,
             b"EXPLAIN QUERY PLAN SELECT rowid FROM m WHERE q IS NULL"
         ),
-        "SCAN m"
+        "SCAN m USING COVERING INDEX mq"
     );
     assert_eq!(
         listed(super::INDEXED, b"SELECT rowid FROM m WHERE q IS NULL"),
@@ -1123,7 +1125,7 @@ fn a_side_is_keyed_by_what_the_sides_before_it_answer() {
             super::INDEXED,
             b"EXPLAIN QUERY PLAN SELECT m.r FROM k, m WHERE m.p=k.a+1"
         ),
-        "SCAN k|SEARCH m USING INDEX mpq (p=?)"
+        "SCAN k USING COVERING INDEX ka|SEARCH m USING INDEX mpq (p=?)"
     );
     // A term holding the rowid answers one row, which no key of an index
     // answers fewer of.
@@ -1132,7 +1134,7 @@ fn a_side_is_keyed_by_what_the_sides_before_it_answer() {
             super::INDEXED,
             b"EXPLAIN QUERY PLAN SELECT m.p FROM k, m WHERE m.p=k.a AND m.rowid=k.a"
         ),
-        "SCAN k|SEARCH m USING INTEGER PRIMARY KEY (rowid=?)"
+        "SCAN k USING COVERING INDEX ka|SEARCH m USING INTEGER PRIMARY KEY (rowid=?)"
     );
     // A key a side answers is taken over a range of rowids the terms
     // bound, which answers every row between two.
@@ -1149,7 +1151,7 @@ fn a_side_is_keyed_by_what_the_sides_before_it_answer() {
             super::INDEXED,
             b"EXPLAIN QUERY PLAN SELECT m.p FROM k LEFT JOIN m ON m.p=k.a"
         ),
-        "SCAN k|SEARCH m USING COVERING INDEX mpq (p=?)"
+        "SCAN k USING COVERING INDEX ka|SEARCH m USING COVERING INDEX mpq (p=?)"
     );
 }
 
@@ -1158,12 +1160,13 @@ fn what_names_no_key_of_a_side_the_sides_before_it_answer() {
     // A `COLLATE` on the other side of the comparison compares both
     // under the collation it names, so the entries the key reaches are
     // not the rows the term is true of.
+    let covered = "SCAN k USING COVERING INDEX kb|SCAN m USING COVERING INDEX mq";
     assert_eq!(
         planned(
             super::INDEXED,
             b"EXPLAIN QUERY PLAN SELECT m.q FROM k, m WHERE m.q=k.b COLLATE BINARY"
         ),
-        "SCAN k|SCAN m"
+        covered
     );
     // A column standing right of the comparison compares under the
     // collation of what stands left of it, read through a `CAST` and a
@@ -1173,7 +1176,7 @@ fn what_names_no_key_of_a_side_the_sides_before_it_answer() {
         b"EXPLAIN QUERY PLAN SELECT m.q FROM k, m WHERE CAST(k.b AS TEXT)=m.q",
         b"EXPLAIN QUERY PLAN SELECT m.q FROM k, m WHERE +k.b=m.q",
     ] {
-        assert_eq!(planned(super::INDEXED, sql), "SCAN k|SCAN m");
+        assert_eq!(planned(super::INDEXED, sql), covered);
     }
     // A column of a statement written inside the `FROM` compares under
     // `BINARY`, which `q` does not compare under.
@@ -1182,7 +1185,7 @@ fn what_names_no_key_of_a_side_the_sides_before_it_answer() {
             super::INDEXED,
             b"EXPLAIN QUERY PLAN SELECT m.q FROM (SELECT b FROM k) AS s, m WHERE s.b=m.q"
         ),
-        "SCAN k|SCAN s|SCAN m"
+        "SCAN k|SCAN s|SCAN m USING COVERING INDEX mq"
     );
     // `ea` is over an expression, `eb` holds fewer entries than the table
     // has rows, and `ec` compares under another collation than the column
@@ -1192,7 +1195,7 @@ fn what_names_no_key_of_a_side_the_sides_before_it_answer() {
             super::INDEXED,
             b"EXPLAIN QUERY PLAN SELECT e.a FROM k, e WHERE e.a=k.a AND e.b=k.a"
         ),
-        "SCAN k|SCAN e"
+        "SCAN k USING COVERING INDEX ka|SCAN e"
     );
     // `mr` holds its entries from the largest value down.
     assert_eq!(
@@ -1200,7 +1203,7 @@ fn what_names_no_key_of_a_side_the_sides_before_it_answer() {
             super::INDEXED,
             b"EXPLAIN QUERY PLAN SELECT m.r FROM k, m WHERE m.r=k.a"
         ),
-        "SCAN k|SCAN m"
+        "SCAN k USING COVERING INDEX ka|SCAN m"
     );
     // A `RIGHT` join is walked twice and both walks answer the rows in
     // one order, so a term of the `WHERE` names no key of a side of such
@@ -1210,7 +1213,7 @@ fn what_names_no_key_of_a_side_the_sides_before_it_answer() {
             super::INDEXED,
             b"EXPLAIN QUERY PLAN SELECT m.p FROM k RIGHT JOIN m ON m.r=1 WHERE m.p=k.a"
         ),
-        "SCAN k|SCAN m"
+        "SCAN k USING COVERING INDEX ka|SCAN m"
     );
 }
 
@@ -1235,7 +1238,7 @@ fn a_column_of_real_affinity_names_no_key_a_side_answers() {
             &bytes,
             b"EXPLAIN QUERY PLAN SELECT s.v FROM n, s WHERE s.v=n.v"
         ),
-        "SCAN n|SCAN s"
+        "SCAN n|SCAN s USING COVERING INDEX sv"
     );
 }
 
@@ -1267,4 +1270,87 @@ fn a_walk_held_to_a_rowid_a_side_answers_reads_the_row_that_rowid_names() {
         rows(b"SELECT m.p FROM k, m WHERE m.rowid=NULL AND k.a=1"),
         Vec::<Vec<Value>>::new()
     );
+}
+
+#[test]
+fn a_walk_no_term_holds_to_a_key_reads_the_narrowest_index_that_covers() {
+    // `mq` holds `q` and `mpq` holds `p` and `q`, so a statement reading
+    // `q` alone is read out of `mq`.
+    assert_eq!(
+        planned(super::INDEXED, b"EXPLAIN QUERY PLAN SELECT q FROM m"),
+        "SCAN m USING COVERING INDEX mq"
+    );
+    // A statement reading a column no index holds is read out of the
+    // table.
+    assert_eq!(
+        planned(super::INDEXED, b"EXPLAIN QUERY PLAN SELECT p, r FROM m"),
+        "SCAN m"
+    );
+    // `ea` is over an expression, `eb` holds fewer entries than the table
+    // has rows, and `mr` holds its entries from the largest value down.
+    assert_eq!(
+        planned(super::INDEXED, b"EXPLAIN QUERY PLAN SELECT a, b FROM e"),
+        "SCAN e"
+    );
+    assert_eq!(
+        planned(super::INDEXED, b"EXPLAIN QUERY PLAN SELECT r FROM m"),
+        "SCAN m"
+    );
+    // A table that keeps its rows in the key's own tree ends the entries
+    // of its indexes with that key and not with a rowid.
+    assert_eq!(
+        planned(super::INDEXED, b"EXPLAIN QUERY PLAN SELECT b FROM u"),
+        "SCAN u"
+    );
+    // A side a term holds to a key is read by that key.
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT q FROM m WHERE q='b'"
+        ),
+        "SEARCH m USING COVERING INDEX mq (q=?)"
+    );
+    // The order a walk of an index answers is one an `ORDER BY` this walk
+    // does not answer reads, so the side is read out of the table and the
+    // rows are sorted.
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT q FROM m ORDER BY rowid"
+        ),
+        "SCAN m"
+    );
+}
+
+#[test]
+fn the_narrowest_index_that_covers_is_taken_whichever_was_made_last() {
+    use crate::change::Writer;
+    use crate::header::Encoding;
+    // `zab` was made after `za` and is read first, so the narrower index
+    // takes its place.
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE z(a, b)".as_slice(),
+        b"CREATE INDEX za ON z(a)",
+        b"CREATE INDEX zab ON z(a, b)",
+        b"INSERT INTO z VALUES (2, 'x'), (1, 'y')",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let bytes = writer.written();
+    assert_eq!(
+        planned(&bytes, b"EXPLAIN QUERY PLAN SELECT a FROM z"),
+        "SCAN z USING COVERING INDEX za"
+    );
+    // A walk held to no key begins at `OP_Rewind`, which counts no
+    // search, so the two rows count one step and no descent.
+    let answer = Database::open(&bytes)
+        .unwrap()
+        .query(b"SELECT a FROM z")
+        .unwrap();
+    assert_eq!(
+        answer.rows,
+        [alloc::vec![Value::Int(1)], alloc::vec![Value::Int(2)]]
+    );
+    assert_eq!(answer.stepped.searched, 1);
 }

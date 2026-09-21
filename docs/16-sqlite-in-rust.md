@@ -997,6 +997,8 @@ Size: L.
      records.
 128. The key of a side that the sides before it answer. Built, which
      D-390 records.
+129. The index a walk no term holds to a key reads instead of the table.
+     Built, which D-391 records.
 
 ### Done when
 

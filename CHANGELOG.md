@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` reads a side no term holds to a key out of the narrowest
+  index that holds every column the statement reads of it, whose entries
+  are shorter than the rows. D-391 records it. Catalog 6.6.272.
+  `where2.test` goes from 51 cases passing to 57 and `eqp.test` from 21
+  to 25.
+
 - `db-sqlite` keys a side by the columns of an index the sides read
   before it answer with `=`, out of the `ON` and out of the `WHERE`
   alike, which costs one descent per row of those sides where a walk per
