@@ -896,7 +896,7 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   held bit-reversed, the order the shifts of a carry-less product assume,
   so `new` reverses the key, `block` reverses each input block and
   `finish` reverses the result back into the order of the standard. The
-  Karatsuba split is 3 products of 63 steps each over `u64` words against
+  Karatsuba split is 3 products of 64 steps each over `u64` words against
   128 steps over `u128`, and no memory access depends on the key or on the
   message, which is what the table-free form is for. Two regression tests
   pin the product to the bit-at-a-time form of NIST SP 800-38D,
