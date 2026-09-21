@@ -163,6 +163,15 @@ pub(crate) struct Configuration {
 /// table of configurations; this is the part of that table this harness
 /// opens a connection under.
 pub(crate) const CONFIGURATIONS: [Configuration; 9] = [
+    // `testfixture` is built with `-DSQLITE_DEFAULT_PAGE_SIZE=1024`,
+    // which `research/sqlite/main.mk:1784` sets, so a file of the suite
+    // that writes no page size of its own is read under this one.
+    Configuration {
+        name: "utf8-1024-delete",
+        page: 1024,
+        encoding: Encoding::Utf8,
+        journal: None,
+    },
     Configuration {
         name: "utf8-4096-delete",
         page: 4096,
@@ -184,12 +193,6 @@ pub(crate) const CONFIGURATIONS: [Configuration; 9] = [
     Configuration {
         name: "utf8-512-delete",
         page: 512,
-        encoding: Encoding::Utf8,
-        journal: None,
-    },
-    Configuration {
-        name: "utf8-1024-delete",
-        page: 1024,
         encoding: Encoding::Utf8,
         journal: None,
     },
@@ -255,9 +258,10 @@ fn configured() -> Configuration {
 ///
 /// `rowvalue2.test` answers 3834 cases in about two minutes and was
 /// cut at some 2900 under a deadline of one, so the count a run answers
-/// moved by hundreds between runs; three minutes is past every file but
-/// the handful that answer for tens of thousands of rows.
-const DEADLINE: Duration = Duration::from_secs(180);
+/// moved by hundreds between runs; under pages of a thousand bytes
+/// `savepoint6.test` answers 414 cases in under five minutes and 310
+/// under three, so five is past every file of the suite.
+const DEADLINE: Duration = Duration::from_secs(300);
 
 /// How many cases in a row one file may have refused for the same reason
 /// before the file is ended. A loop whose end a command this harness has

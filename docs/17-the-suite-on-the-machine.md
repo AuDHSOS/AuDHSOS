@@ -464,9 +464,9 @@ Size: S.
     the shell draws and compares it against what the file writes, and
     reports a statement the engine names no plan for as one case
     refused, which D-379 records.
-37. The configuration a run opens under is to be `utf8-1024-delete`,
-    which is the page size `testfixture` is built with, and waits on
-    three files that refuse under it, which D-382 records.
+37. A run opens under `utf8-1024-delete`, which is the page size
+    `testfixture` is built with, and one file may run five minutes
+    rather than three, which D-382 records.
 
 ### Produces
 

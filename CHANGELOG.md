@@ -27,6 +27,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- The suite harness opens under `utf8-1024-delete`, which is the page
+  size `testfixture` is built with, and lets one file run five minutes
+  rather than three. D-382 records it. The run goes from 108 595 cases
+  passing to 109 025.
+
 - `db-sqlite` names the table of a statement of a trigger's body the way
   a statement outside a trigger names one where the trigger stands in
   the temp schema, so a body that writes a table of `main` no longer
