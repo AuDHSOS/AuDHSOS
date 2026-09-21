@@ -450,6 +450,8 @@ fn a_descent_into_an_index_tree_deeper_than_the_walk_is_refused() {
     let image = Image::open(&bytes).unwrap();
     let outcome = image.entries_from(2, &mut |_| Ok(true));
     assert_eq!(outcome.err(), Some(Error::Depth));
+    let outcome = image.entries_back_from(2, &mut |_| Ok(true));
+    assert_eq!(outcome.err(), Some(Error::Depth));
 }
 
 #[test]

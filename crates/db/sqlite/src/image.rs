@@ -210,14 +210,6 @@ impl<'a> Image<'a> {
         Entries::new(*self, root)
     }
 
-    /// The entries of the index whose tree begins at `root`, from the
-    /// last of them to the first, which is the walk `OP_Last` and
-    /// `OP_Prev` of `research/sqlite/src/vdbe.c` read an index by.
-    #[must_use]
-    pub const fn entries_back(&self, root: u32) -> Entries<'a> {
-        Entries::backwards(*self, root)
-    }
-
     /// The same, beginning at the first entry `before` does not answer
     /// for.
     ///
@@ -254,6 +246,56 @@ impl<'a> Image<'a> {
                 // entry after that child is answered on the way back.
                 frame.next = if page.kind().is_interior() {
                     at.saturating_mul(2).saturating_add(1)
+                } else {
+                    at
+                };
+            }
+            if !page.kind().is_interior() {
+                return Ok(walk);
+            }
+            number = if at == cells {
+                page.right_most().ok_or(Error::Overrun)?
+            } else {
+                page.child(at)?
+            };
+        }
+        Err(Error::Depth)
+    }
+
+    /// The entries of the index at `root` from the last one `past` does
+    /// not answer for, down to the first entry of the tree, which is
+    /// the walk `OP_Last` with `OP_Prev` of `research/sqlite/src/vdbe.c`
+    /// reads an index by.
+    ///
+    /// `past` answers whether an entry lies past the end a backwards
+    /// walk begins at, which is the mirror of what [`Image::entries_from`]
+    /// asks: the entries not past it stand at the front of the tree, so
+    /// the descent is the same binary search, O(log n) for `n` entries.
+    ///
+    /// # Errors
+    ///
+    /// Whatever `past` refuses, and the errors of [`Image::page`] and
+    /// [`Page::entry`].
+    pub fn entries_back_from(
+        &self,
+        root: u32,
+        past: &mut dyn FnMut(&Payload<'a>) -> Result<bool, Error>,
+    ) -> Result<Entries<'a>, Error> {
+        let mut walk = Entries::backwards(*self, root);
+        let mut number = root;
+        for depth in 1..=MAX_DEPTH {
+            let page = self.page(number)?;
+            let cells = page.cells();
+            let at = search(&page, cells, &mut |entry| past(entry).map(|held| !held))?;
+            walk.depth = depth;
+            for frame in walk.stack.iter_mut().skip(depth.saturating_sub(1)).take(1) {
+                frame.number = number;
+                // A leaf leaves the entries before `at` to read; an
+                // interior page leaves the subtree at `at` and
+                // everything before it, and the walk descends into that
+                // subtree here rather than on the way back.
+                frame.next = if page.kind().is_interior() {
+                    at.saturating_mul(2)
                 } else {
                     at
                 };

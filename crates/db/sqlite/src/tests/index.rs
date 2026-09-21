@@ -651,3 +651,78 @@ fn an_index_tall_enough_to_carry_interior_pages_is_read_backwards_as_well() {
     backwards.reverse();
     assert_eq!(answer.rows, backwards);
 }
+
+#[test]
+fn a_walk_held_between_bounds_is_read_backwards_where_that_answers_the_order() {
+    // `mr` holds `r` backwards, so an `ORDER BY r` over a walk held
+    // between bounds is read from the last entry the bounds hold.
+    assert_eq!(
+        listed(super::INDEXED, b"SELECT rowid FROM m WHERE r>20 ORDER BY r"),
+        "3,5"
+    );
+    assert_eq!(
+        listed(
+            super::INDEXED,
+            b"SELECT rowid FROM m WHERE r<=30 ORDER BY r"
+        ),
+        "1,2,3"
+    );
+    assert_eq!(
+        listed(
+            super::INDEXED,
+            b"SELECT rowid FROM m WHERE r>10 AND r<50 ORDER BY r"
+        ),
+        "2,3"
+    );
+    // `mq` holds `q` forwards, so the walk of it runs the other way.
+    assert_eq!(
+        listed(
+            super::INDEXED,
+            b"SELECT rowid FROM m WHERE q>='A' ORDER BY q DESC"
+        ),
+        "4,2,3,1"
+    );
+    assert_eq!(
+        listed(
+            super::INDEXED,
+            b"SELECT rowid FROM m WHERE p=1 ORDER BY q DESC"
+        ),
+        "2,1"
+    );
+}
+
+#[test]
+fn a_walk_of_a_tall_index_held_between_bounds_is_read_backwards_as_well() {
+    // The descent of a backwards walk descends into the subtree the
+    // bound stands in and reads the pages of the path from the last
+    // position of each of them.
+    // A low bound leaves the descent in the right-most subtree of every
+    // page of the path, and a high bound leaves it in the subtree the
+    // bound stands in.
+    for (sql, held, count) in [
+        (
+            b"SELECT s FROM t WHERE s>='row 5' ORDER BY s DESC".as_slice(),
+            b"SELECT s FROM t WHERE s>='row 5' ORDER BY s".as_slice(),
+            303,
+        ),
+        (
+            b"SELECT s FROM t WHERE s<='row 5' ORDER BY s DESC",
+            b"SELECT s FROM t WHERE s<='row 5' ORDER BY s",
+            297,
+        ),
+    ] {
+        let answer = Database::open(super::TALL_INDEX)
+            .unwrap()
+            .query(sql)
+            .unwrap();
+        let forwards = Database::open(super::TALL_INDEX)
+            .unwrap()
+            .query(held)
+            .unwrap();
+        assert_eq!(answer.rows.len(), count);
+        assert_eq!(answer.stepped.sorts, 0);
+        let mut backwards = forwards.rows;
+        backwards.reverse();
+        assert_eq!(answer.rows, backwards);
+    }
+}

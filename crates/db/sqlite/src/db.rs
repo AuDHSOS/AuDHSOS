@@ -4017,38 +4017,37 @@ impl<'a> Database<'a> {
         } = held;
         let image = self.imaged(stored.place);
         // The descent stands on the first entry the walk takes, which is
-        // the first one the end the entries begin at does not reach
+        // the first one the end the walk begins at does not reach
         // before, and the entry after it where that end leaves it out.
         // An index that holds its entries backwards begins at the high
         // end of the bounds and one that holds them forwards at the low
-        // end.
+        // end, and a walk read from the last entry to the first begins
+        // at the other end of the two.
+        let from_high = backwards != reversed;
         let mut descent = key.clone();
         let mut inside = true;
-        let end = if backwards { &bounds.high } else { &bounds.low };
+        let end = if from_high { &bounds.high } else { &bounds.low };
         if let Some((value, held)) = end {
             descent.push(value.clone());
             inside = *held;
         }
         let mut scratch = Vec::new();
-        // A walk that reads the entries from the last to the first
-        // stands at the last of them, which no descent reaches.
+        let mut reached = |entry: &crate::page::Payload<'a>| {
+            let order = order_of_entry(
+                &image,
+                entry,
+                &descent,
+                &collations,
+                self.encoding,
+                &mut scratch,
+            )
+            .map_err(|_| crate::error::Error::Overrun)?;
+            Ok(is_before(order, from_high, inside))
+        };
         let walk = if reversed {
-            image.entries_back(root)
+            image.entries_back_from(root, &mut reached).ok()?
         } else {
-            image
-                .entries_from(root, &mut |entry| {
-                    let order = order_of_entry(
-                        &image,
-                        entry,
-                        &descent,
-                        &collations,
-                        self.encoding,
-                        &mut scratch,
-                    )
-                    .map_err(|_| crate::error::Error::Overrun)?;
-                    Ok(is_before(order, backwards, inside))
-                })
-                .ok()?
+            image.entries_from(root, &mut reached).ok()?
         };
         Some(Feed::Keyed(Box::new(Sought {
             image,
@@ -4058,7 +4057,7 @@ impl<'a> Database<'a> {
             collations,
             rowid_at,
             bounds,
-            backwards,
+            from_high,
             encoding: self.encoding,
             collation: self.collation(),
             payload: Vec::new(),
@@ -5031,11 +5030,28 @@ fn ordering(
     // A side already held to a key by an index answers its entries in
     // that index's order, so the key is kept where that order is the one
     // the terms name.
-    if let Plan::Keyed { root, key, .. } = &side.plan {
-        return if suffixed(stored, *root, key.len(), &wanted, tail, format) {
-            Ordering::Walked
-        } else {
-            Ordering::Sorted
+    if let Plan::Keyed {
+        root,
+        key,
+        collations,
+        rowid_at,
+        bounds,
+        backwards,
+        ..
+    } = &side.plan
+    {
+        return match suffixed(stored, *root, key.len(), &wanted, tail, format) {
+            Some(true) => Ordering::Walked,
+            Some(false) => Ordering::Index(Plan::Keyed {
+                root: *root,
+                key: key.clone(),
+                collations: collations.clone(),
+                rowid_at: *rowid_at,
+                bounds: bounds.clone(),
+                backwards: *backwards,
+                reversed: true,
+            }),
+            None => Ordering::Sorted,
         };
     }
     if !matches!(side.plan, Plan::Rows(None, None)) {
@@ -5063,40 +5079,49 @@ fn suffixed(
     wanted: &[(usize, bool)],
     tail: Option<bool>,
     format: u32,
-) -> bool {
-    // The walk runs from the first entry of the index, so a term over
-    // the rowid at the end of the terms is answered where it runs the
-    // way the rowid is held, which is from the smallest up.
-    if tail == Some(true) {
-        return false;
-    }
-    stored
-        .indexes
+) -> Option<bool> {
+    let kept = stored.indexes.iter().find(|kept| kept.root == root)?;
+    let constant: Vec<usize> = kept
+        .index
+        .columns
         .iter()
-        .find(|kept| kept.root == root)
-        .is_some_and(|kept| {
-            let constant: Vec<usize> = kept
-                .index
-                .columns
-                .iter()
-                .take(held)
-                .filter_map(crate::schema::Keyed::place)
-                .collect();
-            let mut at = held;
-            for (place, descending) in wanted {
-                if constant.contains(place) {
-                    continue;
-                }
-                if !holds_column(stored, &kept.index, at, (*place, *descending), true, format) {
-                    return false;
-                }
-                at = at.saturating_add(1);
+        .take(held)
+        .filter_map(crate::schema::Keyed::place)
+        .collect();
+    // A walk read from the last entry to the first answers the order of
+    // an index every place of which runs the other way round.
+    for matching in [true, false] {
+        let mut at = held;
+        let mut answers = true;
+        for (place, descending) in wanted {
+            if constant.contains(place) {
+                continue;
             }
-            // The rowid stands after every column of the index, so a
-            // term naming it is answered only where the terms reached
-            // the last column.
-            tail.is_none() || at == kept.index.columns.len()
-        })
+            if !holds_column(
+                stored,
+                &kept.index,
+                at,
+                (*place, *descending),
+                matching,
+                format,
+            ) {
+                answers = false;
+                break;
+            }
+            at = at.saturating_add(1);
+        }
+        // The rowid is held from the smallest up and stands after every
+        // column of the index, so a term naming it is answered where
+        // the walk runs that way and the terms before it reached the
+        // last column.
+        if answers
+            && !tail
+                .is_some_and(|descending| descending == matching || at != kept.index.columns.len())
+        {
+            return Some(matching);
+        }
+    }
+    None
 }
 
 /// Whether the column of `index` at `at` holds the table column at
@@ -5739,8 +5764,8 @@ struct Sought<'i, 'f> {
     /// What the column after the key is held between, which ends the
     /// walk where an entry reaches past the end it runs towards.
     bounds: Bounds,
-    /// Whether the index holds its entries backwards.
-    backwards: bool,
+    /// Whether the walk begins at the high end of the bounds.
+    from_high: bool,
     /// Where the rowid stands in an entry.
     rowid_at: usize,
     /// What encoding the file keeps its text in.
@@ -5769,7 +5794,7 @@ impl<'i> Sought<'i, '_> {
     /// end of the bounds, which every entry after it reaches past as
     /// well, so the walk is read out there.
     fn is_past(&mut self, entry: &crate::page::Payload<'i>) -> Result<bool, Error> {
-        let end = if self.backwards {
+        let end = if self.from_high {
             &self.bounds.low
         } else {
             &self.bounds.high
@@ -5785,9 +5810,9 @@ impl<'i> Sought<'i, '_> {
             .copied()
             .unwrap_or(Collation::Binary);
         let order = compare(&held, &wanted, collation);
-        // The end the entries run towards stands where the end they
-        // begin at stands for an index that holds them the other way.
-        Ok(is_before(order, !self.backwards, inside))
+        // The end the walk runs towards stands where the end it begins
+        // at stands for a walk that runs the other way.
+        Ok(is_before(order, !self.from_high, inside))
     }
 
     /// One entry as the row it names, or nothing where the entry no

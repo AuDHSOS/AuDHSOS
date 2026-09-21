@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` reads a walk of an index held between bounds from its last
+  entry where that answers the `ORDER BY`, descending to that entry
+  rather than reading the ones after it. D-373 records it. Catalog
+  6.6.257. `descidx1.test` goes from 42 cases passing to 46,
+  `descidx2.test` from 25 to 27 and `where.test` from 142 to 161.
+
 - `db-sqlite` reads the entries of an index from the last to the first
   where that answers the `ORDER BY`, and reads each term of an
   `ORDER BY` with its own direction, so an index whose places run in two

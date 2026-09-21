@@ -6734,3 +6734,12 @@ Document 16 step Q8.
   whose places run in two directions.
 - A term over the rowid at the end of the terms, running each way, and
   one the terms before it do not reach the last column for.
+
+### 6.6.257 The walk between bounds read backwards (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A walk held between one bound, between two, and held to a key, read
+  from its last entry.
+- An index held forwards and one held backwards, each read either way.
+- A tree of one leaf and one that carries interior pages.

@@ -970,6 +970,8 @@ Size: L.
 114. The walk of an index read from its last entry to its first, and
      an `ORDER BY` whose terms run in two directions. Built, which
      D-372 records.
+115. The walk of an index held between bounds read from its last
+     entry. Built, which D-373 records.
 
 ### Done when
 
