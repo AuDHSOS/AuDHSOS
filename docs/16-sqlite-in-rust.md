@@ -1014,6 +1014,8 @@ Size: L.
      records.
 136. The encoding a reader over a database of no schema holds. Built,
      which D-403 records.
+137. The log a close writes back and gives up. Built, which D-404
+     records.
 
 ### Done when
 

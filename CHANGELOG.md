@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The last connection over a file in write-ahead logging writes the log
+  back into the file and removes it when it closes, and a file whose
+  header says version two answers `wal` for its journal mode. D-404
+  records it. Catalog 6.6.281. `wal.test` goes from 210 cases passing to
+  235 and `walmode.test` from 51 to 60.
+
 - The suite harness reads the `%XX` escapes of a `sqlite3_exec`
   statement as the bytes they name, and a reader over a database of no
   schema is told the encoding the connection holds. D-403 records it.

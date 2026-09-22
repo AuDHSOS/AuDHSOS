@@ -2315,6 +2315,50 @@ impl Writer {
         Ok(alloc::vec![alloc::vec![read]])
     }
 
+    /// The pages of the file written back and held on the disk, which
+    /// is what `walCheckpoint` of `research/sqlite/src/wal.c` writes for
+    /// every page a frame holds, and the image those writes leave.
+    ///
+    /// `pager_write_changecounter`: the file the checkpoint writes
+    /// carries the counter the frames carried, which is one past the one
+    /// the file holds. It costs O(n) in the pages of the file.
+    fn writes_back(&mut self) -> Vec<u8> {
+        let mut now = self.now();
+        now.change_counter = now.change_counter.saturating_add(1);
+        now.version_valid_for = now.change_counter;
+        let image = self.held.pages.written(&now);
+        let page_size = crate::bytes::size(u64::from(self.held.header.page_size));
+        for (at, page) in image.chunks(page_size.max(1)).enumerate() {
+            self.held.did.push(Does::Write {
+                onto: Onto::Main,
+                at: u64::try_from(at.saturating_mul(page_size)).unwrap_or(u64::MAX),
+                bytes: page.to_vec(),
+            });
+        }
+        self.held.did.push(Does::Sync(Onto::Main));
+        self.held.header.change_counter = now.change_counter;
+        self.held.header.version_valid_for = now.version_valid_for;
+        image
+    }
+
+    /// The log written into the file and given up, which
+    /// `sqlite3WalClose` of `research/sqlite/src/wal.c` does where the
+    /// connection that closes is the last one over the file: the pages
+    /// the frames hold reach the file, the file is held on the disk, and
+    /// the log is removed. A connection that opens the file afterwards
+    /// reads every page out of the file.
+    ///
+    /// It costs O(n) in the pages of the file.
+    pub fn closing(&mut self) {
+        if self.held.log.take().is_none() {
+            return;
+        }
+        let _ = self.writes_back();
+        self.held.did.push(Does::Remove(Onto::Log));
+        self.held.origin = None;
+        self.held.restarting = false;
+    }
+
     /// `PRAGMA wal_checkpoint`: the pages the log holds are written into
     /// the database file, and the three columns
     /// `sqlite3_wal_checkpoint_v2` answers say so.
@@ -2342,24 +2386,7 @@ impl Writer {
         }
         self.held.log = Some(log);
         self.held.restarting = !restarting;
-        // `pager_write_changecounter`: the file the checkpoint writes
-        // carries the counter the frames carried.
-        let mut now = self.now();
-        now.change_counter = now.change_counter.saturating_add(1);
-        now.version_valid_for = now.change_counter;
-        let image = self.held.pages.written(&now);
-        // `walCheckpoint` writes every page a frame holds into the file
-        // and holds the file on the disk, and a checkpoint that begins
-        // the log again writes its header and holds that on the disk.
-        let page_size = crate::bytes::size(u64::from(self.held.header.page_size));
-        for (at, page) in image.chunks(page_size.max(1)).enumerate() {
-            self.held.did.push(Does::Write {
-                onto: Onto::Main,
-                at: u64::try_from(at.saturating_mul(page_size)).unwrap_or(u64::MAX),
-                bytes: page.to_vec(),
-            });
-        }
-        self.held.did.push(Does::Sync(Onto::Main));
+        let image = self.writes_back();
         if restarting {
             let bytes = self.held.log.as_ref().map(Log::bytes).unwrap_or_default();
             self.held.did.push(Does::Write {
@@ -2370,8 +2397,6 @@ impl Writer {
             self.held.did.push(Does::Sync(Onto::Log));
         }
         self.held.origin = Some(image);
-        self.held.header.change_counter = now.change_counter;
-        self.held.header.version_valid_for = now.version_valid_for;
         let counted = if truncating { 0 } else { frames };
         alloc::vec![alloc::vec![
             Value::Int(0),
@@ -4260,6 +4285,12 @@ impl Writer {
                     }
                     let mode = wanted.ok_or(Error::Unsupported)?;
                     if !held {
+                        // A file whose log a close wrote back still says
+                        // version two, which `sqlite3PagerSetJournalMode`
+                        // writes back to one where the pragma names
+                        // another mode.
+                        self.held.header.write_version = 1;
+                        self.held.header.read_version = 1;
                         self.held.mode = mode;
                         // `PRAGMA journal_mode = X` with no schema in
                         // front of it sets the mode of every database the
@@ -4972,7 +5003,10 @@ impl Writer {
     /// five modes that write the file itself otherwise.
     #[must_use]
     pub const fn journalled(&self) -> &'static [u8] {
-        if self.held.log.is_some() {
+        // A file whose header says version two is in write-ahead
+        // logging whether a log lies beside it or not, which
+        // `sqlite3PagerOpenWal` reads off the file a connection opens.
+        if self.held.log.is_some() || self.held.header.write_version == 2 {
             return b"wal";
         }
         crate::pragma::mode_word(self.held.mode)

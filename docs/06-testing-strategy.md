@@ -6955,3 +6955,11 @@ Document 16 step Q8.
 
 - `PRAGMA encoding = 'UTF-16be'` before the first table, with `hex` read
   over a reader told the encoding and over one that is not.
+
+### 6.6.281 The log a close writes back (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A close over a file that keeps a log and one over a file that keeps
+  none, with the rows read out of the file afterwards and the mode the
+  file answers with.

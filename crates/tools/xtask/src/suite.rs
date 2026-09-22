@@ -1508,7 +1508,9 @@ impl Session {
     ///
     /// The connection rolls back the transaction it began itself and
     /// leaves the transaction another connection over the same path began
-    /// where it stands, which the harness names the owner of.
+    /// where it stands, which the harness names the owner of. The last
+    /// connection over a path writes the log of that path into the file
+    /// and removes the log, which `sqlite3WalClose` does.
     fn closed(&mut self, name: &str) {
         if let Some(path) = self.connections.get(name).cloned()
             && self.owners.get(&path).is_some_and(|held| held == name)
@@ -1516,6 +1518,15 @@ impl Session {
         {
             let _ = writer.run(b"ROLLBACK");
             self.owners.remove(&path);
+        }
+        if let Some(path) = self.connections.get(name).cloned()
+            && !self
+                .connections
+                .iter()
+                .any(|(held, over)| held != name && over == &path)
+            && let Some(writer) = self.held.get_mut(&path)
+        {
+            writer.closing();
         }
         self.connections.remove(name);
         self.nulls.remove(name);
@@ -2271,7 +2282,6 @@ impl Session {
         Ok(Vec::new())
     }
 
-    /// The statements of one text, in order, answered as one list.
     /// `eval DB SQL` and `names DB SQL`, which answer the rows and the
     /// column names of a statement, and `exec DB SQL` and `exec_names DB
     /// SQL` beside them, which read the `%XX` escapes of the statement as
@@ -2293,6 +2303,11 @@ impl Session {
         self.eval(name, &sql)
     }
 
+    /// The statements of one text, in order, answered as one list.
+    ///
+    /// # Errors
+    ///
+    /// The message the engine refused the statement with.
     fn eval(&mut self, name: &str, sql: &str) -> Result<Vec<String>, String> {
         if names_file(sql) {
             self.telling_files();

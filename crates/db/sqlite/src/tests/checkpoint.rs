@@ -102,3 +102,39 @@ fn what_truncate_and_restart_leave_the_log_at() {
         [0, 0, 0]
     );
 }
+
+/// A close writes the pages the log holds into the file and gives the
+/// log up, and the file it leaves is still in write-ahead logging; a
+/// close over a file that keeps no log writes nothing.
+#[test]
+fn what_a_close_leaves_of_the_log() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.closing();
+    assert!(writer.did().is_empty());
+    writer.run(b"PRAGMA journal_mode=wal").unwrap();
+    writer.run(b"CREATE TABLE t(a)").unwrap();
+    writer.run(b"INSERT INTO t VALUES(1)").unwrap();
+    let _ = writer.did();
+    writer.closing();
+    assert!(writer.log().is_none());
+    assert_eq!(writer.journalled(), b"wal");
+    // The file holds the rows the log held, and the last thing the
+    // close did was give the log up.
+    let image = writer.written();
+    assert_eq!(
+        Database::open(&image)
+            .unwrap()
+            .query(b"SELECT a FROM t")
+            .unwrap()
+            .rows,
+        [alloc::vec![Value::Int(1)]]
+    );
+    assert_eq!(
+        writer.did().last(),
+        Some(&crate::change::Does::Remove(crate::change::Onto::Log))
+    );
+    // A pragma naming another mode writes the header back to version
+    // one, which the file then answers with.
+    writer.run(b"PRAGMA journal_mode=delete").unwrap();
+    assert_eq!(writer.journalled(), b"delete");
+}
