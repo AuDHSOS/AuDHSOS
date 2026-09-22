@@ -229,6 +229,40 @@ fn every_place_a_statement_names_the_table() {
         b"CREATE TRIGGER tr AFTER INSERT ON \"u\" BEGIN INSERT INTO \"u\" SELECT * FROM \"u\"; END"
             .to_vec()
     );
+    // The table a column reference names is one of those places, and a
+    // name a source carries as an alias or a `WITH` term carries is
+    // not.
+    for (sql, want) in [
+        (
+            b"CREATE VIEW v AS SELECT main.t.a, t.b FROM t".as_slice(),
+            b"CREATE VIEW v AS SELECT main.\"u\".a, \"u\".b FROM \"u\"".as_slice(),
+        ),
+        // A qualifier that names another table is left alone.
+        (
+            b"CREATE VIEW v AS SELECT t.a, s.b FROM t, s",
+            b"CREATE VIEW v AS SELECT \"u\".a, s.b FROM \"u\", s",
+        ),
+        (
+            b"CREATE VIEW v AS SELECT t.a FROM s AS t",
+            b"CREATE VIEW v AS SELECT t.a FROM s AS t",
+        ),
+        (
+            b"CREATE VIEW v AS WITH t(a) AS (SELECT 1) SELECT t.a FROM t",
+            b"CREATE VIEW v AS WITH t(a) AS (SELECT 1) SELECT t.a FROM t",
+        ),
+        (
+            b"CREATE INDEX i ON t(a) WHERE t.b>0",
+            b"CREATE INDEX i ON \"u\"(a) WHERE \"u\".b>0",
+        ),
+    ] {
+        let places = crate::rename::places(sql, b"t");
+        assert_eq!(
+            alloc::string::String::from_utf8_lossy(&crate::rename::written(sql, &places, b"u")),
+            alloc::string::String::from_utf8_lossy(want),
+            "{}",
+            alloc::string::String::from_utf8_lossy(sql)
+        );
+    }
     // A statement the parser refuses names nothing.
     assert_eq!(crate::rename::places(b"NOT A STATEMENT", b"t"), Vec::new());
     // A name that is not an index SQLite made for a key of the table is

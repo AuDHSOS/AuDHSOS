@@ -7,6 +7,10 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` writes the new name of a renamed table at the table a
+  column reference names. D-417 records it. `altertab.test` goes from 66
+  cases passing to 73.
+
 - `db-sqlite` writes a renamed column in quotes where the place it
   writes over was quoted, names the columns an `ON CONFLICT` of a
   trigger's `INSERT` holds, and names what an `ALTER TABLE` over a view

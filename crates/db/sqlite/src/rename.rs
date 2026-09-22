@@ -70,6 +70,28 @@ pub fn places(sql: &[u8], table: &[u8]) -> Vec<Span> {
             out.push(named);
         }
     }
+    // `renameTableExprCb` of `research/sqlite/src/alter.c` marks the
+    // table a column reference names, so `t.a` and `main.t.a` are
+    // written again under the new name. A name a source carries as an
+    // alias stands for that source and not for the table.
+    let aliased = |name: Span| {
+        arena.all_sources().any(|source| {
+            source
+                .alias
+                .is_some_and(|alias| same(alias.text(sql), &crate::schema::dequote(name.text(sql))))
+        })
+    };
+    for id in arena.column_places() {
+        let Some(crate::ast::Node::Column {
+            table: Some(named), ..
+        }) = arena.node(id)
+        else {
+            continue;
+        };
+        if same(named.text(sql), table) && !shadowed(named) && !aliased(named) {
+            out.push(named);
+        }
+    }
     out.sort_unstable_by_key(|span| span.start);
     out.dedup_by_key(|span| span.start);
     out
