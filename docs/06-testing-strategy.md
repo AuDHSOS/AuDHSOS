@@ -6885,3 +6885,12 @@ Document 16 step Q8.
   table that keeps its rows in the key's own tree, and an `ORDER BY` the
   walk of the table answers.
 - The searches a walk beginning at `OP_Rewind` counts.
+
+### 6.6.273 The costs a key and a covering walk are held to (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A term over a column of blob affinity against one asking for a number,
+  which names no key.
+- An index over the one column of a table, whose entry holds as many
+  values as the row.

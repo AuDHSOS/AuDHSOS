@@ -431,22 +431,6 @@ pub struct Index {
     pub filter: Option<ExprId>,
 }
 
-impl Index {
-    /// The first place of the index, with the place in the table of the
-    /// column it holds, or nothing where a statement may not be planned
-    /// against the index: a partial index answers fewer entries than
-    /// the table has rows, and a place over an expression holds a value
-    /// no term of a statement names.
-    #[must_use]
-    pub fn first_keyed(&self) -> Option<(usize, Keyed)> {
-        self.filter
-            .is_none()
-            .then(|| self.columns.first())
-            .flatten()
-            .and_then(|first| first.place().map(|at| (at, *first)))
-    }
-}
-
 /// The index a `CREATE INDEX` describes, read against the table it is
 /// over.
 ///

@@ -999,6 +999,8 @@ Size: L.
      D-390 records.
 129. The index a walk no term holds to a key reads instead of the table.
      Built, which D-391 records.
+130. The affinity a key is held to and the width a covering walk is held
+     to. Built, which D-392 records.
 
 ### Done when
 

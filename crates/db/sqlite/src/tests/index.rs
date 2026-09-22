@@ -1114,7 +1114,7 @@ fn a_side_is_keyed_by_what_the_sides_before_it_answer() {
     assert_eq!(
         planned(
             super::INDEXED,
-            b"EXPLAIN QUERY PLAN SELECT m.p FROM k, m WHERE m.p=k.a AND m.q=k.b"
+            b"EXPLAIN QUERY PLAN SELECT m.p FROM k, m WHERE m.p=k.a+0 AND m.q=k.b"
         ),
         "SCAN k|SEARCH m USING COVERING INDEX mpq (p=? AND q=?)"
     );
@@ -1141,7 +1141,7 @@ fn a_side_is_keyed_by_what_the_sides_before_it_answer() {
     assert_eq!(
         planned(
             super::INDEXED,
-            b"EXPLAIN QUERY PLAN SELECT m.p FROM k, m WHERE m.p=k.a AND m.q=k.b AND m.rowid>2"
+            b"EXPLAIN QUERY PLAN SELECT m.p FROM k, m WHERE m.p=k.a+0 AND m.q=k.b AND m.rowid>2"
         ),
         "SCAN k|SEARCH m USING COVERING INDEX mpq (p=? AND q=?)"
     );
@@ -1149,9 +1149,45 @@ fn a_side_is_keyed_by_what_the_sides_before_it_answer() {
     assert_eq!(
         planned(
             super::INDEXED,
-            b"EXPLAIN QUERY PLAN SELECT m.p FROM k LEFT JOIN m ON m.p=k.a"
+            b"EXPLAIN QUERY PLAN SELECT m.p FROM k LEFT JOIN m ON m.p=k.a+0"
         ),
         "SCAN k USING COVERING INDEX ka|SEARCH m USING COVERING INDEX mpq (p=?)"
+    );
+    // The comparison converts both sides the way its affinity asks, so an
+    // index of another affinity holds its entries in an order the term
+    // does not ask about: `p` converts nothing and `a` asks for a number.
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT m.p FROM k, m WHERE m.p=k.a"
+        ),
+        "SCAN k USING COVERING INDEX ka|SCAN m USING COVERING INDEX mpq"
+    );
+    // A `CAST` names the affinity of the type it writes, and a column of
+    // a statement written inside the `FROM` names none; neither asks for a
+    // number, so `p` names a key against either.
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT m.p FROM k, m WHERE m.p=CAST(k.b AS TEXT)"
+        ),
+        "SCAN k USING COVERING INDEX kb|SEARCH m USING COVERING INDEX mpq (p=?)"
+    );
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT m.p FROM (SELECT b FROM k) AS s, m WHERE m.p=s.b"
+        ),
+        "SCAN k|SCAN s|SEARCH m USING COVERING INDEX mpq (p=?)"
+    );
+    // A side held to a range of rowids is read out of the table, which
+    // holds every column the index holds and the ones it does not.
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT rowid FROM m WHERE rowid>2"
+        ),
+        "SEARCH m USING INTEGER PRIMARY KEY (rowid>?)"
     );
 }
 
@@ -1238,7 +1274,7 @@ fn a_column_of_real_affinity_names_no_key_a_side_answers() {
             &bytes,
             b"EXPLAIN QUERY PLAN SELECT s.v FROM n, s WHERE s.v=n.v"
         ),
-        "SCAN n|SCAN s USING COVERING INDEX sv"
+        "SCAN n|SCAN s"
     );
 }
 

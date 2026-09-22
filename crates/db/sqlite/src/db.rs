@@ -4616,13 +4616,17 @@ fn planned(
                 // row between two, so a key is taken over a range and a
                 // walk the terms only bound is not.
                 let held = plan_of(&terms, at, stored, format, between);
-                let answered = joined(arena, sql, sides, at, (stored, filter));
+                let wide = match &held {
+                    Some(Plan::Keyed { key, .. }) => key.len(),
+                    Some(_) | None => 0,
+                };
                 // A key the statement writes out is read once, where a
                 // key a side already read answers is read per row of
                 // that side, so the first is taken where both hold as
                 // many columns.
-                let better = answered
-                    .filter(|answered| keys_of(answered) > held.as_ref().map_or(0, keys_of));
+                let better = joined(arena, sql, sides, at, (stored, filter))
+                    .filter(|(_, keys)| *keys > wide)
+                    .map(|(plan, _)| plan);
                 // An `OR` is read last, because one index costs less
                 // than one walk per branch, and a side already held to a
                 // range of rowids reads no branch at all.
@@ -5195,21 +5199,6 @@ fn plan_of(
 /// nothing answers is read as.
 const NO_ROWS: &[Vec<Value>] = &[];
 
-/// How many columns of an index a plan holds at one value, which is what
-/// `whereLoopAddBtree` of `research/sqlite/src/where.c` costs a plan by:
-/// one value of a column divides the entries where a bound only ends the
-/// walk.
-const fn keys_of(plan: &Plan) -> usize {
-    match plan {
-        Plan::Keyed { key, .. } => key.len(),
-        Plan::Joined { keys, .. } => keys.len(),
-        // A walk held to one rowid answers one row, which no key of an
-        // index answers fewer of.
-        Plan::Rowid(_) => usize::MAX,
-        Plan::Rows(_, _) | Plan::Union(_) => 0,
-    }
-}
-
 /// Whether the walk of this side reads a whole table or a whole index,
 /// which is the loop `wherecode.c` counts the steps of: a loop no term
 /// holds to a key.
@@ -5379,6 +5368,11 @@ fn covers(side: &mut Side<'_>, read: &[usize]) {
     if stored.table.without_rowid || !matches!(side.plan, Plan::Rows(None, None)) {
         return;
     }
+    let row_fields = stored
+        .table
+        .columns
+        .len()
+        .saturating_add(usize::from(stored.table.rowid_alias.is_none()));
     let mut narrowest: Option<&Kept> = None;
     for kept in stored.indexes.iter().rev() {
         // A partial index answers fewer entries than the table has rows,
@@ -5400,6 +5394,15 @@ fn covers(side: &mut Side<'_>, read: &[usize]) {
             .map(crate::schema::Keyed::place)
             .collect();
         if !read.iter().all(|place| places.contains(&Some(*place))) {
+            continue;
+        }
+        // An entry of the index holds its places and the rowid, and a
+        // row holds every column and the rowid where no column is
+        // another name for it, so an index that holds every column
+        // answers no smaller entry than the row and the table is read
+        // instead. `whereLoopAddBtree` of `research/sqlite/src/where.c`
+        // asks the same of `szIdxRow` against `szTabRow`.
+        if places.len().saturating_add(1) >= row_fields {
             continue;
         }
         if narrowest.is_none_or(|held| places.len() < held.index.columns.len()) {
@@ -5430,14 +5433,19 @@ fn covers(side: &mut Side<'_>, read: &[usize]) {
 /// is reached as the rowid and stands in no reading, because the rowid
 /// is what every entry ends with.
 fn covering_of(side: &Side<'_>, read: &[usize]) -> Option<Vec<Option<usize>>> {
-    let root = match &side.plan {
-        Plan::Keyed { root, .. } | Plan::Joined { root, .. } => root,
-        Plan::Rows(_, _) | Plan::Rowid(_) | Plan::Union(_) => return None,
-    };
-    let Source::Table(stored) = &side.source else {
+    /// The page the tree of the index a plan names begins at, and
+    /// nothing where the plan names no index.
+    const fn rooted(plan: &Plan) -> Option<u32> {
+        match plan {
+            Plan::Keyed { root, .. } | Plan::Joined { root, .. } => Some(*root),
+            Plan::Rows(_, _) | Plan::Rowid(_) | Plan::Union(_) => None,
+        }
+    }
+
+    let (Some(root), Source::Table(stored)) = (rooted(&side.plan), &side.source) else {
         return None;
     };
-    let kept = stored.indexes.iter().find(|kept| kept.root == *root)?;
+    let kept = stored.indexes.iter().find(|kept| kept.root == root)?;
     let places: Vec<Option<usize>> = kept
         .index
         .columns
@@ -6285,7 +6293,7 @@ fn joined(
     sides: &[Side<'_>],
     at: usize,
     (stored, filter): (&Stored, Option<ExprId>),
-) -> Option<Plan> {
+) -> Option<(Plan, usize)> {
     let side = sides.get(at)?;
     // A `RIGHT` or a `FULL` join is walked twice, and the second walk
     // tells the rows it matched from the rows it did not by where they
@@ -6313,9 +6321,9 @@ fn joined(
     // A term holding the rowid answers one row, which no key of an index
     // answers fewer of, so it is taken over every index.
     if let Some(key) = keyed_rowid(arena, &roots, sql, sides, at) {
-        return Some(Plan::Rowid(key));
+        return Some((Plan::Rowid(key), usize::MAX));
     }
-    let mut best: Option<Plan> = None;
+    let mut best: Option<(Plan, usize)> = None;
     let mut held = 0;
     for kept in &stored.indexes {
         // A partial index answers fewer entries than its places say.
@@ -6352,6 +6360,18 @@ fn joined(
             else {
                 break;
             };
+            // A comparison against a value asking for a number reads
+            // both sides as numbers, where the entries hold what the
+            // column's affinity left, so an index over a column asking
+            // for none holds its entries in an order the term does not
+            // ask about. This is `sqlite3IndexAffinityOk` of
+            // `research/sqlite/src/expr.c` over the affinity
+            // `sqlite3CompareAffinity` reads off the two operands, where
+            // one of them is the column the index holds.
+            let other = affinity_of(arena, key, sql, sides);
+            if !column.affinity.numeric() && other.numeric() {
+                break;
+            }
             keys.push(Keying {
                 key,
                 collation: keyed.collation,
@@ -6362,11 +6382,14 @@ fn joined(
         // and a shorter key names more entries than a longer one.
         if keys.len() > held {
             held = keys.len();
-            best = Some(Plan::Joined {
-                root: kept.root,
-                keys,
-                rowid_at: kept.index.columns.len(),
-            });
+            best = Some((
+                Plan::Joined {
+                    root: kept.root,
+                    keys,
+                    rowid_at: kept.index.columns.len(),
+                },
+                held,
+            ));
         }
     }
     best
@@ -6476,6 +6499,32 @@ fn collates(arena: &Arena, id: ExprId) -> Option<bool> {
         arena.under(node, |child| stack.push(child));
     }
     Some(false)
+}
+
+/// The affinity `sqlite3ExprAffinity` of `research/sqlite/src/expr.c`
+/// reads off an expression: the affinity of the column it names and the
+/// affinity of the type a `CAST` writes, and none for every other
+/// expression, which a literal and an operator both are.
+fn affinity_of(arena: &Arena, id: ExprId, sql: &[u8], sides: &[Side<'_>]) -> Affinity {
+    match arena.node(id) {
+        Some(Node::Cast { ty, .. }) => Affinity::of_type(&crate::schema::dequote(ty.text(sql))),
+        Some(Node::Column { .. }) => {
+            let Some((at, Reached::Column(place))) = reached(arena, id, sql, sides) else {
+                // The rowid is a whole number, which `OP_Rowid` answers
+                // with no affinity of its own.
+                return Affinity::None;
+            };
+            match sides.get(at).map(|side| &side.source) {
+                Some(Source::Table(stored)) => stored
+                    .table
+                    .columns
+                    .get(place)
+                    .map_or(Affinity::None, |column| column.affinity),
+                _ => Affinity::None,
+            }
+        }
+        _ => Affinity::None,
+    }
 }
 
 /// The collation `sqlite3ExprCollSeq` of `research/sqlite/src/expr.c`

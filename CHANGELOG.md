@@ -44,6 +44,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` names no key of an index whose column converts a value as
+  the comparison does not, so `SELECT x, a, y=b FROM t1, t2 WHERE y=b`
+  over a numeric `y` and a blob `b` answers its row again. D-392 records
+  it. Catalog 6.6.273. `whereB.test` goes from 57 cases passing to 63,
+  which is every case of the file, and `like3.test` from 194 to 198.
+
 - `db-sqlite` gathers the groups of a `GROUP BY` out of a walk that
   answers the terms in their order, which costs O(n) over the rows where
   a walk of every group costs O(n²). D-389 records it. Catalog 6.6.270.
