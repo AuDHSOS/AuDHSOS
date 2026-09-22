@@ -484,6 +484,8 @@ Size: S.
     they name, which D-403 records.
 44. The log and the journal beside a database are files of their own,
     which a copy and a removal name, which D-405 records.
+45. A connection over a path whose directory is not on the machine
+    answers `SQLITE_CANTOPEN`, which D-407 records.
 
 ### Produces
 

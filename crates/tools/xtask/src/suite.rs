@@ -1014,6 +1014,10 @@ struct Session {
     /// which `sqlite3_search_count` counts and `::sqlite_search_count`
     /// answers.
     searched: i64,
+    /// What the machine answered the last open of a file with, which
+    /// `sqlite3_system_errno` reads: two for a directory that is not
+    /// there, and nought where the file opened.
+    errno: i32,
     /// What each connection was told for the pragmas it keeps a value
     /// for, which belong to a connection and not to the file.
     pragmas: BTreeMap<String, Kept>,
@@ -1071,6 +1075,7 @@ impl Session {
             sorted: 0,
             synced: (0, 0),
             searched: 0,
+            errno: 0,
             pragmas: BTreeMap::new(),
             collations: BTreeMap::new(),
             functions: BTreeMap::new(),
@@ -1142,10 +1147,10 @@ impl Session {
         let first = args.first().map_or("", String::as_str);
         let second = args.get(1).map_or("", String::as_str);
         match verb {
-            "open" => {
-                self.open(first, second);
-                Ok(Vec::new())
-            }
+            "open" => Ok(self.open(first, second)),
+            // `sqlite3_system_errno` of `research/sqlite/src/main.c`:
+            // what the machine answered the last open of a file with.
+            "system_errno" => Ok(vec![self.errno.to_string()]),
             "close" => {
                 self.closed(first);
                 Ok(Vec::new())
@@ -1650,7 +1655,7 @@ impl Session {
     /// `research/sqlite/src/btree.c:2170` makes fresh for every
     /// connection and no other connection reads, so the harness holds
     /// one under a name no file has.
-    fn open(&mut self, name: &str, path: &str) {
+    fn open(&mut self, name: &str, path: &str) -> Vec<String> {
         let under = configured();
         let held = if path.is_empty() || path.eq_ignore_ascii_case(":memory:") {
             self.opened = self.opened.saturating_add(1);
@@ -1659,6 +1664,18 @@ impl Session {
             simplified(path)
         };
         let path = held.as_str();
+        // `sqlite3OsOpen` makes the file where it is not there, and
+        // answers `SQLITE_CANTOPEN` where the directory that would hold
+        // it is not there, which the machine says `ENOENT` for.
+        if let Some(over) = Path::new(path).parent()
+            && !over.as_os_str().is_empty()
+            && !over.is_dir()
+        {
+            self.connections.insert(name.to_owned(), path.to_owned());
+            self.errno = 2;
+            refused_as("SQLITE_CANTOPEN", "14");
+            return vec![String::from("unable to open database file")];
+        }
         if !self.held.contains_key(path)
             && let Ok(mut writer) = Writer::new(under.page, 0, under.encoding)
         {
@@ -1683,6 +1700,9 @@ impl Session {
         // connection, so a connection that opens again defines none.
         self.collations.remove(name);
         self.functions.remove(name);
+        self.errno = 0;
+        stood();
+        vec![String::new()]
     }
 
     /// Keeps a collation the tester defined under its name, leaking the

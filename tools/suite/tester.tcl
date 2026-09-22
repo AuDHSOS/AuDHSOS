@@ -547,7 +547,7 @@ proc sqlite3 {args} {
     incr i
   }
   if {$file eq ""} { set file ":memory:" }
-  harness_send open $name $file
+  set ::harness_error [lindex [harness_send open $name $file] 0]
   # A connection that is opened again holds no authorizer, no null value
   # and no callback, which `sqlite3_open` leaves null.
   catch { unset ::authorizers($name) }
@@ -1916,6 +1916,9 @@ proc sqlite3_expanded_sql {stmt} { return [lindex [harness_send stmt $stmt expan
 proc sqlite3_errcode {db} { return [lindex [harness_send errcode primary] 0] }
 proc sqlite3_extended_errcode {db} { return [lindex [harness_send errcode extended] 0] }
 proc sqlite3_get_autocommit {db} { return [lindex [harness_send autocommit $db] 0] }
+# `sqlite3_system_errno` of `research/sqlite/src/main.c`: what the
+# machine answered the last open of a file with.
+proc sqlite3_system_errno {db} { return [lindex [harness_send system_errno $db] 0] }
 proc sqlite3_errmsg {db} {
   if {$::harness_error eq ""} { return "not an error" }
   return $::harness_error

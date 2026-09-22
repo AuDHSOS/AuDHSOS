@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The suite harness answers `SQLITE_CANTOPEN` for a connection over a
+  path whose directory is not on the machine, and answers
+  `sqlite3_system_errno`. D-407 records it. `capi3.test` goes from 13
+  cases passing to 160.
+
 - `db-sqlite` names the database, the table and the column each result
   column comes from, which the three `sqlite3_column_*_name` answer.
   D-406 records it. Catalog 6.6.282. `capi3c.test` goes from 92 cases
