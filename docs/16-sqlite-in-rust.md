@@ -1021,6 +1021,8 @@ Size: L.
 139. The log a commit over a file in write-ahead logging makes again,
      and the schema format the library refuses. Built, which D-408
      records.
+140. The row of a table that points at itself. Built, which D-413
+     records.
 
 ### Done when
 

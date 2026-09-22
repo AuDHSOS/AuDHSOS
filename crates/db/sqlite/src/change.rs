@@ -5152,7 +5152,7 @@ impl Writer {
             if wanted.contains(&Value::Null) {
                 continue;
             }
-            let rows = self.pointing_rows(&points, &wanted)?;
+            let rows = self.pointing_rows(&points, &wanted, None)?;
             self.deferred = self.deferred.saturating_sub(counted(rows.len()));
         }
         Ok(())
@@ -5210,6 +5210,19 @@ impl Writer {
             // no row, which is `R-...`: such a row is held to nothing.
             if wanted.contains(&Value::Null) {
                 continue;
+            }
+            // A row of a table that points at itself is its own parent
+            // where its parent key answers what its child key holds,
+            // which `sqlite3FkCheck` of `research/sqlite/src/fkey.c:379`
+            // compares before it counts the key.
+            if by > 0 && key.table.eq_ignore_ascii_case(&table.name) {
+                let own: Vec<Value> = places
+                    .iter()
+                    .map(|at| at_place(table, values, rowid, *at))
+                    .collect();
+                if own == wanted {
+                    continue;
+                }
             }
             if found_parent(&database, &key.table, parent, &places, &wanted)? {
                 continue;
@@ -5277,7 +5290,21 @@ impl Writer {
             } else {
                 points.key.on_delete
             };
-            self.acted(&points, &wanted, after.as_deref(), action)?;
+            // A table that points at itself leaves the row the
+            // statement changes out of the rows that point at it, which
+            // `fkScanChildren` of `research/sqlite/src/fkey.c:614` writes
+            // a term of the `WHERE` for.
+            let itself = points
+                .child
+                .eq_ignore_ascii_case(name)
+                .then(|| places.clone());
+            self.acted(
+                &points,
+                &wanted,
+                after.as_deref(),
+                action,
+                itself.as_deref(),
+            )?;
         }
         Ok(())
     }
@@ -5361,8 +5388,9 @@ impl Writer {
         wanted: &[Value],
         after: Option<&[Value]>,
         action: crate::ast::Action,
+        itself: Option<&[usize]>,
     ) -> Result<(), Error> {
-        let rows = self.pointing_rows(points, wanted)?;
+        let rows = self.pointing_rows(points, wanted, itself)?;
         if rows.is_empty() {
             return Ok(());
         }
@@ -5428,6 +5456,7 @@ impl Writer {
         &self,
         points: &Points,
         wanted: &[Value],
+        itself: Option<&[usize]>,
     ) -> Result<Vec<crate::db::Reading>, Error> {
         let bytes = self.image();
         let database = self.reading(&bytes)?;
@@ -5445,9 +5474,21 @@ impl Writer {
             if held.contains(&Value::Null) {
                 continue;
             }
-            if alike_values(&held, wanted, &points.under) {
-                out.push((key, values));
+            if !alike_values(&held, wanted, &points.under) {
+                continue;
             }
+            // The row the statement changes is its own parent, so it is
+            // left out of the rows that point at it.
+            if let Some(places) = itself {
+                let own: Vec<Value> = places
+                    .iter()
+                    .map(|at| at_place(child, &values, keyed_rowid(&key), *at))
+                    .collect();
+                if own == wanted {
+                    continue;
+                }
+            }
+            out.push((key, values));
         }
         Ok(out)
     }

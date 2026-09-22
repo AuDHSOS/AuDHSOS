@@ -6987,3 +6987,11 @@ Document 16 step Q8.
 
 - A connection with a temp table, the schema taken off it, the same
   schema handed back, and a schema of no bytes.
+
+### 6.6.285 The row that points at itself (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A row that points at itself written, changed and taken away, one that
+  points at another row of the same table, and a table that keeps its
+  rows in the key's own tree.

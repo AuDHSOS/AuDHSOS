@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` holds a row of a table that points at itself to be its own
+  parent, and leaves the row a statement changes out of the rows that
+  point at it. D-413 records it. Catalog 6.6.285. `without_rowid3.test`
+  goes from 1135 cases passing to 1154 and `fkey2.test` from 1162 to
+  1172.
+
 - `db-sqlite` hands the temp schema of a connection over as a database
   of its own, and the suite harness carries a bound text or blob as the
   bytes of the value and the kind it is. D-412 records it. Catalog

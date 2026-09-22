@@ -876,3 +876,49 @@ fn the_keyed_row_a_replace_writes_over_is_held_to_the_keys_that_point_at_it() {
     );
     assert_eq!(answered(&writer, "SELECT a, b FROM pp"), ["1", "2"]);
 }
+
+/// A row of a table that points at itself is its own parent, and the
+/// rows that point at a row the statement changes leave that row out.
+#[test]
+fn what_a_row_that_points_at_itself_is_held_to() {
+    let (mut writer, _) = ran(&[
+        "PRAGMA foreign_keys = ON",
+        "CREATE TABLE self(a INTEGER PRIMARY KEY, b REFERENCES self(a))",
+        "INSERT INTO self VALUES(13, 13)",
+    ])
+    .expect("the row is its own parent");
+    assert_eq!(answered(&writer, "SELECT a, b FROM self"), ["13", "13"]);
+    // A key that points at no row is refused, whether the statement
+    // writes it or the one it pointed at moves.
+    assert!(writer.run(b"UPDATE self SET b = 15").is_err());
+    assert!(writer.run(b"INSERT INTO self VALUES(20, 21)").is_err());
+    // A row that carries its key to a new value carries the key it
+    // points at with it, because the row it points at is itself.
+    writer.run(b"UPDATE self SET a = 14, b = 14").unwrap();
+    assert_eq!(answered(&writer, "SELECT a, b FROM self"), ["14", "14"]);
+    // A row that points at itself is left out of the rows that point at
+    // it, so the row goes without the key refusing it.
+    writer.run(b"DELETE FROM self WHERE a = 14").unwrap();
+    assert!(answered(&writer, "SELECT a FROM self").is_empty());
+    // A row of the same table that points at another row is no row's
+    // own parent, so the key it holds is counted.
+    let (mut writer, _) = ran(&[
+        "PRAGMA foreign_keys = ON",
+        "CREATE TABLE tree(a INTEGER PRIMARY KEY, b REFERENCES tree(a) ON DELETE CASCADE)",
+        "INSERT INTO tree VALUES(1, NULL)",
+        "INSERT INTO tree VALUES(2, 1)",
+    ])
+    .expect("a row that points at another");
+    writer.run(b"DELETE FROM tree WHERE a = 1").unwrap();
+    assert!(answered(&writer, "SELECT a FROM tree").is_empty());
+    // A table that keeps its rows in the key's own tree holds the same.
+    let (mut writer, _) = ran(&[
+        "PRAGMA foreign_keys = ON",
+        "CREATE TABLE two(a PRIMARY KEY, b REFERENCES two(a)) WITHOUT ROWID",
+        "INSERT INTO two VALUES('x', 'x')",
+    ])
+    .expect("the row is its own parent");
+    assert!(writer.run(b"UPDATE two SET b = 'y'").is_err());
+    writer.run(b"UPDATE two SET a = 'z', b = 'z'").unwrap();
+    assert_eq!(answered(&writer, "SELECT a, b FROM two"), ["z", "z"]);
+}
