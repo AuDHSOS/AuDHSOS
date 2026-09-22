@@ -1006,6 +1006,8 @@ Size: L.
 132. The two syncs a commit that keeps a rollback journal makes, and what
      a pragma the C library does not hold answers. Built, which D-396 and
      D-397 record.
+133. The root a `DROP` over a file that keeps pointer maps moves. Built,
+     which D-398 records.
 
 ### Done when
 

@@ -2073,10 +2073,53 @@ impl Writer {
         }
         roots.sort_unstable();
         for root in roots.into_iter().rev() {
-            crate::tree::destroy(&mut self.held.pages, root)?;
+            if !self.held.pages.vacuuming() {
+                crate::tree::destroy(&mut self.held.pages, root)?;
+                continue;
+            }
+            let largest = self.held.header.largest_root;
+            let moved = crate::tree::destroy_moving(&mut self.held.pages, root, largest)?;
+            if let Some(from) = moved {
+                self.re_rooted(from, root)?;
+            }
+            self.held.header.largest_root = shrunk(&self.held.pages, largest);
         }
         self.held.header.schema_cookie = self.held.header.schema_cookie.saturating_add(1);
         Ok(())
+    }
+
+    /// The row of `sqlite_schema` that names the root page `from` written
+    /// again to name `into`, which is the `UPDATE` statement
+    /// `destroyRootPage` of `research/sqlite/src/build.c` writes after the
+    /// move.
+    ///
+    /// Finding the row costs O(n) in the rows of the schema.
+    fn re_rooted(&mut self, from: u32, into: u32) -> Result<(), Error> {
+        let bytes = self.image();
+        let image = crate::image::Image::open(&bytes)?;
+        let mut found = None;
+        for row in image.schema() {
+            let row = row?;
+            let record = row.record()?;
+            let mut values = Vec::with_capacity(SCHEMA.len());
+            for at in 0..SCHEMA.len() {
+                values.push(
+                    record
+                        .value(at)?
+                        .map_or(Value::Null, crate::tree::held_value),
+                );
+            }
+            if values.get(3) == Some(&Value::Int(i64::from(from))) {
+                for slot in values.iter_mut().skip(3).take(1) {
+                    *slot = Value::Int(i64::from(into));
+                }
+                found = Some((row.rowid, values));
+                break;
+            }
+        }
+        // A root the drop moved is one a row of the schema names, so the
+        // walk finds that row.
+        found.map_or(Ok(()), |(rowid, values)| self.schema_row(rowid, &values))
     }
 
     /// `PRAGMA integrity_check` over every database the connection holds,
@@ -9934,6 +9977,22 @@ struct Points {
 /// has no rowid for a name to answer.
 fn keyed_rowid(key: &[Value]) -> i64 {
     key.first().map_or(0, Value::to_integer)
+}
+
+/// The largest root page a file holds once the root at `largest` is given
+/// up, which is the page before it and the page before that where the
+/// file keeps a pointer map there.
+///
+/// This is what `btreeDropTable` of `research/sqlite/src/btree.c` writes
+/// into the header as `BTREE_LARGEST_ROOT_PAGE`. The page that carries
+/// the byte a lock stands on lies past any file this crate writes, so no
+/// count steps over it.
+fn shrunk(pages: &crate::tree::Pages, largest: u32) -> u32 {
+    let mut held = largest.saturating_sub(1);
+    while held > 1 && pages.is_map(held) {
+        held = held.saturating_sub(1);
+    }
+    held
 }
 
 /// The word a `DROP` names what it takes away by, which is what the

@@ -6916,3 +6916,10 @@ Document 16 step Q8.
   it writes after the first sync.
 - A pragma name the table does not hold, with a value and without one,
   and one it holds that this crate does not write.
+
+### 6.6.276 The root a drop moves (`db-sqlite`)
+
+Document 16 step Q8.
+
+- Two tables dropped in a row out of a file that keeps pointer maps,
+  read back by `PRAGMA integrity_check`.

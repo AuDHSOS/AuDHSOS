@@ -728,7 +728,7 @@ impl Pages {
         let bytes = self.bytes(from)?.to_vec();
         self.keep(into);
         self.put_page(into, &bytes)?;
-        if kind == Point::Branch {
+        if matches!(kind, Point::Branch | Point::Root) {
             self.point_cells(into)?;
         } else {
             let next = crate::bytes::u32_at(&bytes, 0).ok_or(Error::Overrun)?;
@@ -736,8 +736,32 @@ impl Pages {
                 self.point(next, Point::Tail, into)?;
             }
         }
-        self.repoint(parent, from, into, kind)?;
+        // No page names a root, which is what `relocatePage` leaves the
+        // pointer of `iPtrPage` alone for.
+        if kind != Point::Root {
+            self.repoint(parent, from, into, kind)?;
+        }
         self.point(into, kind, parent)
+    }
+
+    /// The root page `from` written where `into` lay, with the pages its
+    /// cells name written to say so, which is `relocatePage` of
+    /// `research/sqlite/src/btree.c` for a `PTRMAP_ROOTPAGE`.
+    ///
+    /// Moving one root costs O(n) in the cells of it.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] names a page the file does not hold.
+    pub fn move_root(&mut self, from: u32, into: u32) -> Result<(), Error> {
+        self.relocate(from, Point::Root, 0, into)
+    }
+
+    /// Whether the file keeps pointer maps, which is what `PRAGMA
+    /// auto_vacuum` turns on.
+    #[must_use]
+    pub const fn vacuuming(&self) -> bool {
+        self.vacuum
     }
 
     /// The pointer on `parent` that named `from` written to name `into`,
@@ -1499,7 +1523,7 @@ fn order_of_entry(
 /// One value of a record as a value a comparison takes, which is the
 /// bytes as they are stored: an index compares what it holds and not
 /// what an encoding makes of it.
-fn held_value(value: crate::record::Value<'_>) -> Value {
+pub(crate) fn held_value(value: crate::record::Value<'_>) -> Value {
     match value {
         crate::record::Value::Null => Value::Null,
         crate::record::Value::Int(number) => Value::Int(number),
@@ -1900,6 +1924,34 @@ fn clear(pages: &mut Pages, first: Option<u32>) -> Result<(), Error> {
 pub fn destroy(pages: &mut Pages, root: u32) -> Result<(), Error> {
     clear_page(pages, root, false, 0)?;
     pages.release(root)
+}
+
+/// The tree at `root` taken out of a file that keeps pointer maps, with
+/// the root that carries the largest page number moved into the page the
+/// root leaves, and the page that root lay on given up.
+///
+/// This is `btreeDropTable` of `research/sqlite/src/btree.c:10328`: a
+/// root at the end of the file is one the vacuum of the commit cannot
+/// move, so the drop moves it while the schema still says where it is.
+/// The answer is the page the move took a root off, and nothing where
+/// the root dropped was the largest one, so the caller writes the row of
+/// the schema that named the moved root.
+///
+/// Dropping one tree costs O(n) in its pages and O(m) in the cells of
+/// the moved root.
+///
+/// # Errors
+///
+/// [`Error`] names a page the tree names and the file does not hold.
+pub fn destroy_moving(pages: &mut Pages, root: u32, largest: u32) -> Result<Option<u32>, Error> {
+    clear_page(pages, root, false, 0)?;
+    if root >= largest {
+        pages.release(root)?;
+        return Ok(None);
+    }
+    pages.move_root(largest, root)?;
+    pages.release(largest)?;
+    Ok(Some(largest))
 }
 
 /// Every row of the tree at `root` taken out, with the root left as an

@@ -993,21 +993,7 @@ impl Session {
                 Ok(Vec::new())
             }
             "close" => {
-                // `sqlite3_close` rolls back the transaction the
-                // connection had open, and the harness holds one
-                // transaction per file, so the file the connection
-                // closed leaves none.
-                if let Some(path) = self.connections.get(first).cloned()
-                    && let Some(writer) = self.held.get_mut(&path)
-                {
-                    let _ = writer.run(b"ROLLBACK");
-                }
-                self.connections.remove(first);
-                self.nulls.remove(first);
-                self.counters.remove(first);
-                self.pragmas.remove(first);
-                self.collations.remove(first);
-                self.functions.remove(first);
+                self.closed(first);
                 Ok(Vec::new())
             }
             "delete" => {
@@ -1364,6 +1350,27 @@ impl Session {
             "journal" => writer.journal().map(<[u8]>::to_vec),
             _ => None,
         }
+    }
+
+    /// One connection closed, which is `sqlite3_close`.
+    ///
+    /// The connection rolls back the transaction it began itself and
+    /// leaves the transaction another connection over the same path began
+    /// where it stands, which the harness names the owner of.
+    fn closed(&mut self, name: &str) {
+        if let Some(path) = self.connections.get(name).cloned()
+            && self.owners.get(&path).is_some_and(|held| held == name)
+            && let Some(writer) = self.held.get_mut(&path)
+        {
+            let _ = writer.run(b"ROLLBACK");
+            self.owners.remove(&path);
+        }
+        self.connections.remove(name);
+        self.nulls.remove(name);
+        self.counters.remove(name);
+        self.pragmas.remove(name);
+        self.collations.remove(name);
+        self.functions.remove(name);
     }
 
     /// Runs `sql` over the files the session holds, takes the machine to

@@ -561,3 +561,29 @@ fn what_a_step_over_a_file_that_ends_on_a_map_page_gives_up() {
     );
     assert_eq!(writer.written().len(), 104 * 512);
 }
+
+/// `avtrans-4.98` of `test/avtrans.test`: the second of two tables
+/// dropped in a row out of a file that vacuums itself whole.
+#[test]
+fn the_second_table_a_file_that_vacuums_itself_drops_is_dropped() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.vacuuming(false);
+    for sql in [
+        b"CREATE TABLE one(a int PRIMARY KEY, b text)".as_slice(),
+        b"INSERT INTO one VALUES(1,'one')",
+        b"CREATE TABLE two(a int PRIMARY KEY, b text)",
+        b"INSERT INTO two VALUES(1,'I')",
+        b"DROP TABLE one",
+        b"DROP TABLE two",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    assert_eq!(
+        writer
+            .run(b"PRAGMA integrity_check")
+            .unwrap()
+            .first()
+            .and_then(|row| row.first()),
+        Some(&Value::Text(b"ok".to_vec()))
+    );
+}

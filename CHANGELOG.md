@@ -51,6 +51,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` moves the root carrying the largest page number into the
+  page a dropped root leaves where the file keeps pointer maps, so
+  `DROP TABLE one; DROP TABLE two` over such a file no longer answers
+  `database disk image is malformed` for the second drop. D-398 records
+  it. Catalog 6.6.276. `avtrans.test` goes from 229 cases passing to 247.
+
 - `db-sqlite` answers no row for a `PRAGMA` whose name the pragma table
   of the C library does not hold, which it refused before, so the
   statements after `PRAGMA autovacuum = 0` run. D-397 records it. Catalog
