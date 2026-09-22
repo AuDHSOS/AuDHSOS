@@ -181,6 +181,25 @@ fn a_freed_chain_gives_back_every_cluster_it_had() {
 }
 
 #[test]
+fn remove_deletes_the_entry_before_it_frees_the_chain() {
+    let mut fs = volume();
+    let root = fs.root();
+    let name = Name::new("CUT.BIN").expect("name");
+    let mut file = fs.create(root, &name, moment()).expect("create");
+    fs.write(&mut file, 0, &[9u8; 512 * 2]).expect("write");
+    let first = file.first_cluster();
+    let second = fs.next_cluster(first).expect("next").expect("a second");
+    let start = fs.geometry().fat_start(0);
+    let mut disk = fs.into_device();
+    // A chain that stops midway, as a cut or a device error leaves it.
+    set_raw(&mut disk, start, first, second + 1);
+    let mut fs = FileSystem::mount(disk).expect("mount");
+    assert_eq!(fs.remove(root, &name), Err(Error::FreeInChain(second + 1)));
+    // No entry names the chain the removal did not finish (#216).
+    assert_eq!(fs.find(root, &name), Ok(None));
+}
+
+#[test]
 fn a_file_with_no_cluster_frees_none() {
     let mut fs = volume();
     let root = fs.root();

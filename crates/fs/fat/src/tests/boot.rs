@@ -5,7 +5,8 @@
 //! every bad one is refused for.
 
 use crate::boot::{
-    FormatOptions, Geometry, MIN_CLUSTERS, ROOT_CLUSTER, geometry_for, parse, read_geometry,
+    FormatOptions, Geometry, MAX_CLUSTERS, MIN_CLUSTERS, ROOT_CLUSTER, geometry_for, parse,
+    read_geometry,
 };
 use crate::device::{BlockDevice, SECTOR, put};
 use crate::doubles::RamDisk;
@@ -151,10 +152,53 @@ fn a_volume_of_too_few_clusters_is_not_a_fat32_one() {
 }
 
 #[test]
+fn a_volume_of_too_many_clusters_is_not_a_fat32_one() {
+    let boot = patched(32, &u32::MAX.to_le_bytes());
+    match parse(&boot) {
+        Err(Error::NotFat32(clusters)) => assert!(clusters > MAX_CLUSTERS),
+        other => panic!("a huge volume parsed as {other:?}"),
+    }
+    assert!(matches!(
+        geometry_for(u32::MAX, &options()),
+        Err(Error::NotFat32(clusters)) if clusters > MAX_CLUSTERS
+    ));
+}
+
+#[test]
 fn a_device_too_small_for_the_tables_is_refused() {
     assert_eq!(geometry_for(0, &options()), Err(Error::TooSmall(0)));
     assert_eq!(geometry_for(31, &options()), Err(Error::TooSmall(31)));
     assert_eq!(geometry_for(33, &options()), Err(Error::TooSmall(33)));
+}
+
+#[test]
+fn a_table_with_fewer_entries_than_clusters_is_refused() {
+    // Two tables of one sector over 70000 sectors: 69966 clusters, 128
+    // entries (#217).
+    let mut boot = patched(32, &70_000u32.to_le_bytes());
+    put(&mut boot, 36, &1u32.to_le_bytes());
+    assert_eq!(parse(&boot), Err(Error::Layout));
+    // 520 table sectors hold 66560 entries: 66558 clusters fit, 66559 do
+    // not.
+    put(&mut boot, 36, &520u32.to_le_bytes());
+    put(&mut boot, 32, &(32 + 2 * 520 + 66_558u32).to_le_bytes());
+    assert_eq!(parse(&boot).map(|g| g.clusters), Ok(66_558));
+    put(&mut boot, 32, &(32 + 2 * 520 + 66_559u32).to_le_bytes());
+    assert_eq!(parse(&boot), Err(Error::Layout));
+}
+
+#[test]
+fn a_boot_sector_that_claims_more_sectors_than_the_device_has_is_refused() {
+    let mut disk = volume().into_device();
+    let mut boot = [0u8; SECTOR];
+    disk.read(0, &mut boot).expect("read");
+    put(&mut boot, 32, &(SECTORS + 1).to_le_bytes());
+    disk.write(0, &boot).expect("write");
+    assert!(parse(&boot).is_ok());
+    assert_eq!(
+        FileSystem::mount(disk).err(),
+        Some(Error::TooSmall(SECTORS))
+    );
 }
 
 #[test]

@@ -18,8 +18,8 @@ pub mod time;
 
 pub use boot::{
     BACKUP_BOOT_SECTOR, DEFAULT_FAT_COUNT, DEFAULT_RESERVED_SECTORS, FSINFO_SECTOR, FormatOptions,
-    Geometry, MAX_SECTORS_PER_CLUSTER, MEDIA, MIN_CLUSTERS, ROOT_CLUSTER, geometry_for, parse,
-    read_geometry,
+    Geometry, MAX_CLUSTERS, MAX_SECTORS_PER_CLUSTER, MEDIA, MIN_CLUSTERS, ROOT_CLUSTER,
+    geometry_for, parse, read_geometry,
 };
 pub use device::{BlockDevice, SECTOR};
 pub use dir::{

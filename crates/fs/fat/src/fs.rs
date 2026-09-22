@@ -4,6 +4,8 @@
 //! The volume: mounting one, making one, and everything a caller does
 //! with the one it has.
 
+use core::cell::Cell;
+
 use audhsos_time::UnixTime;
 
 use crate::boot::{
@@ -38,6 +40,12 @@ pub struct FileSystem<D> {
     free: u32,
     /// Where the next search for a free cluster starts.
     next_free: u32,
+    /// The number of the directory sector in `sector`, `None` while it
+    /// holds none.
+    cached: Cell<Option<u32>>,
+    /// The last directory sector [`FileSystem::next_entry`] read, so that
+    /// a walk reads each sector once and not once per slot.
+    sector: Cell<[u8; SECTOR]>,
 }
 
 /// A place in a directory, walked one entry at a time.
@@ -95,17 +103,23 @@ impl<D: BlockDevice> FileSystem<D> {
     ///
     /// # Errors
     ///
-    /// The errors of [`parse`], and the device's own.
+    /// The errors of [`parse`], [`Error::TooSmall`] for a boot sector
+    /// that claims more sectors than `device` has, and the device's own.
     pub fn mount(device: D) -> Result<FileSystem<D>, Error> {
         let mut boot = [0u8; SECTOR];
         device.read(0, &mut boot)?;
         let geometry = parse(&boot)?;
+        if geometry.sectors > device.sectors() {
+            return Err(Error::TooSmall(device.sectors()));
+        }
         let (free, next_free) = table::count_free(&device, &geometry)?;
         Ok(FileSystem {
             device,
             geometry,
             free,
             next_free,
+            cached: Cell::new(None),
+            sector: Cell::new([0; SECTOR]),
         })
     }
 
@@ -127,6 +141,8 @@ impl<D: BlockDevice> FileSystem<D> {
             geometry,
             free: geometry.clusters,
             next_free: geometry.root_cluster,
+            cached: Cell::new(None),
+            sector: Cell::new([0; SECTOR]),
         };
         let root = volume.geometry.root_cluster;
         volume.claim(root)?;
@@ -165,7 +181,8 @@ impl<D: BlockDevice> FileSystem<D> {
     /// name to. What is written through here is not seen by the free
     /// count and the hint the volume carries, so a caller that changes
     /// the table this way mounts the volume again afterwards.
-    pub const fn device_mut(&mut self) -> &mut D {
+    pub fn device_mut(&mut self) -> &mut D {
+        self.cached.set(None);
         &mut self.device
     }
 
@@ -181,7 +198,7 @@ impl<D: BlockDevice> FileSystem<D> {
     /// The device's own error.
     pub fn flush(&mut self) -> Result<(), Error> {
         let info = info_sector(self.free, self.next_free);
-        self.device.write(FSINFO_SECTOR, &info)
+        self.write_sector(FSINFO_SECTOR, &info)
     }
 
     /// The cluster after `cluster`, or `None` where the chain ends.
@@ -265,56 +282,150 @@ impl<D: BlockDevice> FileSystem<D> {
         }
     }
 
-    /// The next entry of a walk, or `None` where the directory ends.
+    /// The next entry of a walk, or `None` where the directory ends. An
+    /// entry whose name or date this crate cannot carry is walked past.
     ///
     /// # Errors
     ///
-    /// [`Error::EntryName`] for an entry whose eleven bytes are not a
-    /// name, [`Error::Time`] for one whose date names no day,
-    /// [`Error::ChainLoop`] for a directory whose chain enters more
-    /// clusters than the volume has, and the errors of the table walk.
+    /// [`Error::Cluster`] for an entry whose first cluster is outside the
+    /// data region, or zero for a directory; the cursor then points at
+    /// the slot after that entry. [`Error::ChainLoop`] for a directory
+    /// whose chain enters more clusters than the volume has, and the
+    /// errors of the table walk.
     pub fn next_entry(&self, cursor: &mut Entries) -> Result<Option<Entry>, Error> {
-        while !cursor.done {
-            let location = Location {
-                cluster: cursor.cluster,
-                slot: cursor.slot,
-            };
-            let mut buffer = [0u8; SECTOR];
-            let sector = self
-                .geometry
-                .cluster_sector(cursor.cluster)
-                .saturating_add(cursor.slot.wrapping_div(SLOTS_PER_SECTOR));
-            self.device.read(sector, &mut buffer)?;
-            let offset = usize::try_from(cursor.slot.wrapping_rem(SLOTS_PER_SECTOR))
-                .unwrap_or(0)
-                .saturating_mul(ENTRY_LEN);
-            let bytes = buffer
-                .get(offset..offset.saturating_add(ENTRY_LEN))
-                .ok_or(Error::EntryName)?;
-            let slot = decode(bytes, location)?;
-            self.step(cursor)?;
-            match slot {
-                Slot::End => {
-                    cursor.done = true;
-                    return Ok(None);
-                }
-                Slot::Used(entry) => return Ok(Some(entry)),
-                Slot::Free | Slot::Skip => {}
+        while let Some(slot) = self.next_slot(cursor)? {
+            if let Slot::Used(entry) = slot {
+                return self.checked(entry).map(Some);
             }
         }
         Ok(None)
+    }
+
+    /// The next slot of a walk other than [`Slot::End`], or `None` where
+    /// the directory ends.
+    fn next_slot(&self, cursor: &mut Entries) -> Result<Option<Slot>, Error> {
+        if cursor.done {
+            return Ok(None);
+        }
+        let location = Location {
+            cluster: cursor.cluster,
+            slot: cursor.slot,
+        };
+        let (sector, offset) = self.slot_at(location);
+        let slot = decode(&self.dir_slot(sector, offset)?, location);
+        self.step(cursor)?;
+        if slot == Slot::End {
+            cursor.done = true;
+            return Ok(None);
+        }
+        Ok(Some(slot))
+    }
+
+    /// Whether `dir` holds an entry named `name`, counting a
+    /// [`Slot::Hidden`] one whose bytes equal `name` ignoring case.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ChainLoop`] and the errors of the table walk.
+    fn taken(&self, dir: Dir, name: &Name) -> Result<bool, Error> {
+        let mut cursor = self.entries(dir);
+        while let Some(slot) = self.next_slot(&mut cursor)? {
+            let found = match slot {
+                Slot::Used(entry) => entry.name == *name,
+                Slot::Hidden(raw) => raw.eq_ignore_ascii_case(name.as_bytes()),
+                Slot::End | Slot::Free | Slot::Skip => false,
+            };
+            if found {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// `entry`, where its first cluster is one a read may follow: zero
+    /// for a file without contents, a cluster of the data region
+    /// otherwise.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Cluster`] for any other first cluster. Cluster zero of a
+    /// directory is refused, because [`Geometry::cluster_sector`] maps it
+    /// to the root.
+    const fn checked(&self, entry: Entry) -> Result<Entry, Error> {
+        let first = entry.first_cluster;
+        let valid = if first == 0 {
+            !entry.is_directory()
+        } else {
+            self.geometry.holds(first)
+        };
+        if valid {
+            Ok(entry)
+        } else {
+            Err(Error::Cluster(first))
+        }
+    }
+
+    /// Directory sector `sector`, from the cache where it holds that one.
+    fn dir_sector(&self, sector: u32) -> Result<[u8; SECTOR], Error> {
+        self.load(sector)?;
+        Ok(self.sector.get())
+    }
+
+    /// The slot at `offset` of directory sector `sector`. Copies the
+    /// slot's 32 bytes out of the cache and not the whole sector.
+    fn dir_slot(&self, sector: u32, offset: usize) -> Result<[u8; ENTRY_LEN], Error> {
+        self.load(sector)?;
+        let cells: &Cell<[u8]> = &self.sector;
+        let mut bytes = [0u8; ENTRY_LEN];
+        for (byte, cell) in bytes
+            .iter_mut()
+            .zip(cells.as_slice_of_cells().iter().skip(offset))
+        {
+            *byte = cell.get();
+        }
+        Ok(bytes)
+    }
+
+    /// Puts directory sector `sector` into the cache, where it is not
+    /// there yet.
+    fn load(&self, sector: u32) -> Result<(), Error> {
+        if self.cached.get() != Some(sector) {
+            let mut buffer = [0u8; SECTOR];
+            self.device.read(sector, &mut buffer)?;
+            self.sector.set(buffer);
+            self.cached.set(Some(sector));
+        }
+        Ok(())
+    }
+
+    /// Writes `from` to `sector`, and to the cache where it holds that
+    /// sector.
+    fn write_sector(&mut self, sector: u32, from: &[u8; SECTOR]) -> Result<(), Error> {
+        if self.cached.get() != Some(sector) {
+            return self.device.write(sector, from);
+        }
+        // A failed write leaves the sector unknown, so the cache drops it.
+        self.cached.set(None);
+        self.device.write(sector, from)?;
+        self.sector.set(*from);
+        self.cached.set(Some(sector));
+        Ok(())
     }
 
     /// The entry `name` names, or `None` where the directory has none.
     ///
     /// # Errors
     ///
-    /// The errors of [`FileSystem::next_entry`].
+    /// [`Error::Cluster`] where the first cluster of that entry is not one
+    /// a read may follow; a bad first cluster of another entry is not
+    /// refused. [`Error::ChainLoop`] and the errors of the table walk.
     pub fn find(&self, dir: Dir, name: &Name) -> Result<Option<Entry>, Error> {
         let mut cursor = self.entries(dir);
-        while let Some(entry) = self.next_entry(&mut cursor)? {
-            if entry.name == *name {
-                return Ok(Some(entry));
+        while let Some(slot) = self.next_slot(&mut cursor)? {
+            if let Slot::Used(entry) = slot
+                && entry.name == *name
+            {
+                return self.checked(entry).map(Some);
             }
         }
         Ok(None)
@@ -363,7 +474,7 @@ impl<D: BlockDevice> FileSystem<D> {
     /// moment an entry cannot carry, [`Error::Full`] where the directory
     /// needs a cluster and none is free.
     pub fn create(&mut self, dir: Dir, name: &Name, at: UnixTime) -> Result<File, Error> {
-        if self.find(dir, name)?.is_some() {
+        if self.taken(dir, name)? {
             return Err(Error::Exists);
         }
         let bytes = encode(name, ATTR_ARCHIVE, 0, 0, at)?;
@@ -386,7 +497,7 @@ impl<D: BlockDevice> FileSystem<D> {
     /// cluster is free, and [`Error::Time`] for a moment an entry cannot
     /// carry.
     pub fn create_dir(&mut self, dir: Dir, name: &Name, at: UnixTime) -> Result<Dir, Error> {
-        if self.find(dir, name)?.is_some() {
+        if self.taken(dir, name)? {
             return Err(Error::Exists);
         }
         let cluster = self.allocate()?;
@@ -407,8 +518,7 @@ impl<D: BlockDevice> FileSystem<D> {
         if let Some(slot) = buffer.get_mut(ENTRY_LEN..ENTRY_LEN.saturating_mul(2)) {
             slot.copy_from_slice(&dot_dot);
         }
-        self.device
-            .write(self.geometry.cluster_sector(cluster), &buffer)?;
+        self.write_sector(self.geometry.cluster_sector(cluster), &buffer)?;
         let bytes = encode(name, ATTR_DIRECTORY, cluster, 0, at)?;
         self.insert(dir, &bytes)?;
         Ok(Dir::at(cluster))
@@ -437,6 +547,11 @@ impl<D: BlockDevice> FileSystem<D> {
     /// gave back. A directory is refused, because removing one without
     /// walking into it would leave its contents behind.
     ///
+    /// The entry is marked deleted before its chain is freed: a cut
+    /// between the two leaves clusters no entry names, which the free
+    /// count at the next mount ignores, and not an entry that names free
+    /// clusters, which the next allocation would hand to a second file.
+    ///
     /// # Errors
     ///
     /// [`Error::NotFound`], [`Error::Kind`] for a directory, and the
@@ -446,19 +561,17 @@ impl<D: BlockDevice> FileSystem<D> {
         if entry.is_directory() {
             return Err(Error::Kind);
         }
-        let freed = if entry.first_cluster == 0 {
-            0
-        } else {
-            self.free_chain(entry.first_cluster)?
-        };
         let (sector, offset) = self.slot_at(entry.location);
-        let mut buffer = [0u8; SECTOR];
-        self.device.read(sector, &mut buffer)?;
+        let mut buffer = self.dir_sector(sector)?;
         if let Some(byte) = buffer.get_mut(offset) {
             *byte = DELETED;
         }
-        self.device.write(sector, &buffer)?;
-        Ok(freed)
+        self.write_sector(sector, &buffer)?;
+        if entry.first_cluster == 0 {
+            Ok(0)
+        } else {
+            self.free_chain(entry.first_cluster)
+        }
     }
 
     /// Reads from `file` at `offset` into `into`, and answers how many
@@ -534,7 +647,7 @@ impl<D: BlockDevice> FileSystem<D> {
             if let Some(target) = buffer.get_mut(within..within.saturating_add(take)) {
                 target.copy_from_slice(source);
             }
-            self.device.write(sector, &buffer)?;
+            self.write_sector(sector, &buffer)?;
             done = done.saturating_add(take);
         }
         if end > file.size {
@@ -548,12 +661,11 @@ impl<D: BlockDevice> FileSystem<D> {
     /// that describes it.
     fn write_back(&mut self, file: &File) -> Result<(), Error> {
         let (sector, offset) = self.slot_at(file.location);
-        let mut buffer = [0u8; SECTOR];
-        self.device.read(sector, &mut buffer)?;
+        let mut buffer = self.dir_sector(sector)?;
         if let Some(slot) = buffer.get_mut(offset..offset.saturating_add(ENTRY_LEN)) {
             patch(slot, file.first, file.size);
         }
-        self.device.write(sector, &buffer)
+        self.write_sector(sector, &buffer)
     }
 
     /// Where the entry at `location` stands: its sector and its offset in
@@ -660,18 +772,22 @@ impl<D: BlockDevice> FileSystem<D> {
     fn insert(&mut self, dir: Dir, bytes: &[u8; ENTRY_LEN]) -> Result<Location, Error> {
         let mut cluster = dir.cluster;
         let mut steps = 0u32;
+        let mut buffer = [0u8; SECTOR];
+        let mut loaded = None;
         loop {
             for slot in 0..self.slots_per_cluster() {
                 let location = Location { cluster, slot };
                 let (sector, offset) = self.slot_at(location);
-                let mut buffer = [0u8; SECTOR];
-                self.device.read(sector, &mut buffer)?;
+                if loaded != Some(sector) {
+                    buffer = self.dir_sector(sector)?;
+                    loaded = Some(sector);
+                }
                 let first = buffer.get(offset).copied().unwrap_or(0);
                 if first == 0 || first == DELETED {
                     if let Some(target) = buffer.get_mut(offset..offset.saturating_add(ENTRY_LEN)) {
                         target.copy_from_slice(bytes);
                     }
-                    self.device.write(sector, &buffer)?;
+                    self.write_sector(sector, &buffer)?;
                     return Ok(location);
                 }
             }
@@ -738,7 +854,7 @@ impl<D: BlockDevice> FileSystem<D> {
         let blank = [0u8; SECTOR];
         let start = self.geometry.cluster_sector(cluster);
         for sector in 0..self.geometry.sectors_per_cluster {
-            self.device.write(start.saturating_add(sector), &blank)?;
+            self.write_sector(start.saturating_add(sector), &blank)?;
         }
         Ok(())
     }
