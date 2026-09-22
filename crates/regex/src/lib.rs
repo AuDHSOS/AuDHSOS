@@ -34,7 +34,8 @@ pub struct Options {
 pub struct Limits {
     /// Maximum pattern length in UTF-16 code units.
     pub pattern_units: usize,
-    /// Maximum group nesting, additionally capped at 48.
+    /// Maximum disjunction depth including the top level, capped at 48; a
+    /// pattern with `k` nested groups needs `k + 1`.
     pub depth: usize,
     /// Maximum compiled instructions, including capture and epsilon operations.
     pub states: usize,

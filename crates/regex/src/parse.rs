@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Manuel Baesler and contributors
 
-//! Shared UTF-16 grammar from ECMA-262 22.2.1. Parsing is bounded; the selected
+//! Shared UTF-16 grammar from ECMA-262 22.2.1 with the B.1.2 non-Unicode
+//! extensions for `{`, `}` and `]` literals. Parsing is bounded; the selected
 //! profile never changes the matcher of `audhsos-regex`. Backtracking constructs
 //! are AST nodes only and require the independent `audhsos-regex-bt` compiler.
 
@@ -276,28 +277,25 @@ impl Parser<'_> {
                 self.bump();
                 Some((0, Some(1)))
             }
-            Some(123)
-                if self
-                    .pattern
-                    .get(self.at.saturating_add(1))
-                    .is_some_and(|u| matches!(u, 48..=57)) =>
-            {
-                Some(self.counted()?)
-            }
+            Some(123) if self.braced(self.at) => Some(self.counted()?),
             _ => None,
         };
         let Some((min, max)) = quantifier else {
             return Ok(atom);
         };
-        if matches!(
-            atom,
-            Expr::Assert(_) | Expr::Look { .. } | Expr::Lookaround { .. }
-        ) {
-            return Err(self.syntax("cannot quantify an assertion"));
-        }
         let greedy = !self.eat(63);
-        if matches!(self.peek(), Some(42 | 43 | 63 | 123)) {
+        if matches!(self.peek(), Some(42 | 43 | 63)) || self.braced(self.at) {
             return Err(self.syntax("repeated quantifier"));
+        }
+        // B.1.2 `QuantifiableAssertion` admits lookahead only.
+        match atom {
+            Expr::Assert(_) | Expr::Lookaround { backward: true, .. } => {
+                return Err(self.syntax("cannot quantify an assertion"));
+            }
+            Expr::Look { .. } | Expr::Lookaround { .. } => {
+                return Err(self.unsupported("quantified lookahead"));
+            }
+            _ => {}
         }
         // ECMAScript suppresses empty repeat iterations differently from a
         // tagged epsilon loop. Refuse this gap rather than report wrong captures.
@@ -331,6 +329,51 @@ impl Parser<'_> {
             return Err(self.syntax("repetition maximum below minimum"));
         }
         Ok((min, max))
+    }
+    /// Whether `{n}`, `{n,}` or `{n,m}` starts at `at`; any other `{` is a
+    /// B.1.2 `ExtendedPatternCharacter`.
+    fn braced(&self, at: usize) -> bool {
+        let digits = |mut i: usize| {
+            let start = i;
+            while self.pattern.get(i).is_some_and(|u| matches!(u, 48..=57)) {
+                i = i.saturating_add(1);
+            }
+            (i, i > start)
+        };
+        if self.pattern.get(at) != Some(&123) {
+            return false;
+        }
+        let (mut i, found) = digits(at.saturating_add(1));
+        if !found {
+            return false;
+        }
+        if self.pattern.get(i) == Some(&44) {
+            i = digits(i.saturating_add(1)).0;
+        }
+        self.pattern.get(i) == Some(&125)
+    }
+    /// Whether a 22.2.1 `RegularExpressionModifiers` group head without its
+    /// early errors follows `(?`.
+    fn modifiers(&self) -> bool {
+        let (mut flags, mut dash) = (0u8, false);
+        for unit in self.pattern.get(self.at..).unwrap_or_default() {
+            let bit = match unit {
+                105 => 1,
+                109 => 2,
+                115 => 4,
+                45 if !dash => {
+                    dash = true;
+                    continue;
+                }
+                58 => return flags != 0,
+                _ => return false,
+            };
+            if flags & bit != 0 {
+                return false;
+            }
+            flags |= bit;
+        }
+        false
     }
     fn decimal(&mut self) -> Result<usize, Error> {
         let mut number = 0usize;
@@ -369,8 +412,17 @@ impl Parser<'_> {
                             return self.lookahead();
                         }
                         if !self.eat(58) {
+                            let after = self.pattern.get(self.at.saturating_add(1));
                             return Err(
-                                self.unsupported("lookaround, named groups or inline modifiers")
+                                if self.peek() == Some(60)
+                                    && (matches!(after, Some(61 | 33)) || name_start(after))
+                                {
+                                    self.unsupported("lookbehind or named groups")
+                                } else if self.modifiers() {
+                                    self.unsupported("inline modifiers")
+                                } else {
+                                    self.syntax("invalid group")
+                                },
                             );
                         }
                         None
@@ -387,17 +439,20 @@ impl Parser<'_> {
                     if !self.eat(41) {
                         return Err(self.syntax("unterminated group"));
                     }
-                    if let Some(id) = capture {
-                        Expr::Group(id, Box::new(body))
-                    } else {
-                        body
+                    match (capture, body) {
+                        (Some(id), body) => Expr::Group(id, Box::new(body)),
+                        // `(?:^)*` quantifies the group, not the assertion.
+                        (
+                            None,
+                            body @ (Expr::Assert(_) | Expr::Look { .. } | Expr::Lookaround { .. }),
+                        ) => Expr::Sequence(alloc::vec![body]),
+                        (None, body) => body,
                     }
                 }
                 42 | 43 | 63 => return Err(self.syntax("quantifier without atom")),
-                123 if self.peek().is_some_and(|u| matches!(u, 48..=57)) => {
+                123 if self.braced(self.at.saturating_sub(1)) => {
                     return Err(self.syntax("quantifier without atom"));
                 }
-                93 => return Err(self.syntax("unescaped delimiter")),
                 unit => Expr::Unit(unit),
             },
         )
@@ -470,7 +525,11 @@ impl Parser<'_> {
                 self.bump();
                 return Err(self.unsupported("dot lookahead"));
             }
-            Some(unit) if !matches!(unit, 40 | 41 | 42 | 43 | 63 | 94 | 36 | 124 | 123) => {
+            Some(42 | 43 | 63) => return Err(self.syntax("quantifier without atom")),
+            Some(123) if self.braced(self.at) => {
+                return Err(self.syntax("quantifier without atom"));
+            }
+            Some(unit) if !matches!(unit, 40 | 41 | 94 | 36 | 124) => {
                 self.bump();
                 Expr::Unit(unit)
             }
@@ -498,8 +557,10 @@ impl Parser<'_> {
             true
         } else if self.eat(33) {
             false
-        } else {
+        } else if name_start(self.peek().as_ref()) {
             return Err(self.unsupported("named capturing groups"));
+        } else {
+            return Err(self.syntax("invalid group"));
         };
         let body = self.disjunction()?;
         if !self.eat(41) {
@@ -592,6 +653,12 @@ fn shorthand(unit: u16) -> Class {
         ranges,
         negate: matches!(unit, 68 | 87 | 83),
     }
+}
+
+/// Whether a unit can start a 22.2.1 `RegExpIdentifierName`; non-ASCII units
+/// are admitted and left to the unsupported named-group path.
+fn name_start(unit: Option<&u16>) -> bool {
+    unit.is_some_and(|u| matches!(u, 36 | 65..=90 | 92 | 95 | 97..=122 | 0x80..))
 }
 
 /// Whether a code unit belongs to the non-Unicode ECMAScript word class.

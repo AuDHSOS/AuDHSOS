@@ -461,7 +461,10 @@ fn exact_work_boundary_and_out_of_bounds_start() -> Result<(), Error> {
 }
 #[test]
 fn syntax_restrictions_and_automaton_isolation() {
-    for p in ["(", "[", "a{3,2}", "a**", "\\", "(?=a", "(?<=a", "(?=a)*"] {
+    for p in [
+        "(", "[", "a{3,2}", "a**", "\\", "(?=a", "(?<=a", "(?<=a)*", "(?<!a)+", "(?i)a", "(?<)",
+        "(?<1>a)",
+    ] {
         assert!(
             matches!(
                 Regex::compile(
@@ -474,7 +477,17 @@ fn syntax_restrictions_and_automaton_isolation() {
             "{p}"
         );
     }
-    for p in ["(?<name>a)", "\\9", "\\0x\\1", "\\k<x>", "\\p{L}", "(?i)a"] {
+    for p in [
+        "(?<name>a)",
+        "\\9",
+        "\\0x\\1",
+        "\\k<x>",
+        "\\p{L}",
+        "(?i:a)",
+        "(?=a)*",
+        "(?!ab)+",
+        "(?<x>a)",
+    ] {
         assert!(
             matches!(
                 Regex::compile(
@@ -487,7 +500,15 @@ fn syntax_restrictions_and_automaton_isolation() {
             "{p}"
         );
     }
-    for p in ["(a)\\1", "(?=ab)ab", "(?<=a)b", "(a?)*"] {
+    for p in [
+        "(a)\\1",
+        "(?=ab)ab",
+        "(?<=a)b",
+        "(a?)*",
+        "(?:^)*a",
+        "(?:(?<=a))*b",
+        "(?:\\b)+a",
+    ] {
         assert!(
             Regex::compile(
                 &p.encode_utf16().collect::<Vec<_>>(),

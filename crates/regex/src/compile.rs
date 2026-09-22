@@ -6,6 +6,7 @@
 
 use crate::{
     Error, Limits, Options,
+    matcher::workspace,
     parse::{self, Assertion, Class, Expr},
 };
 use alloc::{rc::Rc, vec::Vec};
@@ -39,8 +40,10 @@ impl Regex {
     /// Invalid syntax, an unsupported construct, or exhausted compile limits.
     pub fn compile(pattern: &[u16], options: Options, limits: Limits) -> Result<Self, Error> {
         let (tree, groups) = parse::parse(pattern, limits)?;
+        let registers = groups.saturating_add(1).saturating_mul(2);
         let mut compiler = Compiler {
             code: Vec::new(),
+            registers,
             limits,
         };
         let end = compiler.emit(Instruction::Match)?;
@@ -50,7 +53,7 @@ impl Regex {
         Ok(Self {
             code: compiler.code,
             start,
-            registers: groups.saturating_add(1).saturating_mul(2),
+            registers,
             options,
         })
     }
@@ -68,6 +71,7 @@ impl Regex {
 
 struct Compiler {
     code: Vec<Instruction>,
+    registers: usize,
     limits: Limits,
 }
 impl Compiler {
@@ -78,6 +82,7 @@ impl Compiler {
             });
         }
         let at = self.code.len();
+        workspace(at.saturating_add(1), self.registers, self.limits)?;
         self.code.push(instruction);
         Ok(at)
     }

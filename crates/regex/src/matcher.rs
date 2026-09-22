@@ -41,7 +41,7 @@ struct Thread {
 struct Search<'a> {
     regex: &'a Regex,
     input: &'a [u16],
-    seen: Vec<bool>,
+    seen: Seen,
     pending: Vec<Thread>,
     visits: u64,
     work: u64,
@@ -67,19 +67,7 @@ impl Regex {
                 resource: "input units",
             });
         }
-        let cells = self
-            .code
-            .len()
-            .checked_mul(self.registers)
-            .and_then(|n| n.checked_mul(6))
-            .ok_or(Error::Limit {
-                resource: "capture workspace",
-            })?;
-        if cells > limits.capture_cells {
-            return Err(Error::Limit {
-                resource: "capture workspace",
-            });
-        }
+        workspace(self.code.len(), self.registers, limits)?;
         if self.code.len() > limits.states {
             return Err(Error::Limit {
                 resource: "match states",
@@ -95,13 +83,42 @@ impl Regex {
         Search {
             regex: self,
             input,
-            seen: vec![false; self.code.len()],
+            seen: Seen(vec![0; self.code.len()]),
             pending: Vec::new(),
             visits: 0,
             work: 0,
             limit: limits.work,
         }
         .run(from, sticky)
+    }
+}
+
+/// Checks the six state/register matrices against `capture_cells`.
+pub(crate) fn workspace(states: usize, registers: usize, limits: Limits) -> Result<(), Error> {
+    states
+        .checked_mul(registers)
+        .and_then(|n| n.checked_mul(6))
+        .filter(|cells| *cells <= limits.capture_cells)
+        .map(|_| ())
+        .ok_or(Error::Limit {
+            resource: "capture workspace",
+        })
+}
+
+/// Per-state stamp of the last closure offset plus one; a new offset
+/// invalidates all marks in O(1), without an O(states) reset.
+pub(crate) struct Seen(pub(crate) Vec<usize>);
+
+impl Seen {
+    /// Marks `pc` at `position`; false if already marked there.
+    pub(crate) fn mark(&mut self, pc: usize, position: usize) -> Result<bool, Error> {
+        let stamp = position.checked_add(1).ok_or(Error::InvalidProgram)?;
+        let slot = self.0.get_mut(pc).ok_or(Error::InvalidProgram)?;
+        if *slot == stamp {
+            return Ok(false);
+        }
+        *slot = stamp;
+        Ok(true)
     }
 }
 
@@ -130,7 +147,6 @@ impl Search<'_> {
                 self.expand(thread, position, &mut current)?;
             }
             // `current` is already ordered and epsilon-closed for this offset.
-            self.seen.fill(false);
             next.clear();
             for thread in current.drain(..) {
                 match self
@@ -204,11 +220,9 @@ impl Search<'_> {
         self.pending.push(thread);
         while let Some(mut thread) = self.pending.pop() {
             self.charge(1)?;
-            let seen = self.seen.get_mut(thread.pc).ok_or(Error::InvalidProgram)?;
-            if *seen {
+            if !self.seen.mark(thread.pc, position)? {
                 continue;
             }
-            *seen = true;
             self.visits = self.visits.saturating_add(1);
             match self
                 .regex
