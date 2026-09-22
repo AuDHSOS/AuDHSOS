@@ -58,6 +58,9 @@ proc harness_send {verb args} {
   if {[lindex $head 0] eq "ERR"} {
     set msg [encoding convertfrom utf-8 [read $h $n]]
     gets $h
+    # `sqlite3_errmsg` answers the message of the last call that was
+    # refused, which this is one of.
+    set ::harness_error $msg
     error $msg
   }
   set out {}
@@ -1892,28 +1895,72 @@ proc sqlite3_column_bytes16 {stmt at} { return [expr {2*[sqlite3_column_bytes $s
 # what `test_bind` of `research/sqlite/src/test1.c` writes.
 proc sqlite3_bind_int {stmt at value} { harness_send bind $stmt $at $value ; return {} }
 proc sqlite3_bind_int64 {stmt at value} { harness_send bind $stmt $at $value ; return {} }
-proc sqlite3_bind_double {stmt at value} { harness_send bind $stmt $at $value ; return {} }
+# `sqlite3_bind_double` binds a real, so a value with no point is one
+# all the same, and a value that is no number at all binds null, which
+# `sqlite3VdbeMemSetDouble` leaves for a NaN.
+proc sqlite3_bind_double {stmt at value} {
+  if {![string is double -strict $value] || [string match -nocase *nan* $value]} {
+    harness_send bind $stmt $at NULL
+    return {}
+  }
+  harness_send bind $stmt $at "CAST('$value' AS REAL)"
+  return {}
+}
 proc sqlite3_bind_null {stmt at} { harness_send bind $stmt $at NULL ; return {} }
 # The first `$bytes` bytes of a value, and the whole of it where the
 # count is negative or absent, which is what `nByte` of
 # `sqlite3_bind_text` names.
 proc harness_bytes {value bytes} {
-  if {$bytes eq "" || $bytes < 0} { return $value }
-  return [string range $value 0 [expr {$bytes - 1}]]
+  if {$bytes ne "" && $bytes >= 0} { return [string range $value 0 [expr {$bytes - 1}]] }
+  set at [string first "\x00" $value]
+  if {$at >= 0} { return [string range $value 0 [expr {$at - 1}]] }
+  return $value
 }
+# `sqlite3_bind_text STMT AT VALUE BYTES` reads that many bytes of the
+# value, or, where the count is below nought, the bytes up to the first
+# nought, which is where a C string ends. The value reaches the engine as
+# the digits of its bytes, because a text of the tester may hold a nought
+# and a quote alike.
 proc sqlite3_bind_text {stmt at value args} {
-  set held [harness_bytes $value [lindex $args 0]]
-  harness_send bind $stmt $at '[string map {' ''} $held]'
+  return [harness_bind_text $stmt $at [harness_bytes $value [lindex $args 0]]]
+}
+proc harness_bind_text {stmt at held} {
+  set hex ""
+  binary scan [encoding convertto utf-8 $held] H* hex
+  harness_send bind $stmt $at "CAST(X'$hex' AS TEXT)"
   return {}
 }
 # `sqlite3_bind_text16` counts the bytes of the UTF-16 text, so two per
 # character, and the engine reads UTF-8.
 proc sqlite3_bind_text16 {stmt at value args} {
-  set held [harness_bytes $value [lindex $args 0]]
-  return [sqlite3_bind_text $stmt $at [harness_utf8 $held] -1]
+  set bytes [lindex $args 0]
+  if {$bytes ne "" && $bytes >= 0} {
+    set held [string range $value 0 [expr {$bytes - 1}]]
+    return [harness_bind_text $stmt $at [encoding convertfrom unicode $held]]
+  }
+  return [harness_bind_text $stmt $at [harness_utf16_upto $value]]
 }
+# The UTF-16 up to its first code unit of nought, which is where a
+# UTF-16 string the caller gave no count for ends.
+proc harness_utf16_upto {value} {
+  binary scan $value su* units
+  set out {}
+  foreach unit $units {
+    if {$unit == 0} break
+    lappend out $unit
+  }
+  return [encoding convertfrom unicode [binary format su* $out]]
+}
+# `sqlite3_bind_blob STMT AT VALUE BYTES` reads that many bytes of the
+# value and stops at no nought, which a blob may hold.
 proc sqlite3_bind_blob {stmt at value args} {
-  return [sqlite3_bind_text $stmt $at $value [lindex $args 0]]
+  set bytes [lindex $args 0]
+  set held $value
+  if {$bytes ne "" && $bytes >= 0} { set held [string range $value 0 [expr {$bytes - 1}]] }
+  set hex ""
+  binary scan $held H* hex
+  harness_send bind $stmt $at "X'$hex'"
+  return {}
 }
 proc sqlite3_bind_parameter_count {stmt} { return [lindex [harness_send stmt $stmt binds] 0] }
 proc sqlite3_bind_parameter_name {stmt at} {

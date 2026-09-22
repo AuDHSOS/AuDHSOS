@@ -490,6 +490,8 @@ Size: S.
     there and read back, which D-409 records.
 47. A value the line cannot carry as text is carried as hexadecimal
     digits, which D-410 records.
+48. The commands that bind a value carry it as the digits of its bytes
+    and read the count the caller wrote, which D-411 records.
 
 ### Produces
 

@@ -2243,6 +2243,14 @@ impl Session {
             .parse()
             .map_err(|source| format!("a place is a whole number: {source}"))?;
         if let Some(held) = self.statements.get_mut(name) {
+            // `sqlite3_bind_*` refuses a place below one and one past
+            // the parameters the statement holds, which
+            // `vdbeUnbind` of `research/sqlite/src/vdbeapi.c` answers
+            // `SQLITE_RANGE` for.
+            if place < 1 || place > count_binds(&held.sql) {
+                refused_as("SQLITE_RANGE", "25");
+                return Err(String::from("column index out of range"));
+            }
             held.bound.insert(place, value.to_owned());
         }
         Ok(alloc_one("SQLITE_OK"))
@@ -4090,9 +4098,23 @@ fn listed(value: &Value, null: &str) -> String {
         // writes for a real are the fifteen significant digits the
         // interpreter wrote and not the seventeen the library writes.
         Value::Real(number) => {
-            String::from_utf8_lossy(&db_sqlite::fp::text(*number, 15)).into_owned()
+            // The interpreter writes a real with `%.15g` and puts `.0`
+            // after one that reads as a whole number, so a value with an
+            // exponent carries no `.0` in front of that exponent.
+            let held = String::from_utf8_lossy(&db_sqlite::fp::text(*number, 15)).into_owned();
+            held.replace(".0e", "e")
         }
-        Value::Text(bytes) | Value::Blob(bytes) => carried_text(bytes),
+        // `dbEvalColumnValue` of `research/sqlite/src/tclsqlite.c` hands
+        // the tester a text as a C string, which ends at the first
+        // nought, and a blob as the bytes it holds.
+        Value::Text(bytes) => {
+            let end = bytes
+                .iter()
+                .position(|byte| *byte == 0)
+                .unwrap_or(bytes.len());
+            carried_text(bytes.get(..end).unwrap_or_default())
+        }
+        Value::Blob(bytes) => carried_text(bytes),
     }
 }
 

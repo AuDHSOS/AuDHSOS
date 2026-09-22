@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The suite harness binds a value as the digits of its bytes, reads the
+  count of bytes the caller wrote, and refuses a place the statement
+  does not hold. D-411 records it. `bind.test` goes from 77 cases
+  passing to 98.
+
 - The line between the suite harness and the tester carries a value it
   cannot hold as text as the hexadecimal digits of its bytes. D-410
   records it. `wal.test` goes from 239 cases passing to 275.
