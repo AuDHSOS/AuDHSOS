@@ -1028,6 +1028,8 @@ Size: L.
      Built, which D-419 records.
 143. The options the build holds, which `PRAGMA compile_options` and the
      two functions beside it answer. Built, which D-420 records.
+144. The statement of more than one column that stands as a row of
+     values. Built, which D-421 records.
 
 ### Done when
 

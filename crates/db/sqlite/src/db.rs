@@ -8178,6 +8178,10 @@ fn counted_node(arena: &Arena, node: Node) -> Result<(), Error> {
     let wanted = match node {
         Node::InSelect { value, select, .. } => match arena.node(value) {
             Some(Node::Row(items)) => Some((select, items.len())),
+            // A statement written for the left side stands as a row of
+            // as many values as it answers columns, which is nothing
+            // where the columns cannot be counted before it runs.
+            Some(Node::Subquery(held)) => width_of(arena, held).map(|held| (select, held)),
             _ => Some((select, 1)),
         },
         _ => None,

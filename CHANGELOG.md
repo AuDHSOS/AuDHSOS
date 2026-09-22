@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` reads a statement of more than one column as a row of
+  values where a row may stand, and names both counts for a member of an
+  `IN` list that holds another number of values than the row. D-421
+  records it. Catalog 6.6.290. `rowvalue.test` goes from 247 cases
+  passing to 282 and `rowvalueA.test` from 21 to 24.
+
 - `db-sqlite` carries the options it was built with, which `PRAGMA
   compile_options` and the two functions beside it answer. D-420 records
   it. Catalog 6.6.289. `ctime.test` goes from 20 cases passing to 25,

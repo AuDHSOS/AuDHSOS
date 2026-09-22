@@ -7030,3 +7030,13 @@ Document 16 step Q8.
   of an option and one that is the front of an option and ends in `=`, a
   name the build holds no option under, the empty name, a place in the
   list, a place past it, and a place below nought.
+
+### 6.6.290 The statement that stands as a row (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A comparison of two statements, of a statement against a row, of a
+  statement of one column against one value, a statement that answers no
+  row, a `COLLATE` on either side, a `BETWEEN` over a statement, an `IN`
+  over one, a statement of another width than the row, and a member of
+  an `IN` list that holds another number of values than the row.

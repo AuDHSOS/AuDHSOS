@@ -61,6 +61,10 @@ pub enum Error {
     /// `sqlite3VectorErrorMsg` refuses as `row value misused`, and a
     /// row compared against a row of another width.
     RowValue,
+    /// A member of an `IN` list that holds another number of values
+    /// than the row looked for, which `sqlite3ExprListIsVector` of
+    /// `research/sqlite/src/expr.c` counts, with the two counts.
+    InTerms(usize, usize),
     /// A shape of expression this engine does not answer yet.
     Unsupported,
     /// The tree names a node the arena does not hold.
@@ -152,6 +156,10 @@ impl Error {
                 "FILTER clause may only be used with aggregate window functions".to_string()
             }
             Error::RowValue => "row value misused".to_string(),
+            Error::InTerms(held, wanted) => alloc::format!(
+                "IN(...) element has {held} term{} - expected {wanted}",
+                if *held == 1 { "" } else { "s" }
+            ),
             Error::Raised(_, text) => shown(text),
             Error::HexTooBig(text) => {
                 alloc::format!("hex literal too big: {}", shown(text))
@@ -478,11 +486,11 @@ pub fn evaluate_items(
         .collect())
 }
 
-/// Whether an expression is a row of values, which decides how many
-/// columns a statement compared against it answers.
+/// Whether an expression stands as a row of values, which decides how
+/// many columns a statement compared against it answers.
 #[must_use]
 pub fn is_row_value(arena: &Arena, id: ExprId) -> bool {
-    is_row(arena, id)
+    stands_as_row(arena, id)
 }
 
 /// One node.
@@ -1022,6 +1030,9 @@ fn listed(
     if is_row(arena, value) {
         return rows_listed(arena, value, list, negated, sql, row, deeper).map(Answer::plain);
     }
+    // `X IN (a, b)` reads a statement written for `X` as one value,
+    // which `sqlite3ExprCodeIN` does for a list it holds the members of
+    // itself, so a statement of more than one column is a refusal.
     let left = answer(arena, value, sql, row, deeper)?;
     let mut members = Vec::new();
     for member in arena.children(list) {
@@ -1051,7 +1062,7 @@ fn rows_listed(
     for member in arena.children(list) {
         let held = row_answers(arena, *member, sql, row, depth)?;
         if held.len() != left.len() {
-            return Err(Error::RowValue);
+            return Err(Error::InTerms(held.len(), left.len()));
         }
         match logic(&pairs_compared(BinaryOp::Eq, &left, &held, row.collation())) {
             Some(true) => return Ok(Value::Int(i64::from(!negated))),
@@ -1131,8 +1142,15 @@ fn binary(
     row: &dyn Row,
     depth: u32,
 ) -> Result<Answer, Error> {
-    if is_row(arena, left) || is_row(arena, right) {
-        return rows_compared(arena, op, left, right, sql, row, depth).map(Answer::plain);
+    // A row of values stands under a comparison and nowhere else, and a
+    // statement stands as a row only there, because every other
+    // operator reads it as the one value `sqlite3ExprCodeSubselect`
+    // answers.
+    if is_row(arena, left)
+        || is_row(arena, right)
+        || (compares(op) && (stands_as_row(arena, left) || stands_as_row(arena, right)))
+    {
+        return rows_compared(arena, op, left, right, sql, row, depth);
     }
     let left = answer(arena, left, sql, row, depth)?;
     let right = answer(arena, right, sql, row, depth)?;
@@ -1359,6 +1377,15 @@ impl Width {
     }
 }
 
+/// How many values a width holds, which a statement holds as many of as
+/// it answers columns and every other expression one of.
+const fn counted(held: Width) -> usize {
+    match held {
+        Width::Row(held) => held,
+        _ => 1,
+    }
+}
+
 /// How wide the expression at `id` is.
 fn width(arena: &Arena, id: ExprId) -> Width {
     match arena.node(id) {
@@ -1435,6 +1462,13 @@ pub fn rows_placed(arena: &Arena) -> Result<(), Error> {
             } => {
                 let middle = width(arena, value);
                 if !middle.is_row() {
+                    // A statement stands as a row, so the rows written
+                    // against one stand where they may and how wide it
+                    // is is read when it runs.
+                    if middle == Width::Unknown {
+                        mark(low, &mut allowed);
+                        mark(high, &mut allowed);
+                    }
                     continue;
                 }
                 if !fit(middle, width(arena, low)) || !fit(middle, width(arena, high)) {
@@ -1450,8 +1484,9 @@ pub fn rows_placed(arena: &Arena) -> Result<(), Error> {
                     continue;
                 }
                 for member in arena.children(list) {
-                    if !fit(left, width(arena, *member)) {
-                        return Err(Error::RowValue);
+                    let held = width(arena, *member);
+                    if !fit(left, held) {
+                        return Err(Error::InTerms(counted(held), counted(left)));
                     }
                     mark(*member, &mut allowed);
                 }
@@ -1506,8 +1541,35 @@ fn is_row(arena: &Arena, id: ExprId) -> bool {
     matches!(arena.node(id), Some(Node::Row(_)))
 }
 
-/// The answers of the items of a row, which a node that is no row is
-/// a misuse of one.
+/// Whether the node stands as a row of values: a row the statement
+/// wrote, or a statement of its own, the columns of which are the
+/// values of the row.
+///
+/// `sqlite3ExprCodeSubselect` reads a vector out of a statement of more
+/// than one column, and one of one column stands for one value.
+fn stands_as_row(arena: &Arena, id: ExprId) -> bool {
+    matches!(arena.node(id), Some(Node::Row(_) | Node::Subquery(_)))
+}
+
+/// Whether the operator compares two values, which is the only kind a
+/// row of values stands under.
+const fn compares(op: BinaryOp) -> bool {
+    matches!(
+        op,
+        BinaryOp::Eq
+            | BinaryOp::Ne
+            | BinaryOp::Lt
+            | BinaryOp::Le
+            | BinaryOp::Gt
+            | BinaryOp::Ge
+            | BinaryOp::Is
+            | BinaryOp::IsNot
+    )
+}
+
+/// The values an expression answers as a row: the items of a row, the
+/// columns of a statement, or the one value every other expression
+/// answers.
 fn row_answers(
     arena: &Arena,
     id: ExprId,
@@ -1533,7 +1595,9 @@ fn row_answers(
                 })
                 .collect());
         }
-        _ => return Err(Error::RowValue),
+        // Every other expression answers one value, which stands as a
+        // row of one value.
+        _ => return Ok(alloc::vec![answer(arena, id, sql, row, depth)?]),
     };
     let mut out = Vec::new();
     for item in arena.children(items) {
@@ -1544,7 +1608,8 @@ fn row_answers(
 
 /// `(a, b) < (c, d)`: a comparison of a row against a row, which
 /// `sqlite3ExprCodeVectorCompare` answers pair by pair. Every other
-/// operator, and a row compared against one value, is a misuse.
+/// operator, and a row compared against a row of another width, is a
+/// misuse.
 fn rows_compared(
     arena: &Arena,
     op: BinaryOp,
@@ -1553,18 +1618,8 @@ fn rows_compared(
     sql: &[u8],
     row: &dyn Row,
     depth: u32,
-) -> Result<Value, Error> {
-    if !matches!(
-        op,
-        BinaryOp::Eq
-            | BinaryOp::Ne
-            | BinaryOp::Lt
-            | BinaryOp::Le
-            | BinaryOp::Gt
-            | BinaryOp::Ge
-            | BinaryOp::Is
-            | BinaryOp::IsNot
-    ) {
+) -> Result<Answer, Error> {
+    if !compares(op) {
         return Err(Error::RowValue);
     }
     let left = row_answers(arena, left, sql, row, depth)?;
@@ -1572,7 +1627,24 @@ fn rows_compared(
     if left.len() != right.len() {
         return Err(Error::RowValue);
     }
-    Ok(pairs_compared(op, &left, &right, row.collation()))
+    // A statement of one column stands for one value, which is compared
+    // as every other value is and carries the collation of the two
+    // sides.
+    if let ([left], [right]) = (left.as_slice(), right.as_slice()) {
+        return Ok(Answer {
+            value: comparison(op, left, right, row.collation()),
+            json: false,
+            affinity: Affinity::None,
+            collation: compared_under(left, right),
+            written: left.written || right.written,
+        });
+    }
+    Ok(Answer::plain(pairs_compared(
+        op,
+        &left,
+        &right,
+        row.collation(),
+    )))
 }
 
 /// What a comparison of two rows of the same width answers.
@@ -1737,26 +1809,27 @@ fn between(
     row: &dyn Row,
     depth: u32,
 ) -> Result<Answer, Error> {
-    let (above, below) = if is_row(arena, value) || is_row(arena, low) || is_row(arena, high) {
-        let middle = row_answers(arena, value, sql, row, depth)?;
-        let low = row_answers(arena, low, sql, row, depth)?;
-        let high = row_answers(arena, high, sql, row, depth)?;
-        if middle.len() != low.len() || middle.len() != high.len() {
-            return Err(Error::RowValue);
-        }
-        (
-            pairs_compared(BinaryOp::Ge, &middle, &low, row.collation()),
-            pairs_compared(BinaryOp::Le, &middle, &high, row.collation()),
-        )
-    } else {
-        let middle = answer(arena, value, sql, row, depth)?;
-        let low = answer(arena, low, sql, row, depth)?;
-        let high = answer(arena, high, sql, row, depth)?;
-        (
-            comparison(BinaryOp::Ge, &middle, &low, row.collation()),
-            comparison(BinaryOp::Le, &middle, &high, row.collation()),
-        )
-    };
+    let (above, below) =
+        if stands_as_row(arena, value) || stands_as_row(arena, low) || stands_as_row(arena, high) {
+            let middle = row_answers(arena, value, sql, row, depth)?;
+            let low = row_answers(arena, low, sql, row, depth)?;
+            let high = row_answers(arena, high, sql, row, depth)?;
+            if middle.len() != low.len() || middle.len() != high.len() {
+                return Err(Error::RowValue);
+            }
+            (
+                pairs_compared(BinaryOp::Ge, &middle, &low, row.collation()),
+                pairs_compared(BinaryOp::Le, &middle, &high, row.collation()),
+            )
+        } else {
+            let middle = answer(arena, value, sql, row, depth)?;
+            let low = answer(arena, low, sql, row, depth)?;
+            let high = answer(arena, high, sql, row, depth)?;
+            (
+                comparison(BinaryOp::Ge, &middle, &low, row.collation()),
+                comparison(BinaryOp::Le, &middle, &high, row.collation()),
+            )
+        };
     let (above, below) = (logic(&above), logic(&below));
     let inside = if above == Some(false) || below == Some(false) {
         Some(false)

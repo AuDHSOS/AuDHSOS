@@ -158,12 +158,15 @@ fn a_row_written_where_one_value_belongs_is_refused() {
         "SELECT (1,2)=1",
         "SELECT 1=(1,2)",
         "SELECT abs((1,2))",
-        "SELECT (1,2) IN (1,2)",
         "SELECT (1,2) BETWEEN 1 AND 2",
         "SELECT (1,2) BETWEEN (1,1) AND 3",
         "SELECT (1,2) BETWEEN (1,1,1) AND (2,2)",
         "SELECT c FROM t WHERE (a,b)<=1",
         "SELECT (1,2) IS 1",
+        // A statement of more than one column stands as a row, so a
+        // comparison against one value is a misuse of a row.
+        "SELECT 1=(SELECT 1,2)",
+        "SELECT (SELECT 1,2)<(SELECT 1,2,3)",
     ] {
         assert_eq!(
             refusal(&writer, sql),
@@ -175,12 +178,31 @@ fn a_row_written_where_one_value_belongs_is_refused() {
         Error::Eval(crate::eval::Error::RowValue).message(),
         "row value misused"
     );
+    // A member of an `IN` list that holds another number of values than
+    // the row looked for names both counts, and one value is a term and
+    // not terms.
+    for (sql, message) in [
+        (
+            "SELECT (1,2) IN (1,2)",
+            "IN(...) element has 1 term - expected 2",
+        ),
+        (
+            "SELECT (1,2) IN ((1,2),(3,4,5))",
+            "IN(...) element has 3 terms - expected 2",
+        ),
+        (
+            "SELECT (1,2,3) IN ((1,2),(3,4))",
+            "IN(...) element has 2 terms - expected 3",
+        ),
+    ] {
+        assert_eq!(refusal(&writer, sql).message(), message, "{sql}");
+    }
 }
 
 #[test]
 fn a_statement_used_as_a_value_answers_one_column() {
     let writer = connection();
-    for sql in ["SELECT (SELECT 1,2)", "SELECT 1=(SELECT 1,2)"] {
+    for sql in ["SELECT (SELECT 1,2)", "SELECT (SELECT 1,2)+1"] {
         assert_eq!(
             refusal(&writer, sql).message(),
             "sub-select returns 2 columns - expected 1",
@@ -232,7 +254,6 @@ fn a_view_written_over_a_row_is_refused_where_it_is_read() {
         ("v1", "SELECT (a,b)=(1,2,3) FROM t"),
         ("v2", "SELECT (a,b)+(1,2) FROM t"),
         ("v3", "SELECT (a,b)=1 FROM t"),
-        ("v4", "SELECT (a,b) IN ((1,2,3)) FROM t"),
         ("v5", "SELECT (a,b) BETWEEN (1,1,1) AND (2,2) FROM t"),
         ("v6", "SELECT 1=(a,b) FROM t"),
         ("v7", "SELECT 1 BETWEEN (a,b) AND 3 FROM t"),
@@ -247,4 +268,84 @@ fn a_view_written_over_a_row_is_refused_where_it_is_read() {
             "{body}"
         );
     }
+    writer
+        .run(b"CREATE VIEW v4 AS SELECT (a,b) IN ((1,2,3)) FROM t")
+        .unwrap();
+    assert_eq!(
+        refusal(&writer, "SELECT * FROM v4").message(),
+        "IN(...) element has 3 terms - expected 2"
+    );
+}
+
+/// A statement of more than one column stands as a row, which the C
+/// library answers `1` for where the rows are alike.
+#[test]
+fn what_a_statement_of_more_than_one_column_stands_as() {
+    let writer = connection();
+    // A comparison of two statements, of a statement against a row, and
+    // of a statement against a row the other way round.
+    assert_eq!(answered(&writer, "SELECT (SELECT 1,2)=(SELECT 1,2)"), ["1"]);
+    assert_eq!(answered(&writer, "SELECT (SELECT 1,2)=(1,2)"), ["1"]);
+    assert_eq!(answered(&writer, "SELECT (1,2)=(SELECT 1,3)"), ["0"]);
+    assert_eq!(answered(&writer, "SELECT (SELECT 1,2)<(SELECT 1,3)"), ["1"]);
+    assert_eq!(
+        answered(&writer, "SELECT (SELECT 1,NULL) IS (SELECT 1,NULL)"),
+        ["1"]
+    );
+    // A statement that answers no row stands for a row of nulls, which
+    // no comparison settles and `IS` answers for.
+    assert_eq!(
+        answered(&writer, "SELECT ((SELECT x,y FROM empty)=(1,2)) IS NULL"),
+        ["1"]
+    );
+    // A statement of one column stands for one value, which carries the
+    // collation of the sides it is compared under.
+    assert_eq!(answered(&writer, "SELECT (SELECT 1)=1"), ["1"]);
+    // A `COLLATE` on either side is the collation the comparison reads
+    // under.
+    assert_eq!(
+        answered(&writer, "SELECT ('A' COLLATE nocase)=(SELECT 'a')"),
+        ["1"]
+    );
+    assert_eq!(
+        answered(&writer, "SELECT (SELECT 'a')=('A' COLLATE nocase)"),
+        ["1"]
+    );
+    assert_eq!(answered(&writer, "SELECT (SELECT 'a')='A'"), ["0"]);
+    // A `BETWEEN` reads a statement as a row as well.
+    assert_eq!(
+        answered(&writer, "SELECT (SELECT 2,2) BETWEEN (2,2) AND (3,3)"),
+        ["1"]
+    );
+    assert_eq!(
+        answered(&writer, "SELECT (SELECT 1) BETWEEN 0 AND 2"),
+        ["1"]
+    );
+    // An `IN` over a statement reads the left side as a row of as many
+    // values as the right side answers columns.
+    assert_eq!(
+        answered(&writer, "SELECT (SELECT 1,0) IN (SELECT x,y FROM u)"),
+        ["1"]
+    );
+    assert_eq!(
+        answered(&writer, "SELECT (SELECT 2,0) IN (SELECT x,y FROM u)"),
+        ["0"]
+    );
+    // A row against a statement of another width, and a row under an
+    // operator that compares nothing, are both a misuse of a row.
+    for sql in [
+        "SELECT (SELECT 1,2) BETWEEN (1,1,1) AND (3,3,3)",
+        "SELECT (SELECT 1) BETWEEN (1,2) AND (3,4)",
+    ] {
+        assert_eq!(
+            refusal(&writer, sql).message(),
+            "row value misused",
+            "{sql}"
+        );
+    }
+    // `X IN (a, b)` reads a statement written for `X` as one value.
+    assert_eq!(
+        refusal(&writer, "SELECT (SELECT 1,2) IN (1,2)").message(),
+        "sub-select returns 2 columns - expected 1"
+    );
 }
