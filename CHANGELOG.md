@@ -7,6 +7,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The suite harness runs `crashsql` and `crash_on_write`, which leave the
+  files of a database as a machine that lost power part way through a
+  commit left them, and `db-sqlite` answers what a commit writes and
+  opens a connection over the three files a database is kept in. D-393
+  and D-394 record it. Catalog 6.6.274. `walcrash.test` goes from 435
+  cases passing to 2574 and refuses none.
+
 - `db-sqlite` reads a side no term holds to a key out of the narrowest
   index that holds every column the statement reads of it, whose entries
   are shorter than the rows. D-391 records it. Catalog 6.6.272.
@@ -43,6 +50,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   from 34 to 49 and `skipscan1.test` from 18 to 30.
 
 ### Fixed
+
+- `db-sqlite` reads the pages of a log by the number of its last commit
+  frame, so a frame after that commit naming a page no frame before it
+  named no longer pushes a committed page out of what a reader reaches.
+  D-395 records it.
 
 - `db-sqlite` names no key of an index whose column converts a value as
   the comparison does not, so `SELECT x, a, y=b FROM t1, t2 WHERE y=b`

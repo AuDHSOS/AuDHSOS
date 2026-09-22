@@ -488,6 +488,50 @@ struct HeldFile {
     /// one. A connection outside `BEGIN` holds none and commits every
     /// statement of its own.
     began: Option<Header>,
+    /// What the commits since the caller last read them did to the
+    /// files, in the order they did it.
+    did: Vec<Does>,
+}
+
+/// Which file of a database one write of a commit reaches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Onto {
+    /// The database file.
+    Main,
+    /// The rollback journal beside it.
+    Journal,
+    /// The write-ahead log beside it.
+    Log,
+}
+
+/// One thing the commit of a transaction does to the files, in the order
+/// `sqlite3PagerCommitPhaseOne` of `research/sqlite/src/pager.c` does it.
+///
+/// A caller that simulates a machine losing power applies a prefix of
+/// these and garbles what the prefix leaves pending, which is what the
+/// crash layer of `research/sqlite/src/test6.c` does.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Does {
+    /// Writes `bytes` at `at` bytes into one file.
+    Write {
+        /// Which file.
+        onto: Onto,
+        /// How many bytes into it the write begins.
+        at: u64,
+        /// What it writes.
+        bytes: Vec<u8>,
+    },
+    /// Holds one file on the disk, which is `xSync`.
+    Sync(Onto),
+    /// Cuts one file back to `at` bytes.
+    Truncate {
+        /// Which file.
+        onto: Onto,
+        /// How many bytes are left.
+        at: u64,
+    },
+    /// Takes one file away, which is `xDelete`.
+    Remove(Onto),
 }
 
 /// What one statement names: the schema it wrote, the name the database
@@ -840,6 +884,7 @@ impl Writer {
                 origin: None,
                 restarting: false,
                 began: None,
+                did: Vec::new(),
                 header: Header {
                     page_size,
                     write_version: 1,
@@ -893,6 +938,65 @@ impl Writer {
         })
     }
 
+    /// A connection over the three files a database is kept in: the file
+    /// itself, the rollback journal beside it, and the write-ahead log
+    /// beside it.
+    ///
+    /// A journal that holds what recovering the database needs is played
+    /// back first, which is `pager_playback` running out of
+    /// `sqlite3PagerSharedLock`; a log is read after it, and the pages it
+    /// holds are the ones the connection reads and writes further frames
+    /// beside. A journal that is not hot and a log that holds no frame
+    /// each leave the file as it stands.
+    ///
+    /// Recovering costs O(p) in the bytes of the pages of the file and
+    /// the frames of the log.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] names what the header of the file breaks.
+    pub fn recovered(image: &[u8], journal: &[u8], log: &[u8]) -> Result<Self, Error> {
+        let played = crate::journal::Journal::open(journal).rolled_back(image);
+        let Some(held) = Log::opened(log) else {
+            return Self::opened(&played);
+        };
+        let read = crate::wal::Wal::open(log).ok();
+        let pages = read.as_ref().map_or(0, crate::wal::Wal::pages);
+        let page_size = crate::bytes::size(u64::from(held.page_size()));
+        let mut image = played.clone();
+        image.resize(
+            page_size.saturating_mul(crate::bytes::size(u64::from(pages))),
+            0,
+        );
+        for number in 1..=pages {
+            let Some(bytes) = read.as_ref().and_then(|read| read.page_bytes(number)) else {
+                continue;
+            };
+            let at =
+                page_size.saturating_mul(crate::bytes::size(u64::from(number.saturating_sub(1))));
+            for (slot, byte) in image.iter_mut().skip(at).take(page_size).zip(bytes) {
+                *slot = *byte;
+            }
+        }
+        // A log of no committed frame leaves the file as it stands, which
+        // is what `walIndexReadHdr` finding no frame answers.
+        let mut writer = match Self::opened(if pages == 0 { &played } else { &image }) {
+            Ok(writer) => writer,
+            // A file of no bytes beside a log of no committed frame is a
+            // database of no page, which is what a process that was
+            // ended before its first commit leaves.
+            Err(error) if played.is_empty() => {
+                Self::new(held.page_size(), 0, crate::header::Encoding::Utf8).or(Err(error))?
+            }
+            Err(error) => return Err(error),
+        };
+        writer.held.origin = Some(played);
+        writer.held.log = Some(held);
+        writer.held.header.write_version = 2;
+        writer.held.header.read_version = 2;
+        Ok(writer)
+    }
+
     /// A connection over a database that is already written, which is
     /// what opening a file that was there answers.
     ///
@@ -925,6 +1029,7 @@ impl Writer {
                 origin: None,
                 restarting: false,
                 began: None,
+                did: Vec::new(),
             },
             called: Called {
                 name: b"main".to_vec(),
@@ -1045,7 +1150,16 @@ impl Writer {
         self.held.header.change_counter = self.held.header.change_counter.saturating_add(1);
         self.held.header.version_valid_for = self.held.header.change_counter;
         self.held.origin = Some(self.held.pages.written(&self.held.header));
-        self.held.log = Some(Log::new(self.held.header.page_size, salt, 0, false));
+        let log = Log::new(self.held.header.page_size, salt, 0, false);
+        // The log is on the disk once the pragma answers, which is
+        // `sqlite3WalOpen` writing its header and holding it there.
+        self.held.did.push(Does::Write {
+            onto: Onto::Log,
+            at: 0,
+            bytes: log.bytes().to_vec(),
+        });
+        self.held.did.push(Does::Sync(Onto::Log));
+        self.held.log = Some(log);
     }
 
     /// What the connection has written, which `changes()`,
@@ -2183,7 +2297,29 @@ impl Writer {
         let mut now = self.now();
         now.change_counter = now.change_counter.saturating_add(1);
         now.version_valid_for = now.change_counter;
-        self.held.origin = Some(self.held.pages.written(&now));
+        let image = self.held.pages.written(&now);
+        // `walCheckpoint` writes every page a frame holds into the file
+        // and holds the file on the disk, and a checkpoint that begins
+        // the log again writes its header and holds that on the disk.
+        let page_size = crate::bytes::size(u64::from(self.held.header.page_size));
+        for (at, page) in image.chunks(page_size.max(1)).enumerate() {
+            self.held.did.push(Does::Write {
+                onto: Onto::Main,
+                at: u64::try_from(at.saturating_mul(page_size)).unwrap_or(u64::MAX),
+                bytes: page.to_vec(),
+            });
+        }
+        self.held.did.push(Does::Sync(Onto::Main));
+        if restarting {
+            let bytes = self.held.log.as_ref().map(Log::bytes).unwrap_or_default();
+            self.held.did.push(Does::Write {
+                onto: Onto::Log,
+                at: 0,
+                bytes: bytes.to_vec(),
+            });
+            self.held.did.push(Does::Sync(Onto::Log));
+        }
+        self.held.origin = Some(image);
         self.held.header.change_counter = now.change_counter;
         self.held.header.version_valid_for = now.version_valid_for;
         let counted = if truncating { 0 } else { frames };
@@ -2549,6 +2685,16 @@ impl Writer {
         now.freelist = first;
         now.freelist_pages = count;
         now
+    }
+
+    /// What the commits since this was last read did to the files, in
+    /// the order they did it, which a caller that simulates a machine
+    /// losing power applies a prefix of.
+    ///
+    /// Reading them clears the list, so each call answers what the
+    /// commits since the last call did.
+    pub fn did(&mut self) -> Vec<Does> {
+        core::mem::take(&mut self.held.did)
     }
 
     /// What the commit of the last statement left beside the file: the
@@ -3493,14 +3639,113 @@ fn commit_file(held: &mut HeldFile, was: &Header) -> Result<(), Error> {
         let mut now = held.header;
         now.change_counter = now.change_counter.saturating_add(1);
         now.version_valid_for = now.change_counter;
+        let stood = log.bytes().len();
         log.commit(&held.pages.frames(&now), held.pages.count());
+        let did = logged(log.bytes(), stood, held.header.page_size);
+        held.did.extend(did);
         return Ok(());
     }
     held.header.change_counter = held.header.change_counter.saturating_add(1);
     held.header.version_valid_for = held.header.change_counter;
     let written = held.pages.journal(was, held.nonce, held.sector);
+    let did = journalled(&written, held);
     held.journal = crate::journal::committed(&written, held.mode);
+    held.did.extend(did);
     Ok(())
+}
+
+/// What a commit in write-ahead logging mode wrote: the header of a log
+/// the commit began, one write per frame it appended, and the sync that
+/// holds them, which is `walWriteToLog` followed by `sqlite3OsSync`.
+///
+/// `stood` is how many bytes the log held before the commit. Building the
+/// list costs O(n) in the frames.
+fn logged(bytes: &[u8], stood: usize, page_size: u32) -> Vec<Does> {
+    let header = crate::wal::HEADER;
+    let frame = crate::wal::FRAME.saturating_add(crate::bytes::size(u64::from(page_size)));
+    let mut did = Vec::new();
+    let mut at = stood.max(header);
+    // A log the commit began, and one it began again, hold no frame the
+    // commit before this one wrote, so the header is written again.
+    if stood <= header {
+        did.push(Does::Write {
+            onto: Onto::Log,
+            at: 0,
+            bytes: bytes.get(..header).unwrap_or_default().to_vec(),
+        });
+    }
+    while let Some(held) = bytes.get(at..at.saturating_add(frame)) {
+        did.push(Does::Write {
+            onto: Onto::Log,
+            at: u64::try_from(at).unwrap_or(u64::MAX),
+            bytes: held.to_vec(),
+        });
+        at = at.saturating_add(frame);
+    }
+    did.push(Does::Sync(Onto::Log));
+    did
+}
+
+/// What a commit that keeps a rollback journal wrote: the header of the
+/// journal, one write per record it holds, the sync that holds them, one
+/// write per page of the file, the sync that holds those, and what the
+/// journal mode leaves of the journal.
+///
+/// This is the order `sqlite3PagerCommitPhaseOne` writes in: the journal
+/// is on the disk before a page of the file is written over, so a machine
+/// that loses power between the two is recovered by playing the journal
+/// back. Building the list costs O(n) in the pages.
+fn journalled(written: &[u8], held: &HeldFile) -> Vec<Does> {
+    let sector = crate::bytes::size(u64::from(held.sector));
+    let page_size = crate::bytes::size(u64::from(held.header.page_size));
+    let record = page_size.saturating_add(8);
+    let mut did = alloc::vec![Does::Write {
+        onto: Onto::Journal,
+        at: 0,
+        bytes: written.get(..sector).unwrap_or_default().to_vec(),
+    }];
+    let mut at = sector;
+    while let Some(bytes) = written.get(at..at.saturating_add(record)) {
+        did.push(Does::Write {
+            onto: Onto::Journal,
+            at: u64::try_from(at).unwrap_or(u64::MAX),
+            bytes: bytes.to_vec(),
+        });
+        at = at.saturating_add(record);
+    }
+    did.push(Does::Sync(Onto::Journal));
+    for (number, page) in held.pages.frames(&held.header) {
+        did.push(Does::Write {
+            onto: Onto::Main,
+            at: u64::from(number.saturating_sub(1))
+                .saturating_mul(u64::try_from(page_size).unwrap_or(u64::MAX)),
+            bytes: page,
+        });
+    }
+    // `pager_truncate`: a file the commit shrank is cut back once every
+    // page it keeps is written.
+    did.push(Does::Truncate {
+        onto: Onto::Main,
+        at: u64::from(held.pages.count())
+            .saturating_mul(u64::try_from(page_size).unwrap_or(u64::MAX)),
+    });
+    did.push(Does::Sync(Onto::Main));
+    // `pager_end_transaction` takes the journal away under `delete`, cuts
+    // it to nothing under `truncate`, and writes zeros over its header
+    // under `persist`.
+    did.push(match held.mode {
+        Mode::Truncate => Does::Truncate {
+            onto: Onto::Journal,
+            at: 0,
+        },
+        Mode::Persist => Does::Write {
+            onto: Onto::Journal,
+            at: 0,
+            bytes: alloc::vec![0u8; crate::journal::ZEROED],
+        },
+        Mode::Delete | Mode::Memory | Mode::Off => Does::Remove(Onto::Journal),
+    });
+    did
 }
 
 impl Writer {

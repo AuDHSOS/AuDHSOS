@@ -6894,3 +6894,16 @@ Document 16 step Q8.
   which names no key.
 - An index over the one column of a table, whose entry holds as many
   values as the row.
+
+### 6.6.274 What a commit writes (`db-sqlite`)
+
+Document 16 step Q8.
+
+- The writes, the syncs and the removals of a commit that keeps a
+  rollback journal, under each of the journal modes.
+- The writes and the sync of a commit in write-ahead logging, and of the
+  commit that begins the log again.
+- A connection over a file beside a hot journal, over a file beside a
+  log, and over three files of no bytes.
+- A log holding a frame after its last commit frame that names a page no
+  frame before it named.

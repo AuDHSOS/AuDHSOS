@@ -79,7 +79,7 @@ pub enum Mode {
 
 /// The magic and the four fields a commit writes over in `persist`
 /// mode, which is `zeroJournalHdr`.
-const ZEROED: usize = 28;
+pub(crate) const ZEROED: usize = 28;
 
 /// A journal written for `pages` pages of `page_size` bytes, holding
 /// `records` of a page number, the page as it was, and a checksum.

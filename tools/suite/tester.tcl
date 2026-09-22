@@ -2055,7 +2055,47 @@ proc sqlite3_snprintf_str {size format a b args} {
   return [string range $whole 0 [expr {$size-2}]]
 }
 
-proc crashsql {args} { error "this harness does not crash" }
+# `crashsql` of `research/sqlite/test/tester.tcl` runs the statements in a
+# process of its own under a layer that holds every write back until a
+# sync and ends the process at the sync the delay names. The runner does
+# the same over the files it holds and leaves them as that process left
+# them.
+proc crashsql {args} {
+  set crashdelay 1
+  set crashfile ""
+  set prngseed 0
+  set sql [lindex $args end]
+  for {set ii 0} {$ii < [llength $args]-1} {incr ii 2} {
+    set z [lindex $args $ii]
+    set n [string length $z]
+    set z2 [lindex $args [expr $ii+1]]
+    if     {$n>1 && [string first $z -delay]==0}     {set crashdelay $z2} \
+    elseif {$n>1 && [string first $z -seed]==0}      {set prngseed $z2} \
+    elseif {$n>1 && [string first $z -file]==0}      {set crashfile $z2} \
+    elseif {$n>1 && [string first $z -opendb]==0}    {} \
+    elseif {$n>1 && [string first $z -blocksize]==0} {} \
+    elseif {$n>1 && [string first $z -characteristics]==0} {} \
+    elseif {$n>1 && [string first $z -dfltvfs]==0}   {} \
+    else   { error "this harness has no crashsql $z" }
+  }
+  if {$crashfile eq ""} { error "Compulsory option -file missing" }
+  return [harness_send crash sql $crashdelay $crashfile $prngseed $sql]
+}
+
+# `crash_on_write` ends the process before the write the delay names,
+# where every write reaches the file it names as it is made.
+proc crash_on_write {args} {
+  set nArg [llength $args]
+  if {$nArg<2 || $nArg%2} { error "bad args: $args" }
+  set zSql [lindex $args end]
+  set nDelay [lindex $args end-1]
+  for {set ii 0} {$ii < $nArg-2} {incr ii 2} {
+    if {[lindex $args $ii] ne "-devchar"} {
+      error "this harness has no crash_on_write [lindex $args $ii]"
+    }
+  }
+  return [harness_send crash write $nDelay test.db 0 $zSql]
+}
 proc do_faultsim_test {args} {}
 proc do_malloc_test {args} {}
 proc do_ioerr_test {args} {}

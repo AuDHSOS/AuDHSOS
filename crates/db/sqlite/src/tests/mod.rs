@@ -25,6 +25,7 @@ mod compound;
 mod configured;
 mod constraint;
 mod counted;
+mod crashing;
 mod date;
 mod db;
 mod deferred;

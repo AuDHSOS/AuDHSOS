@@ -473,6 +473,8 @@ Size: S.
 39. A statement of the connection that writes a file is read through the
     pages that connection wrote, and one of another connection follows
     the log beside the file, which D-385 records.
+40. `crashsql` and `crash_on_write` run their statements over the files
+    the session holds and stop part way through, which D-394 records.
 
 ### Produces
 

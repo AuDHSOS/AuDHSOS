@@ -1001,6 +1001,8 @@ Size: L.
      Built, which D-391 records.
 130. The affinity a key is held to and the width a covering walk is held
      to. Built, which D-392 records.
+131. What a commit writes, and a connection over the three files a
+     database is kept in. Built, which D-393 records.
 
 ### Done when
 

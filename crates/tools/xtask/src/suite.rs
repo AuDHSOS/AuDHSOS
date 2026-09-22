@@ -30,7 +30,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use db_sqlite::change::Writer;
+use db_sqlite::change::{Does, Onto, Writer};
 use db_sqlite::db::Database;
 use db_sqlite::func::Counted;
 use db_sqlite::func::Defined;
@@ -271,7 +271,7 @@ const LOOPING: usize = 5000;
 
 /// The capabilities an `ifcapable` may name that this engine does not
 /// have. Every other name is answered as held.
-const MISSING: [&str; 18] = [
+const MISSING: [&str; 17] = [
     "vtab",
     "fts1",
     "fts2",
@@ -282,7 +282,6 @@ const MISSING: [&str; 18] = [
     "icu",
     "shared_cache",
     "memdebug",
-    "crashtest",
     "codec",
     "atomicwrite",
     "explain",
@@ -621,6 +620,212 @@ struct Prepared {
     stamp: u64,
 }
 
+/// The three files of one database while the writes of a run are applied
+/// to them, which a crash stops part way through.
+struct Crashing {
+    /// The database file.
+    main: Vec<u8>,
+    /// The rollback journal beside it.
+    journal: Vec<u8>,
+    /// The write-ahead log beside it.
+    log: Vec<u8>,
+}
+
+impl Crashing {
+    /// The files as the session holds them.
+    fn new(files: (Vec<u8>, Vec<u8>, Vec<u8>)) -> Self {
+        Crashing {
+            main: files.0,
+            journal: files.1,
+            log: files.2,
+        }
+    }
+
+    /// A connection over the files as they stand, which plays back a
+    /// journal that is hot and reads a log that holds frames.
+    ///
+    /// Three files of no bytes are a database no process has written,
+    /// which a connection makes under the settings this run opens every
+    /// database with. A file of no bytes beside a log is the database a
+    /// connection in write-ahead logging left, whose pages are all in
+    /// the log.
+    fn opened(&self) -> Result<Writer, String> {
+        if self.main.is_empty() && self.journal.is_empty() && self.log.is_empty() {
+            let under = configured();
+            let mut writer =
+                Writer::new(under.page, 0, under.encoding).map_err(|error| refusal(&error))?;
+            if let Some(journal) = under.journal {
+                let mut sql = b"PRAGMA journal_mode=".to_vec();
+                sql.extend_from_slice(journal);
+                let _ = writer.run(&sql);
+            }
+            return Ok(writer);
+        }
+        Writer::recovered(&self.main, &self.journal, &self.log).map_err(|error| refusal(&error))
+    }
+
+    /// The connection the session holds after the crash, which recovers
+    /// the files the crash left.
+    fn recovered(&self) -> Result<Writer, String> {
+        self.opened()
+    }
+
+    /// The file one write reaches.
+    const fn file(&mut self, onto: Onto) -> &mut Vec<u8> {
+        match onto {
+            Onto::Main => &mut self.main,
+            Onto::Journal => &mut self.journal,
+            Onto::Log => &mut self.log,
+        }
+    }
+
+    /// Does one thing to the files.
+    fn does(&mut self, held: &Does) {
+        match held {
+            Does::Write { onto, at, bytes } => {
+                let file = self.file(*onto);
+                let at = usize::try_from(*at).unwrap_or(usize::MAX);
+                let end = at.saturating_add(bytes.len());
+                if file.len() < end {
+                    file.resize(end, 0);
+                }
+                for (slot, byte) in file.iter_mut().skip(at).zip(bytes) {
+                    *slot = *byte;
+                }
+            }
+            Does::Truncate { onto, at } => {
+                let at = usize::try_from(*at).unwrap_or(usize::MAX);
+                self.file(*onto).truncate(at);
+            }
+            Does::Remove(onto) => self.file(*onto).clear(),
+            Does::Sync(_) => {}
+        }
+    }
+
+    /// Applies the writes of `did` until the `delay`th of them, which the
+    /// machine never reaches, and answers whether it stopped there.
+    ///
+    /// `writecrashWrite` of `research/sqlite/src/test_devsym.c` counts
+    /// every write of every file and ends the process before the one the
+    /// count reaches, so the writes before it stand on the disk and the
+    /// one it stopped at reaches nothing.
+    fn on_write(&mut self, did: &[Does], delay: usize) -> bool {
+        let mut left = delay;
+        for held in did {
+            if matches!(held, Does::Write { .. }) {
+                left = left.saturating_sub(1);
+                if left == 0 {
+                    return true;
+                }
+            }
+            self.does(held);
+        }
+        false
+    }
+
+    /// Holds every write back until the sync of its file and stops at the
+    /// `delay`th sync of `onto`, which the machine loses power at, and
+    /// answers whether it stopped there.
+    ///
+    /// `writeListSync` of `research/sqlite/src/test6.c` writes the list a
+    /// sync holds back and, where the sync is the one that crashes,
+    /// writes each entry of the whole list, leaves it out, or fills the
+    /// sectors it covers with garbage, one of the three per entry.
+    fn on_sync(&mut self, did: &[Does], delay: usize, onto: Onto, seed: usize) -> bool {
+        let mut left = delay;
+        let mut pending: Vec<&Does> = Vec::new();
+        let mut random = Rolling::new(seed);
+        for held in did {
+            let Does::Sync(synced) = held else {
+                pending.push(held);
+                continue;
+            };
+            if *synced == onto {
+                left = left.saturating_sub(1);
+            }
+            if *synced == onto && left == 0 {
+                self.torn(&pending, &mut random);
+                return true;
+            }
+            let (now, later): (Vec<&Does>, Vec<&Does>) = pending
+                .into_iter()
+                .partition(|held| onto_of(held) == *synced);
+            for held in &now {
+                self.does(held);
+            }
+            pending = later;
+        }
+        for held in &pending {
+            self.does(held);
+        }
+        false
+    }
+
+    /// Writes what the machine that lost power had written of the list:
+    /// each entry in turn until one of them, which is written in part or
+    /// not at all, and nothing after it.
+    ///
+    /// A machine stops once, so the entries before the one it stopped in
+    /// stand whole, the one it stopped in stands as far as its bytes
+    /// reached, and the ones after it reach the disk at all. This is
+    /// narrower than `writeListSync` of `research/sqlite/src/test6.c`,
+    /// which fills whole sectors with garbage: a frame of the log is
+    /// shorter than a sector and holds no sector of its own, so garbage
+    /// over the sector a frame lies in would take back frames the log
+    /// had already held.
+    fn torn(&mut self, pending: &[&Does], random: &mut Rolling) {
+        let stops = random.next().checked_rem(pending.len().max(1)).unwrap_or(0);
+        for (at, held) in pending.iter().enumerate() {
+            if at < stops {
+                self.does(held);
+                continue;
+            }
+            let Does::Write { onto, at, bytes } = held else {
+                return;
+            };
+            let reached = random.next().checked_rem(bytes.len().max(1)).unwrap_or(0);
+            self.does(&Does::Write {
+                onto: *onto,
+                at: *at,
+                bytes: bytes.get(..reached).unwrap_or_default().to_vec(),
+            });
+            return;
+        }
+    }
+}
+
+/// The file one thing a commit does reaches.
+const fn onto_of(held: &Does) -> Onto {
+    match held {
+        Does::Write { onto, .. }
+        | Does::Truncate { onto, .. }
+        | Does::Remove(onto)
+        | Does::Sync(onto) => *onto,
+    }
+}
+
+/// The numbers the crash chooses by, which one seed answers the same
+/// list of every time: `x[n+1] = x[n] * 6364136223846793005 + 1`, the
+/// multiplier Knuth names for a linear congruential source.
+struct Rolling(u64);
+
+impl Rolling {
+    /// The source one seed begins.
+    fn new(seed: usize) -> Self {
+        Rolling(u64::try_from(seed).unwrap_or(0))
+    }
+
+    /// The next number, which is the high bits of the state because the
+    /// low ones of such a source repeat in short cycles.
+    fn next(&mut self) -> usize {
+        self.0 = self
+            .0
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1);
+        usize::try_from(self.0 >> 33).unwrap_or(0)
+    }
+}
+
 /// One run of one file: the interpreter on one side of the line and the
 /// engine on the other.
 struct Session {
@@ -810,6 +1015,9 @@ impl Session {
                 Ok(Vec::new())
             }
             "exists" => Ok(vec![usize::from(self.sized(first).is_some()).to_string()]),
+            // `crashsql` and `crash_on_write` of
+            // `research/sqlite/test/tester.tcl`.
+            "crash" => self.crashed(args),
             // `md5` and `md5file` of `test_md5.c`: the digest of a text
             // and the digest of a file the harness holds.
             "md5" => Ok(vec![crate::md5::digest(first.as_bytes())]),
@@ -1156,6 +1364,83 @@ impl Session {
             "journal" => writer.journal().map(<[u8]>::to_vec),
             _ => None,
         }
+    }
+
+    /// Runs `sql` over the files the session holds, takes the machine to
+    /// lose power part way through, and leaves the files as that machine
+    /// left them.
+    ///
+    /// The arguments are the kind of crash, how long it waits, the file
+    /// it counts on, the seed of its choices and the statements: `crashsql`
+    /// of `research/sqlite/test/tester.tcl` counts the syncs of one file
+    /// and `crash_on_write` counts the writes of every file. Both run the
+    /// statements in a process of their own, which the crash ends, so the
+    /// session opens the files again afterwards and recovers them.
+    ///
+    /// The answer is the two values `catch` leaves: one and a message
+    /// where the crash happened, and nought and nothing where the
+    /// statements ran to their end.
+    fn crashed(&mut self, args: &[String]) -> Result<Vec<String>, String> {
+        let kind = args.first().map_or("", String::as_str);
+        let delay = number_of(args.get(1).map_or("", String::as_str))?;
+        let named = args.get(2).map_or("", String::as_str);
+        let seed = number_of(args.get(3).map_or("0", String::as_str))?;
+        let sql = args.get(4).map_or("", String::as_str);
+        let path = named
+            .strip_suffix("-wal")
+            .or_else(|| named.strip_suffix("-journal"))
+            .unwrap_or(named);
+        let onto = match named.rsplit_once('-').map(|(_, tail)| tail) {
+            Some("wal") => Onto::Log,
+            Some("journal") => Onto::Journal,
+            _ => Onto::Main,
+        };
+        let mut files = Crashing::new(self.files_of(path));
+        let mut writer = files.opened()?;
+        writer.defines(DEFINED);
+        writer.groups(GROUPED);
+        ticked(&mut writer, self.clock);
+        let mut did: Vec<Does> = Vec::new();
+        for statement in statements(sql) {
+            let text = statement.trim();
+            if text.is_empty() {
+                continue;
+            }
+            if writer.run(text.as_bytes()).is_err() {
+                break;
+            }
+            did.extend(writer.did());
+        }
+        let crashed = if kind == "write" {
+            files.on_write(&did, delay)
+        } else {
+            files.on_sync(&did, delay, onto, seed)
+        };
+        let recovered = files.recovered()?;
+        self.held.insert(path.to_owned(), recovered);
+        if !crashed {
+            return Ok(vec!["0".to_owned(), String::new()]);
+        }
+        let message = if kind == "write" {
+            "child killed: SIGABRT"
+        } else {
+            "child process exited abnormally"
+        };
+        Ok(vec!["1".to_owned(), message.to_owned()])
+    }
+
+    /// The three files a database is kept in, as the session holds them:
+    /// the file itself, the rollback journal beside it and the
+    /// write-ahead log beside it.
+    fn files_of(&self, path: &str) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+        let Some(writer) = self.held.get(path) else {
+            return (Vec::new(), Vec::new(), Vec::new());
+        };
+        (
+            writer.written(),
+            writer.journal().unwrap_or_default().to_vec(),
+            writer.log().unwrap_or_default().to_vec(),
+        )
     }
 
     /// One of the three counters of a connection: `db changes`,

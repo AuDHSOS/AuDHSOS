@@ -26,10 +26,10 @@ use crate::bytes::{size, u32_at};
 use crate::error::Error;
 
 /// The length of the log's header.
-const HEADER: usize = 32;
+pub(crate) const HEADER: usize = 32;
 
 /// The length of a frame's header.
-const FRAME: usize = 24;
+pub(crate) const FRAME: usize = 24;
 
 /// What a log begins with when its checksum is computed little-endian.
 const LITTLE: u32 = 0x377f_0682;
@@ -82,8 +82,8 @@ impl<'a> Wal<'a> {
         // The running checksum begins with the header's own, which is
         // the checksum of the first 24 bytes of it.
         let mut running = (word(24), word(28));
-        let mut newest: Vec<(u32, u32)> = Vec::new();
-        let mut committed = 0usize;
+        let mut frames: Vec<(u32, u32)> = Vec::new();
+        let mut committed = None;
         let mut pages = 0u32;
         let stride = size(u64::from(page_size)).saturating_add(FRAME);
         let mut at = HEADER;
@@ -99,17 +99,25 @@ impl<'a> Wal<'a> {
                 break;
             }
             running = carried;
-            place(&mut newest, field(0), index);
+            frames.push((field(0), index));
             if field(4) != 0 {
-                // A commit frame ends a transaction, so everything up to
-                // it is what a reader may see.
-                committed = newest.len();
+                // A commit frame ends a transaction, so every frame up
+                // to it is one a reader may see.
+                committed = Some(index);
                 pages = field(4);
             }
             index = index.saturating_add(1);
             at = at.saturating_add(stride);
         }
-        newest.truncate(committed);
+        // The frames after the last commit frame are the ones a
+        // transaction that was never committed wrote, which
+        // `walIndexReadHdr` leaves out of the pages a reader reaches.
+        let mut newest: Vec<(u32, u32)> = Vec::new();
+        for (page, frame) in frames {
+            if committed.is_some_and(|last| frame <= last) {
+                place(&mut newest, page, frame);
+            }
+        }
         Ok(Wal {
             bytes,
             newest,
@@ -209,6 +217,54 @@ impl Log {
             big,
             running,
         }
+    }
+
+    /// A log read back out of the `-wal` file it was written into, cut
+    /// back to the last frame whose salts and checksum hold, so a commit
+    /// after it carries the checksum on from there.
+    ///
+    /// A file the header of which does not read answers nothing, and so
+    /// does one whose page size the format does not allow, because a
+    /// commit cannot carry such a log on.
+    ///
+    /// Reading the log costs O(n) in the bytes of its frames.
+    #[must_use]
+    pub fn opened(bytes: &[u8]) -> Option<Self> {
+        let head = bytes.get(..HEADER)?;
+        let word = |offset: usize| u32_at(head, offset).unwrap_or(0);
+        let magic = word(0);
+        if magic != LITTLE && magic != BIG {
+            return None;
+        }
+        let page_size = word(8);
+        if !page_size.is_power_of_two() || !(512..=65536).contains(&page_size) {
+            return None;
+        }
+        let big = magic == BIG;
+        let salt = (word(16), word(20));
+        let mut running = (word(24), word(28));
+        let stride = size(u64::from(page_size)).saturating_add(FRAME);
+        let mut at = HEADER;
+        while let Some(frame) = bytes.get(at..at.saturating_add(stride)) {
+            let field = |offset: usize| u32_at(frame, offset).unwrap_or(0);
+            if (field(8), field(12)) != salt {
+                break;
+            }
+            let carried = checksum(running, frame.get(..8).unwrap_or_default(), big);
+            let carried = checksum(carried, frame.get(FRAME..).unwrap_or_default(), big);
+            if carried != (field(16), field(20)) {
+                break;
+            }
+            running = carried;
+            at = at.saturating_add(stride);
+        }
+        Some(Log {
+            bytes: bytes.get(..at).unwrap_or_default().to_vec(),
+            page_size,
+            salt,
+            big,
+            running,
+        })
     }
 
     /// One transaction written into the log: a frame for each page, the
