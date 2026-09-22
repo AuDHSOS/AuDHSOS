@@ -1162,6 +1162,13 @@ impl Writer {
         self.held.log = Some(log);
     }
 
+    /// The encoding the connection keeps its text in, which a reader
+    /// built over a file of no page is told by [`Database::encoded`].
+    #[must_use]
+    pub const fn encoding(&self) -> Encoding {
+        self.held.header.encoding
+    }
+
     /// What the connection has written, which `changes()`,
     /// `total_changes()` and `last_insert_rowid()` answer: a reader
     /// built over this connection's file is told it by

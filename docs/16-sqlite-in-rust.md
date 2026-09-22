@@ -1012,6 +1012,8 @@ Size: L.
      records.
 135. The key an index over an expression names. Built, which D-401
      records.
+136. The encoding a reader over a database of no schema holds. Built,
+     which D-403 records.
 
 ### Done when
 

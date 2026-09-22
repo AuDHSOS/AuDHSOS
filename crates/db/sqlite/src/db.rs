@@ -2209,6 +2209,20 @@ impl<'a> Database<'a> {
         self
     }
 
+    /// The same database, keeping its text in the encoding the
+    /// connection that writes was told to keep it in.
+    ///
+    /// A file of no page carries no header and so names no encoding,
+    /// where `PRAGMA encoding` has told the connection one:
+    /// `sqlite3Pragma` of `research/sqlite/src/pragma.c` writes it into
+    /// the schema of the connection, which the first page the connection
+    /// writes then carries.
+    #[must_use]
+    pub const fn encoded(mut self, encoding: Encoding) -> Self {
+        self.encoding = encoding;
+        self
+    }
+
     /// The same database, answering `PRAGMA journal_mode` with the mode
     /// of the connection that writes.
     ///

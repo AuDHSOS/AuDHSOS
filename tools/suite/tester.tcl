@@ -875,39 +875,25 @@ proc catchsql {sql {db db}} {
   return [list $rc $msg]
 }
 
-# The `%XX` escapes `test_exec` of `research/sqlite/src/test1.c:442`
-# reads, which is how a file writes a byte it cannot hold as text.
-proc exec_bytes {sql} {
-  set out ""
-  set at 0
-  set n [string length $sql]
-  while {$at < $n} {
-    set c [string index $sql $at]
-    set hex [string range $sql [expr {$at+1}] [expr {$at+2}]]
-    if {$c eq "%" && [string length $hex] == 2 && [scan $hex %2x byte] == 1} {
-      append out [format %c $byte]
-      incr at 3
-    } else {
-      append out $c
-      incr at 1
-    }
-  }
-  return $out
-}
-
-# `sqlite3_exec DB SQL` of `research/sqlite/src/test1.c:421`: the code
-# the statement answered, and then the column names followed by every
-# row's values, which `exec_printf_cb` writes only where a first row
-# arrived. An error answers the code and the message.
-proc sqlite3_exec {db sql} {
-  set sql [exec_bytes $sql]
-  if {[catch { set rows [$db eval $sql] } msg]} { return [list 1 $msg] }
+# What `sqlite3_exec DB SQL` of `research/sqlite/src/test1.c:421` and
+# the two commands beside it answer: the code the statement answered,
+# and then the column names followed by every row's values, which
+# `exec_printf_cb` writes only where a first row arrived. An error
+# answers the code and the message.
+proc exec_answer {db sql runs names} {
+  if {[catch { set rows [harness_send $runs $db $sql] } msg]} { return [list 1 $msg] }
   if {[llength $rows] == 0} { return [list 0 {}] }
-  return [list 0 [concat [$db names $sql] $rows]]
+  return [list 0 [concat [harness_send $names $db $sql] $rows]]
+}
+# `test_exec` reads a `%XX` escape of the statement as the byte it
+# names, which is how a file writes a byte it cannot hold as text.
+proc sqlite3_exec {db sql} {
+  return [exec_answer $db $sql exec exec_names]
 }
 
-# `sqlite3_exec_nr DB SQL`, which drops what the statement answered.
-proc sqlite3_exec_nr {db sql} { return [lindex [sqlite3_exec $db $sql] 0] }
+# `sqlite3_exec_nr DB SQL` of `research/sqlite/src/test1.c:465`, which
+# drops what the statement answered and reads no `%XX` escape.
+proc sqlite3_exec_nr {db sql} { return [lindex [exec_answer $db $sql eval names] 0] }
 
 # `sqlite3_mprintf` of `research/sqlite/src/printf.c` over one argument,
 # which is what the commands that take a format hand it: `%s` writes the
@@ -936,11 +922,11 @@ proc mprintf {format arg} {
   return $out
 }
 
-# `sqlite3_exec_printf DB FORMAT STRING` of `research/sqlite/src/test1.c`:
-# the format written with the string and run as `sqlite3_exec` runs a
-# text.
+# `sqlite3_exec_printf DB FORMAT STRING` of
+# `research/sqlite/src/test1.c:481`: the format written with the string
+# and run, with no `%XX` escape read out of it.
 proc sqlite3_exec_printf {db format {arg {}}} {
-  return [sqlite3_exec $db [mprintf $format $arg]]
+  return [exec_answer $db [mprintf $format $arg] eval names]
 }
 proc sqlite_exec_printf {db format {arg {}}} {
   return [sqlite3_exec_printf $db $format $arg]

@@ -6948,3 +6948,10 @@ Document 16 step Q8.
 Document 16 step Q8.
 
 - `PRAGMA fullfsync` on and off, and a connection told neither.
+
+### 6.6.280 The encoding a reader over a database of no schema holds (`db-sqlite`)
+
+Document 16 step Q8.
+
+- `PRAGMA encoding = 'UTF-16be'` before the first table, with `hex` read
+  over a reader told the encoding and over one that is not.

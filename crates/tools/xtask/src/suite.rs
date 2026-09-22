@@ -1213,7 +1213,7 @@ impl Session {
             "errcode" => Ok(alloc_one(&last_code(first))),
             "normalize" => Ok(alloc_one(&normalized(first))),
             "columnmeta" => self.column_meta(first, second, args.get(2).map_or("", String::as_str)),
-            "eval" => self.eval(first, second),
+            "eval" | "names" | "exec" | "exec_names" => self.of_sql(verb, first, second),
             // `DB deserialize BYTES` of
             // `research/sqlite/src/tclsqlite.c`: the database of the
             // connection is read again from the bytes the tester hands
@@ -1224,7 +1224,6 @@ impl Session {
             // `sqlite3_blob_read` and `sqlite3_blob_write` of
             // `research/sqlite/src/test_blob.c`.
             "blob_bytes" | "blob_read" | "blob_write" | "refused" => self.blob(verb, args),
-            "names" => self.names(first, second),
             "changes" | "total_changes" | "rowid" => self.counted(verb, first),
             // What the engine's writer does not answer. A case that
             // reads one of these is refused rather than scored against
@@ -2102,7 +2101,7 @@ impl Session {
         writer.collates(collating);
         writer.defines(defines);
         let ran = writer
-            .run(sql.as_bytes())
+            .run(&sql_bytes(sql))
             .map(|_| db_sqlite::db::Answer::default())
             .map_err(|error| shape(sql, refusal(&error)));
         let counted = writer.counts();
@@ -2273,6 +2272,27 @@ impl Session {
     }
 
     /// The statements of one text, in order, answered as one list.
+    /// `eval DB SQL` and `names DB SQL`, which answer the rows and the
+    /// column names of a statement, and `exec DB SQL` and `exec_names DB
+    /// SQL` beside them, which read the `%XX` escapes of the statement as
+    /// the bytes they name: that is how a file writes a byte it cannot
+    /// hold as text.
+    ///
+    /// # Errors
+    ///
+    /// The message the engine refused the statement with.
+    fn of_sql(&mut self, verb: &str, name: &str, sql: &str) -> Result<Vec<String>, String> {
+        let sql = if verb.starts_with("exec") {
+            escaped(sql)
+        } else {
+            sql.to_owned()
+        };
+        if verb.ends_with("names") {
+            return self.names(name, &sql);
+        }
+        self.eval(name, &sql)
+    }
+
     fn eval(&mut self, name: &str, sql: &str) -> Result<Vec<String>, String> {
         if names_file(sql) {
             self.telling_files();
@@ -2467,6 +2487,7 @@ impl Session {
                     .defining(defines)
                     .grouping(GROUPED)
                     .sensitively(writer.sensitive())
+                    .encoded(writer.encoding())
                     .journalling(writer.journalled());
                 match held {
                     Some(seconds) => database.clocked(seconds),
@@ -2476,7 +2497,7 @@ impl Session {
             .and_then(|database| attaching(database, &beside))
             .map_err(|error| refusal(&error))?;
         let answered = database
-            .query(last.as_bytes())
+            .query(&sql_bytes(last))
             .map_err(|error| refusal(&error))?;
         Ok(answered
             .names
@@ -3010,12 +3031,77 @@ fn run_one(
         return Ok(out);
     }
     let rows = writer
-        .run(text.as_bytes())
+        .run(&sql_bytes(text))
         .map_err(|error| shape(text, refusal(&error)))?;
     for row in &rows {
         out.extend(row.iter().cloned());
     }
     Ok(out)
+}
+
+/// The lowest character of the private use area that stands for a byte
+/// a `%XX` escape read, which is that area's first character plus the
+/// byte.
+const ESCAPED: u32 = 0xe000;
+
+/// A statement with every `%XX` escape of `test_exec` of
+/// `research/sqlite/src/test1.c:442` read as the byte it names.
+///
+/// A byte over `0x7f` is no character of its own, so it is carried as
+/// the character `ESCAPED` plus the byte and read back by `sql_bytes`;
+/// the line between this harness and the tester carries text and not
+/// bytes. It costs O(n) in the length of the statement.
+fn escaped(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let hex = |at: usize| {
+        let digits = text.get(at..at.saturating_add(2))?;
+        digits
+            .bytes()
+            .all(|digit| digit.is_ascii_hexdigit())
+            .then(|| u8::from_str_radix(digits, 16).ok())?
+    };
+    let mut out = String::with_capacity(text.len());
+    let mut at = 0;
+    while at < bytes.len() {
+        let byte = hex(at.saturating_add(1)).filter(|_| bytes.get(at) == Some(&b'%'));
+        let Some(byte) = byte else {
+            let rest = text.get(at..).unwrap_or("");
+            let value = rest.chars().next().unwrap_or('\0');
+            out.push(value);
+            at = at.saturating_add(value.len_utf8());
+            continue;
+        };
+        if byte < 0x80 {
+            out.push(char::from(byte));
+        } else {
+            let value = ESCAPED.saturating_add(u32::from(byte));
+            out.push(char::from_u32(value).unwrap_or('?'));
+        }
+        at = at.saturating_add(3);
+    }
+    out
+}
+
+/// The bytes of a statement, with every character `escaped` wrote for a
+/// byte over `0x7f` read back as that byte.
+///
+/// It costs O(n) in the length of the statement.
+fn sql_bytes(text: &str) -> Vec<u8> {
+    let carried =
+        |value: char| (ESCAPED..ESCAPED.saturating_add(0x100)).contains(&u32::from(value));
+    if !text.chars().any(carried) {
+        return text.as_bytes().to_vec();
+    }
+    let mut out = Vec::with_capacity(text.len());
+    let mut buffer = [0_u8; 4];
+    for value in text.chars() {
+        if carried(value) {
+            out.push(u8::try_from(u32::from(value) & 0xff).unwrap_or(0));
+        } else {
+            out.extend_from_slice(value.encode_utf8(&mut buffer).as_bytes());
+        }
+    }
+    out
 }
 
 /// What one statement that reads answers: the names of its columns and
@@ -3054,6 +3140,7 @@ fn answered_rows(
             None => Database::open_collating(&bytes, collating),
         };
         let counted = writer.counts();
+        let encoding = writer.encoding();
         let naming = writer.naming();
         let journalled = writer.journalled();
         let sensitive = writer.sensitive();
@@ -3067,6 +3154,7 @@ fn answered_rows(
                     .defining(defines)
                     .grouping(GROUPED)
                     .sensitively(sensitive)
+                    .encoded(encoding)
                     .journalling(journalled);
                 let database = match asks {
                     Some(asking) => database.asked(asking),
@@ -3078,7 +3166,7 @@ fn answered_rows(
                 }
             })
             .and_then(|database| attaching(database, &beside))
-            .and_then(|database| database.query(text.as_bytes()))
+            .and_then(|database| database.query(&sql_bytes(text)))
             .map_err(|error| shape(text, refusal(&error)))?;
         Ok(answered)
     }

@@ -356,3 +356,23 @@ fn what_a_constraint_reads_after_the_schema_changed() {
         alloc::vec![alloc::vec![Value::Int(-1), Value::Int(-3), Value::Int(9)]]
     );
 }
+
+/// A database of no schema says nought for its encoding, so a reader
+/// over one is told the encoding the connection holds and answers `hex`
+/// over it.
+#[test]
+fn what_hex_answers_over_a_database_of_no_schema() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.run(b"PRAGMA encoding = 'UTF-16be'").unwrap();
+    assert_eq!(writer.encoding(), Encoding::Utf16Be);
+    let image = writer.written();
+    let read = Database::open(&image).expect("a database");
+    assert_eq!(
+        rows(&read, b"SELECT hex('a')"),
+        alloc::vec![alloc::vec![Value::Text(b"61".to_vec())]]
+    );
+    assert_eq!(
+        rows(&read.encoded(writer.encoding()), b"SELECT hex('a')"),
+        alloc::vec![alloc::vec![Value::Text(b"0061".to_vec())]]
+    );
+}

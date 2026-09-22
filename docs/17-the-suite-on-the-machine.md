@@ -480,6 +480,8 @@ Size: S.
     the transaction of the path waits, which D-400 records.
 42. `::sqlite_sync_count` and `::sqlite_fullsync_count` are answered from
     the syncs the commits of a request made, which D-402 records.
+43. `sqlite3_exec` reads the `%XX` escapes of its statement as the bytes
+    they name, which D-403 records.
 
 ### Produces
 

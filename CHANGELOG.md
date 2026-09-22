@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The suite harness reads the `%XX` escapes of a `sqlite3_exec`
+  statement as the bytes they name, and a reader over a database of no
+  schema is told the encoding the connection holds. D-403 records it.
+  Catalog 6.6.280. `badutf.test` goes from 5 cases passing to 36 and
+  `badutf2.test` from 31 to 40.
+
 - The suite harness answers `::sqlite_sync_count` and
   `::sqlite_fullsync_count` from the syncs the commits of a request made.
   D-402 records it. Catalog 6.6.279. `trans.test` goes from 249 cases
