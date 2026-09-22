@@ -147,6 +147,7 @@ fn a_released_stack_frees_its_slot_and_its_pages() {
     assert!(!pool.is_used(0));
     assert!(pool.is_empty());
     assert!(fixture.frames.outstanding() < outstanding);
+    assert!(fixture.frames.stray().is_empty());
     let mapper = fixture.mapper();
     for page in stack.pages() {
         assert!(mapper.translate(page).is_none(), "{page:?} is unmapped");

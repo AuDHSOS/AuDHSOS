@@ -95,6 +95,10 @@ impl Fixture {
         self.frames.outstanding()
     }
 
+    fn stray(&self) -> &[PhysFrame] {
+        self.frames.stray()
+    }
+
     /// The raw entry a page selects at `level`, following the tables.
     fn entry_at(&self, page: Page, level: usize) -> Option<X86Entry> {
         let mut current = X86Entry::LEVELS - 1;
@@ -558,6 +562,7 @@ fn a_range_operation_stops_at_the_budget_and_can_be_resumed() {
         Ok(Progress::Done)
     );
     assert_eq!(fixture.outstanding(), 0);
+    assert!(fixture.stray().is_empty());
 }
 
 #[test]
@@ -614,6 +619,7 @@ fn frame_exhaustion_leaves_no_half_created_table_behind() {
             0,
             "every frame taken for a table was given back"
         );
+        assert!(fixture.stray().is_empty(), "no frame was given back twice");
         assert!(fixture.flushes().is_empty());
         assert_eq!(fixture.mapper().translate(page(0x1000)), None);
         let table = fixture.access.table(fixture.root).unwrap();
@@ -672,6 +678,7 @@ fn an_unreachable_frame_for_a_new_table_is_reported_and_given_back() {
         Err(MapError::UnreachableFrame)
     );
     assert_eq!(frames.outstanding(), 0);
+    assert!(frames.stray().is_empty());
     assert!(tlb.flushes().is_empty());
 }
 
@@ -892,6 +899,9 @@ impl ModelTest for MapperModel {
         }
         if model.is_empty() && sut.outstanding() != 0 {
             return Err("tables were kept although nothing is mapped".to_owned());
+        }
+        if !sut.stray().is_empty() {
+            return Err(format!("stray releases: {:?}", sut.stray()));
         }
         Ok(())
     }

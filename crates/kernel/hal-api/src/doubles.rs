@@ -3,7 +3,7 @@
 
 //! In-memory implementations of the HAL traits that record every call.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use audhsos_abi::{Ecam, Framebuffer, WallClockSource};
 use kernel_types::{Page, PhysAddr, PhysFrame, PhysFrameRange, VirtAddr};
@@ -24,6 +24,11 @@ use crate::timer::{Timer, TimerError};
 /// be declared as memory, so that a table appears there on the first
 /// modifying access, the way a freshly allocated frame in the kernel is
 /// already reachable through the physical window.
+///
+/// A frame holds a table or bytes, not both, since the machine reaches both
+/// through the same 4096 bytes of the window. A modifying access switches
+/// the view only of a frame whose content is a default table or all zeros,
+/// and a default table is taken to be all zeros.
 #[derive(Debug)]
 pub struct MemoryFrameAccess<T> {
     tables: HashMap<PhysFrame, Box<T>>,
@@ -65,8 +70,10 @@ impl<T> MemoryFrameAccess<T> {
         self.memory
     }
 
-    /// Makes `frame` reachable with `table` as its content.
+    /// Makes `frame` reachable with `table` as its content, in place of its
+    /// bytes.
     pub fn insert(&mut self, frame: PhysFrame, table: T) {
+        self.bytes.remove(&frame);
         self.tables.insert(frame, Box::new(table));
     }
 
@@ -93,23 +100,32 @@ impl<T> MemoryFrameAccess<T> {
         self.tables.is_empty()
     }
 
-    /// Makes the bytes of `frame` reachable, filled with zeros. A frame of
-    /// the lazy range needs no such call: its bytes appear on the first
-    /// access, the way a frame of the reserve is already reachable through
-    /// the physical window.
+    /// Makes the bytes of `frame` reachable, filled with zeros, in place of
+    /// its table. A frame of the lazy range needs no such call: its bytes
+    /// appear on the first modifying access, the way a frame of the reserve
+    /// is already reachable through the physical window.
     pub fn add_bytes(&mut self, frame: PhysFrame) {
+        self.tables.remove(&frame);
         self.bytes
             .entry(frame)
             .or_insert_with(|| Box::new([0; FRAME_BYTES]));
     }
 }
 
-impl<T> FrameBytes for MemoryFrameAccess<T> {
+impl<T: Default + PartialEq> FrameBytes for MemoryFrameAccess<T> {
     fn frame_bytes(&self, frame: PhysFrame) -> Option<&[u8; FRAME_BYTES]> {
         self.bytes.get(&frame).map(AsRef::as_ref)
     }
 
     fn frame_bytes_mut(&mut self, frame: PhysFrame) -> Option<&mut [u8; FRAME_BYTES]> {
+        match self.tables.get(&frame) {
+            Some(table) if **table == T::default() => {
+                self.tables.remove(&frame);
+                self.add_bytes(frame);
+            }
+            Some(_) => return None,
+            None => {}
+        }
         if !self.bytes.contains_key(&frame) && self.memory.is_some_and(|ram| ram.contains(frame)) {
             self.add_bytes(frame);
         }
@@ -117,12 +133,20 @@ impl<T> FrameBytes for MemoryFrameAccess<T> {
     }
 }
 
-impl<T: Default> FrameAccess<T> for MemoryFrameAccess<T> {
+impl<T: Default + PartialEq> FrameAccess<T> for MemoryFrameAccess<T> {
     fn table(&self, frame: PhysFrame) -> Option<&T> {
         self.tables.get(&frame).map(AsRef::as_ref)
     }
 
     fn table_mut(&mut self, frame: PhysFrame) -> Option<&mut T> {
+        match self.bytes.get(&frame) {
+            Some(bytes) if bytes.iter().all(|&byte| byte == 0) => {
+                self.bytes.remove(&frame);
+                self.tables.insert(frame, Box::new(T::default()));
+            }
+            Some(_) => return None,
+            None => {}
+        }
         if !self.tables.contains_key(&frame) && self.memory.is_some_and(|ram| ram.contains(frame)) {
             self.tables.insert(frame, Box::new(T::default()));
         }
@@ -232,18 +256,22 @@ pub struct CountingFrameSource {
     remaining: Option<u64>,
     allocated: Vec<PhysFrame>,
     released: Vec<PhysFrame>,
+    live: HashSet<PhysFrame>,
+    stray: Vec<PhysFrame>,
 }
 
 impl CountingFrameSource {
     /// A source that starts at `first` and hands out at most `limit` frames
     /// (`None` for no limit other than the address width).
     #[must_use]
-    pub const fn new(first: PhysFrame, limit: Option<u64>) -> Self {
+    pub fn new(first: PhysFrame, limit: Option<u64>) -> Self {
         CountingFrameSource {
             next: first,
             remaining: limit,
             allocated: Vec::new(),
             released: Vec::new(),
+            live: HashSet::new(),
+            stray: Vec::new(),
         }
     }
 
@@ -261,8 +289,15 @@ impl CountingFrameSource {
 
     /// Frames handed out and not yet released.
     #[must_use]
-    pub const fn outstanding(&self) -> usize {
-        self.allocated.len().saturating_sub(self.released.len())
+    pub fn outstanding(&self) -> usize {
+        self.live.len()
+    }
+
+    /// Every release of a frame that was not handed out or was released
+    /// already, in order.
+    #[must_use]
+    pub fn stray(&self) -> &[PhysFrame] {
+        &self.stray
     }
 }
 
@@ -278,11 +313,15 @@ impl FrameSource for CountingFrameSource {
             None => self.remaining = Some(0),
         }
         self.allocated.push(frame);
+        self.live.insert(frame);
         Some(frame)
     }
 
     fn release_frame(&mut self, frame: PhysFrame) {
         self.released.push(frame);
+        if !self.live.remove(&frame) {
+            self.stray.push(frame);
+        }
     }
 }
 

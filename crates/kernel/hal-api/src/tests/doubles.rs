@@ -55,6 +55,7 @@ fn frame_source_counts_up_to_its_limit_and_records() {
     assert_eq!(source.released(), &[frame(10)]);
     assert_eq!(source.allocated(), &[frame(10), frame(11)]);
     assert_eq!(source.outstanding(), 1);
+    assert!(source.stray().is_empty());
     let mut unlimited = CountingFrameSource::new(frame(0), None);
     assert_eq!(unlimited.allocate_frame(), Some(frame(0)));
     let mut at_top = CountingFrameSource::new(frame(kernel_types::phys::MAX_FRAME_NUMBER), None);
@@ -299,8 +300,9 @@ fn the_page_table_double_reaches_the_bytes_of_a_frame_as_well() {
 
     let ram = kernel_types::PhysFrameRange::new(frame(4), 2).unwrap();
     let mut access: MemoryFrameAccess<u64> = MemoryFrameAccess::with_lazy_tables(ram);
-    // A frame of the lazy range has its bytes on the first access, the way a
-    // frame of the reserve is already reachable through the window.
+    // A frame of the lazy range has its bytes on the first modifying access
+    // (issue #63), the way a frame of the reserve is already reachable
+    // through the window.
     assert!(access.frame_bytes(frame(4)).is_none());
     access.frame_bytes_mut(frame(4)).unwrap()[3] = 9;
     assert_eq!(access.frame_bytes(frame(4)).unwrap().get(3), Some(&9));
@@ -316,6 +318,63 @@ fn the_page_table_double_reaches_the_bytes_of_a_frame_as_well() {
     );
     let mut plain: MemoryFrameAccess<u64> = MemoryFrameAccess::new();
     assert!(plain.frame_bytes_mut(frame(1)).is_none());
+}
+
+/// A frame holds a table or bytes, not both; only a default table or zero
+/// bytes switch the view.
+///
+/// Regression test for issue #68: `table_mut` and `frame_bytes_mut` each
+/// consulted only their own map, so one frame handed out two unrelated
+/// contents where the machine has one.
+#[test]
+fn a_frame_in_use_as_a_table_has_no_bytes_and_the_reverse() {
+    use crate::paging::{FRAME_BYTES, FrameBytes};
+
+    let ram = kernel_types::PhysFrameRange::new(frame(4), 4).unwrap();
+    let mut access: MemoryFrameAccess<u64> = MemoryFrameAccess::with_lazy_tables(ram);
+    *access.table_mut(frame(4)).unwrap() = 7;
+    assert!(access.frame_bytes_mut(frame(4)).is_none());
+    assert!(access.frame_bytes(frame(4)).is_none());
+    access.frame_bytes_mut(frame(5)).unwrap()[0] = 1;
+    assert!(access.table_mut(frame(5)).is_none());
+    assert!(access.table(frame(5)).is_none());
+    // A cleared table is zero bytes, the way the kernel zeroes a fresh
+    // frame through the table view and then writes an IPC buffer into it.
+    *access.table_mut(frame(4)).unwrap() = 0;
+    access.frame_bytes_mut(frame(4)).unwrap()[1] = 2;
+    assert!(access.table(frame(4)).is_none());
+    access.frame_bytes_mut(frame(5)).unwrap()[0] = 0;
+    assert_eq!(access.table_mut(frame(5)), Some(&mut 0));
+    assert!(access.frame_bytes(frame(5)).is_none());
+    // The setup calls replace the other view.
+    access.add_bytes(frame(9));
+    access.insert(frame(9), 3);
+    assert!(access.frame_bytes(frame(9)).is_none());
+    assert!(access.frame_bytes_mut(frame(9)).is_none());
+    access.add_bytes(frame(9));
+    assert!(access.table(frame(9)).is_none());
+    assert_eq!(access.frame_bytes(frame(9)), Some(&[0; FRAME_BYTES]));
+}
+
+/// A release of a frame that is not live is recorded apart and leaves the
+/// count of live frames alone.
+///
+/// Regression test for issue #67: `outstanding` was allocations minus
+/// releases, so a double release of one frame hid the leak of another.
+#[test]
+fn a_double_release_does_not_hide_a_leak() {
+    let mut source = CountingFrameSource::new(frame(10), None);
+    let first = source.allocate_frame().unwrap();
+    let second = source.allocate_frame().unwrap();
+    source.release_frame(first);
+    source.release_frame(first);
+    assert_eq!(source.outstanding(), 1);
+    assert_eq!(source.stray(), &[first]);
+    source.release_frame(frame(99));
+    assert_eq!(source.stray(), &[first, frame(99)]);
+    source.release_frame(second);
+    assert_eq!(source.outstanding(), 0);
+    assert_eq!(source.released(), &[first, first, frame(99), second]);
 }
 
 #[test]

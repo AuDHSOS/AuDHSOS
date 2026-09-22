@@ -242,7 +242,7 @@ fn freeing_the_user_half_gives_back_every_table_and_no_leaf() {
     use kernel_types::{Page, VirtAddr};
 
     // Every frame the mapper takes for a table appears in the map on its
-    // first access, the way a frame of the reserve does through the window.
+    // first modifying access, the way a frame of the reserve does through the window.
     let mut tables =
         Tables::with_lazy_tables(kernel_types::PhysFrameRange::new(frame(1), 64).unwrap());
     let mut frames = Frames::default();
