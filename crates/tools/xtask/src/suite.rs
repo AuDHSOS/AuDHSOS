@@ -1169,15 +1169,12 @@ impl Session {
             // `sqlite3_system_errno` of `research/sqlite/src/main.c`:
             // what the machine answered the last open of a file with.
             "system_errno" => Ok(vec![self.errno.to_string()]),
-            "close" => {
-                self.closed(first);
-                Ok(Vec::new())
-            }
-            "delete" => {
-                self.removed(first);
-                Ok(Vec::new())
-            }
+            "close" => Ok(self.closed(first)),
+            "delete" => Ok(self.removed(first)),
             "exists" => Ok(vec![usize::from(self.sized(first).is_some()).to_string()]),
+            // `sqlite3_test_control SQLITE_TESTCTRL_LOCALTIME_FAULT`,
+            // which names the zone `localtime` and `utc` read.
+            "zone" => Ok(zoning(first)),
             // The tester opens a file of the machine, so the bytes the
             // session holds are written there first, and read back when
             // it closes the channel.
@@ -1597,7 +1594,7 @@ impl Session {
     /// where it stands, which the harness names the owner of. The last
     /// connection over a path writes the log of that path into the file
     /// and removes the log, which `sqlite3WalClose` does.
-    fn closed(&mut self, name: &str) {
+    fn closed(&mut self, name: &str) -> Vec<String> {
         if let Some(path) = self.connections.get(name).cloned()
             && self.owners.get(&path).is_some_and(|held| held == name)
             && let Some(writer) = self.held.get_mut(&path)
@@ -1629,6 +1626,7 @@ impl Session {
         self.pragmas.remove(name);
         self.collations.remove(name);
         self.functions.remove(name);
+        Vec::new()
     }
 
     /// Runs `sql` over the files the session holds, takes the machine to
@@ -2443,18 +2441,19 @@ impl Session {
     /// One file the session holds given up, which `forcedelete` asks
     /// for: the database with the log and the journal beside it, or one
     /// of those two alone, which leaves the database where it is.
-    fn removed(&mut self, name: &str) {
+    fn removed(&mut self, name: &str) -> Vec<String> {
         if self.held.remove(name).is_some() {
-            return;
+            return Vec::new();
         }
         let (base, tail) = named_beside(name);
         let mut files = self.files_of(base);
         match tail {
             Some("wal") => files.2 = Vec::new(),
             Some("journal") => files.1 = Vec::new(),
-            _ => return,
+            _ => return Vec::new(),
         }
         let _ = self.opened_again(base, files);
+        Vec::new()
     }
 
     /// The connection over `path` made again out of the three files, which
@@ -2623,6 +2622,7 @@ impl Session {
         WHO.with(|who| who.borrow_mut().clone_from(&name.to_owned()));
         NULLED.with(|text| text.borrow_mut().clone_from(&null));
         writer.opens(opening);
+        writer.in_zone(zoned);
         let mut waiting = self.waiting.contains(name);
         let (out, ran) = ran_each(
             writer,
@@ -2754,7 +2754,8 @@ impl Session {
                     .grouping(GROUPED)
                     .sensitively(writer.sensitive())
                     .encoded(writer.encoding())
-                    .journalling(writer.journalled());
+                    .journalling(writer.journalled())
+                    .in_zone(zoned);
                 match held {
                     Some(seconds) => database.clocked(seconds),
                     None => database,
@@ -2817,6 +2818,12 @@ struct Line {
 }
 
 thread_local! {
+    /// Which zone `localtime` and `utc` read, which
+    /// `SQLITE_TESTCTRL_LOCALTIME_FAULT` names: nought the zone of the
+    /// machine, one a zone that fails, and two the zone
+    /// `testLocaltime` answers.
+    static ZONED: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+
     /// What the walks and the sorts of the last statement counted, which
     /// `db status` answers, because `run_one` carries no connection.
     static STEPPED: core::cell::Cell<db_sqlite::db::Stepped> =
@@ -3348,6 +3355,38 @@ fn escaped(text: &str) -> String {
     out
 }
 
+/// Which zone the run reads local time through, which
+/// `SQLITE_TESTCTRL_LOCALTIME_FAULT` names.
+fn zoning(text: &str) -> Vec<String> {
+    ZONED.with(|held| held.set(number_of(text).unwrap_or(0)));
+    Vec::new()
+}
+
+/// The local time of a moment, as the seconds of the unix epoch a clock
+/// of the zone reads.
+///
+/// `testLocaltime` of `research/sqlite/src/test1.c:7937` is half an hour
+/// later than UTC on an odd day and half an hour earlier on an even
+/// one, and fails for the one moment `2000-05-29 14:16:00`. A run that
+/// names no zone reads the machine's, which is UTC here.
+fn zoned(seconds: i64) -> Option<i64> {
+    match ZONED.with(core::cell::Cell::get) {
+        1 => None,
+        2 => {
+            if seconds == 959_609_760 {
+                return None;
+            }
+            let half = 1800;
+            if (seconds / 86_400) & 1 == 1 {
+                Some(seconds.saturating_add(half))
+            } else {
+                Some(seconds.saturating_sub(half))
+            }
+        }
+        _ => Some(seconds),
+    }
+}
+
 /// The bytes a run of hexadecimal digits names.
 fn bytes_of_hex(digits: &str) -> Vec<u8> {
     let held: Vec<u8> = digits
@@ -3474,7 +3513,8 @@ fn answered_rows(
                     .grouping(GROUPED)
                     .sensitively(sensitive)
                     .encoded(encoding)
-                    .journalling(journalled);
+                    .journalling(journalled)
+                    .in_zone(zoned);
                 let database = match asks {
                     Some(asking) => database.asked(asking),
                     None => database,
@@ -3900,6 +3940,7 @@ const fn ticked(writer: &mut Writer, clock: Option<i64>) {
     if let Some(seconds) = clock {
         writer.clocking(seconds);
     }
+    writer.in_zone(zoned);
 }
 
 /// A whole number a request carries, which every request that names a

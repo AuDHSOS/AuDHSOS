@@ -1705,6 +1705,9 @@ pub struct Database<'a> {
     /// The moment `now` names, as the seconds since 1970, and nothing
     /// where the caller told the connection none.
     clock: Option<i64>,
+    /// The zone `localtime` and `utc` read, and nothing where the
+    /// connection was told none.
+    zone: Option<crate::date::Zone>,
     /// Whether `LIKE` tells the twenty-six letters apart, which
     /// `PRAGMA case_sensitive_like` on the connection that writes sets.
     sensitive: bool,
@@ -2005,6 +2008,7 @@ impl<'a> Database<'a> {
             encoding,
             random: crate::random::Source::default(),
             clock: None,
+            zone: None,
             sensitive: false,
             asking: None,
             ignored: core::cell::RefCell::new(Vec::new()),
@@ -2269,6 +2273,17 @@ impl<'a> Database<'a> {
     #[must_use]
     pub const fn encoded(mut self, encoding: Encoding) -> Self {
         self.encoding = encoding;
+        self
+    }
+
+    /// The same database, reading local time through the zone the
+    /// connection was told.
+    ///
+    /// A database told no zone answers nothing for a statement that
+    /// names `localtime` or `utc`, which is `osLocaltime` failing.
+    #[must_use]
+    pub const fn in_zone(mut self, zone: crate::date::Zone) -> Self {
+        self.zone = Some(zone);
         self
     }
 
@@ -5056,7 +5071,9 @@ fn alike_nodes(mine: Written<'_>, one: Node, theirs: Written<'_>, other: Node) -
     let under = |held: ExprId, other: ExprId| alike_written(mine.at(held), theirs.at(other));
     match (one, other) {
         (Node::Literal(one), Node::Literal(other)) => {
-            let read = |held, sql| crate::eval::literal_value(held, sql, false, None).ok();
+            let read = |held, sql| {
+                crate::eval::literal_value(held, sql, false, crate::date::Told::default()).ok()
+            };
             read(one, mine.sql).is_some_and(|one| Some(one) == read(other, theirs.sql))
         }
         (Node::Column { column: one, .. }, Node::Column { column: other, .. }) => named(one, other),
@@ -9708,6 +9725,10 @@ impl eval::Row for Cursor<'_> {
 
     fn clock(&self) -> Option<i64> {
         self.reach.database.clock.map(crate::date::julian_of)
+    }
+
+    fn zone(&self) -> Option<crate::date::Zone> {
+        self.reach.database.zone
     }
 
     fn sensitive(&self) -> bool {

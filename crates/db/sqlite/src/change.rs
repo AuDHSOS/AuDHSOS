@@ -762,6 +762,9 @@ pub struct Writer {
     /// The moment `now` names, as the seconds since 1970, and nothing
     /// where the caller told the connection none.
     clock: Option<i64>,
+    /// The zone `localtime` and `utc` read, and nothing where the
+    /// caller told the connection none.
+    zone: Option<crate::date::Zone>,
     /// What the connection was told for each pragma of
     /// [`crate::pragma::HELD`], where it was told one.
     kept: Vec<Option<i64>>,
@@ -916,6 +919,7 @@ impl Writer {
             made: Vec::new(),
             random: crate::random::Source::default(),
             clock: None,
+            zone: None,
             kept: alloc::vec![None; crate::pragma::HELD.len()],
             running: Vec::new(),
             truth: Truths::default(),
@@ -1041,6 +1045,7 @@ impl Writer {
             made: Vec::new(),
             random: crate::random::Source::default(),
             clock: None,
+            zone: None,
             kept: alloc::vec![None; crate::pragma::HELD.len()],
             running: Vec::new(),
             truth: Truths::default(),
@@ -1081,6 +1086,25 @@ impl Writer {
     /// `CURRENT_TIME`, `CURRENT_DATE` or `CURRENT_TIMESTAMP`.
     pub const fn clocking(&mut self, seconds: i64) {
         self.clock = Some(seconds);
+    }
+
+    /// The zone `localtime` and `utc` read.
+    ///
+    /// SQLite reads the zone of the operating system, which this crate
+    /// has none of, so the caller says how local time differs from UTC
+    /// and a connection that is not told answers nothing for a
+    /// statement naming either modifier.
+    pub const fn in_zone(&mut self, zone: crate::date::Zone) {
+        self.zone = Some(zone);
+    }
+
+    /// The zone the caller told the connection, and nothing where the
+    /// caller told it none.
+    ///
+    /// Reading it costs O(1).
+    #[must_use]
+    pub const fn zone(&self) -> Option<crate::date::Zone> {
+        self.zone
     }
 
     /// The moment the caller told the connection, as the seconds since
@@ -1969,6 +1993,7 @@ impl Writer {
             encoding: self.held.header.encoding,
             random: &self.random,
             clock: self.clock.map(crate::date::julian_of),
+            zone: self.zone,
             sensitive: self.truth.sensitive,
             counted: self.counted,
             defined: self.defined,
@@ -6483,6 +6508,7 @@ impl Writer {
                         encoding: self.held.header.encoding,
                         random: &self.random,
                         clock: self.clock.map(crate::date::julian_of),
+                        zone: self.zone,
                         sensitive: self.truth.sensitive,
                         counted: self.counted,
                         defined: self.defined,
@@ -6566,6 +6592,7 @@ impl Writer {
                     encoding: self.held.header.encoding,
                     random: &self.random,
                     clock: self.clock.map(crate::date::julian_of),
+                    zone: self.zone,
                     sensitive: self.truth.sensitive,
                     counted: self.counted,
                     defined: self.defined,
@@ -6637,6 +6664,7 @@ impl Writer {
             encoding: self.held.header.encoding,
             random: &self.random,
             clock: self.clock.map(crate::date::julian_of),
+            zone: self.zone,
             sensitive: self.truth.sensitive,
             counted: self.counted,
             defined: self.defined,
@@ -7214,6 +7242,7 @@ impl Writer {
                     encoding: self.held.header.encoding,
                     random: &self.random,
                     clock: self.clock.map(crate::date::julian_of),
+                    zone: self.zone,
                     sensitive: self.truth.sensitive,
                     counted: self.counted,
                     defined: self.defined,
@@ -8280,6 +8309,8 @@ struct Held<'a> {
     random: &'a crate::random::Source,
     /// What the clock says, which `now` names.
     clock: Option<i64>,
+    /// The zone `localtime` and `utc` read.
+    zone: Option<crate::date::Zone>,
     /// Whether `LIKE` tells the twenty-six letters apart, which
     /// `PRAGMA case_sensitive_like` sets.
     sensitive: bool,
@@ -8319,6 +8350,10 @@ impl crate::eval::Row for Held<'_> {
 
     fn clock(&self) -> Option<i64> {
         self.clock
+    }
+
+    fn zone(&self) -> Option<crate::date::Zone> {
+        self.zone
     }
 
     fn sensitive(&self) -> bool {
@@ -9005,6 +9040,7 @@ impl Writer {
                     encoding: self.held.header.encoding,
                     random: &self.random,
                     clock: self.clock.map(crate::date::julian_of),
+                    zone: self.zone,
                     sensitive: self.truth.sensitive,
                     counted: self.counted,
                     defined: self.defined,
@@ -9149,6 +9185,7 @@ impl Writer {
                     encoding: self.held.header.encoding,
                     random: &self.random,
                     clock: self.clock.map(crate::date::julian_of),
+                    zone: self.zone,
                     sensitive: self.truth.sensitive,
                     counted: self.counted,
                     defined: self.defined,
@@ -9584,6 +9621,7 @@ impl Writer {
             encoding: self.held.header.encoding,
             random: &self.random,
             clock: self.clock.map(crate::date::julian_of),
+            zone: self.zone,
             sensitive: self.truth.sensitive,
             counted: self.counted,
             defined: self.defined,

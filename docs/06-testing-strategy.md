@@ -6995,3 +6995,11 @@ Document 16 step Q8.
 - A row that points at itself written, changed and taken away, one that
   points at another row of the same table, and a table that keeps its
   rows in the key's own tree.
+
+### 6.6.286 The zone localtime reads (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A moment carried into local time and back, one outside the years the
+  zone answers for, one the text says is UTC, a zone that fails, and a
+  connection told no zone.

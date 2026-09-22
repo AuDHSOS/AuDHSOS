@@ -997,8 +997,9 @@ pub struct Given<'a> {
     pub random: Option<&'a crate::random::Source>,
     /// What the three counters of the connection stand at.
     pub counted: Counted,
-    /// What the clock says, which `now` names.
-    pub clock: Option<i64>,
+    /// What the clock says, which `now` names, and the zone
+    /// `localtime` and `utc` read.
+    pub clock: crate::date::Told,
     /// Whether `like` tells the twenty-six letters apart, which
     /// `PRAGMA case_sensitive_like` sets.
     pub sensitive: bool,

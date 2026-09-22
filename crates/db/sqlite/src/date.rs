@@ -14,8 +14,9 @@
 //! `setDateTimeToCurrent`; a connection told no clock answers nothing
 //! for a statement that names it.
 //!
-//! What is not here: `localtime`, which needs the rules of a time zone
-//! this crate is given none of, so a statement that names it refuses.
+//! `localtime` and `utc` read the zone the caller hands the connection,
+//! which is `osLocaltime`; a connection told no zone answers nothing for
+//! a statement that names either.
 
 use alloc::vec::Vec;
 
@@ -31,6 +32,23 @@ const LAST: i64 = 464_269_060_799_999;
 /// Milliseconds between the julian day and the unix epoch, which is
 /// `21086676 * 10000000` of `src/date.c`.
 const EPOCH: i64 = 210_866_760_000_000;
+
+/// How local time differs from UTC: the seconds of the unix epoch a
+/// clock of the zone reads for the moment those seconds name, and
+/// nothing where the zone is not known, which is `osLocaltime`
+/// answering an error.
+pub type Zone = fn(i64) -> Option<i64>;
+
+/// What the connection tells the date functions.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Told {
+    /// The moment the clock stands at, as the julian day number times
+    /// 86 400 000, and nothing where the connection was told no clock.
+    pub now: Option<i64>,
+    /// The zone `localtime` and `utc` read, and nothing where the
+    /// connection was told none.
+    pub zone: Option<Zone>,
+}
 
 /// One date and time, as `DateTime` of `src/date.c` holds it.
 #[derive(Clone, Copy, Debug, Default)]
@@ -70,6 +88,12 @@ pub struct Moment {
     subsec: bool,
     /// Whether the moment is known to be UTC.
     utc: bool,
+    /// Whether `utc` has been applied to the moment, which
+    /// `DateTime.isUtc` holds.
+    is_utc: bool,
+    /// Whether `localtime` has been applied to the moment, which
+    /// `DateTime.isLocal` holds.
+    is_local: bool,
 }
 
 /// One field of a date or a time: how many digits it takes, the least
@@ -190,6 +214,8 @@ impl Moment {
         self.has_hms = false;
         self.zone = 0;
         self.utc = true;
+        self.is_utc = true;
+        self.is_local = false;
     }
 
     /// The year, the month and the day the julian day says.
@@ -306,6 +332,8 @@ fn read_zone(text: &[u8], moment: &mut Moment) -> Option<()> {
         Some(b'+') => 1,
         Some(b'Z' | b'z') => {
             moment.utc = true;
+            moment.is_utc = true;
+            moment.is_local = false;
             return after_spaces(held.get(1..).unwrap_or_default())
                 .is_empty()
                 .then_some(());
@@ -320,6 +348,8 @@ fn read_zone(text: &[u8], moment: &mut Moment) -> Option<()> {
         .saturating_mul(sign);
     if moment.zone == 0 {
         moment.utc = true;
+        moment.is_utc = true;
+        moment.is_local = false;
     }
     after_spaces(rest.get(5..).unwrap_or_default())
         .is_empty()
@@ -427,11 +457,13 @@ fn read_now(moment: &mut Moment, now: Option<i64>) -> Option<()> {
     moment.jd = now?;
     moment.has_jd = true;
     moment.utc = true;
+    moment.is_utc = true;
+    moment.is_local = false;
     Some(())
 }
 
 /// The moment a text says, which is a date, a time, `now` or a number.
-fn read_moment(text: &[u8], moment: &mut Moment, now: Option<i64>) -> Option<()> {
+fn read_moment(text: &[u8], moment: &mut Moment, told: Told) -> Option<()> {
     if read_date(text, moment).is_some() {
         return Some(());
     }
@@ -441,7 +473,7 @@ fn read_moment(text: &[u8], moment: &mut Moment, now: Option<i64>) -> Option<()>
     // `parseDateOrTimeString` reads `now` where the fields read
     // neither a date nor a time.
     if text.eq_ignore_ascii_case(b"now") {
-        return read_now(moment, now);
+        return read_now(moment, told.now);
     }
     // `subsec` without a moment before it asks for the clock as well,
     // which this crate does not read here.
@@ -497,7 +529,7 @@ const fn same(one: &[u8], other: &[u8]) -> bool {
 ///
 /// `at` is which argument the modifier is, counting the moment as one:
 /// `auto`, `julianday` and `unixepoch` are only read as the first.
-fn modified(moment: &mut Moment, text: &[u8], at: usize) -> Option<()> {
+fn modified(moment: &mut Moment, text: &[u8], at: usize, zone: Option<Zone>) -> Option<()> {
     let first = text.first().copied()?.to_ascii_lowercase();
     match first {
         b'a' if same(text, b"auto") => {
@@ -524,6 +556,45 @@ fn modified(moment: &mut Moment, text: &[u8], at: usize) -> Option<()> {
                 return None;
             }
             moment.raw = false;
+            Some(())
+        }
+        b'l' if same(text, b"localtime") => {
+            if !moment.is_local {
+                to_local(moment, zone?)?;
+            }
+            moment.is_utc = false;
+            moment.is_local = true;
+            Some(())
+        }
+        b'u' if same(text, b"utc") => {
+            if moment.is_utc {
+                return Some(());
+            }
+            let held = zone?;
+            moment.compute_jd();
+            let first = moment.jd;
+            let mut guess = first;
+            let mut off = 0;
+            for _ in 0..4 {
+                guess = guess.saturating_sub(off);
+                let mut held_moment = Moment {
+                    jd: guess,
+                    has_jd: true,
+                    ..Moment::default()
+                };
+                to_local(&mut held_moment, held)?;
+                held_moment.compute_jd();
+                off = held_moment.jd.saturating_sub(first);
+                if off == 0 {
+                    break;
+                }
+            }
+            *moment = Moment {
+                jd: guess,
+                has_jd: true,
+                is_utc: true,
+                ..Moment::default()
+            };
             Some(())
         }
         b'u' if same(text, b"unixepoch") => {
@@ -553,6 +624,59 @@ fn modified(moment: &mut Moment, text: &[u8], at: usize) -> Option<()> {
         b'+' | b'-' | b'0'..=b'9' => moved(moment, text),
         _ => None,
     }
+}
+
+/// The moment as a clock of the zone reads it, which is `toLocaltime`
+/// of `research/sqlite/src/date.c:608`.
+///
+/// A moment outside the years the zone answers for is carried into a
+/// year of the same shape between 1970 and 2037, read there, and
+/// carried back, because `localtime_r` answers those years alone.
+/// Reading one costs O(1).
+fn to_local(moment: &mut Moment, zone: Zone) -> Option<()> {
+    /// The julian day of 1970-01-01, in milliseconds.
+    const FIRST: i64 = 210_866_760_000_000;
+    /// The julian day of 2038-01-18, in milliseconds.
+    const LAST_YEAR: i64 = 213_014_145_600_000;
+    moment.compute_jd();
+    let (held, shift) = if moment.jd < FIRST || moment.jd > LAST_YEAR {
+        let mut held = *moment;
+        held.compute_both();
+        let shift = held
+            .year
+            .rem_euclid(4)
+            .saturating_add(2000)
+            .saturating_sub(held.year);
+        held.year = held.year.saturating_add(shift);
+        held.has_jd = false;
+        held.compute_jd();
+        (held.jd, shift)
+    } else {
+        (moment.jd, 0)
+    };
+    let seconds = held.div_euclid(1000).saturating_sub(EPOCH.div_euclid(1000));
+    let local = zone(seconds)?;
+    let mut read = Moment {
+        jd: local
+            .saturating_add(EPOCH.div_euclid(1000))
+            .saturating_mul(1000),
+        has_jd: true,
+        ..Moment::default()
+    };
+    read.compute_both();
+    moment.year = read.year.saturating_sub(shift);
+    moment.month = read.month;
+    moment.day = read.day;
+    moment.hour = read.hour;
+    moment.minute = read.minute;
+    moment.second = read.second + integer_as_real(moment.jd.rem_euclid(1000)) * 0.001;
+    moment.has_ymd = true;
+    moment.has_hms = true;
+    moment.has_jd = false;
+    moment.raw = false;
+    moment.zone = 0;
+    moment.error = false;
+    Some(())
 }
 
 /// `weekday N`, which moves the moment forward to the next day `N` of
@@ -801,15 +925,15 @@ fn time_moved(moment: &mut Moment, text: &[u8], sign: u8) -> Option<()> {
 
 /// The moment the arguments say: the first of them read as a moment,
 /// and the ones after it as modifiers, which is `isDate`.
-fn moment_of(args: &[Value], now: Option<i64>) -> Option<Moment> {
+fn moment_of(args: &[Value], told: Told) -> Option<Moment> {
     let mut moment = Moment::default();
     match args.first() {
         // `isDate` reads the clock where the call names no moment, so
         // `datetime()` is `datetime('now')`.
-        None => read_now(&mut moment, now)?,
+        None => read_now(&mut moment, told.now)?,
         Some(Value::Int(number)) => read_number(&mut moment, integer_as_real(*number)),
         Some(Value::Real(number)) => read_number(&mut moment, *number),
-        Some(Value::Text(text) | Value::Blob(text)) => read_moment(text, &mut moment, now)?,
+        Some(Value::Text(text) | Value::Blob(text)) => read_moment(text, &mut moment, told)?,
         Some(Value::Null) => return None,
     }
     for (at, held) in args.iter().enumerate().skip(1) {
@@ -818,7 +942,7 @@ fn moment_of(args: &[Value], now: Option<i64>) -> Option<Moment> {
             Value::Null => return None,
             other => other.text()?,
         };
-        modified(&mut moment, &text, at)?;
+        modified(&mut moment, &text, at, told.zone)?;
     }
     moment.compute_jd();
     if moment.error || !whole_day(moment.jd) {
@@ -923,8 +1047,8 @@ const fn unix_seconds(moment: &Moment) -> i64 {
 
 /// `date(TIME, MOD, ...)`.
 #[must_use]
-pub fn date(args: &[Value], now: Option<i64>) -> Value {
-    let Some(mut moment) = moment_of(args, now) else {
+pub fn date(args: &[Value], told: Told) -> Value {
+    let Some(mut moment) = moment_of(args, told) else {
         return Value::Null;
     };
     moment.compute_ymd();
@@ -933,8 +1057,8 @@ pub fn date(args: &[Value], now: Option<i64>) -> Value {
 
 /// `time(TIME, MOD, ...)`.
 #[must_use]
-pub fn time(args: &[Value], now: Option<i64>) -> Value {
-    let Some(mut moment) = moment_of(args, now) else {
+pub fn time(args: &[Value], told: Told) -> Value {
+    let Some(mut moment) = moment_of(args, told) else {
         return Value::Null;
     };
     moment.compute_hms();
@@ -943,8 +1067,8 @@ pub fn time(args: &[Value], now: Option<i64>) -> Value {
 
 /// `datetime(TIME, MOD, ...)`.
 #[must_use]
-pub fn datetime(args: &[Value], now: Option<i64>) -> Value {
-    let Some(mut moment) = moment_of(args, now) else {
+pub fn datetime(args: &[Value], told: Told) -> Value {
+    let Some(mut moment) = moment_of(args, told) else {
         return Value::Null;
     };
     moment.compute_both();
@@ -956,8 +1080,8 @@ pub fn datetime(args: &[Value], now: Option<i64>) -> Value {
 
 /// `julianday(TIME, MOD, ...)`.
 #[must_use]
-pub fn julianday(args: &[Value], now: Option<i64>) -> Value {
-    let Some(mut moment) = moment_of(args, now) else {
+pub fn julianday(args: &[Value], told: Told) -> Value {
+    let Some(mut moment) = moment_of(args, told) else {
         return Value::Null;
     };
     moment.compute_jd();
@@ -966,8 +1090,8 @@ pub fn julianday(args: &[Value], now: Option<i64>) -> Value {
 
 /// `unixepoch(TIME, MOD, ...)`.
 #[must_use]
-pub fn unixepoch(args: &[Value], now: Option<i64>) -> Value {
-    let Some(mut moment) = moment_of(args, now) else {
+pub fn unixepoch(args: &[Value], told: Told) -> Value {
+    let Some(mut moment) = moment_of(args, told) else {
         return Value::Null;
     };
     moment.compute_jd();
@@ -1025,11 +1149,11 @@ fn thursday(moment: &Moment) -> Moment {
 
 /// `strftime(FORMAT, TIME, MOD, ...)`.
 #[must_use]
-pub fn strftime(args: &[Value], now: Option<i64>) -> Value {
+pub fn strftime(args: &[Value], told: Told) -> Value {
     let Some(format) = args.first().and_then(Value::text) else {
         return Value::Null;
     };
-    let Some(mut moment) = moment_of(args.get(1..).unwrap_or_default(), now) else {
+    let Some(mut moment) = moment_of(args.get(1..).unwrap_or_default(), told) else {
         return Value::Null;
     };
     moment.compute_jd();
@@ -1163,10 +1287,10 @@ const NOUGHT: i64 = 148_699_540_800_000;
 ///
 /// Walking the months costs O(n) in them.
 #[must_use]
-pub fn timediff(args: &[Value], now: Option<i64>) -> Value {
+pub fn timediff(args: &[Value], told: Told) -> Value {
     let (Some(mut one), Some(mut other)) = (
-        moment_of(args.get(..1).unwrap_or_default(), now),
-        moment_of(args.get(1..2).unwrap_or_default(), now),
+        moment_of(args.get(..1).unwrap_or_default(), told),
+        moment_of(args.get(1..2).unwrap_or_default(), told),
     ) else {
         return Value::Null;
     };

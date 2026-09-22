@@ -65,7 +65,7 @@ fn quoted(value: &Value) -> String {
         crate::func::Given {
             random: None,
             counted: crate::func::Counted::default(),
-            clock: None,
+            clock: crate::date::Told::default(),
             sensitive: false,
         },
     )

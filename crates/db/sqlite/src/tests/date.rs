@@ -660,3 +660,106 @@ fn a_column_that_falls_back_to_the_clock_holds_what_the_writer_was_told() {
         [alloc::vec![Value::Int(1)]]
     );
 }
+
+/// The zone of these tests, which is `testLocaltime` of
+/// `research/sqlite/src/test1.c:7937`: local time is half an hour later
+/// than UTC on an odd day and half an hour earlier on an even one, and
+/// the one moment `2000-05-29 14:16:00` fails.
+fn zone(seconds: i64) -> Option<i64> {
+    if seconds == 959_609_760 {
+        return None;
+    }
+    if (seconds / 86_400) & 1 == 1 {
+        Some(seconds + 1800)
+    } else {
+        Some(seconds - 1800)
+    }
+}
+
+/// What `sql` answers over a connection told that zone.
+fn zoned(sql: &str) -> String {
+    let mut writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
+    writer.in_zone(zone);
+    assert!(writer.zone().is_some());
+    let bytes = writer.written();
+    let database = Database::open(&bytes).unwrap().in_zone(zone);
+    let statement = alloc::format!("SELECT quote({sql})");
+    let answered = database.query(statement.as_bytes()).unwrap();
+    match answered
+        .rows
+        .first()
+        .and_then(|row| row.first())
+        .cloned()
+        .unwrap_or(Value::Null)
+    {
+        Value::Null => String::from("NULL"),
+        Value::Text(bytes) | Value::Blob(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+        Value::Int(number) => alloc::format!("{number}"),
+        Value::Real(number) => String::from_utf8_lossy(&crate::fp::text(number, 15)).into_owned(),
+    }
+}
+
+/// `localtime` reads the zone the connection was told and `utc` carries
+/// a moment of that zone back, which are the answers the C library gives
+/// under the same zone.
+#[test]
+fn what_localtime_and_utc_answer_under_a_zone() {
+    for (sql, want) in [
+        (
+            "datetime('2000-10-29 12:00:00','localtime')",
+            "'2000-10-29 12:30:00'",
+        ),
+        (
+            "datetime('2000-10-29 12:30:00','utc')",
+            "'2000-10-29 12:00:00'",
+        ),
+        (
+            "datetime('2000-10-30 12:00:00','localtime')",
+            "'2000-10-30 11:30:00'",
+        ),
+        (
+            "datetime('2000-10-30 11:30:00','utc')",
+            "'2000-10-30 12:00:00'",
+        ),
+        // A moment outside the years the zone answers for is carried
+        // into a year of the same shape and back.
+        (
+            "datetime('1800-10-29 12:00:00','localtime')",
+            "'1800-10-29 12:30:00'",
+        ),
+        (
+            "datetime('3000-10-30 12:00:00','localtime')",
+            "'3000-10-30 11:30:00'",
+        ),
+        // A moment the text says is UTC is one `utc` leaves alone.
+        (
+            "datetime('2000-10-29 12:00Z','utc','utc')",
+            "'2000-10-29 12:00:00'",
+        ),
+        (
+            "datetime('2000-10-29 12:00+00:00','utc','utc')",
+            "'2000-10-29 12:00:00'",
+        ),
+        (
+            "datetime('2000-10-29 12:00-01:00','utc')",
+            "'2000-10-29 13:00:00'",
+        ),
+        // `localtime` twice is `localtime` once.
+        (
+            "datetime('2000-10-29 12:00:00','localtime','localtime')",
+            "'2000-10-29 12:30:00'",
+        ),
+        // A zone that fails answers nothing, and so does a modifier
+        // that is no modifier of this library.
+        ("datetime('2000-05-29 14:16:00','localtime')", "NULL"),
+        ("datetime('2000-10-29 12:00:00','local')", "NULL"),
+    ] {
+        assert_eq!(zoned(sql), want, "{sql}");
+    }
+    // A connection told no zone answers nothing for either modifier.
+    assert_eq!(
+        quoted("datetime('2000-10-29 12:00:00','localtime')"),
+        "NULL"
+    );
+    assert_eq!(quoted("datetime('2000-10-29 12:00:00','utc')"), "NULL");
+}

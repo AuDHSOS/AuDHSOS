@@ -323,6 +323,21 @@ pub trait Row {
         None
     }
 
+    /// The zone `localtime` and `utc` read, and nothing where the
+    /// connection was told none.
+    fn zone(&self) -> Option<crate::date::Zone> {
+        None
+    }
+
+    /// What the connection tells the date functions: the clock and the
+    /// zone together.
+    fn told(&self) -> crate::date::Told {
+        crate::date::Told {
+            now: self.clock(),
+            zone: self.zone(),
+        }
+    }
+
     /// Whether `LIKE` tells the twenty-six letters apart, which
     /// `PRAGMA case_sensitive_like` sets and a connection told nothing
     /// answers false for.
@@ -351,7 +366,7 @@ fn given_of(row: &dyn Row) -> func::Given<'_> {
     func::Given {
         random: row.random(),
         counted: row.counted(),
-        clock: row.clock(),
+        clock: row.told(),
         sensitive: row.sensitive(),
     }
 }
@@ -791,7 +806,7 @@ fn called(
 ///
 /// Reading one costs O(n) in the bytes it was written with.
 fn plain_literal(literal: Literal, sql: &[u8], row: &dyn Row) -> Result<Answer, Error> {
-    literal_value(literal, sql, false, row.clock()).map(Answer::plain)
+    literal_value(literal, sql, false, row.told()).map(Answer::plain)
 }
 
 /// A constant, with `negated` for the minus sign the parser leaves as a
@@ -800,7 +815,7 @@ pub(crate) fn literal_value(
     literal: Literal,
     sql: &[u8],
     negated: bool,
-    clock: Option<i64>,
+    clock: crate::date::Told,
 ) -> Result<Value, Error> {
     match literal {
         Literal::Null => Ok(Value::Null),
@@ -815,7 +830,7 @@ pub(crate) fn literal_value(
         // `time`, `date` and `datetime` of the clock, which
         // `currentTimeFunc` writes in the same shapes.
         Literal::CurrentTime(which) => {
-            if clock.is_none() {
+            if clock.now.is_none() {
                 return Err(Error::Unsupported);
             }
             Ok(match which {
@@ -957,7 +972,7 @@ fn unary(
         if let Some(Node::Literal(literal)) = arena.node(operand)
             && matches!(literal, Literal::Integer(_) | Literal::Float(_))
         {
-            return literal_value(literal, sql, true, row.clock()).map(Answer::plain);
+            return literal_value(literal, sql, true, row.told()).map(Answer::plain);
         }
     }
     let inner = answer(arena, operand, sql, row, depth)?;

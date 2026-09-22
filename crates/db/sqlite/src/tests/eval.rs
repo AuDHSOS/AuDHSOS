@@ -55,7 +55,7 @@ fn shown(value: &Value) -> (Vec<u8>, Vec<u8>) {
             crate::func::Given {
                 random: None,
                 counted: crate::func::Counted::default(),
-                clock: None,
+                clock: crate::date::Told::default(),
                 sensitive: false,
             },
         )

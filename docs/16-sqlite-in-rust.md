@@ -1023,6 +1023,7 @@ Size: L.
      records.
 140. The row of a table that points at itself. Built, which D-413
      records.
+141. The zone `localtime` and `utc` read. Built, which D-415 records.
 
 ### Done when
 
