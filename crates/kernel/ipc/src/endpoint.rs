@@ -311,10 +311,8 @@ pub fn received<const NP: usize, const NT: usize, const NM: usize, const NH: usi
     objects: &mut Objects<NP, NT, NM, NH>,
     scheduler: &mut Scheduler,
     sender: ThreadId,
-    receiver: ThreadId,
     handover: Handover,
 ) -> Result<Outcome, Error> {
-    let _ = receiver;
     let mine =
         Outcome::values(handover.received[0], handover.received[1]).with_status(handover.status);
     if let Some(reply) = handover.reply {

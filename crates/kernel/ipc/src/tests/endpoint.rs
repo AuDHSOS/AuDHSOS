@@ -84,7 +84,6 @@ fn a_call_with_no_receiver_blocks_the_caller_and_a_later_receive_completes_it() 
         &mut fixture.objects,
         &mut fixture.scheduler,
         caller,
-        receiver,
         Handover {
             reply: Some(reply),
             received: [BADGE, handle.raw()],
@@ -97,6 +96,58 @@ fn a_call_with_no_receiver_blocks_the_caller_and_a_later_receive_completes_it() 
     assert_eq!(outcome.wakeup, None, "the caller waits for the answer");
     assert_eq!(fixture.state(caller), Some(ThreadState::BlockedReply));
     assert_eq!(fixture.wait_of(caller), Wait::Reply { reply });
+}
+
+#[test]
+fn received_leaves_the_receiver_as_recv_left_it() {
+    for wants_reply in [false, true] {
+        let mut fixture = Fixture::new();
+        let client = fixture.process(8);
+        let server = fixture.process(8);
+        let sender = fixture.running(client, 4);
+        let endpoint = fixture.endpoint();
+        let intent = if wants_reply {
+            Intent::call(BADGE)
+        } else {
+            Intent::badged(BADGE)
+        };
+        send(
+            &mut fixture.objects,
+            &mut fixture.scheduler,
+            sender,
+            endpoint,
+            intent,
+        )
+        .unwrap();
+        let receiver = fixture.running(server, 4);
+        recv(
+            &mut fixture.objects,
+            &mut fixture.scheduler,
+            receiver,
+            endpoint,
+            true,
+        )
+        .unwrap();
+        let reply =
+            wants_reply.then(|| open_reply(&mut fixture.objects, sender, server).unwrap().0);
+        let before = *fixture.objects.threads.get(receiver).unwrap();
+        received(
+            &mut fixture.objects,
+            &mut fixture.scheduler,
+            sender,
+            Handover {
+                reply,
+                received: [BADGE, 0],
+                status: Status::OK,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            *fixture.objects.threads.get(receiver).unwrap(),
+            before,
+            "`received` acts on the sender only"
+        );
+    }
 }
 
 #[test]
@@ -249,7 +300,6 @@ fn a_queued_sender_wakes_when_a_receiver_takes_its_message() {
         &mut fixture.objects,
         &mut fixture.scheduler,
         sender,
-        receiver,
         Handover {
             reply: None,
             received: [BADGE, 0],
@@ -332,7 +382,6 @@ fn several_senders_are_served_by_priority_and_then_by_arrival() {
             &mut fixture.objects,
             &mut fixture.scheduler,
             wanted,
-            receiver,
             Handover::PLAIN,
         )
         .unwrap();
@@ -410,7 +459,6 @@ fn a_reply_wakes_its_caller_and_a_second_one_is_refused() {
         &mut fixture.objects,
         &mut fixture.scheduler,
         caller,
-        receiver,
         Handover {
             reply: Some(reply),
             received: [BADGE, 0],
@@ -478,7 +526,6 @@ fn a_reply_object_whose_caller_is_gone_is_refused_without_touching_memory() {
         &mut fixture.objects,
         &mut fixture.scheduler,
         caller,
-        receiver,
         Handover {
             reply: Some(reply),
             received: [BADGE, 0],
@@ -1056,7 +1103,6 @@ fn call_and_receive(
         &mut fixture.objects,
         &mut fixture.scheduler,
         caller,
-        receiver,
         Handover {
             reply: Some(reply),
             received: [BADGE, 0],

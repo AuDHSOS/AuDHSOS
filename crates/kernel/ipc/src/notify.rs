@@ -56,9 +56,9 @@ pub(crate) fn deliver_word<const NP: usize, const NT: usize, const NM: usize, co
     if held.word == 0 {
         return Outcome::DONE;
     }
-    // A waiter that stopped waiting without the notification knowing — a
-    // `thread_resume` of one that was suspended out of its wait — leaves the
-    // bits in the word for whoever asks next.
+    // `cancel` clears `waiter` for suspend, kill and process exit, so a
+    // waiter that is not blocked here is a stale record from a path that
+    // skipped `cancel`; the bits stay in the word for whoever asks next.
     let Some(reschedule) = wake(&mut objects.threads, scheduler, waiter) else {
         return Outcome::DONE;
     };
