@@ -2156,6 +2156,13 @@ proc btree_varint_test {start mult count incr} {
   return ""
 }
 
+# sqlite3_quota_glob PATTERN TEXT of test_quota.c:254: whether the text
+# matches the pattern under the rules of `GLOB`, with a `/` of the
+# pattern matching either separator of a path.
+proc sqlite3_quota_glob {pattern text} {
+  return [lindex [harness_send strglob $pattern $text] 0]
+}
+
 # btree_from_db DB ?N? of test3.c:110: the b-tree of the database at
 # place N of the connection, which this harness holds one image per path
 # for, so the name of the connection stands for it. `db_enter` and

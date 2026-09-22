@@ -501,6 +501,8 @@ Size: S.
 51. `btree_from_db` names the database of a connection and
     `btree_pager_stats` answers the eleven counts of
     `sqlite3PagerStats` for it, which D-424 records.
+52. `sqlite3_quota_glob` answers whether a text matches a pattern under
+    the rules `quotaStrglob` reads, which D-425 records.
 
 ### Produces
 

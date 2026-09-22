@@ -1312,6 +1312,9 @@ impl Session {
                 Ok(Vec::new())
             }
             "varint" => varint(args),
+            // `sqlite3_quota_glob` of
+            // `research/sqlite/src/test_quota.c:254`.
+            "strglob" => Ok(globbed(first, second)),
             "mprintf" => mprintf(args),
             "capable" => Ok(vec![usize::from(capable(first)).to_string()]),
             "case" => {
@@ -3940,6 +3943,168 @@ fn varint(args: &[String]) -> Result<Vec<String>, String> {
         value = value.wrapping_add(step);
     }
     Ok(Vec::new())
+}
+
+/// What `sqlite3_quota_glob` answers: one where the text matches the
+/// pattern and nought where it does not.
+fn globbed(pattern: &str, text: &str) -> Vec<String> {
+    let held = quota_glob(&sql_bytes(pattern), &sql_bytes(text));
+    vec![usize::from(held).to_string()]
+}
+
+/// Whether the text matches the pattern, which `quotaStrglob` of
+/// `research/sqlite/src/test_quota.c:254` answers: the rules of `GLOB`,
+/// and a `/` of the pattern matching a `/` or a `\` of the text.
+///
+/// Matching a pattern of m bytes against a text of n bytes costs O(m*n)
+/// in the worst case, because a `*` is tried at every place the byte
+/// after it stands at.
+fn quota_glob(pattern: &[u8], text: &[u8]) -> bool {
+    let byte = |bytes: &[u8], at: usize| bytes.get(at).copied().unwrap_or(0);
+    let mut at = 0;
+    let mut over = 0;
+    while let Some(held) = pattern.get(at).copied() {
+        at = at.saturating_add(1);
+        match held {
+            b'*' => return many(pattern, text, (at, over)),
+            b'?' => {
+                if text.get(over).is_none() {
+                    return false;
+                }
+                over = over.saturating_add(1);
+            }
+            b'[' => {
+                let Some(held) = text.get(over).copied() else {
+                    return false;
+                };
+                over = over.saturating_add(1);
+                let (seen, past) = one_of(pattern, at, held);
+                at = past;
+                if !seen {
+                    return false;
+                }
+            }
+            // A `/` of the pattern matches either separator of a path.
+            b'/' => {
+                if !matches!(text.get(over), Some(&b'/' | &b'\\')) {
+                    return false;
+                }
+                over = over.saturating_add(1);
+            }
+            held => {
+                if byte(text, over) != held {
+                    return false;
+                }
+                over = over.saturating_add(1);
+            }
+        }
+    }
+    over == text.len()
+}
+
+/// Whether the rest of the text matches the rest of the pattern after a
+/// `*`, which stands for as many bytes as it takes.
+///
+/// Every `*` and `?` after the first `*` is read there: each `?` takes
+/// one byte of the text, and the byte after them is looked for at every
+/// place of the text the rest of the pattern is then tried at.
+fn many(pattern: &[u8], text: &[u8], held: (usize, usize)) -> bool {
+    let byte = |bytes: &[u8], at: usize| bytes.get(at).copied().unwrap_or(0);
+    let (mut at, mut over) = held;
+    let mut wanted;
+    loop {
+        wanted = byte(pattern, at);
+        at = at.saturating_add(1);
+        if wanted != b'*' && wanted != b'?' {
+            break;
+        }
+        if wanted == b'?' {
+            if text.get(over).is_none() {
+                return false;
+            }
+            over = over.saturating_add(1);
+        }
+    }
+    // A `*` the pattern ends on matches the rest of the text.
+    if wanted == 0 {
+        return true;
+    }
+    // A set after a `*` is tried at every place, because the byte it
+    // matches is not one byte the text has to hold.
+    if wanted == b'[' {
+        let from = at.saturating_sub(1);
+        while over < text.len()
+            && !quota_glob(
+                pattern.get(from..).unwrap_or_default(),
+                text.get(over..).unwrap_or_default(),
+            )
+        {
+            over = over.saturating_add(1);
+        }
+        return over < text.len();
+    }
+    let other = if wanted == b'/' { b'\\' } else { wanted };
+    while let Some(mut held) = text.get(over).copied() {
+        over = over.saturating_add(1);
+        while held != wanted && held != other {
+            let Some(next) = text.get(over).copied() else {
+                return false;
+            };
+            held = next;
+            over = over.saturating_add(1);
+        }
+        if quota_glob(
+            pattern.get(at..).unwrap_or_default(),
+            text.get(over..).unwrap_or_default(),
+        ) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether the byte is one the set that begins at `at` holds, and where
+/// the pattern stands after the set.
+///
+/// A set that the pattern does not close holds nothing, which
+/// `quotaStrglob` answers no match for.
+fn one_of(pattern: &[u8], at: usize, held: u8) -> (bool, usize) {
+    let byte = |at: usize| pattern.get(at).copied().unwrap_or(0);
+    let mut at = at;
+    let mut prior = 0;
+    let mut seen = false;
+    let mut invert = false;
+    let mut wanted = byte(at);
+    at = at.saturating_add(1);
+    if wanted == b'^' {
+        invert = true;
+        wanted = byte(at);
+        at = at.saturating_add(1);
+    }
+    // A `]` the set opens with is one of its own bytes.
+    if wanted == b']' {
+        seen = held == b']';
+        wanted = byte(at);
+        at = at.saturating_add(1);
+    }
+    while wanted != 0 && wanted != b']' {
+        if wanted == b'-' && byte(at) != b']' && byte(at) != 0 && prior > 0 {
+            wanted = byte(at);
+            at = at.saturating_add(1);
+            if held >= prior && held <= wanted {
+                seen = true;
+            }
+            prior = 0;
+        } else {
+            if held == wanted {
+                seen = true;
+            }
+            prior = wanted;
+        }
+        wanted = byte(at);
+        at = at.saturating_add(1);
+    }
+    (wanted != 0 && seen != invert, at)
 }
 
 /// The `sqlite3_mprintf_*` commands of `src/test1.c`: the format of the

@@ -7,6 +7,10 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The suite harness answers `sqlite3_quota_glob`. D-425 records it.
+  `quota-glob.test` goes from no case passing to 108, which is every
+  case of the file.
+
 - The suite harness answers `btree_from_db`, `btree_pager_stats` and
   `btree_ismemdb`. D-424 records it. `corrupt.test` goes from 1993 cases
   passing to 2771, `cache.test` from 0 to 178 and `io.test` from 7 to 10.
