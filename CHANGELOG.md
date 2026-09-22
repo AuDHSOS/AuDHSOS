@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` writes a renamed column in quotes where the place it
+  writes over was quoted, names the columns an `ON CONFLICT` of a
+  trigger's `INSERT` holds, and names what an `ALTER TABLE` over a view
+  would have done to it. D-416 records it. `altercol.test` goes from 184
+  cases passing to 194.
+
 - `db-sqlite` reads `localtime` and `utc` through the zone the caller
   hands the connection. D-415 records it. Catalog 6.6.286. `date.test`
   goes from 1649 cases passing to 1679.

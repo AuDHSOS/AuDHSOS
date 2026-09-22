@@ -207,7 +207,11 @@ fn renamed(values: &mut [Value], from: &[u8], to: &[u8]) -> bool {
 /// [`Error::NoTable`] where the schema holds no such table or view,
 /// [`Error::NotAlterable`] for a table SQLite keeps for itself, and
 /// [`Error::NotATable`] for a view.
-fn alterable(database: &Database<'_>, name: &[u8]) -> Result<(), Error> {
+fn alterable(
+    database: &Database<'_>,
+    name: &[u8],
+    held: Option<crate::db::Altering>,
+) -> Result<(), Error> {
     let view = database.view(name).is_some();
     if database.table(name).is_none() && !view {
         return Err(Error::NoTable(name.to_vec()));
@@ -225,9 +229,14 @@ fn alterable(database: &Database<'_>, name: &[u8]) -> Result<(), Error> {
         };
         return Err(Error::NotAlterable(held));
     }
-    // A view is not a table, so it is not what these statements alter.
+    // A view is not a table, so it is not what these statements alter:
+    // `sqlite3AlterRenameTable` refuses to rename one and `isRealTable`
+    // names what the other statements would have done to it.
     if view {
-        return Err(Error::NotATable(name.to_vec()));
+        return Err(match held {
+            Some(held) => Error::NotAView(held, name.to_vec()),
+            None => Error::NotATable(name.to_vec()),
+        });
     }
     Ok(())
 }
@@ -1498,7 +1507,7 @@ impl Writer {
         let to = crate::schema::dequote(asked.name.text(sql));
         let bytes = self.image();
         let database = self.reading(&bytes)?;
-        alterable(&database, &from)?;
+        alterable(&database, &from, None)?;
         if names(&database, &to) {
             return Err(Error::Named(to));
         }
@@ -1691,7 +1700,7 @@ impl Writer {
         let name = crate::schema::dequote(asked.table.text(sql));
         let bytes = self.image();
         let database = self.reading(&bytes)?;
-        alterable(&database, &name)?;
+        alterable(&database, &name, Some(crate::db::Altering::DropConstraint))?;
         // The table was located above, so this refusal carries no name
         // of its own.
         let (table, root) = database.table(&name).ok_or(Error::NoTable(Vec::new()))?;
@@ -1849,7 +1858,7 @@ impl Writer {
         let as_written = asked.name.text(sql).to_vec();
         let bytes = self.image();
         let database = self.reading(&bytes)?;
-        alterable(&database, &name)?;
+        alterable(&database, &name, Some(crate::db::Altering::RenameColumn))?;
         // The table was located above, so this refusal carries no name
         // of its own.
         let (table, _) = database.table(&name).ok_or(Error::NoTable(Vec::new()))?;
@@ -1912,7 +1921,7 @@ impl Writer {
         let column = crate::schema::dequote(asked.column.text(sql));
         let bytes = self.image();
         let database = self.reading(&bytes)?;
-        alterable(&database, &name)?;
+        alterable(&database, &name, Some(crate::db::Altering::DropColumn))?;
         // The table was located above, so these refusals carry no name
         // of their own.
         let (table, root) = database.table(&name).ok_or(Error::NoTable(Vec::new()))?;

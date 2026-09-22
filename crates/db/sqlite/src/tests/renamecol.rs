@@ -125,6 +125,26 @@ fn a_column_the_table_does_not_hold_and_a_table_sqlite_keeps_are_refused() {
         .run(b"ALTER TABLE t RENAME COLUMN a TO \"y y\"")
         .unwrap();
     assert_eq!(schema(&writer), [b"CREATE TABLE t(\"y y\",b)".to_vec()]);
+    // A view holds no columns of its own, so the three statements that
+    // alter what a table holds name what they would have done to it.
+    writer.run(b"CREATE VIEW v AS SELECT * FROM t").unwrap();
+    for (sql, message) in [
+        (
+            b"ALTER TABLE v RENAME COLUMN b TO c".as_slice(),
+            "cannot rename columns of view \"v\"",
+        ),
+        (
+            b"ALTER TABLE v DROP COLUMN b",
+            "cannot drop column from view \"v\"",
+        ),
+        (
+            b"ALTER TABLE v DROP CONSTRAINT c",
+            "cannot edit constraints of view \"v\"",
+        ),
+        (b"ALTER TABLE v RENAME TO w", "view v may not be altered"),
+    ] {
+        assert_eq!(writer.run(sql).unwrap_err().message(), message);
+    }
 }
 
 #[test]
@@ -155,6 +175,26 @@ fn rewritten(sql: &[u8], table: &[u8], column: &[u8], to: &[u8]) -> Vec<u8> {
 
 #[test]
 fn every_place_a_statement_names_the_column() {
+    // A name that begins with an underscore or past ASCII carries no
+    // quotes.
+    assert_eq!(
+        alloc::string::String::from_utf8_lossy(&rewritten(
+            b"CREATE TABLE t(_a, b)",
+            b"t",
+            b"_a",
+            b"zz"
+        )),
+        "CREATE TABLE t(zz, b)"
+    );
+    assert_eq!(
+        alloc::string::String::from_utf8_lossy(&rewritten(
+            "CREATE TABLE t(é, b)".as_bytes(),
+            b"t",
+            "é".as_bytes(),
+            b"zz"
+        )),
+        "CREATE TABLE t(zz, b)"
+    );
     // A statement no schema holds names nothing.
     assert!(crate::rename::column_places(b"ALTER TABLE t RENAME a TO b", b"t", b"a").is_empty());
     assert!(crate::rename::column_places(b"CREATE TABLE t AS SELECT 1", b"t", b"a").is_empty());
@@ -193,6 +233,33 @@ fn every_place_a_statement_names_the_column() {
               INSERT INTO t(a) VALUES(old.a); DELETE FROM t; END",
             b"CREATE TRIGGER tr AFTER DELETE ON t BEGIN \
               INSERT INTO t(zz) VALUES(old.zz); DELETE FROM t; END",
+        ),
+        // The `ON CONFLICT` of an `INSERT` the trigger's body writes
+        // names the columns of the table it writes.
+        (
+            b"CREATE TRIGGER tr AFTER DELETE ON t BEGIN \
+              INSERT INTO t(a) VALUES(1) ON CONFLICT(a) WHERE a>1 \
+              DO UPDATE SET a=a+1 WHERE a<9; END",
+            b"CREATE TRIGGER tr AFTER DELETE ON t BEGIN \
+              INSERT INTO t(zz) VALUES(1) ON CONFLICT(zz) WHERE zz>1 \
+              DO UPDATE SET zz=zz+1 WHERE zz<9; END",
+        ),
+        // A place the statement wrote in quotes stays in quotes, and a
+        // place it wrote bare is written bare.
+        (
+            b"CREATE TABLE t(\"a\" NOT NULL, b, CHECK(a>0))",
+            b"CREATE TABLE t(\"zz\" NOT NULL, b, CHECK(zz>0))",
+        ),
+        // An `ON CONFLICT` that names no index, writes nothing and
+        // holds the write to nothing names no column of its own, and
+        // one of an `INSERT` over another table names none either.
+        (
+            b"CREATE TRIGGER tr AFTER DELETE ON t BEGIN \
+              INSERT INTO t(a) VALUES(1) ON CONFLICT DO NOTHING; \
+              INSERT INTO u(a) VALUES(1) ON CONFLICT(a) DO UPDATE SET a=2; END",
+            b"CREATE TRIGGER tr AFTER DELETE ON t BEGIN \
+              INSERT INTO t(zz) VALUES(1) ON CONFLICT DO NOTHING; \
+              INSERT INTO u(a) VALUES(1) ON CONFLICT(a) DO UPDATE SET a=2; END",
         ),
         // A statement of a trigger's body over another table leaves its
         // own columns alone.

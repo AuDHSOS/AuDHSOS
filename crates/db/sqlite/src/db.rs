@@ -375,6 +375,10 @@ pub enum Error {
     NotAlterable(Vec<u8>),
     /// An `ALTER TABLE` over a view, with the name of the view.
     NotATable(Vec<u8>),
+    /// An `ALTER TABLE` over a view that alters what the view holds
+    /// rather than its name, with what it would have done and the name
+    /// of the view.
+    NotAView(Altering, Vec<u8>),
     /// A `DISTINCT` on an ordered-set aggregate, with the name of that
     /// aggregate.
     OrderedDistinct(Vec<u8>),
@@ -824,6 +828,11 @@ impl Error {
             ),
             Error::NotATable(name) => alloc::format!(
                 "view {} may not be altered",
+                alloc::string::String::from_utf8_lossy(name)
+            ),
+            Error::NotAView(held, name) => alloc::format!(
+                "cannot {} view \"{}\"",
+                held.words(),
                 alloc::string::String::from_utf8_lossy(name)
             ),
             Error::Named(name) => alloc::format!(
@@ -1859,6 +1868,31 @@ impl Default for Naming {
 /// `sqlite3CreateIndex` writes for an index that holds its entries
 /// backwards.
 const HELD_FORMAT: u32 = 4;
+
+/// What an `ALTER TABLE` does to the table, which `isRealTable` of
+/// `research/sqlite/src/alter.c:566` names the refusal a view is
+/// answered with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Altering {
+    /// `RENAME COLUMN`.
+    RenameColumn,
+    /// `DROP COLUMN`.
+    DropColumn,
+    /// `DROP CONSTRAINT`.
+    DropConstraint,
+}
+
+impl Altering {
+    /// The words the refusal names it by.
+    #[must_use]
+    pub const fn words(self) -> &'static str {
+        match self {
+            Altering::RenameColumn => "rename columns of",
+            Altering::DropColumn => "drop column from",
+            Altering::DropConstraint => "edit constraints of",
+        }
+    }
+}
 
 /// Where a column of an answer comes from: the database, the table and
 /// the name the column carries there.

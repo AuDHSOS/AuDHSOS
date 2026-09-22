@@ -141,22 +141,38 @@ pub fn written(sql: &[u8], places: &[Span], name: &[u8]) -> Vec<u8> {
 /// `sql` with `written` written at each of `places`, which the caller
 /// read with [`places`] or [`column_places`].
 ///
-/// `sqlite3AlterRenameColumn` reads `bQuote` off the first byte of the
-/// new name, so a name the statement wrote without quotes is written
-/// without them.
+/// `renameEditSql` of `research/sqlite/src/alter.c:1222` writes the new
+/// name as the statement wrote it only where the name the statement
+/// wrote carries no quotes and the name it writes over carries none
+/// either; every other place carries the name in quotes, because a
+/// place that was quoted stays quoted.
 ///
 /// Writing `n` bytes costs O(n).
 #[must_use]
-pub fn written_as(sql: &[u8], places: &[Span], quoted: &[u8]) -> Vec<u8> {
+pub fn written_as(sql: &[u8], places: &[Span], written: &[u8]) -> Vec<u8> {
+    let bare = written.first().is_some_and(|byte| is_name(*byte));
+    let held = quoted(&crate::schema::dequote(written));
     let mut out = Vec::new();
     let mut at = 0_usize;
     for place in places {
         out.extend_from_slice(sql.get(at..place.start).unwrap_or_default());
-        out.extend_from_slice(quoted);
+        let over = sql.get(place.start).copied().unwrap_or(0);
+        if bare && is_name(over) {
+            out.extend_from_slice(written);
+        } else {
+            out.extend_from_slice(&held);
+        }
         at = place.start.saturating_add(place.len);
     }
     out.extend_from_slice(sql.get(at..).unwrap_or_default());
     out
+}
+
+/// Whether a byte begins a name that carries no quotes, which is
+/// `sqlite3IsIdChar` over the bytes a place may begin with: a letter, a
+/// digit, an underscore, or a byte of a character past ASCII.
+const fn is_name(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_' || byte >= 0x80
 }
 
 /// The name of an index SQLite made for a key of `from`, written for
@@ -381,6 +397,35 @@ impl Finding<'_> {
         }
     }
 
+    /// Marks the places an `ON CONFLICT` of an `INSERT` over the table
+    /// names the column at: the terms it names the index by, the `WHERE`
+    /// of a partial index, what it writes, and the `WHERE` the write is
+    /// held to.
+    ///
+    /// `sqlite3UpsertAnalyzeTarget` reads the terms against the table
+    /// the `INSERT` writes, so a statement over another table names none
+    /// of this one's columns.
+    fn upsert_places(&mut self, upserts: crate::ast::Range, writes: bool, row: bool) {
+        let stands = Stands { bare: writes, row };
+        let held: Vec<crate::ast::Upsert> = self.arena.upserts(upserts).to_vec();
+        for upsert in held {
+            self.mark_orders(upsert.targets, stands);
+            if let Some(over) = upsert.over {
+                self.mark_expr(over, stands);
+            }
+            let sets: Vec<crate::ast::Set> = self.arena.sets(upsert.sets).to_vec();
+            for set in sets {
+                if writes {
+                    self.mark(set.column);
+                }
+                self.mark_expr(set.value, stands);
+            }
+            if let Some(filter) = upsert.filter {
+                self.mark_expr(filter, stands);
+            }
+        }
+    }
+
     /// Marks the places a `CREATE TRIGGER` names the column at: the
     /// columns of an `UPDATE OF` where the trigger is on the table, the
     /// `WHEN`, and every statement of the body.
@@ -400,13 +445,15 @@ impl Finding<'_> {
         for step in steps {
             match step {
                 TriggerStep::Insert(into) => {
-                    if same(into.name.text(self.sql), self.table) {
+                    let writes = same(into.name.text(self.sql), self.table);
+                    if writes {
                         self.mark_names(into.columns);
                     }
                     self.select_places(Stands {
                         bare: reads,
                         row: on,
                     });
+                    self.upsert_places(into.upserts, writes, on);
                 }
                 TriggerStep::Update(update) => {
                     // A name written under nothing reads the table the
