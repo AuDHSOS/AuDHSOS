@@ -1008,6 +1008,8 @@ Size: L.
      D-397 record.
 133. The root a `DROP` over a file that keeps pointer maps moves. Built,
      which D-398 records.
+134. The page a new root of such a file takes. Built, which D-399
+     records.
 
 ### Done when
 

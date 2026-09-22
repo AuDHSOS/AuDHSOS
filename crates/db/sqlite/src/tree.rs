@@ -424,6 +424,48 @@ impl Pages {
         Ok(number)
     }
 
+    /// The page a new root takes over a file that keeps pointer maps,
+    /// left as an empty page of `kind`.
+    ///
+    /// This is `sqlite3BtreeCreateTable` of
+    /// `research/sqlite/src/btree.c`: a root takes the page after the
+    /// largest root the file holds, stepping over a pointer-map page, and
+    /// the page that lies there is moved to the page the free list gave
+    /// back or to the end of the file. The roots of a file that vacuums
+    /// itself therefore run from page three up with no gap, which is what
+    /// lets the vacuum of a commit move every page above them.
+    ///
+    /// Taking the page costs O(n) in the pages of the free list and O(m)
+    /// in the cells of the page it moves.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Page`] where the page the root is to take holds a root
+    /// already or lies on the free list, and whatever reading or writing
+    /// a page refuses.
+    pub fn root_after(&mut self, largest: u32, kind: Kind) -> Result<u32, Error> {
+        let mut wanted = largest.saturating_add(1);
+        while self.is_map(wanted) {
+            wanted = wanted.saturating_add(1);
+        }
+        // `allocateBtreePage` under `BTALLOC_EXACT` takes the page the
+        // root is to lie on where the free list holds it, and the page
+        // nearest it where it does not.
+        let taken = self.plain(wanted)?;
+        if taken != wanted {
+            let (point, parent) = self.point_of(wanted)?;
+            // `sqlite3BtreeCreateTable` refuses a page the map names a
+            // root or a free page, because no tree holds the root it is
+            // to take yet and the free list gave that page back already.
+            let moves = !matches!(point, Point::Root | Point::Free);
+            moves.then_some(()).ok_or(Error::Page(wanted))?;
+            self.relocate(wanted, point, parent, taken)?;
+        }
+        self.blank(wanted, kind)?;
+        self.point(wanted, Point::Root, 0)?;
+        Ok(wanted)
+    }
+
     /// The page `number` written over as an empty page of `kind`, which
     /// is what the root of a cleared tree is left as.
     ///

@@ -587,3 +587,43 @@ fn the_second_table_a_file_that_vacuums_itself_drops_is_dropped() {
         Some(&Value::Text(b"ok".to_vec()))
     );
 }
+
+/// `autovacuum-2.2.3` of `test/autovacuum.test`: the roots of a file
+/// that vacuums itself run from page three up with no gap.
+#[test]
+fn a_root_of_a_file_that_vacuums_itself_takes_the_page_after_the_largest() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.vacuuming(false);
+    writer.run(b"CREATE TABLE av1(x)").unwrap();
+    // The row fills the page and runs onto a chain, so the page the
+    // second root takes holds part of that chain.
+    writer
+        .run(b"INSERT INTO av1 VALUES(zeroblob(3000))")
+        .unwrap();
+    writer.run(b"CREATE TABLE av2(x)").unwrap();
+    writer.run(b"CREATE TABLE av3(x)").unwrap();
+    let bytes = writer.written();
+    let read = |sql: &[u8]| {
+        Database::open(&bytes)
+            .unwrap()
+            .query(sql)
+            .unwrap()
+            .rows
+            .into_iter()
+            .flatten()
+            .collect::<alloc::vec::Vec<Value>>()
+    };
+    assert_eq!(
+        read(b"SELECT rootpage FROM sqlite_master ORDER BY rootpage"),
+        [Value::Int(3), Value::Int(4), Value::Int(5)]
+    );
+    assert_eq!(read(b"SELECT count(*) FROM av1"), [Value::Int(1)]);
+    assert_eq!(
+        writer
+            .run(b"PRAGMA integrity_check")
+            .unwrap()
+            .first()
+            .and_then(|row| row.first()),
+        Some(&Value::Text(b"ok".to_vec()))
+    );
+}

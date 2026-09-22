@@ -5691,13 +5691,20 @@ impl Writer {
         let Some(kind) = kind else {
             return Ok(0);
         };
-        let root = self.held.pages.add(kind, 0)?;
         // `sqlite3BtreeCreateTable`: the root of a tree is named by no
-        // page, and page one holds the largest root the file has.
-        self.held.pages.point(root, crate::tree::Point::Root, 0)?;
-        if self.held.header.largest_root != 0 {
+        // page, and page one holds the largest root the file has. A file
+        // that keeps pointer maps holds its roots from page three up with
+        // no gap, so the root takes the page after the largest one.
+        if self.held.pages.vacuuming() {
+            let root = self
+                .held
+                .pages
+                .root_after(self.held.header.largest_root, kind)?;
             self.held.header.largest_root = root;
+            return Ok(root);
         }
+        let root = self.held.pages.add(kind, 0)?;
+        self.held.pages.point(root, crate::tree::Point::Root, 0)?;
         Ok(root)
     }
 

@@ -6923,3 +6923,10 @@ Document 16 step Q8.
 
 - Two tables dropped in a row out of a file that keeps pointer maps,
   read back by `PRAGMA integrity_check`.
+
+### 6.6.277 The page a new root takes (`db-sqlite`)
+
+Document 16 step Q8.
+
+- Three roots of a file that keeps pointer maps, with a chain lying where
+  the second and the third take their pages.

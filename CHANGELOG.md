@@ -51,6 +51,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` gives a new root of a file that keeps pointer maps the page
+  after the largest root it holds, moving the page that lies there, so
+  the roots run from page three up with no gap. D-399 records it. Catalog
+  6.6.277. `incrvacuum.test` goes from 35 cases passing to 50.
+
 - `db-sqlite` moves the root carrying the largest page number into the
   page a dropped root leaves where the file keeps pointer maps, so
   `DROP TABLE one; DROP TABLE two` over such a file no longer answers
