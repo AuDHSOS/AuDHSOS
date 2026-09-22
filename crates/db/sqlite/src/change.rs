@@ -7326,7 +7326,6 @@ impl Writer {
             let key = crate::schema::key_of(&table, &named);
             self.tells_peek(Did::Update, &table, (0, 0), (Some(&held), Some(&named)));
             self.unparented(&table, &held, 0)?;
-            self.parented(&table, &named, 0)?;
             self.orphaned(name, &table, &held, 0, Some((&named, 0)))?;
             let was = crate::schema::key_of(&table, &held);
             self.unindex_row(&kept, &table, &held, &was)?;
@@ -7338,6 +7337,10 @@ impl Writer {
                 crate::record::write_in(&stored, &affinities, 4, self.held.header.encoding);
             let order = ordering(&collations, self.held.header.encoding);
             crate::tree::insert_entry(&mut self.held.pages, root, &record, &key, order, false)?;
+            // `sqlite3Update` reads the keys of the new row after it
+            // has written the row, so a row that points at itself
+            // points at what it now holds.
+            self.parented(&table, &named, 0)?;
             changed = changed.saturating_add(1);
             self.writing = changed;
             self.returns(arena, statement.returning, sql, (&table, &named, None))?;
@@ -8134,7 +8137,6 @@ impl Writer {
             self.held.header.encoding,
         );
         self.unparented(table, held, rowid)?;
-        self.parented(table, &named, key)?;
         self.orphaned(&table.name, table, held, rowid, Some((&named, key)))?;
         self.unindex_row(wanted.kept, wanted.table, held, &keyed_as(rowid))?;
         let moved = key != rowid;
@@ -8147,6 +8149,10 @@ impl Writer {
         } else {
             crate::tree::update(&mut self.held.pages, wanted.root, rowid, &record)?;
         }
+        // `sqlite3Update` of `research/sqlite/src/update.c` reads the
+        // keys of the new row after it has written the row, so a row
+        // that points at itself points at what it now holds.
+        self.parented(table, &named, key)?;
         let answered = (table, named.as_slice(), Some(key));
         self.returns(wanted.arena, wanted.returning, wanted.sql, answered)?;
         if fires {
@@ -9285,11 +9291,11 @@ impl Writer {
                 4,
                 self.held.header.encoding,
             );
-            // `I.1` of `src/fkey.c` over the row as it will stand, and
-            // `D.2` over the row as it stands: a row that points at no
-            // row is refused, and so is one that rows point at.
+            // `D.2` of `src/fkey.c` over the row as it stands: a row
+            // that rows of another table point at is refused. `I.1`
+            // over the new row runs once the row is written, which is
+            // the order `sqlite3Update` writes the two in.
             self.unparented(&table, &held, rowid)?;
-            self.parented(&table, &named, key)?;
             self.orphaned(&name, &table, &held, rowid, Some((&named, key)))?;
             // `sqlite3Update` removes the entries of the row, removes
             // the row itself where the key changes, and then writes
@@ -9311,6 +9317,7 @@ impl Writer {
             } else {
                 crate::tree::update(&mut self.held.pages, root, rowid, &record)?;
             }
+            self.parented(&table, &named, key)?;
             self.tells_write(Did::Update, &table, key);
             changed = changed.saturating_add(1);
             self.writing = changed;

@@ -7,6 +7,10 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` reads the keys of the row an `UPDATE` wrote after it has
+  written the row. D-414 records it. `without_rowid3.test` goes from
+  1154 cases passing to 1159.
+
 - `db-sqlite` holds a row of a table that points at itself to be its own
   parent, and leaves the row a statement changes out of the rows that
   point at it. D-413 records it. Catalog 6.6.285. `without_rowid3.test`
