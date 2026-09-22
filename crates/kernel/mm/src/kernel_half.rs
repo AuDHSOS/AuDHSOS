@@ -18,10 +18,7 @@ use audhsos_abi::layout::{KERNEL_SPACE_START, PAGE_SIZE};
 use kernel_hal_api::paging::{FrameAccess, FrameSource};
 use kernel_types::PhysFrame;
 
-use crate::page_table::{EntryFormat, PageTable};
-
-/// Number of entries in a top-level page table.
-pub const ENTRIES: usize = 512;
+use crate::page_table::{ENTRIES, EntryFormat, PageTable};
 
 /// The first entry of the upper half: everything from here on belongs to
 /// the kernel and is shared by every address space.
@@ -66,24 +63,26 @@ where
     F: EntryFormat + Copy,
     A: FrameAccess<PageTable<F>>,
 {
-    let mut entries = [F::EMPTY; ENTRIES];
-    {
-        let table = access
-            .table(kernel)
-            .ok_or(ShareError::Unreachable(kernel))?;
-        for (index, slot) in entries.iter_mut().enumerate() {
-            *slot = table.entry(index);
-        }
-    }
-    let table = access
+    // One entry per borrow keeps no table copy on the kernel stack (D-70).
+    access
+        .table(kernel)
+        .ok_or(ShareError::Unreachable(kernel))?;
+    access
         .table_mut(target)
         .ok_or(ShareError::Unreachable(target))?;
     let mut shared: usize = 0;
-    for (index, entry) in entries.iter().enumerate().skip(FIRST_KERNEL_ENTRY) {
+    for index in FIRST_KERNEL_ENTRY..ENTRIES {
+        let entry = access
+            .table(kernel)
+            .ok_or(ShareError::Unreachable(kernel))?
+            .entry(index);
         if entry.is_present() {
             shared = shared.saturating_add(1);
         }
-        table.set_entry(index, *entry);
+        access
+            .table_mut(target)
+            .ok_or(ShareError::Unreachable(target))?
+            .set_entry(index, entry);
     }
     Ok(shared)
 }
@@ -124,19 +123,10 @@ where
     let expected = access
         .table(kernel)
         .ok_or(ShareError::Unreachable(kernel))?;
-    let mut wanted = [F::EMPTY; ENTRIES];
-    for (index, slot) in wanted.iter_mut().enumerate() {
-        *slot = expected.entry(index);
-    }
     let table = access
         .table(target)
         .ok_or(ShareError::Unreachable(target))?;
-    for (index, entry) in wanted.iter().enumerate().skip(FIRST_KERNEL_ENTRY) {
-        if table.entry(index) != *entry {
-            return Ok(false);
-        }
-    }
-    Ok(true)
+    Ok((FIRST_KERNEL_ENTRY..ENTRIES).all(|index| table.entry(index) == expected.entry(index)))
 }
 
 /// The index of the top-level entry an address falls into.
@@ -204,7 +194,7 @@ where
 {
     let mut freed = 0_u64;
     if level > 0 {
-        for index in 0..F::ENTRIES {
+        for index in 0..ENTRIES {
             let Some(entry) = access.table(frame).map(|table| table.entry(index)) else {
                 break;
             };

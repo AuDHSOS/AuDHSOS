@@ -5,7 +5,8 @@
 //!
 //! Invariants: a call that changes a translation flushes exactly that page
 //! once; a call that fails changes nothing and flushes nothing; every table
-//! frame the mapper allocates is either installed or given back.
+//! frame the mapper allocates is either installed or given back; a leaf of
+//! a kernel-half page carries no user access.
 
 use core::fmt;
 
@@ -27,6 +28,8 @@ pub enum MapError {
     UnreachableFrame,
     /// A table entry could not be interpreted.
     Entry(EntryError),
+    /// A frame of the range lies past the largest frame number.
+    FrameOverflow,
 }
 
 impl fmt::Display for MapError {
@@ -37,6 +40,9 @@ impl fmt::Display for MapError {
             MapError::OutOfKernelMemory => f.write_str("no frame is left for a page table"),
             MapError::UnreachableFrame => f.write_str("a table frame is not reachable"),
             MapError::Entry(error) => write!(f, "{error}"),
+            MapError::FrameOverflow => {
+                f.write_str("a frame of the range passes the largest frame number")
+            }
         }
     }
 }
@@ -47,7 +53,9 @@ impl From<MapError> for audhsos_abi::Error {
             MapError::AlreadyMapped => audhsos_abi::Error::AlreadyMapped,
             MapError::NotMapped => audhsos_abi::Error::NotMapped,
             MapError::OutOfKernelMemory => audhsos_abi::Error::OutOfKernelMemory,
-            MapError::UnreachableFrame | MapError::Entry(_) => audhsos_abi::Error::InvalidArgument,
+            MapError::UnreachableFrame | MapError::Entry(_) | MapError::FrameOverflow => {
+                audhsos_abi::Error::InvalidArgument
+            }
         }
     }
 }
@@ -60,6 +68,9 @@ pub enum Progress {
     /// The budget ran out after this many pages.
     Partial(u64),
 }
+
+/// Number of tables one walk can record: one per level below the root.
+const MAX_CREATED: usize = 3;
 
 /// One table that was created during a walk, so that it can be undone.
 #[derive(Clone, Copy, Debug)]
@@ -91,8 +102,13 @@ where
     T: TlbControl,
     S: FrameSource,
 {
+    /// Fails the build for a format whose walk creates more tables than
+    /// `walk` records.
+    const LEVELS_FIT: () = assert!(F::LEVELS <= MAX_CREATED + 1);
+
     /// A mapper over the tables rooted in `root`.
     pub fn new(root: PhysFrame, access: &'a mut A, tlb: &'a mut T, frames: &'a mut S) -> Self {
+        let () = Self::LEVELS_FIT;
         tlb.target(root);
         Mapper {
             root,
@@ -115,10 +131,10 @@ where
         self.frames
     }
 
-    fn read(&self, frame: PhysFrame, index: usize) -> Result<F, MapError> {
+    fn read(&self, frame: PhysFrame, level: usize, index: usize) -> Result<F, MapError> {
         let table = self.access.table(frame).ok_or(MapError::UnreachableFrame)?;
         let entry = table.entry(index);
-        entry.validate().map_err(MapError::Entry)?;
+        entry.validate(level).map_err(MapError::Entry)?;
         Ok(entry)
     }
 
@@ -132,7 +148,7 @@ where
     }
 
     /// Undoes the tables created during a failed walk, newest first.
-    fn rollback(&mut self, created: &[Option<Created>; 3], len: usize) {
+    fn rollback(&mut self, created: &[Option<Created>; MAX_CREATED], len: usize) {
         for entry in created.iter().take(len).rev().flatten() {
             let _ = self.write(entry.parent, entry.index, F::EMPTY);
             self.frames.release_frame(entry.frame);
@@ -142,13 +158,13 @@ where
     /// The frame of the table that holds the leaf for `page`, creating the
     /// intermediate tables when `create` is set.
     fn walk(&mut self, page: Page, create: bool) -> Result<PhysFrame, MapError> {
-        let mut created: [Option<Created>; 3] = [None; 3];
+        let mut created: [Option<Created>; MAX_CREATED] = [None; MAX_CREATED];
         let mut created_len = 0usize;
         let mut table_frame = self.root;
         let mut level = F::LEVELS.saturating_sub(1);
         while level > 0 {
             let index = F::index(level, page);
-            let entry = match self.read(table_frame, index) {
+            let entry = match self.read(table_frame, level, index) {
                 Ok(entry) => entry,
                 Err(error) => {
                     self.rollback(&created, created_len);
@@ -211,12 +227,16 @@ where
     ) -> Result<(), MapError> {
         let leaf_table = self.walk(page, true)?;
         let index = F::index(0, page);
-        let entry = self.read(leaf_table, index)?;
+        let entry = self.read(leaf_table, 0, index)?;
         if entry.is_present() {
             return Err(MapError::AlreadyMapped);
         }
         let global = !page.is_user();
-        self.write(leaf_table, index, F::leaf(frame, perms, cache, global))?;
+        self.write(
+            leaf_table,
+            index,
+            F::leaf(frame, confine(page, perms), cache, global),
+        )?;
         self.tlb.flush_page(page);
         Ok(())
     }
@@ -230,7 +250,7 @@ where
     pub fn unmap(&mut self, page: Page) -> Result<PhysFrame, MapError> {
         let leaf_table = self.walk(page, false)?;
         let index = F::index(0, page);
-        let entry = self.read(leaf_table, index)?;
+        let entry = self.read(leaf_table, 0, index)?;
         let frame = entry.frame().ok_or(MapError::NotMapped)?;
         self.write(leaf_table, index, F::EMPTY)?;
         // Intel SDM Vol. 3A, 5.10.4.2 requires the invalidation after the
@@ -277,7 +297,7 @@ where
         let mut current = F::LEVELS.saturating_sub(1);
         let mut frame = self.root;
         while current > target {
-            let entry = self.read(frame, F::index(current, page))?;
+            let entry = self.read(frame, current, F::index(current, page))?;
             let Some(next) = entry.frame() else {
                 return Ok(None);
             };
@@ -298,11 +318,15 @@ where
     pub fn protect(&mut self, page: Page, perms: Permissions) -> Result<(), MapError> {
         let leaf_table = self.walk(page, false)?;
         let index = F::index(0, page);
-        let entry = self.read(leaf_table, index)?;
+        let entry = self.read(leaf_table, 0, index)?;
         if !entry.is_present() {
             return Err(MapError::NotMapped);
         }
-        self.write(leaf_table, index, entry.with_permissions(perms))?;
+        self.write(
+            leaf_table,
+            index,
+            entry.with_permissions(confine(page, perms)),
+        )?;
         self.tlb.flush_page(page);
         Ok(())
     }
@@ -313,11 +337,11 @@ where
         let mut table_frame = self.root;
         let mut level = F::LEVELS.saturating_sub(1);
         while level > 0 {
-            let entry = self.read(table_frame, F::index(level, page)).ok()?;
+            let entry = self.read(table_frame, level, F::index(level, page)).ok()?;
             table_frame = entry.frame()?;
             level = level.saturating_sub(1);
         }
-        let entry = self.read(table_frame, F::index(0, page)).ok()?;
+        let entry = self.read(table_frame, 0, F::index(0, page)).ok()?;
         entry.frame().map(|frame| (frame, entry.permissions()))
     }
 
@@ -326,8 +350,10 @@ where
     ///
     /// # Errors
     ///
-    /// The errors of [`Mapper::map`]; the pages mapped before the failure
-    /// stay mapped.
+    /// [`MapError::FrameOverflow`] before any page is mapped if the last
+    /// frame passes the largest frame number; the errors of
+    /// [`Mapper::map`], where the pages mapped before the failure stay
+    /// mapped.
     pub fn map_range(
         &mut self,
         pages: PageRange,
@@ -336,6 +362,9 @@ where
         cache: CachePolicy,
         budget: u64,
     ) -> Result<Progress, MapError> {
+        first_frame
+            .checked_add(pages.count().saturating_sub(1))
+            .ok_or(MapError::FrameOverflow)?;
         let mut done = 0u64;
         for page in pages {
             if done >= budget {
@@ -343,7 +372,7 @@ where
             }
             let frame = first_frame
                 .checked_add(done)
-                .ok_or(MapError::UnreachableFrame)?;
+                .ok_or(MapError::FrameOverflow)?;
             self.map(page, frame, perms, cache)?;
             done = done.saturating_add(1);
         }
@@ -366,5 +395,13 @@ where
             done = done.saturating_add(1);
         }
         Ok(Progress::Done)
+    }
+}
+
+/// `perms` with user access removed for a kernel-half page.
+const fn confine(page: Page, perms: Permissions) -> Permissions {
+    Permissions {
+        user: perms.user && page.is_user(),
+        ..perms
     }
 }

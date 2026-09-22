@@ -263,7 +263,7 @@ adapter.
 | Memory map | normalization, reserve selection | none |
 | Frame allocation | bitmap allocator, contiguous first-fit | none |
 | Page-table entries | `PageTableEntry(u64)` with typed flags, encode/decode, reserved-bit checks | none |
-| Page-table walk | `Mapper<A: FrameAccess, T: TlbControl, S: FrameSource>`: creates intermediate tables, maps, unmaps, frees empty tables, reports which pages need flushing | kernel: `FrameAccess` through the physical window, `TlbControl` with `invlpg`, `activate` writes `CR3`; loader: `FrameAccess` through the identity mapping, `TlbControl` as a no-op |
+| Page-table walk | `Mapper<A: FrameAccess, T: TlbControl, S: FrameSource>`: creates intermediate tables, maps, unmaps, frees empty tables, flushes each changed page through `TlbControl` | kernel: `FrameAccess` through the physical window, `TlbControl` with `invlpg`, `activate` writes `CR3`; loader: `FrameAccess` through the identity mapping, `TlbControl` as a no-op |
 | IPC buffer access | message encode/decode over `&mut [u8; 4096]` | `PhysicalWindow::frame_bytes_mut(frame)` |
 | Kernel stacks | stack pool bookkeeping, initial frame layout for a new thread written as `u64` values into a `&mut [u64]` | stack pointer switch |
 

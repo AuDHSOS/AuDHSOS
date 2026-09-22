@@ -89,14 +89,13 @@ impl fmt::Display for EntryError {
     }
 }
 
+/// Number of entries in one table, for every format.
+pub const ENTRIES: usize = 512;
+
 /// The format of one page-table entry.
 pub trait EntryFormat: Copy + Default + 'static {
     /// Number of translation levels.
     const LEVELS: usize;
-    /// Number of index bits per level.
-    const INDEX_BITS: u32;
-    /// Number of entries in one table.
-    const ENTRIES: usize;
     /// An entry that maps nothing.
     const EMPTY: Self;
 
@@ -123,12 +122,13 @@ pub trait EntryFormat: Copy + Default + 'static {
     #[must_use]
     fn with_permissions(self, perms: Permissions) -> Self;
 
-    /// Rejects entries this release cannot interpret.
+    /// Rejects entries this release cannot interpret; `level` counts the
+    /// way [`EntryFormat::index`] counts.
     ///
     /// # Errors
     ///
     /// [`EntryError`] for reserved bits and for large pages.
-    fn validate(self) -> Result<(), EntryError>;
+    fn validate(self, level: usize) -> Result<(), EntryError>;
 }
 
 /// One page table.
@@ -136,13 +136,13 @@ pub trait EntryFormat: Copy + Default + 'static {
 #[repr(C, align(4096))]
 pub struct PageTable<F: EntryFormat> {
     /// The entries, indexed by [`EntryFormat::index`].
-    pub entries: [F; 512],
+    pub entries: [F; ENTRIES],
 }
 
 impl<F: EntryFormat> Default for PageTable<F> {
     fn default() -> Self {
         PageTable {
-            entries: [F::EMPTY; 512],
+            entries: [F::EMPTY; ENTRIES],
         }
     }
 }
@@ -154,7 +154,7 @@ impl<F: EntryFormat> PageTable<F> {
         Self::default()
     }
 
-    /// The entry at `index`. An index at or above 512 is out of range and
+    /// The entry at `index`. An index at or above [`ENTRIES`] is out of range and
     /// reports the empty entry; [`EntryFormat::index`] never produces one.
     #[must_use]
     pub fn entry(&self, index: usize) -> F {
@@ -208,7 +208,8 @@ pub const X86_NO_CACHE: u64 = 1 << 4;
 pub const X86_ACCESSED: u64 = 1 << 5;
 /// Bit 6: the page was written.
 pub const X86_DIRTY: u64 = 1 << 6;
-/// Bit 7: the entry maps a large page.
+/// Bit 7: the entry maps a large page above level zero; PAT at level zero
+/// (Intel SDM Vol. 3A, 5.5.1, Table 5-20).
 pub const X86_HUGE: u64 = 1 << 7;
 /// Bit 8: the translation survives an address space switch.
 pub const X86_GLOBAL: u64 = 1 << 8;
@@ -262,16 +263,11 @@ impl fmt::Debug for X86Entry {
 /// Number of index bits per level on `x86_64`.
 const X86_INDEX_BITS: u32 = 9;
 
-/// Number of entries in one `x86_64` table.
-const X86_ENTRIES: usize = 512;
-
 /// The bits of one table index.
 const X86_INDEX_MASK: u64 = 0x1FF;
 
 impl EntryFormat for X86Entry {
     const LEVELS: usize = 4;
-    const INDEX_BITS: u32 = X86_INDEX_BITS;
-    const ENTRIES: usize = X86_ENTRIES;
     const EMPTY: Self = X86Entry(0);
 
     fn index(level: usize, page: Page) -> usize {
@@ -321,14 +317,14 @@ impl EntryFormat for X86Entry {
             .with(X86_NO_EXECUTE, !perms.execute)
     }
 
-    fn validate(self) -> Result<(), EntryError> {
+    fn validate(self, level: usize) -> Result<(), EntryError> {
         if !self.is_present() {
             return Ok(());
         }
         if self.0 & X86_RESERVED_MASK != 0 {
             return Err(EntryError::ReservedBits(self.0));
         }
-        if self.has(X86_HUGE) {
+        if level > 0 && self.has(X86_HUGE) {
             return Err(EntryError::HugePage);
         }
         Ok(())
@@ -337,3 +333,4 @@ impl EntryFormat for X86Entry {
 
 const _: () = assert!(PAGE_SHIFT == 12);
 const _: () = assert!(X86_ADDRESS_MASK & X86_RESERVED_MASK == 0);
+const _: () = assert!(ENTRIES == 1 << X86_INDEX_BITS);

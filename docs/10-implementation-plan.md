@@ -419,7 +419,7 @@ impl Permissions {
 pub enum CachePolicy { #[default] WriteBack, Uncached }
 pub enum EntryError { ReservedBits(u64), HugePage }
 pub trait EntryFormat: Copy + Default + 'static {
-    const LEVELS: usize; const INDEX_BITS: u32; const ENTRIES: usize; const EMPTY: Self;
+    const LEVELS: usize; const EMPTY: Self;
     fn index(level: usize, page: Page) -> usize;             // 9-bit slices of the page number
     fn is_present(self) -> bool;
     fn frame(self) -> Option<PhysFrame>;                      // None when the entry is not present
@@ -427,9 +427,10 @@ pub trait EntryFormat: Copy + Default + 'static {
     fn leaf(frame: PhysFrame, perms: Permissions, cache: CachePolicy, global: bool) -> Self;
     fn permissions(self) -> Permissions;
     fn with_permissions(self, perms: Permissions) -> Self;
-    fn validate(self) -> Result<(), EntryError>;              // reserved bits
+    fn validate(self, level: usize) -> Result<(), EntryError>; // reserved bits, large pages above level 0
 }
-#[repr(C, align(4096))] pub struct PageTable<F: EntryFormat> { pub entries: [F; 512] }
+pub const ENTRIES: usize = 512;
+#[repr(C, align(4096))] pub struct PageTable<F: EntryFormat> { pub entries: [F; ENTRIES] }
 impl<F: EntryFormat> PageTable<F> {
     pub fn new() -> Self;                                     // Default is the same
     pub fn entry(&self, index: usize) -> F;                   // F::EMPTY outside the table
@@ -462,7 +463,7 @@ is covered rather than assumed.
 ```rust
 pub struct Mapper<'a, F: EntryFormat, A: FrameAccess<PageTable<F>>, T: TlbControl, S: FrameSource> {
     root: PhysFrame, access: &'a mut A, tlb: &'a mut T, frames: &'a mut S, _format: PhantomData<fn() -> F> }
-pub enum MapError { AlreadyMapped, NotMapped, OutOfKernelMemory, UnreachableFrame, Entry(EntryError) }
+pub enum MapError { AlreadyMapped, NotMapped, OutOfKernelMemory, UnreachableFrame, Entry(EntryError), FrameOverflow }
 pub enum Progress { Done, Partial(u64) }
 impl Mapper {
     pub fn new(root: PhysFrame, access: &'a mut A, tlb: &'a mut T, frames: &'a mut S) -> Self;
@@ -474,7 +475,7 @@ impl Mapper {
     pub fn map_range(&mut self, pages: PageRange, first_frame: PhysFrame, perms: Permissions, cache: CachePolicy, budget: u64) -> Result<Progress, MapError>;
     pub fn unmap_range(&mut self, pages: PageRange, budget: u64) -> Result<Progress, MapError>;
 }
-impl From<MapError> for audhsos_abi::Error { /* AlreadyMapped, NotMapped, OutOfKernelMemory; UnreachableFrame and Entry -> InvalidArgument */ }
+impl From<MapError> for audhsos_abi::Error { /* AlreadyMapped, NotMapped, OutOfKernelMemory; UnreachableFrame, Entry, and FrameOverflow -> InvalidArgument */ }
 ```
 
 `map` walks the levels `LEVELS - 1` down to 1 and then writes the leaf at
@@ -491,7 +492,9 @@ entries are all empty, from the lowest level upward, never the root. Range
 operations stop after `budget` pages and return `Partial(done)`; `budget`
 is `MAX_PAGES_PER_CALL` in the kernel, and the pages a range operation
 processed before an error stay processed. The `global` bit is set when the
-page is a kernel page.
+page is a kernel page; the `user` bit of a kernel page is cleared in `map`
+and `protect`. `map_range` returns `FrameOverflow` before the first page
+when the last frame passes `MAX_FRAME_NUMBER`.
 
 **`address_space.rs`.**
 

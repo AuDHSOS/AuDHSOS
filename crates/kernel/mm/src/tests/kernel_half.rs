@@ -12,9 +12,9 @@ use kernel_hal_api::paging::FrameAccess;
 use kernel_types::{PhysAddr, PhysFrame};
 
 use crate::kernel_half::{
-    ENTRIES, FIRST_KERNEL_ENTRY, ShareError, entry_of, kernel_entries, share, shares_kernel_half,
+    FIRST_KERNEL_ENTRY, ShareError, entry_of, kernel_entries, share, shares_kernel_half,
 };
-use crate::page_table::{EntryFormat, PageTable, Permissions, X86Entry};
+use crate::page_table::{ENTRIES, EntryFormat, PageTable, Permissions, X86Entry};
 
 /// The tables the tests work on.
 type Tables = MemoryFrameAccess<PageTable<X86Entry>>;
@@ -177,6 +177,16 @@ fn a_root_that_is_not_reachable_is_reported_and_nothing_is_written() {
         audhsos_abi::Error::from(ShareError::Unreachable(missing)),
         audhsos_abi::Error::OutOfKernelMemory
     );
+}
+
+#[test]
+fn sharing_a_root_with_itself_changes_nothing() {
+    // Regression for #61: the copy runs one entry at a time, so the same
+    // root on both sides is read and written in turn.
+    let (mut tables, kernel, _) = roots();
+    let before = *tables.table(kernel).unwrap();
+    assert_eq!(share::<X86Entry, _>(&mut tables, kernel, kernel), Ok(2));
+    assert_eq!(*tables.table(kernel).unwrap(), before);
 }
 
 #[test]
