@@ -9,7 +9,7 @@ pub mod font;
 pub mod format;
 pub mod present;
 pub mod rect;
-#[cfg(feature = "test-strategies")]
+#[cfg(any(test, feature = "test-strategies"))]
 pub mod strategies;
 pub mod surface;
 

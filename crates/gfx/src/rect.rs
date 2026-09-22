@@ -133,7 +133,7 @@ impl Rect {
 /// it holds: presenting too much is slower, presenting too little is wrong.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Damage {
-    /// The rectangles, of which the first `len` count.
+    /// The rectangles, of which the first `len` count; the rest are empty.
     rects: [Rect; DAMAGE_CAPACITY],
     /// How many of them there are.
     len: usize,
@@ -169,7 +169,7 @@ impl Damage {
 
     /// Forgets everything, which is what presenting does.
     pub const fn clear(&mut self) {
-        self.len = 0;
+        *self = Damage::new();
     }
 
     /// The rectangles, in the order they were added.
@@ -184,15 +184,29 @@ impl Damage {
     }
 
     /// Records that `rect` changed. An empty rectangle changes nothing.
+    ///
+    /// The union with an overlapped held rectangle absorbs every other held
+    /// rectangle it overlaps, so no two held rectangles overlap. O(n²) for n
+    /// held rectangles.
     pub fn push(&mut self, rect: Rect) {
         if rect.is_empty() {
             return;
         }
-        for held in self.rects.iter_mut().take(self.len) {
-            if held.overlaps(rect) {
-                *held = held.union(rect);
-                return;
+        let first = self.iter().position(|held| held.overlaps(rect));
+        if let Some(mut slot) = first {
+            let held = self.rects.get(slot).copied().unwrap_or(Rect::EMPTY);
+            let mut merged = held.union(rect);
+            while let Some(index) = self.overlapping(merged, slot) {
+                merged = merged.union(self.rects.get(index).copied().unwrap_or(Rect::EMPTY));
+                self.remove(index);
+                if index < slot {
+                    slot = slot.saturating_sub(1);
+                }
             }
+            if let Some(held) = self.rects.get_mut(slot) {
+                *held = merged;
+            }
+            return;
         }
         if let Some(slot) = self.rects.get_mut(self.len) {
             *slot = rect;
@@ -202,5 +216,24 @@ impl Damage {
         let bounds = self.bounds().union(rect);
         self.clear();
         self.push(bounds);
+    }
+
+    /// The first held rectangle other than the one at `slot` that overlaps
+    /// `rect`.
+    fn overlapping(&self, rect: Rect, slot: usize) -> Option<usize> {
+        self.iter()
+            .enumerate()
+            .position(|(index, held)| index != slot && held.overlaps(rect))
+    }
+
+    /// Removes the held rectangle at `index`, keeping the order of the rest.
+    fn remove(&mut self, index: usize) {
+        if let Some(rest) = self.rects.get_mut(index..self.len) {
+            rest.rotate_left(1);
+            if let Some(last) = rest.last_mut() {
+                *last = Rect::EMPTY;
+            }
+            self.len = self.len.saturating_sub(1);
+        }
     }
 }
