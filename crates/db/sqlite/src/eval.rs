@@ -165,6 +165,10 @@ impl Error {
                 alloc::format!("hex literal too big: {}", shown(text))
             }
             Error::BadEscape => "ESCAPE expression must be a single character".to_string(),
+            // `SQLITE_TOOBIG` of `sqlite3VdbeMemTooBig`, which the
+            // library writes these words for.
+            Error::TooBig => "string or blob too big".to_string(),
+            Error::PatternTooBig => "LIKE or GLOB pattern too complex".to_string(),
             Error::Overflow => "integer overflow".to_string(),
             Error::Json(refused) => refused.message(),
             Error::Regexp(why) => (*why).to_string(),
@@ -353,6 +357,13 @@ pub trait Row {
         false
     }
 
+    /// The limits the connection holds, which a value the statement
+    /// answers is held to and a connection told nothing holds the hard
+    /// limits of the build for.
+    fn limits(&self) -> crate::db::Limits {
+        crate::db::Limits::new()
+    }
+
     /// The first row the statement `select` answers, each value with
     /// the affinity and the collation a comparison against it uses,
     /// which is what a row compared against `(SELECT a, b)` compares
@@ -376,6 +387,7 @@ fn given_of(row: &dyn Row) -> func::Given<'_> {
         counted: row.counted(),
         clock: row.told(),
         sensitive: row.sensitive(),
+        limits: row.limits(),
     }
 }
 
@@ -814,7 +826,12 @@ fn called(
 ///
 /// Reading one costs O(n) in the bytes it was written with.
 fn plain_literal(literal: Literal, sql: &[u8], row: &dyn Row) -> Result<Answer, Error> {
-    literal_value(literal, sql, false, row.told()).map(Answer::plain)
+    let held = literal_value(literal, sql, false, row.told())?;
+    // A literal longer than the length the connection holds is refused,
+    // which `sqlite3VdbeMemTooBig` refuses the value of every statement
+    // for.
+    crate::func::held_length(&held, row.limits())?;
+    Ok(Answer::plain(held))
 }
 
 /// A constant, with `negated` for the minus sign the parser leaves as a
@@ -1178,7 +1195,13 @@ fn binary(
         | BinaryOp::Multiply
         | BinaryOp::Divide
         | BinaryOp::Modulo => arithmetic(op, &left.value, &right.value),
-        BinaryOp::Concat => concatenate(&left.value, &right.value),
+        BinaryOp::Concat => {
+            let held = concatenate(&left.value, &right.value);
+            // `sqlite3VdbeMemTooBig` holds the text two values make to
+            // the length the connection holds.
+            crate::func::held_length(&held, row.limits())?;
+            held
+        }
         BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::LShift | BinaryOp::RShift => {
             bitwise(op, &left.value, &right.value)
         }

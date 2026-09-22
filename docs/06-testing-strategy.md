@@ -7074,3 +7074,12 @@ Document 16 step Q8.
   number no limit carries, a value the build takes, one above the hard
   limit, one below the smallest a limit takes, a value below nought, and
   an `ATTACH` past the databases the limit holds the connection to.
+
+### 6.6.295 The length a value is held to (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A blob of noughts longer than the limit, the text a quote grew, the
+  text two values make, a literal, the text a replacement grew, the text
+  a `group_concat` grew, a value the limit holds, a value that is no
+  text, and a pattern longer than the limit of its own.

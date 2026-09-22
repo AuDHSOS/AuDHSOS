@@ -2880,6 +2880,7 @@ impl Session {
                     .defining(defines)
                     .grouping(GROUPED)
                     .sensitively(writer.sensitive())
+                    .limited(writer.limits())
                     .encoded(writer.encoding())
                     .journalling(writer.journalled())
                     .in_zone(zoned);
@@ -3629,6 +3630,7 @@ fn answered_rows(
         let naming = writer.naming();
         let journalled = writer.journalled();
         let sensitive = writer.sensitive();
+        let limits = writer.limits();
         let asks = writer.asking();
         let held = writer.clock();
         let answered = opened
@@ -3639,6 +3641,7 @@ fn answered_rows(
                     .defining(defines)
                     .grouping(GROUPED)
                     .sensitively(sensitive)
+                    .limited(limits)
                     .encoded(encoding)
                     .journalling(journalled)
                     .in_zone(zoned);

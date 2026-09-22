@@ -1039,6 +1039,9 @@ Size: L.
 148. The limits a connection holds, which `sqlite3_limit` reads and
      sets, and the `ATTACH` one of them holds. Built, which D-427
      records; the other limits are read and not yet held to.
+149. The length of a value and the length of a pattern, which the limits
+     of the connection hold every statement to. Built, which D-428
+     records.
 
 ### Done when
 

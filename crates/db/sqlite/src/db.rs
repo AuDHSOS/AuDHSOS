@@ -1908,6 +1908,9 @@ pub struct Database<'a> {
     /// Whether `LIKE` tells the twenty-six letters apart, which
     /// `PRAGMA case_sensitive_like` on the connection that writes sets.
     sensitive: bool,
+    /// The limits the connection holds, which `sqlite3_limit` sets and a
+    /// value the statement answers is held to.
+    limits: Limits,
     /// The function `sqlite3_set_authorizer` told the connection, which
     /// every statement is read against.
     asking: Option<crate::auth::Asking>,
@@ -2305,6 +2308,7 @@ impl<'a> Database<'a> {
             clock: None,
             zone: None,
             sensitive: false,
+            limits: Limits::new(),
             asking: None,
             ignored: core::cell::RefCell::new(Vec::new()),
             stepped: core::cell::Cell::new(Stepped::default()),
@@ -2511,6 +2515,15 @@ impl<'a> Database<'a> {
     #[must_use]
     pub const fn sensitively(mut self, sensitive: bool) -> Self {
         self.sensitive = sensitive;
+        self
+    }
+
+    /// The same database, read under the limits the connection holds,
+    /// which `sqlite3_limit` sets and a value the statement answers is
+    /// held to.
+    #[must_use]
+    pub const fn limited(mut self, limits: Limits) -> Self {
+        self.limits = limits;
         self
     }
 
@@ -4923,7 +4936,12 @@ impl<'a> Database<'a> {
         for group in &groups {
             let mut answers = Vec::new();
             for (call, accumulator) in calls.iter().zip(&group.accumulators) {
-                answers.push((call.id, accumulator.finish()?));
+                let held = accumulator.finish()?;
+                // The text a `group_concat` grew is held to the length
+                // the connection holds, which
+                // `sqlite3VdbeMemTooBig` holds every value to.
+                crate::func::held_length(&held, self.limits)?;
+                answers.push((call.id, held));
             }
             // A group that kept no row answers `NULL` for every column
             // of it, which is the accumulator never loaded.
@@ -10114,6 +10132,10 @@ impl eval::Row for Cursor<'_> {
         self.reach.database.sensitive
     }
 
+    fn limits(&self) -> Limits {
+        self.reach.database.limits
+    }
+
     fn grouped(&self) -> &'static [crate::func::Grouped] {
         self.reach.database.grouped
     }
@@ -10899,7 +10921,9 @@ fn accumulated(
         }
         accumulator.step(&values, &carried, collation)?;
     }
-    Ok(accumulator.finish()?)
+    let held = accumulator.finish()?;
+    crate::func::held_length(&held, crate::eval::Row::limits(cursor))?;
+    Ok(held)
 }
 
 /// What one window function call answers for the row at `at` of its

@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` holds every value a statement answers to
+  `SQLITE_LIMIT_LENGTH` and every pattern to
+  `SQLITE_LIMIT_LIKE_PATTERN_LENGTH`. D-428 records it. Catalog 6.6.295.
+  `sqllimits1.test` goes from 48 cases passing to 64 and
+  `zeroblob.test` from 35 to 37.
+
 - `db-sqlite` holds the thirteen limits of a connection, which
   `sqlite3_limit` reads and sets and which an `ATTACH` is held to.
   D-427 records it. Catalog 6.6.294. `sqllimits1.test` goes from no case

@@ -1003,6 +1003,9 @@ pub struct Given<'a> {
     /// Whether `like` tells the twenty-six letters apart, which
     /// `PRAGMA case_sensitive_like` sets.
     pub sensitive: bool,
+    /// The limits the connection holds, which the value a function
+    /// answers is held to.
+    pub limits: crate::db::Limits,
 }
 
 /// What `function` answers for `args`, under `collation` where it
@@ -1028,10 +1031,11 @@ pub fn call(
         counted,
         clock,
         sensitive,
+        limits,
     } = given;
     let arg = |at: usize| args.get(at).cloned().unwrap_or(Value::Null);
     let first = arg(0);
-    Ok((
+    let answered = (
         match function {
             Function::Date => crate::date::date(args, clock),
             Function::Time => crate::date::time(args, clock),
@@ -1115,20 +1119,20 @@ pub fn call(
                 // `randomBlob` answers one byte where the count is less
                 // than one, which `randomblob(NULL)` is.
                 let count = first.to_integer().max(1);
-                let count = usize::try_from(count).map_err(|_| Error::TooBig)?;
-                if count > MAX_LENGTH {
+                if count > limits.of(crate::db::Limit::Length) {
                     return Err(Error::TooBig);
                 }
+                let count = usize::try_from(count).map_err(|_| Error::TooBig)?;
                 Value::Blob(source.bytes(count))
             }
             Function::Zeroblob => {
                 // `sqlite3_value_int64` of a `NULL` is nought, so a blob of
                 // no bytes is what `zeroblob(NULL)` answers.
                 let count = first.to_integer().max(0);
-                let count = usize::try_from(count).map_err(|_| Error::TooBig)?;
-                if count > MAX_LENGTH {
+                if count > limits.of(crate::db::Limit::Length) {
                     return Err(Error::TooBig);
                 }
+                let count = usize::try_from(count).map_err(|_| Error::TooBig)?;
                 Value::Blob(alloc::vec![0u8; count])
             }
             Function::Abs => match first {
@@ -1231,7 +1235,7 @@ pub fn call(
                     },
                 }
             }
-            Function::Replace => replace(&first, &arg(1), &arg(2)),
+            Function::Replace => replace(&first, &arg(1), &arg(2), limits)?,
             Function::Instr => instr(&first, &arg(1)),
             Function::Substr => substr(&first, &arg(1), args.get(2)),
             Function::Hex => match first {
@@ -1304,12 +1308,38 @@ pub fn call(
                 }
             },
             Function::Like | Function::Glob => {
-                return pattern(function, args, sensitive).map(|value| (value, false));
+                return pattern(function, args, sensitive, limits).map(|value| (value, false));
             }
             Function::Json { which, binary } => return json_call(which, binary, args, carried),
         },
         false,
-    ))
+    );
+    // `sqlite3VdbeMemTooBig` of `research/sqlite/src/vdbemem.c` holds
+    // every value a statement answers to the length the connection
+    // holds, so a call that grew one past it is refused.
+    held_length(&answered.0, limits)?;
+    Ok(answered)
+}
+
+/// Refuses a value longer than the length the limits of the connection
+/// hold it to, which `sqlite3VdbeMemTooBig` of
+/// `research/sqlite/src/vdbemem.c` refuses `SQLITE_TOOBIG` for.
+///
+/// Reading the length costs O(1).
+///
+/// # Errors
+///
+/// [`Error::TooBig`] names nothing but the length.
+pub fn held_length(value: &Value, limits: crate::db::Limits) -> Result<(), Error> {
+    let held = match value {
+        Value::Text(bytes) | Value::Blob(bytes) => bytes.len(),
+        _ => return Ok(()),
+    };
+    let most = usize::try_from(limits.of(crate::db::Limit::Length)).unwrap_or(MAX_LENGTH);
+    if held > most {
+        return Err(Error::TooBig);
+    }
+    Ok(())
 }
 
 /// One call of the JSON family, which answers whether what it
@@ -1443,17 +1473,31 @@ fn trim(bytes: &[u8], set: &[u8], left: bool, right: bool) -> Vec<u8> {
 }
 
 /// `replace(X,Y,Z)`, which works in bytes and answers text.
-fn replace(subject: &Value, pattern: &Value, with: &Value) -> Value {
+fn replace(
+    subject: &Value,
+    pattern: &Value,
+    with: &Value,
+    limits: crate::db::Limits,
+) -> Result<Value, Error> {
     let (Some(bytes), Some(needle)) = (subject.text(), pattern.text()) else {
-        return Value::Null;
+        return Ok(Value::Null);
     };
     // An empty pattern answers before the replacement is even read.
     if needle.first().is_none_or(|byte| *byte == 0) {
-        return Value::Text(bytes);
+        return Ok(Value::Text(bytes));
     }
     let Some(replacement) = with.text() else {
-        return Value::Null;
+        return Ok(Value::Null);
     };
+    // `replaceFunc` of `research/sqlite/src/func.c` counts the bytes the
+    // answer holds before it writes one of them, because a replacement
+    // that grows the text past the length the connection holds is
+    // refused rather than written.
+    let held = counted_bytes(&bytes, &needle, replacement.len());
+    let most = usize::try_from(limits.of(crate::db::Limit::Length)).unwrap_or(MAX_LENGTH);
+    if held > most {
+        return Err(Error::TooBig);
+    }
     let mut out = Vec::new();
     let mut at = 0;
     while at < bytes.len() {
@@ -1465,7 +1509,26 @@ fn replace(subject: &Value, pattern: &Value, with: &Value) -> Value {
             at = at.saturating_add(1);
         }
     }
-    Value::Text(out)
+    Ok(Value::Text(out))
+}
+
+/// How many bytes a text holds once every run of `needle` in it is one
+/// of `held` bytes, which is what `replace` answers.
+///
+/// Counting them costs O(n) in the bytes of the text.
+fn counted_bytes(bytes: &[u8], needle: &[u8], held: usize) -> usize {
+    let mut out: usize = 0;
+    let mut at: usize = 0;
+    while at < bytes.len() {
+        if bytes.get(at..at.saturating_add(needle.len())) == Some(needle) {
+            out = out.saturating_add(held);
+            at = at.saturating_add(needle.len());
+        } else {
+            out = out.saturating_add(1);
+            at = at.saturating_add(1);
+        }
+    }
+    out
 }
 
 /// `instr(X,Y)`, which counts characters for text and bytes for blobs.
@@ -1688,7 +1751,12 @@ struct Pattern {
 /// `like(P,X[,E])` and `glob(P,X)`, with `sensitive` for the connection
 /// that registered `like` through `sqlite3RegisterLikeFunctions` with
 /// the twenty-six letters told apart.
-fn pattern(function: Function, args: &[Value], sensitive: bool) -> Result<Value, Error> {
+fn pattern(
+    function: Function,
+    args: &[Value],
+    sensitive: bool,
+    limits: crate::db::Limits,
+) -> Result<Value, Error> {
     let mut info = if function == Function::Glob {
         Pattern {
             many: u32::from(b'*'),
@@ -1704,7 +1772,8 @@ fn pattern(function: Function, args: &[Value], sensitive: bool) -> Result<Value,
             fold: !sensitive,
         }
     };
-    if args.first().and_then(Value::text).unwrap_or_default().len() > MAX_PATTERN {
+    let most = usize::try_from(limits.of(crate::db::Limit::LikePattern)).unwrap_or(MAX_PATTERN);
+    if args.first().and_then(Value::text).unwrap_or_default().len() > most {
         return Err(Error::PatternTooBig);
     }
     let mut other = info.set;

@@ -1134,6 +1134,15 @@ impl Writer {
         self.limits = limits;
     }
 
+    /// The limits the connection holds, which a caller reads back to
+    /// tell a reader of its own the same ones.
+    ///
+    /// Reading them costs O(1).
+    #[must_use]
+    pub const fn limits(&self) -> crate::db::Limits {
+        self.limits
+    }
+
     /// The zone the caller told the connection, and nothing where the
     /// caller told it none.
     ///
@@ -1628,6 +1637,35 @@ impl Writer {
         Ok(())
     }
 
+    /// One row of a table as an expression reads it: the values and the
+    /// key of the row, the row of a side beside it, and the database a
+    /// statement written under the expression is answered against.
+    fn reading_row<'a>(
+        &'a self,
+        row: (&'a Table, &'a [Value], Option<i64>),
+        outer: Option<&'a dyn crate::eval::Row>,
+        reading: Option<Reading<'a>>,
+    ) -> Held<'a> {
+        let (table, values, rowid) = row;
+        Held {
+            table,
+            values,
+            rowid,
+            encoding: self.held.header.encoding,
+            random: &self.random,
+            clock: self.clock.map(crate::date::julian_of),
+            zone: self.zone,
+            sensitive: self.truth.sensitive,
+            limits: self.limits,
+            counted: self.counted,
+            defined: self.defined,
+            grouped: self.grouped,
+            collating: self.collating,
+            outer,
+            reading,
+        }
+    }
+
     /// The file an `ATTACH` names: a database of one page where the name
     /// is `:memory:` or no bytes at all, and the image the opening
     /// function answers otherwise.
@@ -2044,6 +2082,7 @@ impl Writer {
             clock: self.clock.map(crate::date::julian_of),
             zone: self.zone,
             sensitive: self.truth.sensitive,
+            limits: self.limits,
             counted: self.counted,
             defined: self.defined,
             grouped: self.grouped,
@@ -2839,6 +2878,7 @@ impl Writer {
             .defining(self.defined)
             .grouping(self.grouped)
             .sensitively(self.truth.sensitive)
+            .limited(self.limits)
             .named_main(&self.called.name);
         Ok(match self.clock {
             Some(seconds) => database.clocked(seconds),
@@ -6563,6 +6603,7 @@ impl Writer {
                         clock: self.clock.map(crate::date::julian_of),
                         zone: self.zone,
                         sensitive: self.truth.sensitive,
+                        limits: self.limits,
                         counted: self.counted,
                         defined: self.defined,
                         grouped: self.grouped,
@@ -6647,6 +6688,7 @@ impl Writer {
                     clock: self.clock.map(crate::date::julian_of),
                     zone: self.zone,
                     sensitive: self.truth.sensitive,
+                    limits: self.limits,
                     counted: self.counted,
                     defined: self.defined,
                     grouped: self.grouped,
@@ -6719,6 +6761,7 @@ impl Writer {
             clock: self.clock.map(crate::date::julian_of),
             zone: self.zone,
             sensitive: self.truth.sensitive,
+            limits: self.limits,
             counted: self.counted,
             defined: self.defined,
             grouped: self.grouped,
@@ -7297,6 +7340,7 @@ impl Writer {
                     clock: self.clock.map(crate::date::julian_of),
                     zone: self.zone,
                     sensitive: self.truth.sensitive,
+                    limits: self.limits,
                     counted: self.counted,
                     defined: self.defined,
                     grouped: self.grouped,
@@ -8367,6 +8411,9 @@ struct Held<'a> {
     /// Whether `LIKE` tells the twenty-six letters apart, which
     /// `PRAGMA case_sensitive_like` sets.
     sensitive: bool,
+    /// The limits the connection holds, which a value the statement
+    /// answers is held to.
+    limits: crate::db::Limits,
     /// What the connection has written, which `changes()`,
     /// `total_changes()` and `last_insert_rowid()` answer.
     counted: crate::func::Counted,
@@ -8411,6 +8458,10 @@ impl crate::eval::Row for Held<'_> {
 
     fn sensitive(&self) -> bool {
         self.sensitive
+    }
+
+    fn limits(&self) -> crate::db::Limits {
+        self.limits
     }
 
     fn counted(&self) -> crate::func::Counted {
@@ -9095,6 +9146,7 @@ impl Writer {
                     clock: self.clock.map(crate::date::julian_of),
                     zone: self.zone,
                     sensitive: self.truth.sensitive,
+                    limits: self.limits,
                     counted: self.counted,
                     defined: self.defined,
                     grouped: self.grouped,
@@ -9231,29 +9283,18 @@ impl Writer {
                     values: row,
                     outer,
                 });
-                let held = Held {
-                    table,
-                    values: &values,
-                    rowid: Some(rowid),
-                    encoding: self.held.header.encoding,
-                    random: &self.random,
-                    clock: self.clock.map(crate::date::julian_of),
-                    zone: self.zone,
-                    sensitive: self.truth.sensitive,
-                    counted: self.counted,
-                    defined: self.defined,
-                    grouped: self.grouped,
-                    collating: self.collating,
-                    outer: aside
+                let held = self.reading_row(
+                    (table, &values, Some(rowid)),
+                    aside
                         .as_ref()
                         .map(|one| -> &dyn crate::eval::Row { one })
                         .or(outer),
-                    reading: Some(Reading {
+                    Some(Reading {
                         database: &database,
                         arena,
                         sql,
                     }),
-                };
+                );
                 let keep = match statement.filter {
                     None => true,
                     Some(filter) => {
@@ -9677,6 +9718,7 @@ impl Writer {
             clock: self.clock.map(crate::date::julian_of),
             zone: self.zone,
             sensitive: self.truth.sensitive,
+            limits: self.limits,
             counted: self.counted,
             defined: self.defined,
             grouped: self.grouped,

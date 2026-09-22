@@ -67,6 +67,7 @@ fn quoted(value: &Value) -> String {
             counted: crate::func::Counted::default(),
             clock: crate::date::Told::default(),
             sensitive: false,
+            limits: crate::db::Limits::new(),
         },
     )
     .expect("a function that always answers");

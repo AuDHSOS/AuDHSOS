@@ -78,6 +78,9 @@ fn what_an_attach_is_held_to() {
     let mut limits = Limits::new();
     limits.set(Limit::AttachedDatabases, 2);
     writer.limited(limits);
+    // The limits the connection holds are read back, which a caller
+    // tells a reader of its own.
+    assert_eq!(writer.limits().of(Limit::AttachedDatabases), 2);
     writer.run(b"ATTACH ':memory:' AS one").unwrap();
     writer.run(b"ATTACH ':memory:' AS two").unwrap();
     assert_eq!(
@@ -101,4 +104,89 @@ fn what_an_attach_is_held_to() {
             .message(),
         "too many attached databases - max 10"
     );
+}
+
+/// What a statement answers under the limits, or the message it is
+/// refused with.
+fn answered(limits: Limits, sql: &[u8]) -> Result<alloc::string::String, alloc::string::String> {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(x)").unwrap();
+    writer
+        .run(b"INSERT INTO t VALUES('aaaaaaaaaa'),('bbbbbbbbbb')")
+        .unwrap();
+    let bytes = writer.written();
+    let database = crate::db::Database::open(&bytes)
+        .unwrap()
+        .limited(limits)
+        .clocked(0);
+    match database.query(sql) {
+        Ok(answer) => Ok(alloc::string::String::from_utf8_lossy(
+            &answer
+                .rows
+                .first()
+                .and_then(|row| row.first())
+                .and_then(crate::value::Value::text)
+                .unwrap_or_default(),
+        )
+        .into_owned()),
+        Err(refusal) => Err(refusal.message()),
+    }
+}
+
+/// A value longer than the length the connection holds is refused,
+/// wherever the statement grew it.
+#[test]
+fn what_a_value_longer_than_the_limit_is_refused_with() {
+    let mut limits = Limits::new();
+    limits.set(Limit::Length, 30);
+    let too_big = alloc::string::String::from("string or blob too big");
+    // A blob of noughts, the text a quote grew, the text two values
+    // make, a literal, the text a replacement grew, and the text a
+    // `group_concat` grew.
+    assert_eq!(
+        answered(limits, b"SELECT zeroblob(31)"),
+        Err(too_big.clone())
+    );
+    assert_eq!(
+        answered(limits, b"SELECT quote(zeroblob(20))"),
+        Err(too_big.clone())
+    );
+    assert_eq!(
+        answered(limits, b"SELECT 'aaaaaaaaaaaaaaa' || 'bbbbbbbbbbbbbbbb'"),
+        Err(too_big.clone())
+    );
+    assert_eq!(
+        answered(limits, b"SELECT 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'"),
+        Err(too_big.clone())
+    );
+    assert_eq!(
+        answered(
+            limits,
+            b"SELECT replace('ab', 'a', 'cccccccccccccccccccccccccccccc')"
+        ),
+        Err(too_big.clone())
+    );
+    assert_eq!(
+        answered(limits, b"SELECT group_concat(x || x) FROM t"),
+        Err(too_big)
+    );
+    // A value the limit holds is answered, and so is one that is no text
+    // at all.
+    assert_eq!(answered(limits, b"SELECT zeroblob(4)").map(|_| 0), Ok(0));
+    assert_eq!(
+        answered(limits, b"SELECT length(x) FROM t"),
+        Ok("10".into())
+    );
+    assert_eq!(
+        answered(limits, b"SELECT replace('ab', 'a', 'cc')"),
+        Ok("ccb".into())
+    );
+    assert_eq!(answered(limits, b"SELECT 'ab' || 'cd'"), Ok("abcd".into()));
+    // The pattern of a `LIKE` is held to a limit of its own.
+    limits.set(Limit::LikePattern, 4);
+    assert_eq!(
+        answered(limits, b"SELECT 'abcdefgh' LIKE 'abcde%'"),
+        Err("LIKE or GLOB pattern too complex".into())
+    );
+    assert_eq!(answered(limits, b"SELECT 'ab' LIKE 'ab'"), Ok("1".into()));
 }
