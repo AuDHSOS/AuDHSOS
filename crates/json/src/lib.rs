@@ -22,7 +22,7 @@ pub struct Limits {
     pub input: usize,
     /// Maximum total nodes in the flat arena.
     pub nodes: usize,
-    /// Maximum container nesting (also hard-capped at 48).
+    /// Maximum nested containers (also hard-capped at 48).
     pub depth: usize,
     /// Maximum total decoded string/key units.
     pub strings: usize,
@@ -134,7 +134,7 @@ impl Parser<'_, '_> {
         Ok(())
     }
     fn value(&mut self, depth: usize) -> Result<usize, Error> {
-        if depth > self.limits.depth.min(48) || self.nodes.len() >= self.limits.nodes {
+        if self.nodes.len() >= self.limits.nodes {
             return Err(Error::Limit);
         }
         self.space()?;
@@ -155,7 +155,7 @@ impl Parser<'_, '_> {
             Some(34) => Kind::String(self.string()?),
             Some(45 | 48..=57) => self.number()?,
             Some(91) => {
-                self.bump()?;
+                self.open(depth)?;
                 self.space()?;
                 let mut items = Vec::new();
                 if !self.eat(93)? {
@@ -171,14 +171,15 @@ impl Parser<'_, '_> {
                 Kind::Array(items)
             }
             Some(123) => {
-                self.bump()?;
+                self.open(depth)?;
                 self.space()?;
                 let mut items = Vec::new();
                 if !self.eat(125)? {
                     loop {
                         self.space()?;
-                        self.need(34)?;
-                        self.at = self.at.saturating_sub(1);
+                        if self.peek() != Some(34) {
+                            return Err(Error::Syntax(self.at));
+                        }
                         let name = self.string()?;
                         self.space()?;
                         self.need(58)?;
@@ -204,6 +205,13 @@ impl Parser<'_, '_> {
             source: start..self.at,
         });
         Ok(index)
+    }
+    /// Consumes a container's opening unit; `depth` counts enclosing containers.
+    fn open(&mut self, depth: usize) -> Result<(), Error> {
+        if depth >= self.limits.depth.min(48) {
+            return Err(Error::Limit);
+        }
+        self.bump().map(drop)
     }
     fn word(&mut self, word: &str) -> Result<(), Error> {
         for u in word.encode_utf16() {

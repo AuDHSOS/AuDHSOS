@@ -13,6 +13,7 @@ fuzz_support::fuzz_target!(|bytes: &[u8]| {
         let mut work=100_000;
         if let Ok(doc)=parse(text,limits,&mut work){
             assert_eq!(doc.root,doc.nodes.len()-1);
+            assert_eq!(usize::try_from(100_000-work).unwrap(),text.len());
             for (index,node)in doc.nodes.iter().enumerate(){
                 assert!(node.source.start<node.source.end&&node.source.end<=text.len());
                 match &node.kind{
