@@ -9,10 +9,11 @@ The parse result is a flat postorder arena, so destruction does not recursively
 walk attacker-controlled nesting. Containers hold child indices and object
 members retain source order and duplicates; the embedding applies its own
 duplicate-key policy. Every node retains its exact source range for revivers.
-Parsing is O(n) in input units with bounded nesting (hard cap 48), node count,
-input length and total decoded string storage. A caller-supplied work counter
-bounds parsing and quoting. Quoting appends to a bounded output buffer. Logical
-limits do not catch allocator OOM; the embedding still needs a memory quota.
+Parsing is O(n) in input units with at most 48 nested containers, bounded node
+count, input length and total decoded string storage. A caller-supplied work
+counter bounds parsing and quoting; parsing charges one unit per input unit.
+Quoting appends to a bounded output buffer. Logical limits do not catch
+allocator OOM; the embedding still needs a memory quota.
 
 This crate does not implement JavaScript object hooks or JSON.stringify's
 property traversal. Those live in jrs. The xtask QMP-specific integer-only JSON

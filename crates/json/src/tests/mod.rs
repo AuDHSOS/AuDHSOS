@@ -150,3 +150,73 @@ fn quotas() {
     assert_eq!(quote(&mut Vec::new(), &[1], 1, &mut 100), Err(Error::Limit));
     assert_eq!(quote(&mut Vec::new(), &[1], 100, &mut 0), Err(Error::Limit));
 }
+fn units(s: &str) -> Vec<u16> {
+    s.encode_utf16().collect()
+}
+// #401: the depth limit counts containers.
+#[test]
+fn depth_cap_counts_containers() {
+    let nest = |n: usize, inner: &str| format!("{}{inner}{}", "[".repeat(n), "]".repeat(n));
+    for (text, ok) in [
+        (nest(48, ""), true),
+        (nest(48, "0"), true),
+        (nest(49, ""), false),
+        (nest(49, "0"), false),
+        (format!("{}0{}", "{\"a\":".repeat(48), "}".repeat(48)), true),
+        (
+            format!("{}0{}", "{\"a\":".repeat(49), "}".repeat(49)),
+            false,
+        ),
+    ] {
+        let r = parse(&units(&text), Limits::default(), &mut 100_000);
+        assert_eq!(r.is_ok(), ok, "{text}");
+    }
+    let capped = |depth, text: &str| {
+        parse(
+            &units(text),
+            Limits {
+                depth,
+                ..Limits::default()
+            },
+            &mut 100,
+        )
+        .is_ok()
+    };
+    assert!(capped(0, "0"));
+    assert!(!capped(0, "[]"));
+    assert!(capped(1, "[0]"));
+    assert!(!capped(1, "[[]]"));
+    assert!(!capped(100, &nest(49, "")));
+}
+// #403: parsing charges one work unit per input unit.
+#[test]
+fn work_equals_input_length() {
+    for text in [
+        "{\"a\":1}",
+        "{\"a\":1,\"b\":2}",
+        "[\"a\",1]",
+        " { \"a\" : [ {\"b\":\"c\"} ] } ",
+    ] {
+        let input = units(text);
+        let len = u64::try_from(input.len()).unwrap();
+        let mut work = len;
+        assert!(
+            parse(&input, Limits::default(), &mut work).is_ok(),
+            "{text}"
+        );
+        assert_eq!(work, 0, "{text}");
+        assert_eq!(
+            parse(&input, Limits::default(), &mut (len - 1)).err(),
+            Some(Error::Limit),
+            "{text}"
+        );
+    }
+    assert_eq!(
+        parse(&units("{1:2}"), Limits::default(), &mut 100).err(),
+        Some(Error::Syntax(1))
+    );
+    assert_eq!(
+        parse(&units("{\"a\":1,}"), Limits::default(), &mut 100).err(),
+        Some(Error::Syntax(7))
+    );
+}
