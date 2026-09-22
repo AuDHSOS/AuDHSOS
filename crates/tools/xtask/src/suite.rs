@@ -992,6 +992,11 @@ struct Session {
     /// connection, sorted, which `sqlite3_sort_count` counts and
     /// `::sqlite_sort_count` answers.
     sorted: u64,
+    /// How many times a commit held a file on the disk since the tester
+    /// last counted from nought, which `sqlite3_sync_count` counts and
+    /// `::sqlite_sync_count` answers, and how many of those the
+    /// connection was under `PRAGMA fullfsync` for.
+    synced: (u64, u64),
     /// The descents and the steps the last statement of the run took,
     /// which `sqlite3_search_count` counts and `::sqlite_search_count`
     /// answers.
@@ -1051,6 +1056,7 @@ impl Session {
             waiting: BTreeSet::new(),
             stepped: BTreeMap::new(),
             sorted: 0,
+            synced: (0, 0),
             searched: 0,
             pragmas: BTreeMap::new(),
             collations: BTreeMap::new(),
@@ -1176,6 +1182,18 @@ impl Session {
             "status" => self.status(first, second),
             // `sqlite3_sort_count` of `vdbe.c:79`.
             "sorts" => Ok(alloc_one(&self.sorted.to_string())),
+            // `sqlite3_sync_count` and `sqlite3_fullsync_count` of
+            // `research/sqlite/src/os_unix.c`.
+            "syncs" => Ok(alloc_one(&self.synced.0.to_string())),
+            "fullsyncs" => Ok(alloc_one(&self.synced.1.to_string())),
+            "syncs_as" => {
+                self.synced.0 = u64::try_from(number_of(first)?).unwrap_or(0);
+                Ok(Vec::new())
+            }
+            "fullsyncs_as" => {
+                self.synced.1 = u64::try_from(number_of(first)?).unwrap_or(0);
+                Ok(Vec::new())
+            }
             // `sqlite3_search_count` of `vdbe.c:56`.
             "searches" => Ok(alloc_one(&self.searched.to_string())),
             "clock" => self.ticks(first),
@@ -2331,14 +2349,28 @@ impl Session {
         } else {
             self.waiting.remove(name);
         }
+        // `sqlite3OsSync` counts every sync, and counts it twice where
+        // `PRAGMA fullfsync` says the file is held on the disk of the
+        // machine rather than in the cache of its driver.
+        let syncs = writer
+            .did()
+            .iter()
+            .filter(|held| matches!(held, Does::Sync(_)))
+            .count();
         let counted = writer.counts();
         let kept = writer.kept();
+        let full = kept.fullfsync();
         let began = writer.began();
         let files = writer.attached_files();
         if began {
             self.owners.entry(path.clone()).or_insert(name.to_owned());
         } else {
             self.owners.remove(&path);
+        }
+        let syncs = u64::try_from(syncs).unwrap_or(0);
+        self.synced.0 = self.synced.0.saturating_add(syncs);
+        if full {
+            self.synced.1 = self.synced.1.saturating_add(syncs);
         }
         let stepped = STEPPED.with(core::cell::Cell::take);
         self.sorted = stepped.sorts;

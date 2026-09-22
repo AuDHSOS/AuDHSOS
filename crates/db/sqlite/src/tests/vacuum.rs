@@ -627,3 +627,16 @@ fn a_root_of_a_file_that_vacuums_itself_takes_the_page_after_the_largest() {
         Some(&Value::Text(b"ok".to_vec()))
     );
 }
+
+/// `trans-9.2.5` of `test/trans.test`: what a connection was told for
+/// `PRAGMA fullfsync`, which says a sync holds the file on the disk of
+/// the machine and not only in the cache of its driver.
+#[test]
+fn what_the_connection_was_told_for_fullfsync() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    assert!(!writer.kept().fullfsync());
+    writer.run(b"PRAGMA fullfsync=ON").unwrap();
+    assert!(writer.kept().fullfsync());
+    writer.run(b"PRAGMA fullfsync=OFF").unwrap();
+    assert!(!writer.kept().fullfsync());
+}

@@ -6942,3 +6942,9 @@ Document 16 step Q8.
   arguments, a node of another kind, a place under another collation, a
   term under a `COLLATE`, an expression that reads nothing of the row,
   one that reads a statement of its own, and one that reads two sides.
+
+### 6.6.279 What a connection was told for fullfsync (`db-sqlite`)
+
+Document 16 step Q8.
+
+- `PRAGMA fullfsync` on and off, and a connection told neither.

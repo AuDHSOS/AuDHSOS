@@ -478,6 +478,8 @@ Size: S.
 41. A database is named by the path with the steps that name nothing
     taken out, and a connection that wrote `BEGIN` while another holds
     the transaction of the path waits, which D-400 records.
+42. `::sqlite_sync_count` and `::sqlite_fullsync_count` are answered from
+    the syncs the commits of a request made, which D-402 records.
 
 ### Produces
 

@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The suite harness answers `::sqlite_sync_count` and
+  `::sqlite_fullsync_count` from the syncs the commits of a request made.
+  D-402 records it. Catalog 6.6.279. `trans.test` goes from 249 cases
+  passing to 306 and `avtrans.test` from 247 to 304.
+
 - `db-sqlite` reads a side by an index over an expression where a term
   holds that same expression at one value. D-401 records it. Catalog
   6.6.278.

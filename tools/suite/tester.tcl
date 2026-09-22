@@ -1995,6 +1995,31 @@ proc harness_search_count {args} {
 trace add variable ::sqlite_search_count read harness_search_count
 
 
+# sqlite3_sync_count and sqlite3_fullsync_count of os_unix.c: how many
+# times a commit held a file on the disk, which a test reads to see that
+# a commit synced at all and that PRAGMA fullfsync reached the driver.
+# The harness holds both counts, so reading a variable asks for one and
+# writing one says where to count from.
+set ::sqlite_sync_count 0
+proc harness_sync_count {name1 name2 op} {
+  if {$op eq "write"} {
+    harness_send syncs_as $::sqlite_sync_count
+    return
+  }
+  set ::sqlite_sync_count [lindex [harness_send syncs] 0]
+}
+trace add variable ::sqlite_sync_count {read write} harness_sync_count
+
+set ::sqlite_fullsync_count 0
+proc harness_fullsync_count {name1 name2 op} {
+  if {$op eq "write"} {
+    harness_send fullsyncs_as $::sqlite_fullsync_count
+    return
+  }
+  set ::sqlite_fullsync_count [lindex [harness_send fullsyncs] 0]
+}
+trace add variable ::sqlite_fullsync_count {read write} harness_fullsync_count
+
 # save_prng_state, restore_prng_state: the state random and randomblob
 # draw from next, which a test holds to draw the same words again.
 proc save_prng_state {} { harness_send save_prng }

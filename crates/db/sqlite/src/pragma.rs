@@ -155,6 +155,20 @@ pub struct Keeps {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Kept(pub(crate) Vec<Option<i64>>);
 
+impl Kept {
+    /// Whether `PRAGMA fullfsync` is on, which says a sync holds the file
+    /// on the disk of the machine and not only in the cache of its
+    /// driver, and which `sqlite3_fullsync_count` of
+    /// `research/sqlite/src/os_unix.c` counts the syncs made under.
+    #[must_use]
+    pub fn fullfsync(&self) -> bool {
+        HELD.iter()
+            .position(|keeps| keeps.name == b"fullfsync")
+            .and_then(|at| self.0.get(at).copied().flatten())
+            .is_some_and(|value| value != 0)
+    }
+}
+
 /// The pragmas the connection keeps a value for, which are the ones
 /// `sqlite3Pragma` answers out of the connection and no byte of the
 /// file holds.
