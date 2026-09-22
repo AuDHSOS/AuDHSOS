@@ -54,10 +54,16 @@ impl Tag {
 
     /// A context-specific tag, constructed or primitive, as explicit and
     /// implicit tagging respectively produce them.
+    ///
+    /// `None` for a number above thirty, which needs the high tag number
+    /// form.
     #[must_use]
-    pub const fn context(number: u8, constructed: bool) -> Tag {
+    pub const fn context(number: u8, constructed: bool) -> Option<Tag> {
+        if number >= HIGH_FORM {
+            return None;
+        }
         let form = if constructed { CONSTRUCTED } else { 0 };
-        Tag(CONTEXT | form | (number & HIGH_FORM))
+        Some(Tag(CONTEXT | form | number))
     }
 
     /// The identifier octet.

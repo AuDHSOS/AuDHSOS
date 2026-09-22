@@ -16,6 +16,23 @@ use crate::algorithm::{DNS_NAME_TAG, SignatureAlgorithm, SubjectPublicKey, expec
 use crate::error::X509Error;
 use crate::oid;
 
+/// The tag of `issuerUniqueID`: context one, primitive.
+const ISSUER_UNIQUE_ID_TAG: Tag = match Tag::context(1, false) {
+    Some(tag) => tag,
+    None => panic!("one is a low tag number"),
+};
+/// The tag of `subjectUniqueID`: context two, primitive.
+const SUBJECT_UNIQUE_ID_TAG: Tag = match Tag::context(2, false) {
+    Some(tag) => tag,
+    None => panic!("two is a low tag number"),
+};
+/// The tag of the explicit wrapper around `extensions`: context three,
+/// constructed.
+const EXTENSIONS_TAG: Tag = match Tag::context(3, true) {
+    Some(tag) => tag,
+    None => panic!("three is a low tag number"),
+};
+
 /// The window a certificate is valid in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Validity {
@@ -147,8 +164,8 @@ impl<'a> Certificate<'a> {
 
         // The two unique identifiers of version two, which nothing issues
         // any more but the encoding still allows.
-        let _ = body.read_optional(Tag::context(1, false))?;
-        let _ = body.read_optional(Tag::context(2, false))?;
+        let _ = body.read_optional(ISSUER_UNIQUE_ID_TAG)?;
+        let _ = body.read_optional(SUBJECT_UNIQUE_ID_TAG)?;
 
         let mut certificate = Certificate {
             tbs,
@@ -167,7 +184,7 @@ impl<'a> Certificate<'a> {
             subject_key_identifier: None,
         };
 
-        if body.peek_is(Tag::context(3, true)) {
+        if body.peek_is(EXTENSIONS_TAG) {
             let mut wrapper = body.read_context(3)?;
             let mut extensions = wrapper.read_sequence()?;
             certificate.read_extensions(&mut extensions)?;

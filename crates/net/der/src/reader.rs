@@ -193,9 +193,11 @@ impl<'a> Reader<'a> {
     ///
     /// # Errors
     ///
-    /// See [`Reader::read_constructed`].
+    /// [`DerError::HighTagNumber`] for a `number` above thirty, and
+    /// otherwise see [`Reader::read_constructed`].
     pub fn read_context(&mut self, number: u8) -> Result<Reader<'a>, DerError> {
-        self.read_constructed(Tag::context(number, true))
+        let tag = Tag::context(number, true).ok_or(DerError::HighTagNumber)?;
+        self.read_constructed(tag)
     }
 
     /// The next value when it carries `tag`, and nothing when it does not.

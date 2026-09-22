@@ -282,6 +282,36 @@ fn a_set_and_an_explicit_context_value_are_read() {
 }
 
 #[test]
+fn a_context_number_above_thirty_has_no_tag() {
+    for number in 0..=30u8 {
+        let primitive = Tag::context(number, false).expect("a low tag number");
+        let constructed = Tag::context(number, true).expect("a low tag number");
+        assert_eq!(primitive.octet(), 0x80 | number);
+        assert_eq!(constructed.octet(), 0xA0 | number);
+        assert!(!primitive.is_high_form());
+        assert!(!constructed.is_high_form());
+    }
+    for number in 31..=u8::MAX {
+        assert_eq!(Tag::context(number, false), None, "number {number}");
+        assert_eq!(Tag::context(number, true), None, "number {number}");
+    }
+}
+
+#[test]
+fn an_explicit_context_number_above_thirty_is_refused() {
+    let tagged = encode(0xA0, &encode(0x02, &[0x07]));
+    let mut reader = Reader::new(&tagged);
+    for number in [31, 32, 63, u8::MAX] {
+        assert_eq!(
+            reader.read_context(number).err(),
+            Some(DerError::HighTagNumber),
+            "number {number}"
+        );
+    }
+    assert!(reader.read_context(0).is_ok(), "the value is still there");
+}
+
+#[test]
 fn a_primitive_tag_cannot_be_read_as_a_constructed_one() {
     let encoded = encode(0x02, &[0x01]);
     let mut reader = Reader::new(&encoded);
@@ -360,10 +390,10 @@ fn a_tag_that_was_not_expected_leaves_the_reader_where_it_was() {
 fn the_tag_type_answers_what_it_is() {
     assert!(Tag::SEQUENCE.is_constructed());
     assert!(!Tag::INTEGER.is_constructed());
-    assert!(Tag::context(0, true).is_context());
+    assert!(Tag::context(0, true).unwrap().is_context());
     assert!(!Tag::SEQUENCE.is_context());
-    assert_eq!(Tag::context(3, true).octet(), 0xA3);
-    assert_eq!(Tag::context(3, false).octet(), 0x83);
+    assert_eq!(Tag::context(3, true).unwrap().octet(), 0xA3);
+    assert_eq!(Tag::context(3, false).unwrap().octet(), 0x83);
     assert!(Tag::new(0x1F).is_high_form());
     assert!(!format!("{:?}", Tag::SEQUENCE).is_empty());
 }

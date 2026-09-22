@@ -455,4 +455,7 @@ pub fn expect_same(reader: &mut Reader<'_>, expected: SignatureAlgorithm) -> Res
 
 /// The tag of a `dNSName` inside a subject alternative name: context two,
 /// primitive, because the string is tagged implicitly.
-pub const DNS_NAME_TAG: Tag = Tag::context(2, false);
+pub const DNS_NAME_TAG: Tag = match Tag::context(2, false) {
+    Some(tag) => tag,
+    None => panic!("two is a low tag number"),
+};
