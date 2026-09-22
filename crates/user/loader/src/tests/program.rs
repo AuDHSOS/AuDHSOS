@@ -262,3 +262,44 @@ fn every_error_renders_a_message() {
         assert!(!format!("{case}").is_empty(), "{case:?} has no message");
     }
 }
+
+/// A read-only segment of no bytes at `vaddr`.
+fn empty(vaddr: u64) -> Header {
+    Header {
+        vaddr,
+        file_size: 0,
+        mem_size: 0,
+        write: false,
+        execute: false,
+    }
+}
+
+#[test]
+fn a_segment_of_no_bytes_gets_no_region() {
+    // Issue #128: an empty segment at an unaligned address is no page.
+    let bytes = image(&[text(BASE, 100), empty(BASE + PAGE_SIZE + 0x10)]);
+    let plan = plan(&bytes).unwrap();
+    assert_eq!(plan.len(), 1);
+    assert_eq!(plan.regions().next().unwrap().vaddr, BASE);
+    assert_eq!(plan.bytes(), PAGE_SIZE + STACK_PAGES * PAGE_SIZE);
+}
+
+#[test]
+fn a_segment_of_no_bytes_in_the_page_of_another_is_no_overlap() {
+    let bytes = image(&[
+        text(BASE, 100),
+        empty(BASE + 0x200),
+        data(BASE + PAGE_SIZE, 8, 8),
+    ]);
+    let plan = plan(&bytes).unwrap();
+    let starts: Vec<u64> = plan.regions().map(|region| region.vaddr).collect();
+    assert_eq!(starts, [BASE, BASE + PAGE_SIZE]);
+}
+
+#[test]
+fn a_segment_of_no_bytes_below_the_program_does_not_move_the_stack() {
+    let bytes = image_with_entry(&[empty(USER_SPACE_START), text(BASE, 100)], BASE);
+    let plan = plan(&bytes).unwrap();
+    assert_eq!(plan.len(), 1);
+    assert_eq!(plan.stack_top, BASE - PAGE_SIZE);
+}

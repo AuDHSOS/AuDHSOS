@@ -168,6 +168,7 @@ impl Plan {
 }
 
 /// Reads `bytes` as a user program and works out what has to be mapped.
+/// A segment of no bytes gets no region.
 ///
 /// # Errors
 ///
@@ -180,10 +181,9 @@ pub fn plan(bytes: &[u8]) -> Result<Plan, ProgramError> {
     let mut regions: [Option<Region>; MAX_SEGMENTS] = [None; MAX_SEGMENTS];
     let mut count = 0usize;
     let mut previous_end = 0u64;
-    // The array and the segments are zipped rather than indexed, because
-    // the ELF reader hands out at most `MAX_SEGMENTS` of them and this is
-    // the way to say so without a branch that can never be taken.
-    for (slot, segment) in regions.iter_mut().zip(image.segments()) {
+    // Zipped rather than indexed: the ELF reader hands out at most
+    // `MAX_SEGMENTS` segments. A segment of no bytes needs no page.
+    for (slot, segment) in regions.iter_mut().zip(occupied(&image)) {
         let region = region_of(&segment);
         if region.vaddr < previous_end {
             return Err(ProgramError::Overlap {
@@ -195,11 +195,10 @@ pub fn plan(bytes: &[u8]) -> Result<Plan, ProgramError> {
         count = count.wrapping_add(1);
     }
 
-    // There is at least one segment: the ELF reader refuses an entry point
-    // that lies in no executable one, and an image without segments has
-    // none.
-    let lowest = image
-        .segments()
+    // At least one segment occupies memory: the ELF reader refuses an entry
+    // point that lies in no executable segment, and a segment of no bytes
+    // contains no address.
+    let lowest = occupied(&image)
         .map(|segment| segment.vaddr)
         .min()
         .unwrap_or(u64::MAX);
@@ -225,6 +224,11 @@ pub fn plan(bytes: &[u8]) -> Result<Plan, ProgramError> {
         stack_top,
         stack_base,
     })
+}
+
+/// The segments of `image` that occupy at least one byte of memory.
+fn occupied<'a>(image: &'a Image<'_>) -> impl Iterator<Item = Segment> + 'a {
+    image.segments().filter(|segment| segment.mem_size != 0)
 }
 
 /// The whole pages a segment occupies.
