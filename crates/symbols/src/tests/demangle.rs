@@ -193,6 +193,94 @@ fn nesting_without_end_is_refused() {
     assert_eq!(text(&name), name, "a reference nested past the bound");
 }
 
+/// A backreference to `target`, in the counted base-62 form.
+fn backref(target: usize) -> String {
+    const DIGITS: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    if target == 0 {
+        return String::from("B_");
+    }
+    let mut value = target - 1;
+    let mut digits = Vec::new();
+    loop {
+        digits.push(DIGITS[value % 62]);
+        value /= 62;
+        if value == 0 {
+            break;
+        }
+    }
+    digits.reverse();
+    format!("B{}_", String::from_utf8(digits).unwrap())
+}
+
+/// `a::f` instantiated with `levels` tuple types, each a pair of
+/// backreferences to the one before, so that each level doubles the parse
+/// work of the level below.
+fn doubling_chain(levels: usize) -> String {
+    let mut rest = String::from("INvC1a1fTjjE");
+    let mut previous = "INvC1a1f".len();
+    for _ in 0..levels {
+        let here = rest.len();
+        let reference = backref(previous);
+        rest.push('T');
+        rest.push_str(&reference);
+        rest.push_str(&reference);
+        rest.push('E');
+        previous = here;
+    }
+    rest.push('E');
+    format!("_R{rest}")
+}
+
+#[test]
+fn a_short_chain_of_reused_backreferences_reads_back() {
+    assert_eq!(text(&doubling_chain(3)), "a::f");
+}
+
+#[test]
+fn backreferences_that_double_the_work_per_level_are_refused() {
+    // Issue #413: each tuple is its own generic argument, so level k costs
+    // 2^k nested parses; the levels below the depth bound sum to about
+    // 2^31. The budget stops them after a few thousand.
+    let name = doubling_chain(40);
+    assert!(name.len() < 500, "a short name: {} bytes", name.len());
+    assert_eq!(text(&name), name);
+}
+
+#[test]
+fn an_identifier_repeated_through_backreferences_is_refused() {
+    // Ten levels of `<X as X>` over a 1000-byte identifier would write
+    // about 1 MB; the identifier bytes are charged to the budget.
+    let mut rest = format!("MIC1bC1000{}", "a".repeat(1000));
+    let mut previous = "MIC1b".len();
+    for _ in 0..10 {
+        let here = rest.len();
+        let reference = backref(previous);
+        rest.push('Y');
+        rest.push_str(&reference);
+        rest.push_str(&reference);
+        previous = here;
+    }
+    rest.push('E');
+    rest.push_str(&backref(previous));
+    let name = format!("_R{rest}");
+    assert_eq!(text(&name), name);
+}
+
+#[test]
+fn a_long_number_read_again_through_backreferences_is_refused() {
+    // A lifetime of 10000 zero digits, read again by 1000 backreferences,
+    // costs 10^7 digit reads; the digits are charged to the budget.
+    let mut rest = format!("INvC1a1fRL{}_u", "0".repeat(10_000));
+    let reference = backref("INvC1a1f".len());
+    for _ in 0..1000 {
+        rest.push_str(&reference);
+    }
+    rest.push('E');
+    let name = format!("_R{rest}");
+    assert_eq!(text(&name), name);
+    assert_eq!(text("_RINvC1a1fRL0_uB7_B7_E"), "a::f");
+}
+
 #[test]
 fn property_no_name_makes_the_demangler_panic_or_loop() {
     let generator = vec(bytes(0..=40), 1..=1);

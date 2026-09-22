@@ -547,8 +547,7 @@ impl<'a> LineProgram<'a> {
         header: &Header,
         index: u64,
     ) -> Result<(Option<&'a str>, Option<u64>), SymbolError> {
-        let format = Format::read(cursor)?;
-        let count = cursor.uleb()?;
+        let (format, count) = Format::read_table(cursor)?;
         let mut number = 0u64;
         while number < count {
             let (path, directory) = format.read_entry(cursor, header, &self.strings)?;
@@ -572,6 +571,18 @@ struct Format {
 const MAX_FORMAT_PAIRS: usize = 8;
 
 impl Format {
+    /// Reads the format and the entry count the cursor stands on. A
+    /// format of no pairs with entries is refused, because its entries
+    /// occupy no bytes and a walk of them would not advance.
+    fn read_table(cursor: &mut Cursor<'_>) -> Result<(Self, u64), SymbolError> {
+        let format = Format::read(cursor)?;
+        let count = cursor.uleb()?;
+        if format.count == 0 && count > 0 {
+            return Err(SymbolError::EmptyFormat);
+        }
+        Ok((format, count))
+    }
+
     /// Reads the format the cursor stands on.
     fn read(cursor: &mut Cursor<'_>) -> Result<Self, SymbolError> {
         let declared = usize::from(cursor.u8()?);
@@ -677,8 +688,7 @@ fn skip_table<'a>(
     header: &Header,
     strings: &Strings<'a>,
 ) -> Result<(), SymbolError> {
-    let format = Format::read(cursor)?;
-    let count = cursor.uleb()?;
+    let (format, count) = Format::read_table(cursor)?;
     let mut number = 0u64;
     while number < count {
         format.read_entry(cursor, header, strings)?;

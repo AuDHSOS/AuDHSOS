@@ -137,6 +137,7 @@ fn every_error_of_the_crate_reads_as_a_sentence() {
         SymbolError::LineVersion(7),
         SymbolError::LineRange,
         SymbolError::UnknownForm(0x99),
+        SymbolError::EmptyFormat,
     ];
     for error in errors {
         assert!(!format!("{error}").is_empty(), "{error:?}");
