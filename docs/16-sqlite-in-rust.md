@@ -1034,6 +1034,8 @@ Size: L.
      of the row. Built, which D-422 records.
 146. The operand of a `CASE` and its `WHEN` clauses as rows of values.
      Built, which D-423 records.
+147. The words a result code names, which `sqlite3_errstr` answers.
+     Built, which D-426 records.
 
 ### Done when
 

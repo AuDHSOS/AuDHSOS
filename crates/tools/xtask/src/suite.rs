@@ -1315,6 +1315,10 @@ impl Session {
             // `sqlite3_quota_glob` of
             // `research/sqlite/src/test_quota.c:254`.
             "strglob" => Ok(globbed(first, second)),
+            // `sqlite3_test_errstr` of
+            // `research/sqlite/src/test1.c:3674`: the words the code of
+            // that name stands for.
+            "errstr" => Ok(vec![db_sqlite::db::errstr(numbered_code(first)).to_owned()]),
             "mprintf" => mprintf(args),
             "capable" => Ok(vec![usize::from(capable(first)).to_string()]),
             "case" => {
@@ -3943,6 +3947,47 @@ fn varint(args: &[String]) -> Result<Vec<String>, String> {
         value = value.wrapping_add(step);
     }
     Ok(Vec::new())
+}
+
+/// The result codes by name, which `sqlite3ErrName` of
+/// `research/sqlite/src/main.c:1545` writes for each: the primary codes,
+/// which are the ones `sqlite3ErrStr` holds words for.
+const NAMED: [(&str, i64); 25] = [
+    ("SQLITE_OK", 0),
+    ("SQLITE_ERROR", 1),
+    ("SQLITE_INTERNAL", 2),
+    ("SQLITE_PERM", 3),
+    ("SQLITE_ABORT", 4),
+    ("SQLITE_BUSY", 5),
+    ("SQLITE_LOCKED", 6),
+    ("SQLITE_NOMEM", 7),
+    ("SQLITE_READONLY", 8),
+    ("SQLITE_INTERRUPT", 9),
+    ("SQLITE_IOERR", 10),
+    ("SQLITE_CORRUPT", 11),
+    ("SQLITE_NOTFOUND", 12),
+    ("SQLITE_FULL", 13),
+    ("SQLITE_CANTOPEN", 14),
+    ("SQLITE_PROTOCOL", 15),
+    ("SQLITE_EMPTY", 16),
+    ("SQLITE_SCHEMA", 17),
+    ("SQLITE_TOOBIG", 18),
+    ("SQLITE_CONSTRAINT", 19),
+    ("SQLITE_MISMATCH", 20),
+    ("SQLITE_MISUSE", 21),
+    ("SQLITE_AUTH", 23),
+    ("SQLITE_RANGE", 25),
+    ("SQLITE_NOTADB", 26),
+];
+
+/// The code a name stands for, and two hundred for a name that stands
+/// for none, which `test_errstr` of `research/sqlite/src/test1.c:3674`
+/// reads as the code past every one it looks up.
+fn numbered_code(name: &str) -> i64 {
+    NAMED
+        .iter()
+        .find(|(held, _)| *held == name)
+        .map_or(200, |(_, code)| *code)
 }
 
 /// What `sqlite3_quota_glob` answers: one where the text matches the

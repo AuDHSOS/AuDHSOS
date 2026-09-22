@@ -195,3 +195,52 @@ fn what_code_a_refusal_of_a_statement_carries() {
         assert_eq!(held.extended_name, extended_name.as_bytes(), "{refused:?}");
     }
 }
+
+/// The words each result code names, which `sqlite3_errstr` answers.
+#[test]
+fn what_words_a_result_code_names() {
+    for (code, words) in [
+        (0, "not an error"),
+        (1, "SQL logic error"),
+        (3, "access permission denied"),
+        (4, "query aborted"),
+        (5, "database is locked"),
+        (6, "database table is locked"),
+        (7, "out of memory"),
+        (8, "attempt to write a readonly database"),
+        (9, "interrupted"),
+        (10, "disk I/O error"),
+        (11, "database disk image is malformed"),
+        (12, "unknown operation"),
+        (13, "database or disk is full"),
+        (14, "unable to open database file"),
+        (15, "locking protocol"),
+        (17, "database schema has changed"),
+        (18, "string or blob too big"),
+        (19, "constraint failed"),
+        (20, "datatype mismatch"),
+        (21, "bad parameter or other API misuse"),
+        (23, "authorization denied"),
+        (25, "column index out of range"),
+        (26, "file is not a database"),
+        (27, "notification message"),
+        (28, "warning message"),
+        // The three codes that name words of their own.
+        (516, "abort due to ROLLBACK"),
+        (100, "another row available"),
+        (101, "no more rows available"),
+        // An extended code names the words of the primary code in its
+        // lowest byte.
+        (2067, "constraint failed"),
+        (266, "disk I/O error"),
+        // The codes the table holds no words for, and one past every
+        // code the library holds.
+        (2, "unknown error"),
+        (16, "unknown error"),
+        (22, "unknown error"),
+        (24, "unknown error"),
+        (200, "unknown error"),
+    ] {
+        assert_eq!(crate::db::errstr(code), words, "{code}");
+    }
+}

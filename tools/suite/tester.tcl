@@ -2156,6 +2156,13 @@ proc btree_varint_test {start mult count incr} {
   return ""
 }
 
+# sqlite3_test_errstr CODE of test1.c:3674: the words `sqlite3ErrStr`
+# answers for the code of that name, which is `unknown error` for a name
+# that stands for no code.
+proc sqlite3_test_errstr {code} {
+  return [lindex [harness_send errstr $code] 0]
+}
+
 # sqlite3_quota_glob PATTERN TEXT of test_quota.c:254: whether the text
 # matches the pattern under the rules of `GLOB`, with a `/` of the
 # pattern matching either separator of a path.

@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` answers the words a result code names through
+  `sqlite3_errstr`, and the suite harness answers
+  `sqlite3_test_errstr`. D-426 records it. Catalog 6.6.293.
+  `capi3.test` goes from 161 cases passing to 182 and `capi3c.test` from
+  145 to 167.
+
 - The suite harness answers `sqlite3_quota_glob`. D-425 records it.
   `quota-glob.test` goes from no case passing to 108, which is every
   case of the file.

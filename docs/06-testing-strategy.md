@@ -7057,3 +7057,11 @@ Document 16 step Q8.
 - An operand that is a row and a `WHEN` that matches, one that does not,
   a statement as the operand, a `CASE` of one value, a `CASE` of no
   operand, and a `WHEN` of another width than the operand.
+
+### 6.6.293 The words a result code names (`db-sqlite`)
+
+Document 16 step Q8.
+
+- Every primary code the table holds words for, the three codes that
+  name words of their own, an extended code, a primary code the table
+  holds no words for, and a code past every one the library holds.

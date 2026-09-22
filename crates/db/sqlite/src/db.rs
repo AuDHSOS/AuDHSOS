@@ -1916,6 +1916,56 @@ impl Altering {
     }
 }
 
+/// The words a result code names, which `sqlite3ErrStr` of
+/// `research/sqlite/src/main.c:1660` answers for it and
+/// `sqlite3_errstr` hands the application.
+///
+/// The extended code is read as the primary one it carries in its lowest
+/// byte, apart from the three codes that name words of their own. A code
+/// the library holds no words for answers `unknown error`, and so does
+/// one whose primary code holds none. Reading the words costs O(1).
+#[must_use]
+pub const fn errstr(code: i64) -> &'static str {
+    match code {
+        // `SQLITE_ABORT_ROLLBACK`, `SQLITE_ROW` and `SQLITE_DONE`, which
+        // carry words of their own.
+        516 => "abort due to ROLLBACK",
+        100 => "another row available",
+        101 => "no more rows available",
+        held => match held & 0xff {
+            0 => "not an error",
+            1 => "SQL logic error",
+            3 => "access permission denied",
+            4 => "query aborted",
+            5 => "database is locked",
+            6 => "database table is locked",
+            7 => "out of memory",
+            8 => "attempt to write a readonly database",
+            9 => "interrupted",
+            10 => "disk I/O error",
+            11 => "database disk image is malformed",
+            12 => "unknown operation",
+            13 => "database or disk is full",
+            14 => "unable to open database file",
+            15 => "locking protocol",
+            17 => "database schema has changed",
+            18 => "string or blob too big",
+            19 => "constraint failed",
+            20 => "datatype mismatch",
+            21 => "bad parameter or other API misuse",
+            23 => "authorization denied",
+            25 => "column index out of range",
+            26 => "file is not a database",
+            27 => "notification message",
+            28 => "warning message",
+            // `SQLITE_INTERNAL`, `SQLITE_EMPTY`, `SQLITE_NOLFS` and
+            // `SQLITE_FORMAT` hold no words, which the table writes a
+            // null for.
+            _ => "unknown error",
+        },
+    }
+}
+
 /// Which parameter of a URI file name carries a mode, which the refusal
 /// of a value names: `sqlite3ParseUri` of
 /// `research/sqlite/src/main.c:3243` writes `access` for `mode=` and

@@ -503,6 +503,8 @@ Size: S.
     `sqlite3PagerStats` for it, which D-424 records.
 52. `sqlite3_quota_glob` answers whether a text matches a pattern under
     the rules `quotaStrglob` reads, which D-425 records.
+53. `sqlite3_test_errstr` answers the words the code of a name stands
+    for, which D-426 records.
 
 ### Produces
 
