@@ -349,3 +349,49 @@ fn what_a_statement_of_more_than_one_column_stands_as() {
         "sub-select returns 2 columns - expected 1"
     );
 }
+
+/// `SET (a, b) = value` writes one column of the row the value answers.
+#[test]
+fn what_a_set_of_more_than_one_column_writes() {
+    let mut writer = connection();
+    // A row of values, a statement, and a statement that answers no
+    // row, which writes a null per column.
+    writer.run(b"UPDATE t SET (a,b)=(10,20) WHERE c=3").unwrap();
+    writer
+        .run(b"UPDATE t SET (a,b)=(SELECT x,y FROM u WHERE x=9) WHERE c=2")
+        .unwrap();
+    writer
+        .run(b"UPDATE t SET (a,b)=(SELECT x,y FROM empty) WHERE c=1")
+        .unwrap();
+    // One column in brackets, a clause of one column beside one of
+    // more, and two clauses of more than one column.
+    writer.run(b"UPDATE t SET (a)=(7), c=8 WHERE c=0").unwrap();
+    assert_eq!(
+        answered(&writer, "SELECT a,b,c FROM t ORDER BY c"),
+        [
+            "NULL", "NULL", "1", "9", "9", "2", "10", "20", "3", "7", "0", "8"
+        ]
+    );
+    // A statement whose width cannot be counted before it runs is left
+    // alone, and writes as many columns as the clause names.
+    writer
+        .run(b"UPDATE t SET (a,b)=(SELECT * FROM u WHERE x=9), (c)=(4) WHERE c=8")
+        .unwrap();
+    assert_eq!(
+        answered(&writer, "SELECT a,b,c FROM t WHERE c=4"),
+        ["9", "9", "4"]
+    );
+    // A clause that writes another number of columns than the value
+    // holds names both counts.
+    for sql in [
+        b"UPDATE t SET (a,b)=(1,2,3)".as_slice(),
+        b"UPDATE t SET (a,b)=(SELECT 1,2,3)",
+    ] {
+        assert_eq!(
+            writer.run(sql).expect_err("a refusal").message(),
+            "2 columns assigned 3 values",
+            "{}",
+            String::from_utf8_lossy(sql)
+        );
+    }
+}

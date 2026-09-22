@@ -1433,6 +1433,13 @@ pub fn rows_placed(arena: &Arena) -> Result<(), Error> {
             mark(*held, &mut allowed);
         }
     }
+    // `SET (a, b) = (1, 2)` writes one column per value of the row, so
+    // the row stands where it may there as well.
+    for set in arena.all_sets() {
+        if set.at.is_some() {
+            mark(set.value, &mut allowed);
+        }
+    }
     for (_, node) in arena.all() {
         match node {
             Node::Binary { op, left, right } => {

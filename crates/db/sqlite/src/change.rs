@@ -6574,7 +6574,7 @@ impl Writer {
                     }
                     let mut next = values.clone();
                     for (at, set) in places.iter().zip(&sets) {
-                        let value = crate::eval::evaluate_row(arena, set.value, sql, &row)?;
+                        let value = set_value(arena, set, sql, &row)?;
                         for slot in next.iter_mut().skip(at.unwrap_or(usize::MAX)).take(1) {
                             slot.clone_from(&value);
                         }
@@ -7018,7 +7018,7 @@ impl Writer {
                 .iter()
                 .position(|column| column.name.eq_ignore_ascii_case(&name))
                 .ok_or_else(|| Error::Eval(crate::eval::Error::NoColumn(name.clone())))?;
-            let value = crate::eval::evaluate_row(wanted.arena, set.value, wanted.sql, &row)?;
+            let value = set_value(wanted.arena, set, wanted.sql, &row)?;
             for slot in values.iter_mut().skip(at).take(1) {
                 slot.clone_from(&value);
             }
@@ -7304,7 +7304,7 @@ impl Writer {
                 }
                 let mut next = values.clone();
                 for (at, set) in places.iter().zip(&sets) {
-                    let value = crate::eval::evaluate_row(arena, set.value, sql, &held)?;
+                    let value = set_value(arena, set, sql, &held)?;
                     for slot in next.iter_mut().skip(*at).take(1) {
                         slot.clone_from(&value);
                     }
@@ -8108,7 +8108,7 @@ impl Writer {
                 .iter()
                 .position(|column| column.name.eq_ignore_ascii_case(&name))
                 .ok_or_else(|| Error::Eval(crate::eval::Error::NoColumn(name.clone())))?;
-            let value = crate::eval::evaluate_row(wanted.arena, set.value, wanted.sql, &row)?;
+            let value = set_value(wanted.arena, set, wanted.sql, &row)?;
             for slot in values.iter_mut().skip(at).take(1) {
                 slot.clone_from(&value);
             }
@@ -9252,7 +9252,7 @@ impl Writer {
                 let mut next = values.clone();
                 let mut key = rowid;
                 for (at, set) in places.iter().zip(&sets) {
-                    let value = crate::eval::evaluate_row(arena, set.value, sql, &held)?;
+                    let value = set_value(arena, set, sql, &held)?;
                     match at {
                         Some(at) => {
                             for slot in next.iter_mut().skip(*at).take(1) {
@@ -9293,6 +9293,7 @@ impl Writer {
         let name = crate::schema::dequote(statement.name.text(sql));
         self.located(&name)?;
         self.holds_index(&name, statement.indexed, sql)?;
+        assigned(arena, arena.sets(statement.sets))?;
         if self.is_view(&name)? {
             return self.update_view(arena, statement, sql, &name, outer);
         }
@@ -10704,6 +10705,67 @@ fn worded(sql: &[u8], name: &[u8]) -> bool {
             && !named(at.checked_sub(1).and_then(|before| sql.get(before)))
             && !named(sql.get(at.saturating_add(name.len())))
     })
+}
+
+/// Refuses a `SET (a, b) = value` that writes another number of columns
+/// than the value holds, which `sqlite3ExprListAppendVector` of
+/// `research/sqlite/src/expr.c:2019` counts.
+///
+/// A value whose width cannot be counted before it runs, which a `*`
+/// among the result columns of a statement is, is left alone. Reading
+/// the clauses costs O(n) in their number.
+///
+/// # Errors
+///
+/// [`Error::Assigned`] names the columns written and the values the
+/// clause holds.
+fn assigned(arena: &Arena, sets: &[crate::ast::Set]) -> Result<(), Error> {
+    let mut counts: Vec<(crate::ast::ExprId, usize)> = Vec::new();
+    for set in sets {
+        if set.at.is_none() {
+            continue;
+        }
+        match counts.last_mut() {
+            Some((id, count)) if *id == set.value => *count = count.saturating_add(1),
+            _ => counts.push((set.value, 1)),
+        }
+    }
+    for (id, count) in counts {
+        let held = match arena.node(id) {
+            Some(crate::ast::Node::Row(items)) => Some(items.len()),
+            Some(crate::ast::Node::Subquery(select)) => crate::db::width_of(arena, select),
+            _ => Some(1),
+        };
+        if let Some(held) = held
+            && held != count
+        {
+            return Err(Error::Assigned(count, held));
+        }
+    }
+    Ok(())
+}
+
+/// The value one clause of a `SET` writes: the value of the expression,
+/// or the value at the column's place in the row the expression
+/// answers, which `SET (a, b) = value` writes one column of.
+///
+/// # Errors
+///
+/// Whatever the expression refuses with.
+fn set_value(
+    arena: &Arena,
+    set: &crate::ast::Set,
+    sql: &[u8],
+    row: &dyn crate::eval::Row,
+) -> Result<Value, Error> {
+    let Some(at) = set.at else {
+        return Ok(crate::eval::evaluate_row(arena, set.value, sql, row)?);
+    };
+    let items = crate::eval::evaluate_items(arena, set.value, sql, row)?;
+    Ok(items
+        .into_iter()
+        .nth(at)
+        .map_or(Value::Null, |(value, _, _)| value))
 }
 
 /// Whether a byte is one a bare name is written with, which

@@ -290,6 +290,9 @@ pub enum Error {
     NoDatabaseFile(Vec<u8>),
     /// An `ATTACH` of a file whose encoding is not the one of `main`.
     AttachEncoding,
+    /// A `SET (a, b) = value` of an `UPDATE` that writes another number
+    /// of columns than the value holds, with the two counts.
+    Assigned(usize, usize),
     /// A file name as a URI with a `%00` escape in it, which this
     /// library is built to refuse.
     UriEscape,
@@ -518,6 +521,9 @@ impl Error {
             Error::AttachEncoding => alloc::string::String::from(
                 "attached databases must use the same text encoding as main database",
             ),
+            Error::Assigned(columns, values) => {
+                alloc::format!("{columns} columns assigned {values} values")
+            }
             Error::UriEscape => alloc::string::String::from("unexpected %00 in uri"),
             Error::UriAuthority(held) => {
                 alloc::format!("invalid uri authority: {}", shown(held))
@@ -8112,7 +8118,7 @@ fn aliased(results: &[ResultColumn], sql: &[u8], name: &[u8]) -> Option<ExprId> 
 ///
 /// A compound is as wide as its first core, which is the one
 /// `sqlite3SubselectError` counts.
-fn width_of(arena: &Arena, id: SelectId) -> Option<usize> {
+pub(crate) fn width_of(arena: &Arena, id: SelectId) -> Option<usize> {
     let select = arena.select(id)?;
     if !select.values.is_empty() {
         let first = arena.children(select.values).first().copied()?;

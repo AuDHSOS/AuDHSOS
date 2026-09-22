@@ -1021,16 +1021,7 @@ impl<'a> Parser<'a> {
         }
         self.expect_keyword(Keyword::Update, Expected::Update)?;
         self.expect_keyword(Keyword::Set, Expected::Set)?;
-        let mut sets = Vec::new();
-        loop {
-            let column = self.name()?;
-            self.expect(Kind::Eq, Expected::Eq)?;
-            let value = self.expression()?;
-            sets.push(Set { column, value });
-            if !self.eat(Kind::Comma) {
-                break;
-            }
-        }
+        let sets = self.set_list()?;
         let sets = self.arena.push_sets(&sets);
         let filter = if self.eat_keyword(Keyword::Where) {
             Some(self.expression()?)
@@ -1046,6 +1037,48 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// The clauses of a `SET`: `column = value`, or `(column, ...) =
+    /// value`, which writes one column of the row the value answers
+    /// per column and is `sqlite3ExprListAppendVector` of
+    /// `research/sqlite/src/expr.c`.
+    fn set_list(&mut self) -> Result<Vec<Set>, Error> {
+        let mut sets = Vec::new();
+        loop {
+            if self.eat(Kind::Lp) {
+                let mut columns = Vec::new();
+                loop {
+                    columns.push(self.name()?);
+                    if !self.eat(Kind::Comma) {
+                        break;
+                    }
+                }
+                self.expect(Kind::Rp, Expected::CloseParen)?;
+                self.expect(Kind::Eq, Expected::Eq)?;
+                let value = self.expression()?;
+                for (at, column) in columns.into_iter().enumerate() {
+                    sets.push(Set {
+                        column,
+                        value,
+                        at: Some(at),
+                    });
+                }
+            } else {
+                let column = self.name()?;
+                self.expect(Kind::Eq, Expected::Eq)?;
+                let value = self.expression()?;
+                sets.push(Set {
+                    column,
+                    value,
+                    at: None,
+                });
+            }
+            if !self.eat(Kind::Comma) {
+                break;
+            }
+        }
+        Ok(sets)
+    }
+
     /// `UPDATE name SET column = value, ... [WHERE filter]`.
     fn update(&mut self) -> Result<Update, Error> {
         self.expect_keyword(Keyword::Update, Expected::Update)?;
@@ -1057,16 +1090,7 @@ impl<'a> Parser<'a> {
         let (schema, name) = self.qualified_name()?;
         let indexed = self.indexed_name()?;
         self.expect_keyword(Keyword::Set, Expected::Set)?;
-        let mut sets = Vec::new();
-        loop {
-            let column = self.name()?;
-            self.expect(Kind::Eq, Expected::Eq)?;
-            let value = self.expression()?;
-            sets.push(Set { column, value });
-            if !self.eat(Kind::Comma) {
-                break;
-            }
-        }
+        let sets = self.set_list()?;
         let sets = self.arena.push_sets(&sets);
         // The tables of a `FROM` are answered as the statement
         // `SELECT * FROM ...` answers them, which is what

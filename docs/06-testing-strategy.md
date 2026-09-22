@@ -7040,3 +7040,12 @@ Document 16 step Q8.
   row, a `COLLATE` on either side, a `BETWEEN` over a statement, an `IN`
   over one, a statement of another width than the row, and a member of
   an `IN` list that holds another number of values than the row.
+
+### 6.6.291 The columns one clause of a SET writes (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A row of values, a statement, a statement that answers no row, one
+  column in brackets, a clause of one column beside a clause of more, a
+  statement whose width cannot be counted before it runs, and a clause
+  that writes another number of columns than the value holds.

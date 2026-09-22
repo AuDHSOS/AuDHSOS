@@ -1030,6 +1030,8 @@ Size: L.
      two functions beside it answer. Built, which D-420 records.
 144. The statement of more than one column that stands as a row of
      values. Built, which D-421 records.
+145. `UPDATE ... SET (a, b) = value`, which writes one column per value
+     of the row. Built, which D-422 records.
 
 ### Done when
 

@@ -721,6 +721,10 @@ pub struct Set {
     pub column: Span,
     /// What it is written with.
     pub value: ExprId,
+    /// Where the column stands in the row the value answers, where the
+    /// statement wrote `SET (a, b) = value`, and nothing where it wrote
+    /// one column and one value.
+    pub at: Option<usize>,
 }
 
 /// `UPDATE name SET column = value, ... [WHERE filter]`.
@@ -1621,6 +1625,12 @@ impl Arena {
     /// written.
     pub fn all_selects(&self) -> impl Iterator<Item = Select> {
         self.selects.iter().copied()
+    }
+
+    /// Every clause of a `SET` the arena holds, in the order they were
+    /// written.
+    pub fn all_sets(&self) -> impl Iterator<Item = Set> {
+        self.sets.iter().copied()
     }
 
     /// How many statements the arena holds.

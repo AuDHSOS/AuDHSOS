@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` writes one column per value of the row for
+  `UPDATE ... SET (a, b) = value`. D-422 records it. Catalog 6.6.291.
+  `rowvalue7.test` goes from 1 case passing to 8 and `rowvalue.test`
+  from 282 to 288.
+
 - `db-sqlite` reads a statement of more than one column as a row of
   values where a row may stand, and names both counts for a member of an
   `IN` list that holds another number of values than the row. D-421
