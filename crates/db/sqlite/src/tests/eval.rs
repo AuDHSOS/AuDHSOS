@@ -326,12 +326,43 @@ fn what_the_ieee754_family_answers() {
         text("ieee754(1,0)")
     );
     // A value of another kind and a blob of another width answer
-    // nothing, and so does every option the build carries none of.
+    // nothing.
     assert_eq!(answered("SELECT ieee754_to_blob('x')"), Value::Null);
     assert_eq!(answered("SELECT ieee754_from_blob(x'00')"), Value::Null);
+    // The options the build holds, which a name is read against without
+    // the `SQLITE_` in front of it and without regard to case: a name
+    // matches an option that carries more than the name only where the
+    // byte after it opens no name.
+    for (sql, want) in [
+        ("SELECT sqlite_compileoption_used('THREADSAFE')", 1),
+        ("SELECT sqlite_compileoption_used('SQLITE_THREADSAFE')", 1),
+        ("SELECT sqlite_compileoption_used('threadsafe=0')", 1),
+        ("SELECT sqlite_compileoption_used('THREADSAFE=')", 0),
+        ("SELECT sqlite_compileoption_used('THREADSAFE=1')", 0),
+        ("SELECT sqlite_compileoption_used('SQLITE_OMIT_TRIGGER')", 0),
+        ("SELECT sqlite_compileoption_used('')", 0),
+        ("SELECT sqlite_compileoption_used(0)", 0),
+        (
+            "SELECT sqlite_compileoption_used(sqlite_compileoption_get(0))",
+            1,
+        ),
+    ] {
+        assert_eq!(answered(sql), Value::Int(want));
+    }
     assert_eq!(
-        answered("SELECT sqlite_compileoption_used('THREADSAFE')"),
-        Value::Int(0)
+        answered("SELECT sqlite_compileoption_get(0)"),
+        text("ENABLE_URI_00_ERROR")
     );
-    assert_eq!(answered("SELECT sqlite_compileoption_get(0)"), Value::Null);
+    assert_eq!(
+        answered("SELECT sqlite_compileoption_get(1)"),
+        text("THREADSAFE=0")
+    );
+    // A place past the list, a place below nought and a name that is
+    // null each answer nothing.
+    assert_eq!(answered("SELECT sqlite_compileoption_get(2)"), Value::Null);
+    assert_eq!(answered("SELECT sqlite_compileoption_get(-1)"), Value::Null);
+    assert_eq!(
+        answered("SELECT sqlite_compileoption_used(NULL)"),
+        Value::Null
+    );
 }

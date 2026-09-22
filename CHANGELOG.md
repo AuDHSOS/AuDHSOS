@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` carries the options it was built with, which `PRAGMA
+  compile_options` and the two functions beside it answer. D-420 records
+  it. Catalog 6.6.289. `ctime.test` goes from 20 cases passing to 25,
+  `uri2.test` from 20 to 21 and `corrupt3.test` from 0 to 9.
+
 - `db-sqlite` reads a file name that begins `file:` as a URI where the
   client asks for it: the authority, the `%HH` escapes of the path, and
   the parameters after it, with `%00` refused. D-419 records it. Catalog

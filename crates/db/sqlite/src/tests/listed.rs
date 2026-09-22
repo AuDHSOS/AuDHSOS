@@ -157,6 +157,17 @@ fn what_the_indexes_of_a_table_answer() {
     );
 }
 
+/// `PRAGMA compile_options` answers one row per option the library was
+/// built with.
+#[test]
+fn what_options_the_build_holds() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    assert_eq!(
+        shown(&mut writer, b"PRAGMA compile_options"),
+        "ENABLE_URI_00_ERROR|THREADSAFE=0|"
+    );
+}
+
 /// The columns a pragma answers, which a caller reads the shape of the
 /// statement from and a reader answers the rows of.
 #[test]
@@ -190,6 +201,7 @@ fn what_columns_a_pragma_answers() {
     assert_eq!(named("index_xinfo", false), "seqno|cid|name|desc|coll|key");
     assert_eq!(named("index_list", false), "seq|name|unique|origin|partial");
     assert_eq!(named("collation_list", false), "seq|name");
+    assert_eq!(named("compile_options", false), "compile_options");
     assert_eq!(named("database_list", false), "seq|name|file");
     assert_eq!(
         named("foreign_key_list", false),
@@ -284,6 +296,10 @@ fn what_a_reader_answers_for_a_pragma_of_the_schema() {
     assert_eq!(
         answered(b"PRAGMA collation_list"),
         "seq|name 0,BINARY/1,NOCASE/2,RTRIM/3,BACKWARDS"
+    );
+    assert_eq!(
+        answered(b"PRAGMA compile_options"),
+        "compile_options ENABLE_URI_00_ERROR/THREADSAFE=0"
     );
     // A pragma of one value names its own column, and one the reader
     // holds no value for is refused.

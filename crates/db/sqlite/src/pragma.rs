@@ -86,6 +86,10 @@ pub enum Setting {
     /// `PRAGMA collation_list`, which answers one row per collation the
     /// connection holds.
     CollationList,
+    /// `PRAGMA compile_options`, which answers one row per option the
+    /// library was built with, and is `PragTyp_COMPILE_OPTIONS` of
+    /// `research/sqlite/src/pragma.c:1105`.
+    CompileOptions,
     /// `PRAGMA database_list`, which answers one row per database the
     /// connection holds, and is `PragTyp_DATABASE_LIST` of
     /// `research/sqlite/src/pragma.c:1436`.
@@ -496,17 +500,10 @@ pub fn of_name(name: &[u8]) -> Option<Setting> {
         | b"legacy_alter_table"
         | b"cache_spill"
         | b"shrink_memory"
-        // `PRAGMA compile_options` answers one row per option the C
-        // library was built with, which `PragTyp_COMPILE_OPTIONS` of
-        // `research/sqlite/src/pragma.c:1105` reads out of
-        // `sqlite3_compileoption_get`. This crate is built with none.
-        | b"compile_options"
         | b"optimize" => Setting::Ignored,
+        b"compile_options" => Setting::CompileOptions,
         _ => {
-            if let Some(at) = HELD
-                .iter()
-                .position(|keeps| keeps.name == name.as_slice())
-            {
+            if let Some(at) = HELD.iter().position(|keeps| keeps.name == name.as_slice()) {
                 Setting::Held(at)
             } else if KNOWN.contains(&name.as_slice()) {
                 // A pragma the C library holds and this crate does not
@@ -646,6 +643,7 @@ impl Setting {
                 return named(&[b"seq", b"name", b"unique", b"origin", b"partial"]);
             }
             Setting::CollationList => return named(&[b"seq", b"name"]),
+            Setting::CompileOptions => return named(&[b"compile_options"]),
             Setting::DatabaseList => return named(&[b"seq", b"name", b"file"]),
             Setting::ForeignKeyList => {
                 return named(&[
@@ -752,6 +750,7 @@ impl Setting {
             | Setting::IndexXinfo
             | Setting::IndexList
             | Setting::CollationList
+            | Setting::CompileOptions
             | Setting::ForeignKeyList
             | Setting::ForeignKeyCheck
             | Setting::WalCheckpoint
@@ -905,4 +904,52 @@ pub fn whole_number(text: &[u8]) -> Option<u32> {
             .and_then(|shifted| shifted.checked_add(u32::from(digit)))?;
     }
     Some(out)
+}
+
+/// The options the library was built with, which `PRAGMA
+/// compile_options` answers one row for and
+/// `sqlite3_compileoption_get` names by place.
+///
+/// `sqlite3CompileOptions` of the generated `ctime.c` carries the list
+/// the C library was built with, in alphabetical order, which a test
+/// reads the order of. This crate is built with two: it refuses a `%00`
+/// escape in a file name written as a URI, which
+/// `SQLITE_ENABLE_URI_00_ERROR` says, and it holds no lock of its own,
+/// which `SQLITE_THREADSAFE=0` says.
+pub const BUILT: [&[u8]; 2] = [b"ENABLE_URI_00_ERROR", b"THREADSAFE=0"];
+
+/// Whether the library was built with the option a name names, which
+/// `sqlite3_compileoption_used` of `research/sqlite/src/main.c:5200`
+/// answers.
+///
+/// The `SQLITE_` in front of the name is left off, the rest is compared
+/// without regard to case, and a name matches an option that carries
+/// more than it only where the byte after it opens no name, so
+/// `THREADSAFE` names `THREADSAFE=0` and `THREADSAFE=` names nothing.
+/// Reading the list costs O(n) in its length.
+#[must_use]
+pub fn built(name: &[u8]) -> bool {
+    let held = match name.get(..7) {
+        Some(front) if front.eq_ignore_ascii_case(b"SQLITE_") => name.get(7..).unwrap_or_default(),
+        _ => name,
+    };
+    BUILT.iter().any(|option| {
+        option
+            .get(..held.len())
+            .is_some_and(|front| front.eq_ignore_ascii_case(held))
+            && option
+                .get(held.len())
+                .is_none_or(|byte| !crate::change::is_name_byte(*byte))
+    })
+}
+
+/// The option at a place in the list, and nothing where no option
+/// stands there, which `sqlite3_compileoption_get` answers null for.
+///
+/// Reading it costs O(1).
+#[must_use]
+pub fn built_at(at: i64) -> Option<&'static [u8]> {
+    usize::try_from(at)
+        .ok()
+        .and_then(|at| BUILT.get(at).copied())
 }

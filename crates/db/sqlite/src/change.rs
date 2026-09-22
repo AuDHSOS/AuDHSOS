@@ -5023,11 +5023,15 @@ impl Writer {
                 | Setting::IndexXinfo
                 | Setting::IndexList
                 | Setting::CollationList
+                | Setting::CompileOptions
         ) {
             return Ok(None);
         }
         if setting == Setting::CollationList {
             return Ok(Some(listed_collations(self.collating)));
+        }
+        if setting == Setting::CompileOptions {
+            return Ok(Some(listed_options()));
         }
         let named = asked
             .value
@@ -10702,14 +10706,24 @@ fn worded(sql: &[u8], name: &[u8]) -> bool {
     })
 }
 
-/// Whether a byte is one a bare name is written with.
-const fn is_name_byte(byte: u8) -> bool {
+/// Whether a byte is one a bare name is written with, which
+/// `sqlite3IsIdChar` of `research/sqlite/src/tokenize.c` reads.
+pub(crate) const fn is_name_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'$' || byte >= 0x80
 }
 
 /// The text of a name a statement wrote, and nothing where it wrote none.
 fn named_text(named: Option<Span>, sql: &[u8]) -> Vec<u8> {
     named.map_or_else(Vec::new, |span| crate::schema::dequote(span.text(sql)))
+}
+
+/// The rows `PRAGMA compile_options` answers: one per option the library
+/// was built with, in the order [`crate::pragma::BUILT`] carries them.
+pub(crate) fn listed_options() -> Vec<Vec<Value>> {
+    crate::pragma::BUILT
+        .iter()
+        .map(|option| alloc::vec![Value::Text(option.to_vec())])
+        .collect()
 }
 
 /// The rows `PRAGMA collation_list` answers: one per collation the

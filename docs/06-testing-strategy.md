@@ -7020,3 +7020,13 @@ Document 16 step Q8.
   of a parameter and in its value, a `%` that two digits do not follow,
   `%00`, a parameter of no name, one of no value, a fragment, and every
   `mode=` and `cache=` value the library holds and one it does not.
+
+### 6.6.289 The options the build holds (`db-sqlite`)
+
+Document 16 step Q8.
+
+- `PRAGMA compile_options`, a name with the `SQLITE_` in front of it and
+  one without, a name written in another case, a name that is the front
+  of an option and one that is the front of an option and ends in `=`, a
+  name the build holds no option under, the empty name, a place in the
+  list, a place past it, and a place below nought.

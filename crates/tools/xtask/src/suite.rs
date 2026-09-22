@@ -271,7 +271,7 @@ const LOOPING: usize = 5000;
 
 /// The capabilities an `ifcapable` may name that this engine does not
 /// have. Every other name is answered as held.
-const MISSING: [&str; 17] = [
+const MISSING: [&str; 19] = [
     "vtab",
     "fts1",
     "fts2",
@@ -289,6 +289,12 @@ const MISSING: [&str; 17] = [
     "unlock_notify",
     "session",
     "update_delete_limit",
+    // `SQLITE_DIRECT_OVERFLOW_READ` reads an overflow page past the
+    // cache, which this engine does not, and `SQLITE_THREADSAFE=2` is a
+    // build that holds a lock per connection, which this engine holds
+    // none of.
+    "direct_read",
+    "threadsafe2",
 ];
 
 /// Runs every file of the suite, or the one `only` names, and answers

@@ -1026,6 +1026,8 @@ Size: L.
 141. The zone `localtime` and `utc` read. Built, which D-415 records.
 142. The file name written as a URI, which an `ATTACH` reads apart.
      Built, which D-419 records.
+143. The options the build holds, which `PRAGMA compile_options` and the
+     two functions beside it answer. Built, which D-420 records.
 
 ### Done when
 

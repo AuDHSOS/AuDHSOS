@@ -3407,6 +3407,9 @@ impl<'a> Database<'a> {
         if setting == Setting::CollationList {
             return Some(crate::change::listed_collations(self.collating));
         }
+        if setting == Setting::CompileOptions {
+            return Some(crate::change::listed_options());
+        }
         let named = asked
             .value
             .map(|value| crate::schema::dequote(value.text(sql)))

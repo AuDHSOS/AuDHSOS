@@ -1057,18 +1057,17 @@ pub fn call(
             Function::Pi => Value::Real(core::f64::consts::PI),
             Function::Ieee754(which) => ieee754(which, &first, args),
             Function::Ieee754Blob(writing) => ieee754_blob(writing, first),
-            // `sqlite3_compileoption_used` of
-            // `research/sqlite/src/ctime.c` reads the names the build
-            // carries, which this crate carries none of, and
-            // `sqlite3_compileoption_get` names the one at a place,
-            // which is nothing for every place.
-            Function::CompileOption(used) => {
-                if used {
-                    Value::Int(0)
-                } else {
-                    Value::Null
-                }
-            }
+            // `sqlite3_compileoption_used` reads the names the build
+            // carries and `sqlite3_compileoption_get` names the one at a
+            // place, which [`crate::pragma::BUILT`] holds.
+            Function::CompileOption(used) => match (used, &first) {
+                (true, Value::Null) => Value::Null,
+                (true, value) => Value::Int(i64::from(crate::pragma::built(
+                    &value.text().unwrap_or_default(),
+                ))),
+                (false, value) => crate::pragma::built_at(value.to_integer())
+                    .map_or(Value::Null, |option| Value::Text(option.to_vec())),
+            },
             Function::Format => crate::format::format(args)?,
             // `sqlite3_changes`, `sqlite3_total_changes` and
             // `sqlite3_last_insert_rowid`, which the connection carries
