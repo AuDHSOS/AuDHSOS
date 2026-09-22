@@ -4585,14 +4585,20 @@ fn planned(
     sensitive: bool,
     format: u32,
 ) {
-    let terms = filter.map_or_else(Vec::new, |filter| {
-        terms_of(arena, filter, sql, sides, sensitive)
-    });
+    let terms = filter.map_or_else(
+        || Planning {
+            held: Vec::new(),
+            over: Vec::new(),
+            arena,
+            sql,
+        },
+        |filter| terms_of(arena, filter, sql, sides, sensitive),
+    );
     // A rowid range is what a table's own tree is walked by, and it
     // answers a row where an index answers only where the row is, so it
     // is taken first and never given up for an index.
     let mut ranges = alloc::vec![(None, None); sides.len()];
-    for term in &terms {
+    for term in &terms.held {
         let (Reached::Key, Value::Int(bound)) = (term.reached, &term.value) else {
             continue;
         };
@@ -4771,14 +4777,15 @@ enum Reached {
 
 /// Every term a top-level `AND` spine holds that compares a column of
 /// one side against a value no row is needed to read.
-fn terms_of(
-    arena: &Arena,
+fn terms_of<'a>(
+    arena: &'a Arena,
     filter: ExprId,
-    sql: &[u8],
+    sql: &'a [u8],
     sides: &[Side<'_>],
     sensitive: bool,
-) -> Vec<Bound> {
+) -> Planning<'a> {
     let mut out = Vec::new();
+    let mut over = Vec::new();
     let mut spine = alloc::vec![filter];
     while let Some(id) = spine.pop() {
         if let Some(Node::Like {
@@ -4832,6 +4839,9 @@ fn terms_of(
         // operator turns over with the operands.
         for (op, column, value) in [(op, left, right), (flipped(op), right, left)] {
             let Some((at, reached)) = reached(arena, column, sql, sides) else {
+                // An index over an expression names a key of a term that
+                // holds that same expression at one value.
+                over.extend(held_over(arena, (column, value), sql, sides, op));
                 continue;
             };
             // `sqlite3BinaryCompareCollSeq`: a `COLLATE` on either side
@@ -4865,7 +4875,237 @@ fn terms_of(
             });
         }
     }
-    out
+    Planning {
+        held: out,
+        over,
+        arena,
+        sql,
+    }
+}
+
+/// The term an expression of one side is held at one value by, and
+/// nothing where the term holds no expression of a side or holds it at
+/// anything but one value.
+///
+/// Only a term written `=` names a key, because the entries of an index
+/// over an expression run in the order that expression answers and a
+/// bound would ask about the order of what the statement wrote.
+///
+/// Reading one term costs O(n) in its nodes.
+fn held_over(
+    arena: &Arena,
+    held: (ExprId, ExprId),
+    sql: &[u8],
+    sides: &[Side<'_>],
+    op: BinaryOp,
+) -> Option<Overed> {
+    let (id, value) = held;
+    if op != BinaryOp::Eq {
+        return None;
+    }
+    // A `COLLATE` says what the comparison compares under, which the
+    // entries of the index are not held in the order of.
+    if matches!(arena.node(value), Some(Node::Collate { .. })) {
+        return None;
+    }
+    let at = over_of(arena, id, sql, sides)?;
+    let value = evaluate_row(arena, value, sql, &eval::NoRow(None)).ok()?;
+    // An index holds no entry a comparison against null reaches.
+    (value != Value::Null).then_some(Overed { at, id, value })
+}
+
+/// One term that holds an expression of a side at a value, which an
+/// index over that same expression names a key of.
+struct Overed {
+    /// Which side every column of the expression reads.
+    at: usize,
+    /// The expression, as the statement wrote it.
+    id: ExprId,
+    /// What it is held at.
+    value: Value,
+}
+
+/// The terms a plan is built from: the ones about a column of a side and
+/// the ones about an expression over one, with the text the expressions
+/// were written in.
+struct Planning<'a> {
+    /// The terms about a column or the rowid.
+    held: Vec<Bound>,
+    /// The terms about an expression.
+    over: Vec<Overed>,
+    /// The tree the expressions stand in.
+    arena: &'a Arena,
+    /// The text that tree was parsed from.
+    sql: &'a [u8],
+}
+
+/// One expression and the text it was written in.
+#[derive(Clone, Copy)]
+struct Written<'a> {
+    /// The tree it stands in.
+    arena: &'a Arena,
+    /// Which node of that tree it is.
+    id: ExprId,
+    /// The text the tree was parsed from.
+    sql: &'a [u8],
+}
+
+impl Written<'_> {
+    /// The same tree and text at another node.
+    const fn at(self, id: ExprId) -> Self {
+        Written {
+            arena: self.arena,
+            id,
+            sql: self.sql,
+        }
+    }
+}
+
+/// Whether the two expressions say the same thing, which
+/// `sqlite3ExprCompare` of `research/sqlite/src/expr.c` decides.
+///
+/// The trees come from two texts, the statement and the `CREATE INDEX`
+/// the index was written by, so a column is compared by the name it
+/// carries and every other name by the text it was written as. A node
+/// that reads anything but the row, which a bound value and a statement
+/// of its own both are, is alike nothing.
+///
+/// Walking both costs O(n) in their nodes.
+fn alike_written(mine: Written<'_>, theirs: Written<'_>) -> bool {
+    mine.arena
+        .node(mine.id)
+        .zip(theirs.arena.node(theirs.id))
+        .is_some_and(|(one, other)| alike_nodes(mine, one, theirs, other))
+}
+
+/// Whether the two nodes say the same thing, which is what
+/// [`alike_written`] answers once both trees hold the node it names.
+fn alike_nodes(mine: Written<'_>, one: Node, theirs: Written<'_>, other: Node) -> bool {
+    let named = |held: Span, other: Span| {
+        crate::schema::dequote(held.text(mine.sql))
+            .eq_ignore_ascii_case(&crate::schema::dequote(other.text(theirs.sql)))
+    };
+    let under = |held: ExprId, other: ExprId| alike_written(mine.at(held), theirs.at(other));
+    match (one, other) {
+        (Node::Literal(one), Node::Literal(other)) => {
+            let read = |held, sql| crate::eval::literal_value(held, sql, false, None).ok();
+            read(one, mine.sql).is_some_and(|one| Some(one) == read(other, theirs.sql))
+        }
+        (Node::Column { column: one, .. }, Node::Column { column: other, .. }) => named(one, other),
+        (
+            Node::Unary { op: one, operand },
+            Node::Unary {
+                op: other,
+                operand: theirs,
+            },
+        ) => one == other && under(operand, theirs),
+        (
+            Node::Binary {
+                op: one,
+                left,
+                right,
+            },
+            Node::Binary {
+                op: other,
+                left: their_left,
+                right: their_right,
+            },
+        ) => one == other && under(left, their_left) && under(right, their_right),
+        (
+            Node::Cast { value, ty: one },
+            Node::Cast {
+                value: theirs,
+                ty: other,
+            },
+        )
+        | (
+            Node::Collate { value, name: one },
+            Node::Collate {
+                value: theirs,
+                name: other,
+            },
+        ) => named(one, other) && under(value, theirs),
+        (
+            Node::Call {
+                name: one,
+                args,
+                distinct: false,
+                star: false,
+                filter: None,
+            },
+            Node::Call {
+                name: other,
+                args: their_args,
+                distinct: false,
+                star: false,
+                filter: None,
+            },
+        ) => named(one, other) && alike_each(mine, args, theirs, their_args),
+        _ => false,
+    }
+}
+
+/// Whether the two runs of expressions say the same things in the same
+/// order.
+fn alike_each(
+    mine: Written<'_>,
+    args: crate::ast::Range,
+    theirs: Written<'_>,
+    their_args: crate::ast::Range,
+) -> bool {
+    let one = mine.arena.children(args);
+    let other = theirs.arena.children(their_args);
+    one.len() == other.len()
+        && one
+            .iter()
+            .zip(other)
+            .all(|(held, their)| alike_written(mine.at(*held), theirs.at(*their)))
+}
+
+/// The one side every column of `id` reads, and nothing where it reads
+/// none, reads several, or reads anything but the row, which a bound
+/// value and a statement of its own both are.
+///
+/// A function stands in such an expression, because an index over one is
+/// an index a `CREATE INDEX` accepted and `sqlite3CreateIndex` refuses a
+/// function that answers differently for one row.
+///
+/// Walking the expression costs O(n) in its nodes.
+fn over_of(arena: &Arena, id: ExprId, sql: &[u8], sides: &[Side<'_>]) -> Option<usize> {
+    let mut found = None;
+    let mut stack = alloc::vec![id];
+    while let Some(id) = stack.pop() {
+        let node = arena.node(id)?;
+        match node {
+            Node::Column { .. } => {
+                let (at, _) = reached(arena, id, sql, sides)?;
+                if found.is_some_and(|held| held != at) {
+                    return None;
+                }
+                found = Some(at);
+            }
+            Node::Literal(_)
+            | Node::Unary { .. }
+            | Node::Binary { .. }
+            | Node::Between { .. }
+            | Node::InList { .. }
+            | Node::Like { .. }
+            | Node::Cast { .. }
+            | Node::Collate { .. }
+            | Node::Case { .. }
+            | Node::Row(_)
+            | Node::Call { .. } => {}
+            Node::Variable(_)
+            | Node::Over { .. }
+            | Node::Subquery(_)
+            | Node::Exists(_)
+            | Node::InSelect { .. }
+            | Node::InTable { .. }
+            | Node::Raise { .. } => return None,
+        }
+        arena.under(node, |child| stack.push(child));
+    }
+    found
 }
 
 /// The term one end of a `BETWEEN` holds the column at, and nothing
@@ -5058,12 +5298,13 @@ fn reached(arena: &Arena, id: ExprId, sql: &[u8], sides: &[Side<'_>]) -> Option<
 /// `WHERE_COLUMN_EQ` and `WHERE_COLUMN_RANGE`. Reading the terms costs
 /// O(i*c*t) in the indexes, their columns and the terms.
 fn plan_of(
-    terms: &[Bound],
+    terms: &Planning<'_>,
     at: usize,
     stored: &Stored,
     format: u32,
     wants_key: bool,
 ) -> Option<Plan> {
+    let about = &terms.held;
     // The index whose key the terms name the most columns of answers
     // the fewest rows, which is what `whereLoopAddBtree` of
     // `research/sqlite/src/where.c` costs an index by: one value of a
@@ -5087,35 +5328,40 @@ fn plan_of(
         // over again for each value of the place before it.
         let backwards = held_backwards(kept.index.columns.first(), format);
         for held in &kept.index.columns {
-            // An index held in another order than the terms ask about,
-            // a place over an expression, and a place under another
-            // collation than the column compares under each answer
-            // entries in an order no term names.
-            let found = held.place().and_then(|place| {
-                stored
-                    .table
-                    .columns
-                    .get(place)
-                    .map(|column| (place, column))
+            let place = match held.of {
+                // A place over an expression is one a term naming that
+                // same expression holds at one value.
+                crate::schema::Of::Term(term) => {
+                    let Some(value) = keyed_over(term, held, kept, terms, at) else {
+                        break;
+                    };
+                    key.push(value);
+                    collations.push(held.collation);
+                    continue;
+                }
+                crate::schema::Of::Place(place) => place,
+            };
+            // A place under another collation than the column compares
+            // under, and an index held in another order than the terms
+            // ask about, each answer entries in an order no term names.
+            // A column of real affinity holds a whole number as a whole
+            // number, which `OP_RealAffinity` reads back as a real, so an
+            // entry compares against a bound as the row does not:
+            // 3175546974276630385 stands in an entry as itself and is
+            // read out of the row as 3175546974276630528. A place naming
+            // a column the table does not hold is a file whose index and
+            // table disagree.
+            let found = stored.table.columns.get(place).filter(|column| {
+                held_backwards(Some(held), format) == backwards
+                    && held.collation == column.collation
+                    && column.affinity != Affinity::Real
             });
-            let Some((place, column)) = found else {
+            let Some(column) = found else {
                 break;
             };
-            if held_backwards(Some(held), format) != backwards || held.collation != column.collation
-            {
-                break;
-            }
-            // A column of real affinity holds a whole number as a whole
-            // number, which `OP_RealAffinity` reads back as a real, so
-            // an entry compares against a bound as the row does not:
-            // 3175546974276630385 stands in an entry as itself and is
-            // read out of the row as 3175546974276630528.
-            if column.affinity == Affinity::Real {
-                break;
-            }
             let reached = Reached::Column(place);
             let named = |op: BinaryOp| {
-                terms
+                about
                     .iter()
                     .find(|term| {
                         term.at == at
@@ -5193,6 +5439,50 @@ fn plan_of(
         ));
     }
     best.map(|(_, plan)| plan)
+}
+
+/// The value a term holds the expression of the place `keyed` at, and
+/// nothing where the place holds no expression or no term names it.
+///
+/// `sqlite3WhereExprUsage` matches a term against a place of an index
+/// over an expression by `sqlite3ExprCompare`, so the term has to say
+/// what the `CREATE INDEX` said.
+///
+/// Matching one place costs O(t * n) in the terms and their nodes.
+fn keyed_over(
+    term: ExprId,
+    keyed: &crate::schema::Keyed,
+    kept: &Kept,
+    terms: &Planning<'_>,
+    at: usize,
+) -> Option<Value> {
+    // An index over an expression holds its entries under the collation
+    // the `CREATE INDEX` wrote, and a term compares under `BINARY` where
+    // it writes none, which `sqlite3BinaryCompareCollSeq` answers for two
+    // operands that name none.
+    if keyed.collation != Collation::Binary {
+        return None;
+    }
+    let theirs = Written {
+        arena: &kept.arena,
+        id: term,
+        sql: &kept.sql,
+    };
+    terms
+        .over
+        .iter()
+        .find(|over| {
+            over.at == at
+                && alike_written(
+                    Written {
+                        arena: terms.arena,
+                        id: over.id,
+                        sql: terms.sql,
+                    },
+                    theirs,
+                )
+        })
+        .map(|over| over.value.clone())
 }
 
 /// The rows of a walk that names no row, which a plan held to a rowid
@@ -5681,14 +5971,23 @@ fn named_index(stored: &Stored, root: u32) -> Vec<u8> {
 /// One term of the brackets: the column the index holds at `at`, and
 /// the comparison written after it.
 fn term_of(stored: &Stored, root: u32, at: usize, how: &[u8]) -> Vec<u8> {
-    let named = stored
+    let keyed = stored
         .indexes
         .iter()
         .find(|kept| kept.root == root)
-        .and_then(|kept| kept.index.columns.get(at))
-        .and_then(crate::schema::Keyed::place)
-        .and_then(|place| stored.table.columns.get(place))
-        .map(|column| column.name.clone());
+        .and_then(|kept| kept.index.columns.get(at));
+    let named = keyed.and_then(|keyed| {
+        // `explainIndexColumnName` writes `<expr>` for a place over an
+        // expression, which no column of the table names.
+        let Some(place) = keyed.place() else {
+            return Some(b"<expr>".to_vec());
+        };
+        stored
+            .table
+            .columns
+            .get(place)
+            .map(|column| column.name.clone())
+    });
     let mut held = named.unwrap_or_default();
     held.extend_from_slice(how);
     held
@@ -6161,8 +6460,8 @@ fn ored(
         // A branch that names the rowid is read out of the table's own
         // tree, which is the `OP_SeekRowid` loop `sqlite3WhereBegin`
         // writes for `WHERE_IPK`.
-        let plan =
-            plan_of(&terms, at, stored, settled.format, false).or_else(|| ranged_of(&terms, at))?;
+        let plan = plan_of(&terms, at, stored, settled.format, false)
+            .or_else(|| ranged_of(&terms.held, at))?;
         plans.push(plan);
     }
     Some(Plan::Union(plans))

@@ -796,7 +796,7 @@ fn plain_literal(literal: Literal, sql: &[u8], row: &dyn Row) -> Result<Answer, 
 
 /// A constant, with `negated` for the minus sign the parser leaves as a
 /// node of its own and SQLite folds into the number.
-fn literal_value(
+pub(crate) fn literal_value(
     literal: Literal,
     sql: &[u8],
     negated: bool,

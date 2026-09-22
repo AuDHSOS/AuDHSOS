@@ -1010,6 +1010,8 @@ Size: L.
      which D-398 records.
 134. The page a new root of such a file takes. Built, which D-399
      records.
+135. The key an index over an expression names. Built, which D-401
+     records.
 
 ### Done when
 

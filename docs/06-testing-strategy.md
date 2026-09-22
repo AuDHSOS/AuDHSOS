@@ -6930,3 +6930,15 @@ Document 16 step Q8.
 
 - Three roots of a file that keeps pointer maps, with a chain lying where
   the second and the third take their pages.
+
+### 6.6.278 The key an index over an expression names (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A call, an operator and a `CAST` that say what the `CREATE INDEX` said,
+  with the value on either side of the comparison.
+- What says something else: a literal of another value, a column of
+  another name, a call of another name, a call of another count of
+  arguments, a node of another kind, a place under another collation, a
+  term under a `COLLATE`, an expression that reads nothing of the row,
+  one that reads a statement of its own, and one that reads two sides.

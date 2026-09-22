@@ -7,6 +7,10 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` reads a side by an index over an expression where a term
+  holds that same expression at one value. D-401 records it. Catalog
+  6.6.278.
+
 - The suite harness names a database by the path with the steps that name
   nothing taken out, and a connection that wrote `BEGIN` while another
   holds the transaction of the path waits, reading the file as that

@@ -1390,3 +1390,117 @@ fn the_narrowest_index_that_covers_is_taken_whichever_was_made_last() {
     );
     assert_eq!(answer.stepped.searched, 1);
 }
+
+/// A database with four indexes over expressions, and two rows to read.
+fn over_expressions() -> Vec<u8> {
+    use crate::change::Writer;
+    use crate::header::Encoding;
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t(a, b, c TEXT)".as_slice(),
+        b"CREATE TABLE u(v)",
+        b"INSERT INTO t VALUES ('and_the_Word_was_God', 1, 'x')",
+        b"INSERT INTO t VALUES ('All_things_were_made', 2, 'y')",
+        b"CREATE INDEX ta ON t(substr(a,1,12))",
+        b"CREATE INDEX tb ON t(-b)",
+        b"CREATE INDEX tc ON t(CAST(b AS TEXT))",
+        b"CREATE INDEX td ON t(c COLLATE NOCASE)",
+        b"CREATE INDEX te ON t(b+1)",
+        b"CREATE INDEX tf ON t(substr(a COLLATE NOCASE,1,3))",
+        b"CREATE INDEX tg ON t(substr(a,1,3) COLLATE NOCASE)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    writer.written()
+}
+
+#[test]
+fn a_term_that_says_what_a_create_index_said_names_a_key_of_that_index() {
+    let bytes = over_expressions();
+    // A call, a literal and a column under it, an operator over a
+    // column, and a `CAST` each say what the `CREATE INDEX` said.
+    for (sql, plan) in [
+        (
+            b"EXPLAIN QUERY PLAN SELECT b FROM t WHERE substr(a,1,12)='and_the_Word'".as_slice(),
+            "SEARCH t USING INDEX ta (<expr>=?)",
+        ),
+        (
+            b"EXPLAIN QUERY PLAN SELECT b FROM t WHERE -b=2",
+            "SEARCH t USING INDEX tb (<expr>=?)",
+        ),
+        (
+            b"EXPLAIN QUERY PLAN SELECT b FROM t WHERE CAST(b AS TEXT)='2'",
+            "SEARCH t USING INDEX tc (<expr>=?)",
+        ),
+        (
+            b"EXPLAIN QUERY PLAN SELECT b FROM t WHERE 'and_the_Word'=substr(a,1,12)",
+            "SEARCH t USING INDEX ta (<expr>=?)",
+        ),
+        (
+            b"EXPLAIN QUERY PLAN SELECT b FROM t WHERE b+1=2",
+            "SEARCH t USING INDEX te (<expr>=?)",
+        ),
+        (
+            b"EXPLAIN QUERY PLAN SELECT b FROM t WHERE substr(a COLLATE NOCASE,1,3)='and'",
+            "SEARCH t USING INDEX tf (<expr>=?)",
+        ),
+    ] {
+        assert_eq!(planned(&bytes, sql), plan);
+    }
+    // The rows the key reaches are the rows the term is true of.
+    let rows = Database::open(&bytes)
+        .unwrap()
+        .query(b"SELECT b FROM t WHERE substr(a,1,12)='and_the_Word'")
+        .unwrap()
+        .rows;
+    assert_eq!(rows, [alloc::vec![Value::Int(1)]]);
+}
+
+#[test]
+fn what_term_says_something_else_than_the_create_index_said() {
+    let bytes = over_expressions();
+    // A literal of another value, a column of another name, a call of
+    // another name, a call of another count of arguments, and a node of
+    // another kind altogether each say something else.
+    for sql in [
+        b"EXPLAIN QUERY PLAN SELECT b FROM t WHERE substr(a,1,11)='and_the_Wor'".as_slice(),
+        b"EXPLAIN QUERY PLAN SELECT b FROM t WHERE substr(c,1,12)='and_the_Word'",
+        b"EXPLAIN QUERY PLAN SELECT b FROM t WHERE ltrim(a,1,12)='and_the_Word'",
+        b"EXPLAIN QUERY PLAN SELECT b FROM t WHERE substr(a,1)='and_the_Word'",
+        b"EXPLAIN QUERY PLAN SELECT b FROM t WHERE (a+1)=2",
+        // An operand of another value and an operator of another kind
+        // each say something else than the `CREATE INDEX` said.
+        b"EXPLAIN QUERY PLAN SELECT b FROM t WHERE b+2=2",
+        b"EXPLAIN QUERY PLAN SELECT b FROM t WHERE b-1=2",
+        b"EXPLAIN QUERY PLAN SELECT b FROM t WHERE substr(a COLLATE BINARY,1,3)='and'",
+        // `tg` holds its entries under the collation the `CREATE INDEX`
+        // wrote, which the term compares under `BINARY`.
+        b"EXPLAIN QUERY PLAN SELECT b FROM t WHERE substr(a,1,3)='and'",
+        // An operator of another kind, and an operand of another name
+        // under the same operator, each say something else.
+        b"EXPLAIN QUERY PLAN SELECT b FROM t WHERE +b=2",
+        b"EXPLAIN QUERY PLAN SELECT b FROM t WHERE -c=2",
+        b"EXPLAIN QUERY PLAN SELECT b FROM t WHERE CAST(c AS TEXT)='2'",
+        // The index holds its entries under the collation the `CREATE
+        // INDEX` wrote, which the term compares under `BINARY`.
+        b"EXPLAIN QUERY PLAN SELECT b FROM t WHERE c='x'",
+        // A `COLLATE` says what the comparison compares under.
+        b"EXPLAIN QUERY PLAN SELECT b FROM t WHERE substr(a,1,12)='x' COLLATE NOCASE",
+        // An expression that reads nothing of the row, and one that
+        // reads a statement of its own, name no key.
+        b"EXPLAIN QUERY PLAN SELECT b FROM t WHERE 1+1=2",
+        b"EXPLAIN QUERY PLAN SELECT b FROM t WHERE (SELECT 1)=1",
+    ] {
+        assert_eq!(planned(&bytes, sql), "SCAN t");
+    }
+    // An expression that reads two sides is one no index of either holds,
+    // and one that reads another side than the index is over is not the
+    // index's own.
+    for sql in [
+        b"EXPLAIN QUERY PLAN SELECT t.b FROM t, u WHERE substr(t.a,1,u.v)='and_the_Word'"
+            .as_slice(),
+        b"EXPLAIN QUERY PLAN SELECT t.b FROM t, u WHERE substr(u.v,1,12)='and_the_Word'",
+    ] {
+        assert_eq!(planned(&bytes, sql), "SCAN t|SCAN u");
+    }
+}
