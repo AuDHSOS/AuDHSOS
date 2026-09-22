@@ -100,6 +100,14 @@ fn a_time_that_does_not_validate_does_not_convert() {
         ..CivilTime::EPOCH
     };
     assert_eq!(UnixTime::from_civil(bad_hour), Err(TimeError::Hour(24)));
+    // Regression (#396): `from_civil` checks the date that `seconds_of_day` skips.
+    let bad_month = CivilTime {
+        month: 13,
+        day: 40,
+        hour: 1,
+        ..CivilTime::EPOCH
+    };
+    assert_eq!(UnixTime::from_civil(bad_month), Err(TimeError::Month(13)));
 }
 
 #[test]
