@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The suite harness writes a database the tester opens as a file of the
+  machine into the directory the interpreter runs in, and reads it back
+  when the channel closes. D-409 records it. `incrvacuum3.test` goes
+  from 12 cases passing to 22.
+
 - `db-sqlite` makes the log again for a commit over a file whose header
   says version two, and refuses a file whose header names a schema
   format above four. D-408 records it. Catalog 6.6.283.

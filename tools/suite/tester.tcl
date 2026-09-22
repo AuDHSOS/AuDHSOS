@@ -997,6 +997,27 @@ proc forcecopy {from to} { harness_send copy $from $to }
 proc copy_file {from to} { harness_send copy $from $to }
 proc file_exists {f} { return [lindex [harness_send exists $f] 0] }
 
+# The tester opens a database as a file of the machine, which the harness
+# holds the bytes of, so the bytes are written there before the channel
+# is opened and read back when it is closed.
+if {[info commands ::tcl_open] eq ""} { rename open ::tcl_open }
+proc open {name args} {
+  catch { harness_send flush $name }
+  set held [::tcl_open $name {*}$args]
+  set ::harness_channels($held) $name
+  return $held
+}
+if {[info commands ::tcl_close] eq ""} { rename close ::tcl_close }
+proc close {held args} {
+  set out [::tcl_close $held {*}$args]
+  if {[info exists ::harness_channels($held)]} {
+    set name $::harness_channels($held)
+    unset ::harness_channels($held)
+    catch { harness_send take $name }
+  }
+  return $out
+}
+
 # The harness holds the database, the log and the journal, and the
 # machine holds no file of them, so `file size`, `file exists` and
 # `file isfile` over one of those names answer out of the harness and

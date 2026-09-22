@@ -486,6 +486,8 @@ Size: S.
     which a copy and a removal name, which D-405 records.
 45. A connection over a path whose directory is not on the machine
     answers `SQLITE_CANTOPEN`, which D-407 records.
+46. A database the tester opens as a file of the machine is written
+    there and read back, which D-409 records.
 
 ### Produces
 

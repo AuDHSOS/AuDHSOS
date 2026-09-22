@@ -1014,6 +1014,10 @@ struct Session {
     /// which `sqlite3_search_count` counts and `::sqlite_search_count`
     /// answers.
     searched: i64,
+    /// The directory the interpreter runs in, which is where a file the
+    /// session holds is written when the tester opens it as a file of
+    /// the machine.
+    over: PathBuf,
     /// What the machine answered the last open of a file with, which
     /// `sqlite3_system_errno` reads: two for a directory that is not
     /// there, and nought where the file opened.
@@ -1063,6 +1067,7 @@ impl Session {
     /// A run that has answered nothing.
     fn new(file: &str) -> Self {
         Session {
+            over: std::env::temp_dir().join(format!("audhsos-suite-{file}")),
             file: file.to_owned(),
             held: BTreeMap::new(),
             connections: BTreeMap::new(),
@@ -1160,6 +1165,11 @@ impl Session {
                 Ok(Vec::new())
             }
             "exists" => Ok(vec![usize::from(self.sized(first).is_some()).to_string()]),
+            // The tester opens a file of the machine, so the bytes the
+            // session holds are written there first, and read back when
+            // it closes the channel.
+            "flush" => Ok(vec![self.flushed(first).to_string()]),
+            "take" => Ok(vec![self.taken(first).to_string()]),
             // `crashsql` and `crash_on_write` of
             // `research/sqlite/test/tester.tcl`.
             "crash" => self.crashed(args),
@@ -1300,6 +1310,51 @@ impl Session {
             "journal" => writer.journal().map(<[u8]>::len),
             _ => None,
         }
+    }
+
+    /// The bytes the session holds under `name` written into the
+    /// directory the interpreter runs in, so that the tester may open
+    /// the file as a file of the machine.
+    ///
+    /// The answer is whether the file was written. Writing costs O(n) in
+    /// its bytes.
+    fn flushed(&self, name: &str) -> usize {
+        let Some(bytes) = self.bytes_of(name) else {
+            return 0;
+        };
+        let path = self.over.join(name);
+        if path.parent().is_some_and(|over| !over.is_dir()) {
+            return 0;
+        }
+        usize::from(std::fs::write(&path, &bytes).is_ok())
+    }
+
+    /// The file of the machine read back into the session, which the
+    /// tester wrote through a channel of its own.
+    ///
+    /// The answer is whether the session took it. A name the session
+    /// holds no database under is left where it is, because a file the
+    /// tester writes beside the databases is its own. Reading costs O(n)
+    /// in the bytes of the database.
+    fn taken(&mut self, name: &str) -> usize {
+        let path = self.over.join(name);
+        let Ok(bytes) = std::fs::read(&path) else {
+            return 0;
+        };
+        let (base, tail) = named_beside(name);
+        if !self.held.contains_key(base) {
+            return 0;
+        }
+        if self.bytes_of(name).is_some_and(|held| held == bytes) {
+            return 0;
+        }
+        let mut files = self.files_of(base);
+        match tail {
+            Some("wal") => files.2 = bytes,
+            Some("journal") => files.1 = bytes,
+            _ => files.0 = bytes,
+        }
+        usize::from(self.opened_again(base, files).is_ok())
     }
 
     /// `hexio_read FILENAME OFFSET AMT`: `amt` bytes of the file from
