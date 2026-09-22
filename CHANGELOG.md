@@ -51,6 +51,16 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` answers no row for a `PRAGMA` whose name the pragma table
+  of the C library does not hold, which it refused before, so the
+  statements after `PRAGMA autovacuum = 0` run. D-397 records it. Catalog
+  6.6.275.
+
+- `db-sqlite` writes the header of a rollback journal with no count of
+  its records and writes the count after the first sync, which is the
+  first and the second journal sync `crash.test` counts. D-396 records
+  it. `crash.test` goes from 129 cases passing to 137.
+
 - `db-sqlite` reads the pages of a log by the number of its last commit
   frame, so a frame after that commit naming a page no frame before it
   named no longer pushes a committed page out of what a reader reaches.

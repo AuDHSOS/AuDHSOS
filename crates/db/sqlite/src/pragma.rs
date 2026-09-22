@@ -489,13 +489,111 @@ pub fn of_name(name: &[u8]) -> Option<Setting> {
         | b"compile_options"
         | b"optimize" => Setting::Ignored,
         _ => {
-            let at = HELD
+            if let Some(at) = HELD
                 .iter()
-                .position(|keeps| keeps.name == name.as_slice())?;
-            Setting::Held(at)
+                .position(|keeps| keeps.name == name.as_slice())
+            {
+                Setting::Held(at)
+            } else if KNOWN.contains(&name.as_slice()) {
+                // A pragma the C library holds and this crate does not
+                // write is refused rather than left out, because a
+                // statement that named it asked for something.
+                return None;
+            } else {
+                // `sqlite3Pragma` looks the name up in the table
+                // `research/sqlite/pragma.h` holds and answers no row for
+                // a name that is not in it, so `PRAGMA autovacuum`, which
+                // no version of the library ever held, changes nothing.
+                Setting::Ignored
+            }
         }
     })
 }
+
+/// The names the pragma table of `research/sqlite/pragma.h` holds, which
+/// `sqlite3Pragma` of `research/sqlite/src/pragma.c` looks a name up in:
+/// a name that is in it and that this crate does not write is refused,
+/// and a name that is not in it changes nothing.
+const KNOWN: [&[u8]; 78] = [
+    b"activate_extensions",
+    b"analysis_limit",
+    b"application_id",
+    b"auto_vacuum",
+    b"automatic_index",
+    b"busy_timeout",
+    b"cache_size",
+    b"cache_spill",
+    b"case_sensitive_like",
+    b"cell_size_check",
+    b"checkpoint_fullfsync",
+    b"collation_list",
+    b"compile_options",
+    b"count_changes",
+    b"data_store_directory",
+    b"data_version",
+    b"database_list",
+    b"default_cache_size",
+    b"defer_foreign_keys",
+    b"empty_result_callbacks",
+    b"encoding",
+    b"foreign_key_check",
+    b"foreign_key_list",
+    b"foreign_keys",
+    b"freelist_count",
+    b"full_column_names",
+    b"fullfsync",
+    b"function_list",
+    b"hard_heap_limit",
+    b"ignore_check_constraints",
+    b"incremental_vacuum",
+    b"index_info",
+    b"index_list",
+    b"index_xinfo",
+    b"integrity_check",
+    b"journal_mode",
+    b"journal_size_limit",
+    b"legacy_alter_table",
+    b"lock_proxy_file",
+    b"lock_status",
+    b"locking_mode",
+    b"max_page_count",
+    b"mmap_size",
+    b"module_list",
+    b"optimize",
+    b"page_count",
+    b"page_size",
+    b"parser_trace",
+    b"pragma_list",
+    b"query_only",
+    b"quick_check",
+    b"read_uncommitted",
+    b"recursive_triggers",
+    b"reverse_unordered_selects",
+    b"schema_version",
+    b"secure_delete",
+    b"short_column_names",
+    b"shrink_memory",
+    b"soft_heap_limit",
+    b"sql_trace",
+    b"stats",
+    b"synchronous",
+    b"table_info",
+    b"table_list",
+    b"table_xinfo",
+    b"temp_store",
+    b"temp_store_directory",
+    b"threads",
+    b"trusted_schema",
+    b"user_version",
+    b"vdbe_addoptrace",
+    b"vdbe_debug",
+    b"vdbe_eqp",
+    b"vdbe_listing",
+    b"vdbe_trace",
+    b"wal_autocheckpoint",
+    b"wal_checkpoint",
+    b"writable_schema",
+];
 
 impl Setting {
     /// The columns this pragma answers, each by name, and none where it
@@ -553,14 +651,11 @@ impl Setting {
             // `PragFlg_NoColumns` states, and the three names no version
             // of the library still holds answer none either.
             Setting::CaseSensitiveLike => return Vec::new(),
+            // A name the pragma table does not hold answers no column
+            // either, because `sqlite3Pragma` answers no row for it.
             Setting::Ignored
-                if [
-                    b"shrink_memory".as_slice(),
-                    b"legacy_file_format",
-                    b"default_synchronous",
-                ]
-                .iter()
-                .any(|word| name.eq_ignore_ascii_case(word)) =>
+                if name.eq_ignore_ascii_case(b"shrink_memory")
+                    || !KNOWN.contains(&name.to_ascii_lowercase().as_slice()) =>
             {
                 return Vec::new();
             }

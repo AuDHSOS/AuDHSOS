@@ -1003,6 +1003,9 @@ Size: L.
      to. Built, which D-392 records.
 131. What a commit writes, and a connection over the three files a
      database is kept in. Built, which D-393 records.
+132. The two syncs a commit that keeps a rollback journal makes, and what
+     a pragma the C library does not hold answers. Built, which D-396 and
+     D-397 record.
 
 ### Done when
 

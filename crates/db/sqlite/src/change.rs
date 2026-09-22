@@ -3699,10 +3699,19 @@ fn journalled(written: &[u8], held: &HeldFile) -> Vec<Does> {
     let sector = crate::bytes::size(u64::from(held.sector));
     let page_size = crate::bytes::size(u64::from(held.header.page_size));
     let record = page_size.saturating_add(8);
+    // `writeJournalHdr` writes the header with no count of the records
+    // that follow it, and `syncJournal` writes the count after the first
+    // sync and holds the journal a second time, so a machine that lost
+    // power before that count reaches the disk plays nothing back.
+    let mut header = written.get(..sector).unwrap_or_default().to_vec();
+    let counted: Vec<u8> = header.get(8..12).unwrap_or_default().to_vec();
+    for slot in header.iter_mut().skip(8).take(4) {
+        *slot = 0;
+    }
     let mut did = alloc::vec![Does::Write {
         onto: Onto::Journal,
         at: 0,
-        bytes: written.get(..sector).unwrap_or_default().to_vec(),
+        bytes: header,
     }];
     let mut at = sector;
     while let Some(bytes) = written.get(at..at.saturating_add(record)) {
@@ -3713,6 +3722,12 @@ fn journalled(written: &[u8], held: &HeldFile) -> Vec<Does> {
         });
         at = at.saturating_add(record);
     }
+    did.push(Does::Sync(Onto::Journal));
+    did.push(Does::Write {
+        onto: Onto::Journal,
+        at: 8,
+        bytes: counted,
+    });
     did.push(Does::Sync(Onto::Journal));
     for (number, page) in held.pages.frames(&held.header) {
         did.push(Does::Write {

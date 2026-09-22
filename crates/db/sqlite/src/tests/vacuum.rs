@@ -244,8 +244,12 @@ fn a_pragma_the_library_does_not_know_answers_no_row() {
     assert_eq!(writer.run(b"PRAGMA default_synchronous").unwrap(), none);
     assert_eq!(writer.run(b"PRAGMA default_synchronous=2").unwrap(), none);
     assert_eq!(writer.run(b"PRAGMA optimize").unwrap(), none);
-    // A name this crate holds nothing for at all is still refused.
-    assert_eq!(writer.run(b"PRAGMA bogus_name"), Err(Error::Unsupported));
+    // A name the pragma table of the C library does not hold changes
+    // nothing, and one it holds that this crate does not write is
+    // refused.
+    assert_eq!(writer.run(b"PRAGMA bogus_name").unwrap(), none);
+    assert_eq!(writer.run(b"PRAGMA autovacuum = 0").unwrap(), none);
+    assert_eq!(writer.run(b"PRAGMA table_list"), Err(Error::Unsupported));
 }
 
 /// `autovacuum-1.*` of `test/autovacuum.test`: a file that vacuums

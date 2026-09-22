@@ -2598,7 +2598,7 @@ fn what_a_pragma_refuses() {
     let mut writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
     // A pragma this crate does not answer, and a value it does not
     // name.
-    assert!(writer.run(b"PRAGMA nosuch=1").is_err());
+    assert!(writer.run(b"PRAGMA table_list=1").is_err());
     // `PRAGMA auto_vacuum` is not among them: `getAutoVacuum` names
     // none for a word no way carries.
     assert!(

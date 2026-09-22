@@ -275,3 +275,32 @@ fn a_log_of_no_committed_frame_leaves_the_file_as_it_stands() {
     let made = Writer::recovered(&[], &[], &empty).unwrap();
     assert_eq!(made.written().len(), 0);
 }
+
+#[test]
+fn a_commit_that_keeps_a_rollback_journal_holds_it_twice() {
+    let mut writer = written(b"delete");
+    writer.run(b"INSERT INTO t VALUES (1)").unwrap();
+    let did = writer.did();
+    let shape = shaped(&did);
+    // The header carries no count of the records until the first sync
+    // has held them, so a machine that stopped before the count reached
+    // the disk plays nothing back.
+    let syncs: Vec<usize> = shape
+        .iter()
+        .enumerate()
+        .filter(|(_, held)| **held == ("sync", Onto::Journal))
+        .map(|(at, _)| at)
+        .collect();
+    assert_eq!(syncs.len(), 2);
+    let Some(Does::Write { at, bytes, .. }) = did.first() else {
+        panic!("the commit writes the header first");
+    };
+    assert_eq!(*at, 0);
+    assert_eq!(bytes.get(8..12), Some([0, 0, 0, 0].as_slice()));
+    let counted = did.get(syncs[0].saturating_add(1));
+    let Some(Does::Write { at, bytes, .. }) = counted else {
+        panic!("the count follows the first sync");
+    };
+    assert_eq!(*at, 8);
+    assert_ne!(bytes.as_slice(), [0, 0, 0, 0].as_slice());
+}

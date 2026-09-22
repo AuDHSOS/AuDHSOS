@@ -6907,3 +6907,12 @@ Document 16 step Q8.
   log, and over three files of no bytes.
 - A log holding a frame after its last commit frame that names a page no
   frame before it named.
+
+### 6.6.275 The two journal syncs and the pragmas the table holds (`db-sqlite`)
+
+Document 16 step Q8.
+
+- The header a commit writes with no count of its records, and the count
+  it writes after the first sync.
+- A pragma name the table does not hold, with a value and without one,
+  and one it holds that this crate does not write.
