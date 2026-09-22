@@ -869,6 +869,16 @@ fn locked(text: &str, waiting: &mut bool) -> Locked {
     }
 }
 
+/// The database a name stands for and which of the two files beside it
+/// the name holds, where the name holds one: `test.db-wal` is the log of
+/// `test.db` and `test.db` is the database itself.
+fn named_beside(name: &str) -> (&str, Option<&str>) {
+    match name.rsplit_once('-') {
+        Some((base, tail @ ("wal" | "journal"))) => (base, Some(tail)),
+        _ => (name, None),
+    }
+}
+
 /// Whether the statement begins a transaction, which `BEGIN` and `BEGIN
 /// TRANSACTION` both do.
 fn begins(text: &str) -> bool {
@@ -1138,7 +1148,7 @@ impl Session {
                 Ok(Vec::new())
             }
             "delete" => {
-                self.held.remove(first);
+                self.removed(first);
                 Ok(Vec::new())
             }
             "exists" => Ok(vec![usize::from(self.sized(first).is_some()).to_string()]),
@@ -2270,15 +2280,52 @@ impl Session {
     /// One database written again under another path, which is what a
     /// file that saves itself and reads the save back asks for.
     fn copy(&mut self, from: &str, to: &str) -> Result<Vec<String>, String> {
-        let Some(held) = self.held.get(from) else {
-            self.held.remove(to);
+        let Some(bytes) = self.bytes_of(from) else {
+            self.removed(to);
             return Ok(Vec::new());
         };
-        let bytes = held.written();
-        let mut writer = Writer::opened(&bytes).map_err(|error| refusal(&error))?;
+        let (base, tail) = named_beside(to);
+        let mut files = self.files_of(base);
+        match tail {
+            Some("wal") => files.2 = bytes,
+            Some("journal") => files.1 = bytes,
+            _ => files.0 = bytes,
+        }
+        self.opened_again(base, files)
+    }
+
+    /// One file the session holds given up, which `forcedelete` asks
+    /// for: the database with the log and the journal beside it, or one
+    /// of those two alone, which leaves the database where it is.
+    fn removed(&mut self, name: &str) {
+        if self.held.remove(name).is_some() {
+            return;
+        }
+        let (base, tail) = named_beside(name);
+        let mut files = self.files_of(base);
+        match tail {
+            Some("wal") => files.2 = Vec::new(),
+            Some("journal") => files.1 = Vec::new(),
+            _ => return,
+        }
+        let _ = self.opened_again(base, files);
+    }
+
+    /// The connection over `path` made again out of the three files, which
+    /// is what a copy or a removal of one of them leaves.
+    ///
+    /// # Errors
+    ///
+    /// The message the engine refused the files with.
+    fn opened_again(
+        &mut self,
+        path: &str,
+        files: (Vec<u8>, Vec<u8>, Vec<u8>),
+    ) -> Result<Vec<String>, String> {
+        let mut writer = Crashing::new(files).opened()?;
         writer.defines(DEFINED);
         writer.groups(GROUPED);
-        self.held.insert(to.to_owned(), writer);
+        self.held.insert(path.to_owned(), writer);
         Ok(Vec::new())
     }
 

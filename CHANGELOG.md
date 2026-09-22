@@ -7,6 +7,10 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The suite harness treats the log and the rollback journal beside a
+  database as files of their own, which a copy and a removal name.
+  D-405 records it. `wal3.test` goes from 297 cases passing to 346.
+
 - The last connection over a file in write-ahead logging writes the log
   back into the file and removes it when it closes, and a file whose
   header says version two answers `wal` for its journal mode. D-404

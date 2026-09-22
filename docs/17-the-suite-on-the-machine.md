@@ -482,6 +482,8 @@ Size: S.
     the syncs the commits of a request made, which D-402 records.
 43. `sqlite3_exec` reads the `%XX` escapes of its statement as the bytes
     they name, which D-403 records.
+44. The log and the journal beside a database are files of their own,
+    which a copy and a removal name, which D-405 records.
 
 ### Produces
 
