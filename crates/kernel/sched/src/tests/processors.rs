@@ -154,3 +154,40 @@ fn invalid_threads_and_homes_leave_the_queues_unchanged() {
     assert_eq!(queues.take_pending(), 0);
     assert_eq!(queues.ready_bitmap(), 0);
 }
+
+#[test]
+fn remote_cancellation_updates_only_the_home_deadline_heap() {
+    let mut queues = Processors::new();
+    let mut threads = Pool::<Thread, 16>::new();
+    let mut waiters = Vec::new();
+    for cpu in 0..4 {
+        queues.online(cpu);
+        queues.select(cpu);
+        let mut ids = Vec::new();
+        for deadline in [30, 10, 20] {
+            let id = thread(&mut threads, cpu, 7);
+            queues.start(&mut threads, id).unwrap();
+            assert_eq!(queues.pick_next(&mut threads), Ok(id));
+            queues
+                .on_block_until(&mut threads, id, Event::BlockNotification, deadline)
+                .unwrap();
+            ids.push(id);
+        }
+        waiters.push(ids);
+    }
+    queues.select(0);
+    for ids in &waiters {
+        queues.on_wake(&mut threads, ids[1]).unwrap();
+    }
+    assert_eq!(queues.take_pending(), 0b1110);
+    for (cpu, ids) in (0..4).zip(&waiters) {
+        queues.select(cpu);
+        assert_eq!(queues.waiting_until(), 2);
+        assert_eq!(queues.next_deadline(), Some(ids[2]));
+    }
+    for ids in waiters {
+        assert_eq!(queues.expired(&mut threads, 30), Some(ids[2]));
+        assert_eq!(queues.expired(&mut threads, 30), Some(ids[0]));
+    }
+    assert_eq!(queues.expired(&mut threads, 30), None);
+}

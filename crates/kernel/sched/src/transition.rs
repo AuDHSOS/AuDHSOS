@@ -1,12 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Manuel Baesler and contributors
 
-//! What a thread may do next, as a table.
-//!
-//! Invariants: every legal transition is exactly one row of
-//! [`TRANSITIONS`]; a pair of state and event the table does not name is an
-//! error and never a panic; [`ThreadState::Exited`] is final, so no row
-//! leaves it.
+//! O(1) state transitions, derived from the legal rows in [`TRANSITIONS`].
 
 use audhsos_abi::{Error, ThreadState};
 
@@ -145,10 +140,7 @@ pub const TRANSITIONS: &[(ThreadState, Event, ThreadState)] = &[
     (ThreadState::Running, Event::Suspend, ThreadState::Suspended),
     (ThreadState::Running, Event::Fault, ThreadState::Faulted),
     (ThreadState::Running, Event::Exit, ThreadState::Exited),
-    // Waiting for something that happens elsewhere. Every blocked state
-    // wakes into `Ready`, is suspendable, and can be killed. The one
-    // transition from one blocked state to another is the queued caller
-    // below, whose message was taken and who now waits for the answer.
+    // Blocked threads may wake, suspend, or exit.
     (ThreadState::BlockedSend, Event::Wake, ThreadState::Ready),
     (
         ThreadState::BlockedSend,
@@ -156,10 +148,7 @@ pub const TRANSITIONS: &[(ThreadState, Event, ThreadState)] = &[
         ThreadState::Suspended,
     ),
     (ThreadState::BlockedSend, Event::Exit, ThreadState::Exited),
-    // A queued caller whose message a receiver has taken. It waited for a
-    // receiver and now waits for the answer, without ever having been
-    // ready in between, which is what makes `ipc_call` atomic from the
-    // receiver's point of view (2.6.1).
+    // A queued call moves directly from waiting for a receiver to a reply.
     (
         ThreadState::BlockedSend,
         Event::BlockReply,
@@ -203,18 +192,51 @@ pub const TRANSITIONS: &[(ThreadState, Event, ThreadState)] = &[
     (ThreadState::Faulted, Event::Exit, ThreadState::Exited),
 ];
 
-/// The state a thread in `state` reaches when `event` happens.
+// ThreadState codes start at one; Event discriminants start at zero.
+const STATES: usize = ThreadState::ALL.len() + 1;
+const EVENTS: usize = Event::ALL.len();
+
+#[expect(
+    clippy::indexing_slicing,
+    clippy::as_conversions,
+    reason = "const evaluation checks all enum indices and transition rows"
+)]
+const LOOKUP: [[Option<ThreadState>; EVENTS]; STATES] = {
+    let mut table = [[None; EVENTS]; STATES];
+    let mut index = 0;
+    while index < ThreadState::ALL.len() {
+        assert!((ThreadState::ALL[index] as usize) < STATES);
+        index += 1;
+    }
+    index = 0;
+    while index < EVENTS {
+        assert!((Event::ALL[index] as usize) == index);
+        index += 1;
+    }
+    index = 0;
+    while index < TRANSITIONS.len() {
+        let (from, event, to) = TRANSITIONS[index];
+        assert!(table[from as usize][event as usize].is_none());
+        table[from as usize][event as usize] = Some(to);
+        index += 1;
+    }
+    table
+};
+
+/// The state reached by `event`, looked up in O(1).
 ///
 /// # Errors
-///
-/// [`Error::InvalidState`] when the table does not name the pair, which is
-/// what an illegal transition is: resuming a thread that is not suspended,
-/// starting one twice, or anything at all after it exited.
+/// [`Error::InvalidState`] for a pair absent from [`TRANSITIONS`].
+#[expect(
+    clippy::as_conversions,
+    reason = "enum discriminants fit usize on kernel targets"
+)]
 pub fn next(state: ThreadState, event: Event) -> Result<ThreadState, Error> {
-    TRANSITIONS
-        .iter()
-        .find(|(from, on, _)| *from == state && *on == event)
-        .map(|(_, _, to)| *to)
+    LOOKUP
+        .get(state as usize)
+        .and_then(|row| row.get(event as usize))
+        .copied()
+        .flatten()
         .ok_or(Error::InvalidState)
 }
 

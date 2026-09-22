@@ -5,6 +5,7 @@
 //! product code only.
 
 mod deadline;
+mod deadline_heap;
 mod scheduler;
 mod transition;
 

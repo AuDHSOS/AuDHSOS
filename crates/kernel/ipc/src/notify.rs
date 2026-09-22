@@ -183,12 +183,8 @@ pub fn wait_until<const NP: usize, const NT: usize, const NM: usize, const NH: u
     }
 }
 
-/// The next thread whose deadline has passed at `now`, made ready with no
-/// bits. `None` says that nothing is due, which is what a tick that wakes
-/// nobody costs: one comparison against the front of the list.
-///
-/// The caller loops until this answers `None`, so a list whose deadlines
-/// have all passed empties in one tick.
+/// Makes the next expired waiter ready with no bits. The caller loops until
+/// `None`; each removal costs O(log n), and each processor's minimum costs O(1).
 pub fn expire<const NP: usize, const NT: usize, const NM: usize, const NH: usize>(
     objects: &mut Objects<NP, NT, NM, NH>,
     scheduler: &mut Scheduler,

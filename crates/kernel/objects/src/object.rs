@@ -411,10 +411,8 @@ pub struct Thread {
     /// kernel crate depends on `audhsos-time`, and comparing two integers
     /// needs no type.
     pub deadline: Option<u64>,
-    /// The list of threads that wait with a deadline, ordered by it. A
-    /// thread is in it exactly while it is `BlockedNotification` with a
-    /// deadline.
-    pub deadline_links: Links,
+    /// The thread's position in its home scheduler's deadline heap.
+    pub deadline_index: Option<usize>,
     /// What the thread stopped on, for `thread_info` and for the message a
     /// fault handler receives.
     pub fault: Option<Fault>,
@@ -459,7 +457,7 @@ impl Thread {
             wait_links: Links::UNLINKED,
             wait: Wait::Nothing,
             deadline: None,
-            deadline_links: Links::UNLINKED,
+            deadline_index: None,
             fault: None,
         })
     }
