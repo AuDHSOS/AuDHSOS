@@ -2,9 +2,10 @@
 // Copyright (C) 2026 Manuel Baesler and contributors
 
 //! The host tests of the crate: one module for the pieces a stream is
-//! made of, one for what this crate writes and reads back, and one for
-//! streams another compressor wrote.
+//! made of, one for streams written bit by bit, one for what this crate
+//! writes and reads back, and one for streams another compressor wrote.
 
 mod format;
+mod malformed;
 mod roundtrip;
 mod vectors;

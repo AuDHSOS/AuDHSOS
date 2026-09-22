@@ -36,15 +36,22 @@ const CODE_LENGTHS: usize = 19;
 pub(crate) fn inflate(input: &[u8], out: &mut [u8]) -> Result<usize, Error> {
     let mut reader = Reader::new(input);
     let mut written = 0usize;
+    // The fixed trees: built at the first fixed block, reused after.
+    let mut fixed: Option<(Tree<LITERALS>, Tree<DISTANCES>)> = None;
     loop {
         let last = reader.bit()?;
         let kind = reader.bits(2)?;
         match kind {
             0 => written = stored(&mut reader, out, written)?,
             1 => {
-                let literals = Tree::<LITERALS>::new(&fixed_literal_lengths());
-                let distances = Tree::<DISTANCES>::new(&fixed_distance_lengths());
-                written = block(&mut reader, out, written, &literals, &distances)?;
+                if fixed.is_none() {
+                    fixed = Some((
+                        Tree::new(&fixed_literal_lengths())?,
+                        Tree::distances(&fixed_distance_lengths())?,
+                    ));
+                }
+                let (literals, distances) = fixed.as_ref().ok_or(Error::Input)?;
+                written = block(&mut reader, out, written, literals, distances)?;
             }
             2 => {
                 let (literals, distances) = tables(&mut reader)?;
@@ -135,7 +142,7 @@ fn tables(reader: &mut Reader<'_>) -> Result<(Tree<LITERALS>, Tree<DISTANCES>), 
         let slot = code_lengths.get_mut(at).ok_or(Error::Input)?;
         *slot = length;
     }
-    let lengths_tree = Tree::<CODE_LENGTHS>::new(&code_lengths);
+    let lengths_tree = Tree::<CODE_LENGTHS>::new(&code_lengths)?;
     // The lengths of both alphabets are one run of numbers, and a repeat
     // may reach from the end of the first into the start of the second.
     let total = literal_count.saturating_add(distance_count);
@@ -168,8 +175,8 @@ fn tables(reader: &mut Reader<'_>) -> Result<(Tree<LITERALS>, Tree<DISTANCES>), 
     let literal_lengths = lengths.get(..literal_count).ok_or(Error::Input)?;
     let distance_lengths = lengths.get(literal_count..total).ok_or(Error::Input)?;
     Ok((
-        Tree::<LITERALS>::new(literal_lengths),
-        Tree::<DISTANCES>::new(distance_lengths),
+        Tree::<LITERALS>::new(literal_lengths)?,
+        Tree::<DISTANCES>::distances(distance_lengths)?,
     ))
 }
 

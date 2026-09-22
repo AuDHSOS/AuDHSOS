@@ -7,9 +7,9 @@
 //! lengths stands for exactly one code, so neither side of a stream has to
 //! carry the codes themselves. Shorter codes come before longer ones, and
 //! codes of one length are given out in the order of the symbols they
-//! belong to. Building a code is therefore counting how many symbols have
-//! each length, giving each length its first code, and walking the symbols
-//! once; reading one is the same walk from the other end.
+//! belong to. Building a code counts the symbols of each length, gives
+//! each length its first code, and assigns the codes in one pass over the
+//! symbols; reading one uses the same counts.
 
 use crate::Error;
 
@@ -27,15 +27,16 @@ pub(crate) struct Codes<const N: usize> {
 }
 
 impl<const N: usize> Codes<N> {
-    /// The one code a set of lengths stands for.
+    /// The one code a set of lengths stands for, in O(N): RFC 1951,
+    /// section 3.2.2, steps 1 to 3.
     pub(crate) fn new(lengths: &[u8; N]) -> Self {
         let counts = counts_of(lengths);
-        // The first code of each length: twice the first code of the
-        // length before it, plus however many codes that length used.
-        let mut first = [0u16; MAX_BITS.saturating_add(1)];
+        // The next code of each length, starting at the first:
+        // `(first[b - 1] + count[b - 1]) * 2`, RFC 1951, section 3.2.2, step 2.
+        let mut next = [0u16; MAX_BITS.saturating_add(1)];
         let mut code = 0u16;
         let mut before = 0u16;
-        for (slot, count) in first.iter_mut().zip(counts) {
+        for (slot, count) in next.iter_mut().zip(counts) {
             code = code.saturating_add(before).saturating_mul(2);
             *slot = code;
             before = count;
@@ -44,39 +45,47 @@ impl<const N: usize> Codes<N> {
             code: [0u16; N],
             length: *lengths,
         };
-        // A symbol's code is the first code of its length plus however
-        // many symbols of that length come before it.
-        for (symbol, target) in codes.code.iter_mut().enumerate() {
-            let length = lengths.get(symbol).copied().unwrap_or(0);
-            if length == 0 {
+        for (target, length) in codes.code.iter_mut().zip(lengths) {
+            if *length == 0 {
                 continue;
             }
-            let rank = lengths
-                .iter()
-                .take(symbol)
-                .filter(|other| **other == length)
-                .count();
-            *target = first
-                .get(usize::from(length))
-                .copied()
-                .unwrap_or(0)
-                .saturating_add(u16::try_from(rank).unwrap_or(0));
+            if let Some(slot) = next.get_mut(usize::from(*length)) {
+                *target = *slot;
+                *slot = slot.saturating_add(1);
+            }
         }
         codes
     }
 }
 
-/// How many codes there are of each length. A length the format does not
-/// have — nothing in a stream can say more than fifteen — counts for
-/// none, and the symbol carrying it falls out of the code.
+/// How many codes there are of each length, in O(N). A length the format
+/// does not have — a stream cannot say more than fifteen — counts for
+/// none, and the symbol carrying it is not in the code.
 fn counts_of(lengths: &[u8]) -> [u16; MAX_BITS.saturating_add(1)] {
-    core::array::from_fn(|bits| {
-        let found = lengths
-            .iter()
-            .filter(|length| usize::from(**length) == bits && bits > 0)
-            .count();
-        u16::try_from(found).unwrap_or(u16::MAX)
-    })
+    let mut counts = [0u16; MAX_BITS.saturating_add(1)];
+    for length in lengths {
+        if *length == 0 {
+            continue;
+        }
+        if let Some(count) = counts.get_mut(usize::from(*length)) {
+            *count = count.saturating_add(1);
+        }
+    }
+    counts
+}
+
+/// How many codes of the longest length the lengths leave unused: zero
+/// for a complete code, above zero for an incomplete one, and `None` for
+/// one that asks for more codes than there are.
+fn unused(counts: &[u16; MAX_BITS.saturating_add(1)]) -> Option<i32> {
+    let mut left = 1i32;
+    for count in counts.iter().skip(1) {
+        left = left.checked_mul(2)?.checked_sub(i32::from(*count))?;
+        if left < 0 {
+            return None;
+        }
+    }
+    Some(left)
 }
 
 /// A code, for reading: how many symbols have each length, and the
@@ -90,28 +99,61 @@ pub(crate) struct Tree<const N: usize> {
 }
 
 impl<const N: usize> Tree<N> {
-    /// The tree a set of lengths stands for.
-    pub(crate) fn new(lengths: &[u8]) -> Self {
+    /// The tree a set of lengths stands for, in O(N).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Input`] for lengths that over-subscribe the code or leave
+    /// it incomplete, as RFC 1951, section 3.2.2, defines a code only for
+    /// a complete set. Lengths that are all zero are a code of no
+    /// symbols, and reading from it fails.
+    pub(crate) fn new(lengths: &[u8]) -> Result<Self, Error> {
+        Self::build(lengths, false)
+    }
+
+    /// The distance tree a set of lengths stands for, which may also be
+    /// one code of length one, as RFC 1951, section 3.2.7, permits.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Input`] as for [`Tree::new`].
+    pub(crate) fn distances(lengths: &[u8]) -> Result<Self, Error> {
+        Self::build(lengths, true)
+    }
+
+    /// The tree, with `lone` allowing one code of length one.
+    fn build(lengths: &[u8], lone: bool) -> Result<Self, Error> {
         let counts = counts_of(lengths);
-        // The symbols, shortest code first and by symbol inside a length.
-        // A tree with less room than the lengths ask for keeps what fits:
-        // the caller gave the size, and a stream that wants more of them
-        // is one that will not decode anyway.
+        let left = unused(&counts).ok_or(Error::Input)?;
+        let total = counts
+            .iter()
+            .fold(0u16, |sum, count| sum.saturating_add(*count));
+        let lone_code = lone && total == 1 && counts.get(1) == Some(&1);
+        if left > 0 && total > 0 && !lone_code {
+            return Err(Error::Input);
+        }
+        // The index of the first symbol of each length: shortest code first,
+        // by symbol within a length. Symbols past N are dropped.
+        let mut offsets = [0usize; MAX_BITS.saturating_add(1)];
+        let mut start = 0usize;
+        for (slot, count) in offsets.iter_mut().zip(counts) {
+            *slot = start;
+            start = start.saturating_add(usize::from(count));
+        }
         let mut symbols = [0u16; N];
-        let mut places = symbols.iter_mut();
-        for bits in 1..=MAX_BITS {
-            let of_this_length = lengths
-                .iter()
-                .enumerate()
-                .filter(|(_, length)| usize::from(**length) == bits);
-            for (symbol, _) in of_this_length {
-                let Some(slot) = places.next() else {
-                    break;
-                };
+        for (symbol, length) in lengths.iter().enumerate() {
+            if *length == 0 {
+                continue;
+            }
+            let Some(offset) = offsets.get_mut(usize::from(*length)) else {
+                continue;
+            };
+            if let Some(slot) = symbols.get_mut(*offset) {
                 *slot = u16::try_from(symbol).unwrap_or(0);
             }
+            *offset = offset.saturating_add(1);
         }
-        Self { counts, symbols }
+        Ok(Self { counts, symbols })
     }
 
     /// Reads one symbol: a bit at a time, until the code is one of the

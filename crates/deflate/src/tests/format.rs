@@ -89,7 +89,7 @@ fn the_fixed_code_is_the_one_the_document_states() {
 fn a_code_written_is_the_symbol_read() {
     let lengths = fixed_literal_lengths();
     let codes = Codes::<LITERALS>::new(&lengths);
-    let tree = Tree::<LITERALS>::new(&lengths);
+    let tree = Tree::<LITERALS>::new(&lengths).expect("a complete code");
     let mut out = [0u8; 64];
     let mut writer = Writer::new(&mut out);
     for symbol in [0u16, 65, 143, 144, 255, 256, 279, 285] {
@@ -115,7 +115,7 @@ fn the_distance_code_is_five_bits_of_its_own_number() {
 
 #[test]
 fn a_tree_of_nothing_reads_nothing() {
-    let tree = Tree::<LITERALS>::new(&[0u8; LITERALS]);
+    let tree = Tree::<LITERALS>::new(&[0u8; LITERALS]).expect("a code of no symbols");
     let mut reader = Reader::new(&[0xFF, 0xFF, 0xFF]);
     assert_eq!(tree.decode(&mut reader), Err(Error::Input));
 }
@@ -177,7 +177,7 @@ fn a_code_length_the_format_does_not_have_is_ignored() {
     // bits or out of an alphabet that stops at fifteen — but a tree is
     // built from a slice, and a slice can say anything.
     // Only the two ones are a code; the first bit read tells them apart.
-    let tree = Tree::<8>::new(&[16, 1, 1, 200]);
+    let tree = Tree::<8>::new(&[16, 1, 1, 200]).expect("a complete code");
     let mut reader = Reader::new(&[0b0000_0001]);
     assert_eq!(tree.decode(&mut reader), Ok(2));
     let mut reader = Reader::new(&[0b0000_0000]);
@@ -186,9 +186,11 @@ fn a_code_length_the_format_does_not_have_is_ignored() {
 
 #[test]
 fn more_symbols_than_a_tree_holds_are_dropped_and_not_written_past() {
-    let tree = Tree::<4>::new(&[1, 1, 2, 2, 3, 3, 3, 3]);
+    let tree = Tree::<2>::new(&[1, 2, 3, 3]).expect("a complete code");
     let mut reader = Reader::new(&[0b0000_0000]);
     assert_eq!(tree.decode(&mut reader), Ok(0));
+    let mut reader = Reader::new(&[0b0000_0111]);
+    assert_eq!(tree.decode(&mut reader), Err(Error::Input));
 }
 
 #[test]
@@ -215,4 +217,123 @@ fn a_table_a_caller_did_not_fill_is_the_empty_one() {
     let empty = crate::Scratch::new();
     assert!(made.head(b"abc", 0).is_none());
     assert!(empty.previous(0).is_none());
+}
+
+#[test]
+fn the_code_of_the_example_is_the_one_the_document_states() {
+    // RFC 1951, section 3.2.2: lengths (3, 3, 3, 3, 3, 2, 4, 4) for A to H
+    // are the codes 010, 011, 100, 101, 110, 00, 1110, 1111.
+    let lengths = [3u8, 3, 3, 3, 3, 2, 4, 4];
+    let codes = Codes::<8>::new(&lengths);
+    assert_eq!(
+        codes.code,
+        [0b010, 0b011, 0b100, 0b101, 0b110, 0b00, 0b1110, 0b1111]
+    );
+    let tree = Tree::<8>::new(&lengths).expect("a complete code");
+    let mut out = [0u8; 8];
+    let mut writer = Writer::new(&mut out);
+    for (code, length) in codes.code.iter().zip(codes.length) {
+        writer.code(*code, length).expect("room");
+    }
+    let written = writer.finish().expect("room");
+    let mut reader = Reader::new(out.get(..written).unwrap_or_default());
+    for symbol in 0..8u16 {
+        assert_eq!(tree.decode(&mut reader), Ok(symbol));
+    }
+}
+
+#[test]
+fn lengths_that_ask_for_more_codes_than_there_are_are_refused() {
+    extern crate alloc;
+    assert_eq!(Tree::<4>::new(&[1, 1, 2]).err(), Some(Error::Input));
+    assert_eq!(
+        Tree::<8>::new(&[1, 1, 2, 2, 3, 3, 3, 3]).err(),
+        Some(Error::Input)
+    );
+    assert_eq!(Tree::<4>::distances(&[1, 1, 1]).err(), Some(Error::Input));
+    // 70000 codes of fifteen bits saturate the count at u16::MAX.
+    let mut lengths = alloc::vec![15u8; 70000];
+    if let Some(first) = lengths.first_mut() {
+        *first = 1;
+    }
+    assert_eq!(Tree::<4>::new(&lengths).err(), Some(Error::Input));
+}
+
+#[test]
+fn lengths_that_leave_codes_unused_are_refused() {
+    assert_eq!(Tree::<4>::new(&[1, 2]).err(), Some(Error::Input));
+    assert_eq!(Tree::<4>::new(&[2, 2, 2]).err(), Some(Error::Input));
+    assert_eq!(Tree::<4>::new(&[1, 0]).err(), Some(Error::Input));
+    assert_eq!(Tree::<4>::distances(&[2, 0]).err(), Some(Error::Input));
+    assert_eq!(Tree::<4>::distances(&[1, 2]).err(), Some(Error::Input));
+}
+
+#[test]
+fn distance_lengths_that_are_all_zero_are_a_code_of_no_symbols() {
+    let tree = Tree::<4>::distances(&[0, 0]).expect("a code of no symbols");
+    let mut reader = Reader::new(&[0xFF, 0xFF]);
+    assert_eq!(tree.decode(&mut reader), Err(Error::Input));
+}
+
+#[test]
+fn one_distance_code_of_one_bit_is_a_code() {
+    // RFC 1951, section 3.2.7: one distance code is written in one bit,
+    // and the other one-bit code is unused.
+    let tree = Tree::<4>::distances(&[0, 0, 1, 0]).expect("one code of one bit");
+    let mut reader = Reader::new(&[0b0000_0000]);
+    assert_eq!(tree.decode(&mut reader), Ok(2));
+    let mut reader = Reader::new(&[0xFF, 0xFF]);
+    assert_eq!(tree.decode(&mut reader), Err(Error::Input));
+}
+
+#[test]
+fn every_rank_of_a_code_is_its_place_among_symbols_of_its_length() {
+    // Codes::new against the definition: a symbol's code is the first code
+    // of its length plus the symbols of that length before it. The lengths
+    // are the fixed ones shuffled, a complete code.
+    let mut lengths = fixed_literal_lengths();
+    let mut state = 0x2545_F491u32;
+    for at in (1..LITERALS).rev() {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        let other = usize::try_from(state).unwrap_or(0) % (at + 1);
+        lengths.swap(at, other);
+    }
+    assert!(Tree::<LITERALS>::new(&lengths).is_ok());
+    let codes = Codes::<LITERALS>::new(&lengths);
+    let mut first = [0u16; 16];
+    let mut code = 0u16;
+    for bits in 1..16usize {
+        let before = lengths
+            .iter()
+            .filter(|length| usize::from(**length) == bits.saturating_sub(1) && bits > 1)
+            .count();
+        code = code
+            .saturating_add(u16::try_from(before).unwrap_or(0))
+            .saturating_mul(2);
+        if let Some(slot) = first.get_mut(bits) {
+            *slot = code;
+        }
+    }
+    for (symbol, length) in lengths.iter().enumerate() {
+        if *length == 0 {
+            continue;
+        }
+        let rank = lengths
+            .iter()
+            .take(symbol)
+            .filter(|other| *other == length)
+            .count();
+        let expected = first
+            .get(usize::from(*length))
+            .copied()
+            .unwrap_or(0)
+            .saturating_add(u16::try_from(rank).unwrap_or(0));
+        assert_eq!(
+            codes.code.get(symbol).copied(),
+            Some(expected),
+            "symbol {symbol}"
+        );
+    }
 }
