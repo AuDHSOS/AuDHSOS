@@ -1577,8 +1577,8 @@ done until every applicable item has a test. Items are added, never removed.
 - Resolver: both questions go out at once, to different servers and with
   different transaction ids, and the answers of both come back together.
   A matching response is accepted; responses with a wrong transaction id,
-  a wrong question section, a wrong source address, or a wrong source
-  port are ignored, as are a message that is a query, bytes that are no
+  a wrong question section, a question class other than `IN`, a wrong
+  source address, or a wrong source port are ignored, as are a message that is a query, bytes that are no
   message, and one whose answer section cannot be walked. The query is
   retried at the scheduled instants and rotates servers, the transaction
   id is kept across retries so that a late answer is still an answer, and

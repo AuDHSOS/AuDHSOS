@@ -182,6 +182,14 @@ fn a_response_that_fails_one_of_the_four_checks_is_ignored() {
     deliver(&mut resolver, FIRST, &other, start);
     assert_eq!(resolver.addresses().count(), 0);
 
+    // A question of class CH, issue #280.
+    let mut chaos =
+        Response::new(sent[0].id, "example.com", RecordType::A).with(&a("example.com", V4));
+    chaos.question.class = Class::new(3);
+    deliver(&mut resolver, FIRST, &chaos, start);
+    assert_eq!(resolver.addresses().count(), 0);
+    assert_eq!(resolver.status(), Status::Asking);
+
     // A source address that is no server of this resolver's.
     deliver(
         &mut resolver,
@@ -346,6 +354,37 @@ fn a_name_that_does_not_exist_is_an_answer_and_not_a_failure() {
             start,
         );
     }
+    assert_eq!(resolver.status(), Status::Done);
+    assert_eq!(resolver.addresses().count(), 0);
+}
+
+#[test]
+fn one_answered_and_one_failed_question_is_done() {
+    // Issue #289: `Done` drops the failure of the other question.
+    let config = Config {
+        retry: Duration::from_secs(1),
+        attempts: 1,
+        deadline: Duration::from_secs(30),
+    };
+    let mut rng = rng();
+    let mut resolver = resolver(config);
+    let start = Instant::from_micros(0);
+    resolver
+        .start(&name("example.com"), start)
+        .expect("started");
+    let sent = drain(&mut resolver, &mut rng, start);
+    let asked_a = sent
+        .iter()
+        .find(|one| one.record_type == RecordType::A)
+        .expect("an A query");
+    deliver(
+        &mut resolver,
+        FIRST,
+        &Response::new(asked_a.id, "example.com", RecordType::A).coded(ResponseCode::NAME_ERROR),
+        start,
+    );
+    assert_eq!(resolver.status(), Status::Asking);
+    assert!(drain(&mut resolver, &mut rng, Instant::from_micros(1_000_000)).is_empty());
     assert_eq!(resolver.status(), Status::Done);
     assert_eq!(resolver.addresses().count(), 0);
 }

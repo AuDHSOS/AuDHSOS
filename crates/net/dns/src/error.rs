@@ -35,8 +35,7 @@ pub enum DnsError {
     /// section 4.1.4 reserves and gives no meaning. The value is the
     /// octet.
     LabelKind(u8),
-    /// A compression pointer that does not point backwards. Following one
-    /// is what a message can be written to make a reader do for ever.
+    /// A compression pointer that does not point backwards of itself.
     PointerForward {
         /// Where the pointer stands.
         at: usize,

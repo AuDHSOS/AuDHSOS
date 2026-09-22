@@ -240,9 +240,10 @@ fn a_name_that_reaches_past_the_message_is_refused() {
 
 #[test]
 fn labels_assembled_from_pointers_are_bounded_at_255_bytes_as_well() {
-    // Sixty-three bytes at the front, and behind them a name that points
-    // back into it five times over. Nothing here is longer than a name may
-    // be; the assembly of it is.
+    // Sixty-three bytes at the front, and behind them a pointer to 0. The
+    // label ends at the pointer, so the walk returns to the same pointer;
+    // the pointers at 66 to 72 are never read. Nothing here is longer than
+    // a name may be; the assembly is.
     let label = [0x3Fu8; 1];
     let mut message = [b'a'; 1 + 63 + 5 * 2];
     message[0] = label[0];
@@ -251,8 +252,8 @@ fn labels_assembled_from_pointers_are_bounded_at_255_bytes_as_well() {
         message[at] = 0xC0;
         message[at + 1] = 0;
     }
-    // Each pointer leads to the same 64 bytes and then to the next
-    // pointer, so four of them are already past the limit.
+    // Each cycle assembles the same 64 bytes, so four jumps are past the
+    // limit.
     assert_eq!(Name::read(&message, 64), Err(DnsError::NameTooLong));
 }
 
@@ -265,4 +266,12 @@ fn a_name_that_does_not_fit_the_buffer_it_is_written_to_says_so() {
         name.write(&mut writer),
         Err(DnsError::Wire(WireError::OutOfBounds { .. }))
     ));
+}
+
+#[test]
+fn a_backward_pointer_behind_a_label_cycles_until_the_jump_bound() {
+    // Issue #283: label `a` at 0, then a pointer to 0. The pointer is
+    // backwards and targets a label the walk read; 17 jumps assemble 34
+    // bytes, so the jump bound ends the cycle before the length bound.
+    assert_eq!(Name::read(b"\x01a\xC0\x00", 0), Err(DnsError::PointerChain));
 }

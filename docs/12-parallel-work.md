@@ -707,14 +707,11 @@ and without it on write, and a stub resolver over UDP above it.
   (section 3.4.1), `AAAA` (RFC 3596, section 2.2) and `CNAME`
   (section 3.3.1) are decoded; every other type, and every class but `IN`,
   is carried as the bytes of its body and stepped over.
-- A name is bounded three times over, and only the last bound is about the
-  bytes that arrived. A compression pointer must point strictly backwards,
-  so the walk provably moves towards the front of the message and can
-  never return to where it has been; the number of jumps is bounded at
-  sixteen, because a chain of pointers that yields no label is work no
-  encoder asks for; and the name being assembled is bounded at the 255
-  bytes of section 2.3.4, which is what a message trying to be expensive
-  runs into first.
+- A name is bounded three times over. A compression pointer must point
+  strictly backwards of the pointer itself, which refuses a pointer to
+  itself or forwards; a pointer behind a label may still target that
+  label. The jump count of sixteen and the 255 bytes of section 2.3.4 on
+  the name being assembled end such a cycle.
 - A decoded name is a value of 255 bytes and not a borrow. It cannot be a
   borrow — a compressed name is not contiguous in the message — and it must
   not be one, because the resolver holds the name it is asking across the

@@ -13,9 +13,10 @@
 //! A response is believed only when four things agree: the source address
 //! is one of the servers this resolver was given, the source port is 53,
 //! the transaction id is the one that went out, and the question section
-//! is the question that was asked. The id is drawn from `Rng` (D-51) and
-//! the source port is the port of the socket the caller bound, which
-//! `net-udp` drew from the dynamic range. Three of the four are what an
+//! is the question that was asked: the name, the type, and class `IN`.
+//! The id is drawn from `Rng` (D-51) and the source port is the port of
+//! the socket the caller bound, which `net-udp` drew from the dynamic
+//! range. Three of the four are what an
 //! attacker who cannot see the query has to guess; the fourth is what
 //! keeps one answer from being taken for another. A fifth thing is
 //! believed only up to 512 bytes: this resolver announces no buffer of its
@@ -43,7 +44,7 @@ use net_wire::{IpAddr, Port, Writer};
 use crate::error::DnsError;
 use crate::message::{MAX_MESSAGE_LEN, MAX_QUERY_LEN, Message, ResponseCode, write_query};
 use crate::name::Name;
-use crate::record::{RecordData, RecordType};
+use crate::record::{Class, RecordData, RecordType};
 
 /// Where a name server listens (RFC 1035, section 4.2).
 pub const SERVER_PORT: Port = Port::new(53);
@@ -108,7 +109,8 @@ pub enum Status {
     Idle,
     /// At least one question is still open.
     Asking,
-    /// Both questions are settled. What came back is in
+    /// No question is open and at least one was answered. The failure of
+    /// the other question is dropped. What came back is in
     /// [`addresses`](Resolver::addresses), which may be empty: a name that
     /// exists and has no address is an answer.
     Done,
@@ -457,6 +459,7 @@ impl Resolver {
                 && ask.has_id
                 && ask.id == message.header.id
                 && ask.record_type == question.record_type
+                && question.class == Class::IN
                 && ask.name == question.name
         }) else {
             return;

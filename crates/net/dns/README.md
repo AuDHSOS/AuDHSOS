@@ -7,12 +7,11 @@ layer that opens the connection, and answering it here would answer it
 twice.
 
 Names are read with compression and written without it. A compression
-pointer is the one thing in this format that lets a sender steer a reader
-in circles, so a pointer must point strictly backwards, the number of
-jumps is bounded, and a name is bounded at the 255 bytes of RFC 1035,
-section 2.3.4 while it is being assembled. A pointer that points forwards
-or to itself is refused before it is followed, which is what makes the
-walk provably finite rather than merely usually finite.
+pointer must point strictly backwards of the pointer itself, which
+refuses a pointer to itself or forwards before the reader follows the
+pointer. The walk reads labels forwards, so a pointer behind a label may
+target that label; the jump count and the bound of 255 bytes of RFC 1035,
+section 2.3.4 on the name being assembled end such a cycle.
 
 A decoded name is a value of its own and not a borrow into the message.
 It cannot be a borrow: a compressed name is not contiguous in the bytes it
@@ -35,14 +34,16 @@ a receive record of `net-udp` carries. The transaction id comes from
 A response is believed only when the source address is one of the servers
 this resolver was given, the source port is 53, the transaction id is the
 one that went out, and the question section is the question that was
-asked. It is also read only up to 512 bytes: this resolver announces no
-buffer of its own, so RFC 1035, section 4.2.1 is what a server may send
-it, and a datagram past that is not an answer to anything it asked. Three of the four are what an off-path attacker has to guess, and
-the fourth is what stops one answer from being taken for another.
+asked: the name, the type, and class `IN`. It is also read only up to 512
+bytes: this resolver announces no buffer of its own, so RFC 1035, section
+4.2.1 is what a server may send it, and a datagram past that is not an
+answer to anything it asked. Three of the four are what an off-path
+attacker has to guess, and the fourth is what stops one answer from being
+taken for another.
 
 The two questions are in the air at once, each with its own id, its own
 attempt counter and its own place in the server rotation, under one
-deadline. A resolution ends when both are settled; a family that never
+deadline. A resolution ends when neither question is open; a family that never
 answers costs nothing but its own attempts, where asking one after the
 other would spend the whole deadline on the first.
 

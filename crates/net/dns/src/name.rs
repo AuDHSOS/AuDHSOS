@@ -11,15 +11,11 @@
 //! name it is asking across the datagrams it asks in, by which time the
 //! message is gone.
 //!
-//! Three bounds make the walk finite, and only the last of them is about
-//! the bytes that arrived. A compression pointer must point strictly
-//! backwards, so the walk provably moves towards the front of the message
-//! and can never return to where it has been. The number of jumps is
-//! bounded besides, because a chain of pointers that yields no label is
-//! work a correct encoder never asks for. And the name being assembled is
-//! bounded at the 255 bytes of RFC 1035, section 2.3.4, which is reached
-//! long before either of the others on a message that is trying to be
-//! expensive.
+//! A compression pointer must point strictly backwards of the pointer
+//! itself, which refuses a pointer to itself or forwards. The walk reads
+//! labels forwards, so a pointer behind a label may target that label.
+//! Two bounds end such a cycle: the number of jumps and the 255 bytes of
+//! RFC 1035, section 2.3.4 on the name being assembled.
 //!
 //! Comparison ignores ASCII case, as RFC 1035, section 2.3.3 requires. The
 //! length octets a name carries are at most 63 and are therefore never
@@ -41,12 +37,11 @@ pub const MAX_LABEL_LEN: usize = 63;
 
 /// How many compression jumps one name may take.
 ///
-/// A pointer that points strictly backwards already bounds the walk, so
-/// this is not what makes it finite; it is what keeps a name that is
-/// nothing but pointers from costing a walk towards the front of the
-/// message for every byte it yields. Two jumps is what an encoder that
-/// compresses well produces, and sixteen is far past anything one writes
-/// on purpose.
+/// This bound and [`MAX_NAME_LEN`] end a cycle through a label, which the
+/// backward rule permits. A chain of pointers yields no bytes towards
+/// [`MAX_NAME_LEN`], so this bound alone limits the chain. An encoder that
+/// compresses well produces at most two jumps; sixteen is past any
+/// encoder's output.
 const MAX_JUMPS: usize = 16;
 
 /// The two top bits of a length octet say what follows.
