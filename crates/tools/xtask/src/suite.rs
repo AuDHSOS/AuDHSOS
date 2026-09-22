@@ -3241,13 +3241,29 @@ fn escaped(text: &str) -> String {
     out
 }
 
+/// Whether the character stands for a byte the line cannot carry as
+/// text, which is one of the private use area from `ESCAPED` on.
+fn escaped_char(value: char) -> bool {
+    (ESCAPED..ESCAPED.saturating_add(0x100)).contains(&u32::from(value))
+}
+
+/// The bytes written as capital hexadecimal digits, two per byte.
+fn hex_of(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len().saturating_mul(2));
+    for byte in bytes {
+        for half in [byte >> 4, byte & 0xf] {
+            out.push(char::from_digit(u32::from(half), 16).unwrap_or('0'));
+        }
+    }
+    out.to_uppercase()
+}
+
 /// The bytes of a statement, with every character `escaped` wrote for a
 /// byte over `0x7f` read back as that byte.
 ///
 /// It costs O(n) in the length of the statement.
 fn sql_bytes(text: &str) -> Vec<u8> {
-    let carried =
-        |value: char| (ESCAPED..ESCAPED.saturating_add(0x100)).contains(&u32::from(value));
+    let carried = escaped_char;
     if !text.chars().any(carried) {
         return text.as_bytes().to_vec();
     }
@@ -3501,6 +3517,16 @@ fn line(reader: &mut BufReader<TcpStream>) -> Result<Option<String>, Error> {
 fn write_ok(stream: &mut &TcpStream, values: &[String]) -> Result<(), Error> {
     let mut out = format!("OK {}\n", values.len()).into_bytes();
     for value in values {
+        // A value the line cannot carry as text is carried as the
+        // hexadecimal digits of its bytes, which the length line says
+        // with an `x` in front of it.
+        if value.chars().any(escaped_char) {
+            let digits = hex_of(&sql_bytes(value));
+            out.extend_from_slice(format!("x{}\n", digits.len()).as_bytes());
+            out.extend_from_slice(digits.as_bytes());
+            out.push(b'\n');
+            continue;
+        }
         out.extend_from_slice(format!("{}\n", value.len()).as_bytes());
         out.extend_from_slice(value.as_bytes());
         out.push(b'\n');
@@ -4066,8 +4092,27 @@ fn listed(value: &Value, null: &str) -> String {
         Value::Real(number) => {
             String::from_utf8_lossy(&db_sqlite::fp::text(*number, 15)).into_owned()
         }
-        Value::Text(bytes) | Value::Blob(bytes) => String::from_utf8_lossy(bytes).into_owned(),
+        Value::Text(bytes) | Value::Blob(bytes) => carried_text(bytes),
     }
+}
+
+/// A value of the engine as the line carries it: the text itself where
+/// the bytes are text, and one character of the private use area per
+/// byte where they are not, which `write_ok` writes as hexadecimal
+/// digits.
+///
+/// A blob holds whatever bytes were written into it, and the line
+/// between this harness and the tester carries text, so a blob reaches
+/// the tester as the bytes it holds and not as the text they are
+/// nearest. It costs O(n) in the bytes.
+fn carried_text(bytes: &[u8]) -> String {
+    if let Ok(text) = core::str::from_utf8(bytes) {
+        return text.to_owned();
+    }
+    bytes
+        .iter()
+        .map(|byte| char::from_u32(ESCAPED.saturating_add(u32::from(*byte))).unwrap_or('?'))
+        .collect()
 }
 
 /// The three empty texts a column of an expression names.

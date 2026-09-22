@@ -488,6 +488,8 @@ Size: S.
     answers `SQLITE_CANTOPEN`, which D-407 records.
 46. A database the tester opens as a file of the machine is written
     there and read back, which D-409 records.
+47. A value the line cannot carry as text is carried as hexadecimal
+    digits, which D-410 records.
 
 ### Produces
 

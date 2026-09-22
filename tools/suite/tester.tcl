@@ -37,10 +37,7 @@ proc harness_send {verb args} {
     set n [lindex $head 2]
     set vals {}
     for {set i 0} {$i < $n} {incr i} {
-      set len [gets $h]
-      set val [read $h $len]
-      gets $h
-      lappend vals [encoding convertfrom utf-8 $val]
+      lappend vals [harness_value $h]
     }
     # A proc that runs a statement of its own would write a request
     # onto the line the answer to this call is read from, so it is
@@ -65,12 +62,24 @@ proc harness_send {verb args} {
   }
   set out {}
   for {set i 0} {$i < $n} {incr i} {
-    set len [gets $h]
-    set val [read $h $len]
-    gets $h
-    lappend out [encoding convertfrom utf-8 $val]
+    lappend out [harness_value $h]
   }
   return $out
+}
+
+# One value off the line: its length and its bytes, or, where the length
+# begins with an `x`, that many hexadecimal digits standing for the bytes
+# the line could not carry as text.
+proc harness_value {h} {
+  set len [gets $h]
+  if {[string index $len 0] eq "x"} {
+    set digits [read $h [string range $len 1 end]]
+    gets $h
+    return [binary format H* $digits]
+  }
+  set val [read $h $len]
+  gets $h
+  return [encoding convertfrom utf-8 $val]
 }
 
 # The procs the collations of this file name, by collation name.

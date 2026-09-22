@@ -7,6 +7,10 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The line between the suite harness and the tester carries a value it
+  cannot hold as text as the hexadecimal digits of its bytes. D-410
+  records it. `wal.test` goes from 239 cases passing to 275.
+
 - The suite harness writes a database the tester opens as a file of the
   machine into the directory the interpreter runs in, and reads it back
   when the channel closes. D-409 records it. `incrvacuum3.test` goes
