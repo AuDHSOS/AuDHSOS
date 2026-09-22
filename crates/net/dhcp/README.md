@@ -46,6 +46,16 @@ is all three at once.
 An option is read strictly. The end marker is required, padding is
 skipped, an option this client has no use for is stepped over, and one
 whose length reaches past the block is an error rather than a short read.
+Option 52 in the option field names `file`, `sname` or both as further
+option blocks. The client reads the option field, then `file`, then
+`sname` (RFC 2131, section 4.1). An option 52 that is not one byte of 1, 2
+or 3 is an error. The client concatenates repeated router and name server
+options into one list (RFC 2131, section 4.1).
+
+In the requesting state, the client takes an acknowledgment or a refusal
+only from the server its request names, and an acknowledgment only for the
+offered address (RFC 2131, section 3.1, step 4). Every request of that
+state repeats the `secs` value of the last discover (section 3.1, step 3).
 A subnet mask that is not a prefix — bits that do not run together — is
 refused, because it cannot be a network and a route from it would be a
 guess.

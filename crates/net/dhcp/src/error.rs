@@ -64,6 +64,10 @@ pub enum DhcpError {
     Address(Ipv4Addr),
     /// An option body longer than the length field can express.
     TooLong(usize),
+    /// An option 52 value other than 1, 2 or 3 (RFC 2132, section 9.3).
+    Overload(u8),
+    /// `sname` or `file` bytes longer than the field.
+    Field(usize),
 }
 
 impl From<WireError> for DhcpError {
@@ -122,6 +126,12 @@ impl fmt::Display for DhcpError {
             }
             DhcpError::TooLong(len) => {
                 write!(f, "a body of {len} bytes is longer than an option carries")
+            }
+            DhcpError::Overload(value) => {
+                write!(f, "{value} is not an option overload value")
+            }
+            DhcpError::Field(len) => {
+                write!(f, "{len} bytes are longer than the sname or file field")
             }
         }
     }

@@ -15,8 +15,8 @@ use test_support::property::check;
 
 use crate::error::DhcpError;
 use crate::message::{
-    FIXED_LEN, HARDWARE_ETHERNET, MAGIC_COOKIE, MAX_MESSAGE_LEN, MIN_MESSAGE_LEN, Message,
-    MessageType, Op,
+    FILE_LEN, FIXED_LEN, HARDWARE_ETHERNET, MAGIC_COOKIE, MAX_MESSAGE_LEN, MIN_MESSAGE_LEN,
+    Message, MessageType, Op, SNAME_LEN,
 };
 use crate::option::OptionCode;
 use crate::tests::harness::{MAC, OFFERED, Reply, opt};
@@ -232,11 +232,169 @@ fn no_byte_stream_makes_the_parser_panic_or_step_outside_it() {
                 message.options.len() <= input.len(),
                 "an option block longer than the message"
             );
-            for option in message.options() {
+            for option in message.all_options() {
                 let Ok((_, body)) = option else { break };
                 assert!(body.len() <= input.len(), "a body longer than the message");
             }
             Ok(())
         },
     );
+}
+
+#[test]
+fn no_overloaded_message_makes_the_option_walk_panic_or_run_on() {
+    let header = with_fields(&[], &[], &[]);
+    check(
+        "dhcp_overloaded_options_are_read_inside_their_bytes",
+        &bytes(1..=320),
+        |input| {
+            // The first byte picks the overload value; the next 192 fill
+            // `sname` and `file`; the rest follows option 52.
+            let mut names = input.get(1..).unwrap_or(&[]).to_vec();
+            let tail = names.split_off(names.len().min(SNAME_LEN + FILE_LEN));
+            names.resize(SNAME_LEN + FILE_LEN, 0);
+            let mut bytes = header[..44].to_vec();
+            bytes.extend_from_slice(&names);
+            bytes.extend_from_slice(&MAGIC_COOKIE);
+            bytes.extend_from_slice(&[52, 1, 1 + input[0] % 3]);
+            bytes.extend_from_slice(&tail);
+            let message = Message::parse(&bytes).expect("a message");
+            let bound = SNAME_LEN + FILE_LEN + message.options.len() + 3;
+            let mut count = 0usize;
+            for option in message.all_options() {
+                count += 1;
+                assert!(count <= bound, "more options than bytes");
+                let Ok((_, body)) = option else { break };
+                assert!(body.len() <= bytes.len(), "a body longer than the message");
+            }
+            Ok(())
+        },
+    );
+}
+
+/// A reply with `options` in the option field, `file`, and `sname`.
+fn with_fields(options: &[u8], file: &[u8], sname: &[u8]) -> Vec<u8> {
+    let mut message = Message::request(1, MAC);
+    message.op = Op::REPLY;
+    message.options = options;
+    message.file = file;
+    message.sname = sname;
+    let mut buffer = [0u8; MIN_MESSAGE_LEN];
+    let mut writer = Writer::new(&mut buffer);
+    message.write(&mut writer).expect("room");
+    writer.finish().to_vec()
+}
+
+#[test]
+fn sname_and_file_read_back_at_their_offsets() {
+    let bytes = with_fields(&[255], b"boot.example", b"server");
+    assert_eq!(&bytes[44..50], b"server");
+    assert_eq!(&bytes[108..120], b"boot.example");
+    let message = Message::parse(&bytes).expect("a message");
+    assert_eq!(message.sname.len(), SNAME_LEN);
+    assert_eq!(message.file.len(), FILE_LEN);
+    assert_eq!(&message.sname[..6], b"server");
+    assert_eq!(&message.file[..12], b"boot.example");
+}
+
+#[test]
+fn a_field_longer_than_sname_or_file_is_refused() {
+    let long = [0u8; FILE_LEN + 1];
+    for (file, sname) in [(&long[..], &[][..]), (&[][..], &long[..=SNAME_LEN])] {
+        let mut message = Message::request(1, MAC);
+        message.file = file;
+        message.sname = sname;
+        let mut buffer = [0u8; MIN_MESSAGE_LEN];
+        let mut writer = Writer::new(&mut buffer);
+        assert_eq!(
+            message.write(&mut writer),
+            Err(DhcpError::Field(file.len().max(sname.len())))
+        );
+    }
+}
+
+#[test]
+fn a_message_type_in_file_is_read_where_option_52_names_file() {
+    let bytes = Reply::ack(1).in_file(OptionCode::MESSAGE_TYPE).bytes();
+    let message = Message::parse(&bytes).expect("a message");
+    assert_eq!(message.message_type(), Ok(MessageType::ACK));
+}
+
+#[test]
+fn a_message_type_in_sname_is_read_where_option_52_names_sname() {
+    let bytes = Reply::ack(1).in_sname(OptionCode::MESSAGE_TYPE).bytes();
+    let message = Message::parse(&bytes).expect("a message");
+    assert_eq!(message.message_type(), Ok(MessageType::ACK));
+}
+
+#[test]
+fn sname_is_read_after_file() {
+    let mut reply = Reply::ack(1).in_file(OptionCode::MESSAGE_TYPE);
+    reply
+        .sname
+        .push(opt(OptionCode::MESSAGE_TYPE, &[MessageType::NAK.get()]));
+    let bytes = reply.bytes();
+    let message = Message::parse(&bytes).expect("a message");
+    assert_eq!(message.message_type(), Ok(MessageType::NAK));
+}
+
+#[test]
+fn file_and_sname_without_option_52_are_not_options() {
+    let bytes = with_fields(&[255], &[53, 1, 5, 255], &[53, 1, 5, 255]);
+    let message = Message::parse(&bytes).expect("a message");
+    assert_eq!(message.message_type(), Err(DhcpError::MissingMessageType));
+}
+
+#[test]
+fn option_52_in_file_is_not_read() {
+    // Option 52 in `file` names `sname`; only the option field counts.
+    let bytes = with_fields(&[52, 1, 1, 255], &[52, 1, 2, 255], &[53, 1, 5, 255]);
+    let message = Message::parse(&bytes).expect("a message");
+    assert_eq!(message.message_type(), Err(DhcpError::MissingMessageType));
+}
+
+#[test]
+fn an_option_52_that_is_not_1_2_or_3_is_refused() {
+    for value in [0, 4, 255] {
+        let bytes = with_fields(&[53, 1, 5, 52, 1, value, 255], &[255], &[255]);
+        let message = Message::parse(&bytes).expect("a message");
+        assert_eq!(message.message_type(), Err(DhcpError::Overload(value)));
+    }
+    let bytes = with_fields(&[53, 1, 5, 52, 2, 1, 1, 255], &[255], &[255]);
+    let message = Message::parse(&bytes).expect("a message");
+    assert_eq!(
+        message.message_type(),
+        Err(DhcpError::OptionLength {
+            code: OptionCode::OVERLOAD,
+            len: 2
+        })
+    );
+}
+
+#[test]
+fn a_file_block_without_an_end_marker_is_reported() {
+    let file = [0u8; FILE_LEN];
+    let bytes = with_fields(&[53, 1, 5, 52, 1, 1, 255], &file, &[]);
+    let message = Message::parse(&bytes).expect("a message");
+    assert_eq!(message.message_type(), Err(DhcpError::MissingEnd));
+}
+
+#[test]
+fn a_truncated_option_in_sname_is_reported() {
+    let sname = [1u8; SNAME_LEN];
+    let bytes = with_fields(&[53, 1, 5, 52, 1, 2, 255], &[], &sname);
+    let message = Message::parse(&bytes).expect("a message");
+    assert_eq!(
+        message.message_type(),
+        Err(DhcpError::TruncatedOption(OptionCode::SUBNET_MASK))
+    );
+}
+
+#[test]
+fn an_error_in_the_option_field_is_reported_once() {
+    // Padding to the minimum length leaves the field without an end marker.
+    let bytes = with_fields(&[53, 1, 5], &[], &[]);
+    let message = Message::parse(&bytes).expect("a message");
+    let items: Vec<_> = message.all_options().collect();
+    assert_eq!(items, vec![Err(DhcpError::MissingEnd)]);
 }

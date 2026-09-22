@@ -225,6 +225,9 @@ pub struct Client {
     has_xid: bool,
     /// When the acquisition began, which the `secs` field counts from.
     started: Instant,
+    /// The `secs` value of the last discover, which every request of the
+    /// requesting state repeats (RFC 2131, section 3.1, step 3).
+    discover_secs: u16,
     /// The delay before the next retransmission, before jitter.
     retry: Duration,
     /// When the next message is due.
@@ -249,6 +252,7 @@ impl Client {
             xid: 0,
             has_xid: false,
             started: Instant::from_micros(0),
+            discover_secs: 0,
             retry: config.first_retry,
             due: Instant::from_micros(0),
             attempts: 0,
@@ -351,6 +355,9 @@ impl Client {
             plan.destination,
             ChecksumPolicy::Computed,
         )?;
+        if plan.kind == MessageType::DISCOVER {
+            self.discover_secs = plan.message.secs;
+        }
         // The backoff moves and the attempt is counted only now, with the
         // datagram in the caller's buffer: a buffer that had no room for
         // one is a buffer nothing went out of.
@@ -391,6 +398,14 @@ impl Client {
                 self.take_lease(&message, now);
             }
             (State::Requesting | State::Renewing | State::Rebinding, MessageType::NAK) => {
+                // In the requesting state, only the server the request
+                // names answers (RFC 2131, section 3.1, step 4).
+                if self.state == State::Requesting
+                    && address_option(&message, OptionCode::SERVER_IDENTIFIER)
+                        != self.offer.map(|offer| offer.server)
+                {
+                    return;
+                }
                 // RFC 2131, section 4.4.5: a refusal takes the client back
                 // to the start, with the address it thought it had gone.
                 self.lease = None;
@@ -470,6 +485,7 @@ impl Client {
             }
             State::Requesting => {
                 message.broadcast = true;
+                message.secs = self.discover_secs;
                 Plan {
                     source: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
                     destination: IpAddr::V4(Ipv4Addr::BROADCAST),
@@ -548,11 +564,23 @@ impl Client {
     /// An acknowledgment this client cannot make a lease out of is
     /// ignored: the request stands and is asked again. Which option was
     /// missing, or which mask was no prefix, is what
-    /// [`Lease::from_reply`] says to a caller that wants to know.
+    /// [`Lease::from_reply`] says to a caller that wants to know. In the
+    /// requesting state, an acknowledgment whose server or address is not
+    /// the offer's is another server's and is ignored (RFC 2131,
+    /// section 3.1, step 4).
     fn take_lease(&mut self, message: &Message<'_>, now: Instant) {
         let Ok(lease) = Lease::from_reply(message, now) else {
             return;
         };
+        if self.state == State::Requesting
+            && self.offer
+                != Some(Offer {
+                    address: lease.address(),
+                    server: lease.server,
+                })
+        {
+            return;
+        }
         self.due = lease.renew;
         self.lease = Some(lease);
         self.state = State::Bound;
@@ -617,10 +645,10 @@ fn u32_option(message: &Message<'_>, code: OptionCode) -> Option<u32> {
     (body.len() == 4).then(|| u32::from_be_bytes(*octets))
 }
 
-/// The body of the last option with `code`, where the whole block reads.
+/// The body of the last option with `code`, where every block reads.
 fn body_of<'a>(message: &Message<'a>, code: OptionCode) -> Option<&'a [u8]> {
     let mut found = None;
-    for option in message.options() {
+    for option in message.all_options() {
         let (seen, body) = option.ok()?;
         if seen == code {
             found = Some(body);
@@ -629,23 +657,46 @@ fn body_of<'a>(message: &Message<'a>, code: OptionCode) -> Option<&'a [u8]> {
     found
 }
 
-/// The first address in the body of `code`. RFC 2132, section 3.5 puts the
-/// routers in order of preference, so the first is the one to use.
+/// The first address of `code`. RFC 2132, section 3.5 puts the routers in
+/// order of preference, so the first is the one to use.
 fn first_address(message: &Message<'_>, code: OptionCode) -> Option<Ipv4Addr> {
-    let octets = body_of(message, code)?.first_chunk::<4>()?;
-    Some(Ipv4Addr::from_octets(*octets))
+    let mut octets = [0u8; 4];
+    (concatenated(message, code, &mut octets)? == octets.len())
+        .then(|| Ipv4Addr::from_octets(octets))
 }
 
 /// The name servers of the lease.
 fn servers_of(message: &Message<'_>) -> ArrayVec<Ipv4Addr, MAX_DNS_SERVERS> {
     let mut out = ArrayVec::new();
-    let Some(body) = body_of(message, OptionCode::DOMAIN_NAME_SERVER) else {
+    let mut bytes = [0u8; MAX_DNS_SERVERS * 4];
+    let Some(len) = concatenated(message, OptionCode::DOMAIN_NAME_SERVER, &mut bytes) else {
         return out;
     };
-    for octets in body.as_chunks::<4>().0.iter().take(MAX_DNS_SERVERS) {
+    for octets in bytes.get(..len).unwrap_or(&[]).as_chunks::<4>().0 {
         let _ = out.push(Ipv4Addr::from_octets(*octets));
     }
     out
+}
+
+/// Copies the bodies of every option `code`, in order, into `out` until
+/// `out` is full, and answers how many bytes it copied: RFC 2131,
+/// section 4.1 has the client concatenate repeated instances. `None` when
+/// the option is not there or a block does not read.
+fn concatenated(message: &Message<'_>, code: OptionCode, out: &mut [u8]) -> Option<usize> {
+    let mut len = 0usize;
+    let mut found = false;
+    for option in message.all_options() {
+        let (seen, body) = option.ok()?;
+        if seen != code {
+            continue;
+        }
+        found = true;
+        let room = out.get_mut(len..).unwrap_or(&mut []);
+        let take = room.len().min(body.len());
+        room.get_mut(..take)?.copy_from_slice(body.get(..take)?);
+        len = len.saturating_add(take);
+    }
+    found.then_some(len)
 }
 
 /// Whether `address` is one a host can be given.
