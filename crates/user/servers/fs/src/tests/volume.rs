@@ -59,6 +59,62 @@ fn a_table_that_names_no_system_partition_is_refused() {
     assert_eq!(outcome.unwrap_err(), Error::NotFound);
 }
 
+/// A partitioned disk whose system partition carries a volume.
+fn formatted() -> RamDisk {
+    let mut disk = partitioned(ESP_TYPE_GUID);
+    let last = u64::from(SECTORS.saturating_sub(40));
+    {
+        let window = Partition::new(&mut disk, 2048, last).unwrap();
+        let _made = FileSystem::format(window, &FormatOptions::default())
+            .expect("the partition takes a volume");
+    }
+    disk
+}
+
+/// `disk` with `change` made to its primary header, the array checksum
+/// taken again, and the backup header zeroed so that a read has no copy
+/// to fall back to.
+fn tampered(mut disk: RamDisk, change: impl Fn(&mut fs_gpt::Header)) -> RamDisk {
+    let mut header = fs_gpt::read(&disk).expect("a table");
+    change(&mut header);
+    let start = usize::try_from(header.entry_lba)
+        .unwrap()
+        .saturating_mul(SECTOR);
+    let len = usize::try_from(header.array_len()).unwrap();
+    let array = disk.bytes().get(start..start.saturating_add(len)).unwrap();
+    header.array_crc = fs_gpt::crc32(array);
+    let sector = |lba: u64| {
+        let offset = usize::try_from(lba).unwrap().saturating_mul(SECTOR);
+        offset..offset.saturating_add(SECTOR)
+    };
+    let bytes = disk.bytes_mut();
+    bytes
+        .get_mut(sector(header.my_lba))
+        .unwrap()
+        .copy_from_slice(&header.write());
+    bytes.get_mut(sector(header.alternate_lba)).unwrap().fill(0);
+    disk
+}
+
+#[test]
+fn a_table_whose_usable_range_reaches_past_the_disk_is_a_wrong_table() {
+    assert!(mount(tampered(formatted(), |_| {})).is_ok());
+    let disk = tampered(formatted(), |header| header.last_usable = u64::MAX);
+    assert_eq!(mount(disk).unwrap_err(), Error::InvalidState);
+}
+
+#[test]
+fn a_table_that_names_too_many_entries_is_a_wrong_table() {
+    let count = fs_gpt::MAX_ENTRY_COUNT.saturating_add(1);
+    let disk = tampered(formatted(), |header| {
+        header.entry_count = count;
+        // The usable range starts behind the larger array, so only the
+        // count decides.
+        header.first_usable = header.entry_lba.saturating_add(header.array_blocks());
+    });
+    assert_eq!(mount(disk).unwrap_err(), Error::InvalidState);
+}
+
 #[test]
 fn the_volume_of_a_partitioned_disk_is_the_partition_and_not_the_disk() {
     let mut disk = partitioned(ESP_TYPE_GUID);

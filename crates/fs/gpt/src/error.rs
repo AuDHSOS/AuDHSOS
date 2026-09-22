@@ -32,12 +32,14 @@ pub enum Error {
     /// An entry size that is not 128 times a power of two, or one that
     /// does not divide a block, so that an entry would straddle two.
     EntrySize(u32),
-    /// The entry array does not lie on this device, or it runs into the
-    /// usable range it describes.
+    /// The entry array names more than
+    /// [`MAX_ENTRY_COUNT`](crate::header::MAX_ENTRY_COUNT) entries, does
+    /// not lie on this device, or runs into the usable range it describes.
     ArrayRange,
     /// The checksum of the entry array does not cover its bytes.
     ArrayChecksum,
-    /// The first usable block lies behind the last usable one.
+    /// The first usable block lies behind the last usable one, or the last
+    /// usable block is not below the last block of the device.
     Usable(u64, u64),
     /// The device has fewer blocks than a table needs.
     TooSmall(u64),
@@ -62,10 +64,12 @@ impl fmt::Display for Error {
             Error::HeaderChecksum => write!(formatter, "the header checksum does not match"),
             Error::MyLba(lba) => write!(formatter, "the header names block {lba} as its own"),
             Error::EntrySize(len) => write!(formatter, "an entry of {len} bytes"),
-            Error::ArrayRange => write!(formatter, "the entry array does not lie on the device"),
+            Error::ArrayRange => {
+                write!(formatter, "the entry array is too large or off the device")
+            }
             Error::ArrayChecksum => write!(formatter, "the array checksum does not match"),
             Error::Usable(first, last) => {
-                write!(formatter, "the usable range {first} to {last} is empty")
+                write!(formatter, "the usable range {first} to {last} does not fit")
             }
             Error::TooSmall(sectors) => write!(formatter, "a device of {sectors} blocks"),
             Error::Name => write!(formatter, "a partition name of more than 36 code units"),

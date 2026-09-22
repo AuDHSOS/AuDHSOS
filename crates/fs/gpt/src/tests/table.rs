@@ -171,6 +171,30 @@ fn an_entry_outside_the_usable_range_is_refused_by_the_walk() {
 }
 
 #[test]
+fn a_table_whose_usable_range_reaches_past_the_device_is_refused_by_the_read() {
+    let mut device = disk();
+    let primary = read(&device).expect("a table");
+    for mut header in [primary, backup_of(&primary)] {
+        header.last_usable = u64::MAX;
+        put_header(&mut device, &header);
+    }
+    assert_eq!(
+        refusal(read(&device)),
+        Error::Usable(FIRST_USABLE, u64::MAX)
+    );
+}
+
+/// The backup header of the table `primary` heads.
+fn backup_of(primary: &crate::header::Header) -> crate::header::Header {
+    crate::header::Header {
+        my_lba: primary.alternate_lba,
+        alternate_lba: primary.my_lba,
+        entry_lba: primary.alternate_lba - ARRAY_SECTORS,
+        ..*primary
+    }
+}
+
+#[test]
 fn a_header_that_names_a_block_the_device_does_not_have_is_refused() {
     let device = disk();
     let mut header = read(&device).expect("a table");
