@@ -1035,6 +1035,11 @@ struct Session {
     /// `sqlite3_system_errno` reads: two for a directory that is not
     /// there, and nought where the file opened.
     errno: i32,
+    /// How many pages the connections over each path have written into
+    /// the database file, which `PAGER_STAT_WRITE` of
+    /// `research/sqlite/src/pager.c` counts and `btree_pager_stats`
+    /// answers under `write`.
+    writes: BTreeMap<String, u64>,
     /// Whether a file name that begins `file:` is read as a URI, which
     /// `sqlite3_config_uri` sets for every connection opened after it.
     uri: bool,
@@ -1102,6 +1107,7 @@ impl Session {
             synced: (0, 0),
             searched: 0,
             errno: 0,
+            writes: BTreeMap::new(),
             uri: false,
             uris: BTreeMap::new(),
             pragmas: BTreeMap::new(),
@@ -1183,10 +1189,13 @@ impl Session {
             // `sqlite3_config_uri` of `research/sqlite/src/main.c:707`,
             // which every connection opened after it reads a file name
             // that begins `file:` as a URI for.
-            "config_uri" => {
-                self.uri = first == "1";
-                Ok(Vec::new())
-            }
+            "config_uri" => Ok(self.reads_uri(first == "1")),
+            // `btree_pager_stats` of `research/sqlite/src/test3.c:147`,
+            // which answers the eleven counts of `sqlite3PagerStats`.
+            "pager" => self.pager(first),
+            // `btree_ismemdb` of `research/sqlite/src/test3.c`, which
+            // answers whether no file holds the database.
+            "ismemdb" => Ok(vec![usize::from(self.in_memory(first)).to_string()]),
             // `sqlite3_system_errno` of `research/sqlite/src/main.c`:
             // what the machine answered the last open of a file with.
             "system_errno" => Ok(vec![self.errno.to_string()]),
@@ -1741,6 +1750,56 @@ impl Session {
             _ => counted.rowid,
         };
         Ok(vec![answer.to_string()])
+    }
+
+    /// Whether a file name that begins `file:` is read as a URI, which
+    /// every connection opened after it reads one for.
+    const fn reads_uri(&mut self, uri: bool) -> Vec<String> {
+        self.uri = uri;
+        Vec::new()
+    }
+
+    /// The counts `btree_pager_stats` answers for the connection, each
+    /// with the name `sqlite3PagerStats` of
+    /// `research/sqlite/src/pager.c:6900` writes it under.
+    ///
+    /// This harness holds the pages of a file as one image and no cache
+    /// of its own, so the counts of a cache are nought: no page is held
+    /// open between two statements, none stands in a cache, and none is
+    /// read or missed there. The pages of the file and the pages
+    /// written are counted, and the state is the one a pager that holds
+    /// no file open reads.
+    fn pager(&self, held: &str) -> Result<Vec<String>, String> {
+        let (name, place) = named_place(held);
+        // The temp schema is a database of the connection's own that no
+        // file holds, so no page of it was written into a file.
+        if place != 0 {
+            let bytes = self.temps.get(name).cloned().unwrap_or_default();
+            return Ok(pager_counts(pages_of(&bytes), 0));
+        }
+        let path = self
+            .connections
+            .get(name)
+            .ok_or_else(|| format!("no such connection: {name}"))?;
+        let held = self
+            .held
+            .get(path)
+            .ok_or_else(|| format!("no such database: {path}"))?;
+        let wrote = self.writes.get(path).copied().unwrap_or(0);
+        Ok(pager_counts(pages_of(&held.written()), wrote))
+    }
+
+    /// Whether no file of the harness holds the database the name
+    /// stands for, which a database of the connection's own and the
+    /// temp schema are the two of.
+    fn in_memory(&self, held: &str) -> bool {
+        let (name, place) = named_place(held);
+        if place != 0 {
+            return true;
+        }
+        self.connections
+            .get(name)
+            .is_some_and(|path| path.contains('\0') || path.is_empty())
     }
 
     /// Opens a connection over a path, making the database where no
@@ -2639,26 +2698,7 @@ impl Session {
         } else {
             writer.asks_nothing();
         }
-        if hooked.contains("commit_hook") {
-            writer.commits(committing);
-        } else {
-            writer.commits_nothing();
-        }
-        if hooked.contains("rollback_hook") {
-            writer.rolls_back(rolling);
-        } else {
-            writer.rolls_back_nothing();
-        }
-        if hooked.contains("update_hook") {
-            writer.writes_rows(writing);
-        } else {
-            writer.writes_nothing();
-        }
-        if hooked.contains("preupdate_hook") {
-            writer.peeks(peeking);
-        } else {
-            writer.peeks_nothing();
-        }
+        hooking(writer, &hooked);
         WHO.with(|who| who.borrow_mut().clone_from(&name.to_owned()));
         NULLED.with(|text| text.borrow_mut().clone_from(&null));
         writer.opens(opening);
@@ -2679,11 +2719,12 @@ impl Session {
         // `sqlite3OsSync` counts every sync, and counts it twice where
         // `PRAGMA fullfsync` says the file is held on the disk of the
         // machine rather than in the cache of its driver.
-        let syncs = writer
-            .did()
+        let did = writer.did();
+        let syncs = did
             .iter()
             .filter(|held| matches!(held, Does::Sync(_)))
             .count();
+        let wrote = wrote_pages(&did);
         let counted = writer.counts();
         let kept = writer.kept();
         let full = kept.fullfsync();
@@ -2695,6 +2736,8 @@ impl Session {
             self.owners.remove(&path);
         }
         let syncs = u64::try_from(syncs).unwrap_or(0);
+        let held = self.writes.entry(path.clone()).or_default();
+        *held = held.saturating_add(wrote);
         self.synced.0 = self.synced.0.saturating_add(syncs);
         if full {
             self.synced.1 = self.synced.1.saturating_add(syncs);
@@ -3696,6 +3739,102 @@ fn term(words: &[String], at: &mut usize) -> bool {
         }
         name => !MISSING.iter().any(|held| name.eq_ignore_ascii_case(held)),
     }
+}
+
+/// The hooks the tester told the connection, told to the writer, with
+/// the ones it told none of taken off it.
+fn hooking(writer: &mut Writer, hooked: &BTreeSet<String>) {
+    if hooked.contains("commit_hook") {
+        writer.commits(committing);
+    } else {
+        writer.commits_nothing();
+    }
+    if hooked.contains("rollback_hook") {
+        writer.rolls_back(rolling);
+    } else {
+        writer.rolls_back_nothing();
+    }
+    if hooked.contains("update_hook") {
+        writer.writes_rows(writing);
+    } else {
+        writer.writes_nothing();
+    }
+    if hooked.contains("preupdate_hook") {
+        writer.peeks(peeking);
+    } else {
+        writer.peeks_nothing();
+    }
+}
+
+/// How many pages of the database file the commits of one request
+/// wrote, which `PAGER_STAT_WRITE` of `research/sqlite/src/pager.c`
+/// counts one of per page written.
+fn wrote_pages(did: &[Does]) -> u64 {
+    let count = did
+        .iter()
+        .filter(|held| {
+            matches!(
+                held,
+                Does::Write {
+                    onto: Onto::Main,
+                    ..
+                }
+            )
+        })
+        .count();
+    u64::try_from(count).unwrap_or(0)
+}
+
+/// The connection and the place of the database a handle of
+/// `btree_from_db` names, which the tester writes as the name of the
+/// connection, an `@`, and the place.
+fn named_place(held: &str) -> (&str, usize) {
+    let (name, place) = held.split_once('@').unwrap_or((held, "0"));
+    (name, place.parse().unwrap_or(0))
+}
+
+/// How many pages of the file the image holds, which is nothing for
+/// bytes no header reads.
+fn pages_of(bytes: &[u8]) -> usize {
+    db_sqlite::image::Image::open(bytes)
+        .ok()
+        .and_then(|image| {
+            bytes
+                .len()
+                .checked_div(usize::try_from(image.header().page_size).unwrap_or(1))
+        })
+        .unwrap_or(0)
+}
+
+/// The eleven counts `sqlite3PagerStats` of
+/// `research/sqlite/src/pager.c:6900` answers, each with the name it
+/// writes under.
+///
+/// This harness holds the pages of a file as one image and no cache of
+/// its own, so every count of a cache is nought: no page is held open
+/// between two statements, none stands in a cache, and none is read or
+/// missed there. The pager state is the one a pager that holds no file
+/// open reads.
+fn pager_counts(pages: usize, wrote: u64) -> Vec<String> {
+    let counts = [
+        ("ref", 0),
+        ("page", 0),
+        ("max", 0),
+        ("size", i64::try_from(pages).unwrap_or(0)),
+        ("state", 0),
+        ("err", 0),
+        ("hit", 0),
+        ("miss", 0),
+        ("ovfl", 0),
+        ("read", 0),
+        ("write", i64::try_from(wrote).unwrap_or(0)),
+    ];
+    let mut out = Vec::new();
+    for (name, count) in counts {
+        out.push(name.to_owned());
+        out.push(count.to_string());
+    }
+    out
 }
 
 /// One request of the tester: the verb and its values.

@@ -498,6 +498,9 @@ Size: S.
     connection reads a file name that begins `file:` as a URI, and an
     open the URI refuses raises the message it was refused with, which
     D-419 records.
+51. `btree_from_db` names the database of a connection and
+    `btree_pager_stats` answers the eleven counts of
+    `sqlite3PagerStats` for it, which D-424 records.
 
 ### Produces
 

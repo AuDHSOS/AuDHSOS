@@ -7,6 +7,10 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The suite harness answers `btree_from_db`, `btree_pager_stats` and
+  `btree_ismemdb`. D-424 records it. `corrupt.test` goes from 1993 cases
+  passing to 2771, `cache.test` from 0 to 178 and `io.test` from 7 to 10.
+
 - `db-sqlite` reads the operand of a `CASE` and its `WHEN` clauses as
   rows of values. D-423 records it. Catalog 6.6.292. `rowvalue.test`
   goes from 288 cases passing to 290.

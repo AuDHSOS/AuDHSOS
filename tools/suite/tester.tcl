@@ -2156,6 +2156,24 @@ proc btree_varint_test {start mult count incr} {
   return ""
 }
 
+# btree_from_db DB ?N? of test3.c:110: the b-tree of the database at
+# place N of the connection, which this harness holds one image per path
+# for, so the name of the connection stands for it. `db_enter` and
+# `db_leave` take the mutex of the connection, which this harness holds
+# none of.
+proc btree_from_db {db {n 0}} { return $db@$n }
+proc db_enter {db} {}
+proc db_leave {db} {}
+
+# btree_pager_stats ID of test3.c:147: the eleven counts of
+# `sqlite3PagerStats`, each under the name that function writes it
+# under.
+proc btree_pager_stats {bt} { return [harness_send pager $bt] }
+
+# btree_ismemdb ID of test3.c:190: whether the database is one of the
+# connection's own, which no file holds.
+proc btree_ismemdb {bt} { return [lindex [harness_send ismemdb $bt] 0] }
+
 # The sqlite3_mprintf_* commands of test1.c. Each argument carries the C
 # type the command hands the format: i a 32-bit int, l a 64-bit one, r a
 # double, h the hexadecimal digits of one, and s a string.
