@@ -46,6 +46,10 @@ pub(crate) fn unwrap(input: &[u8], out: &mut [u8]) -> Result<usize, Error> {
     if first & 0x0F != METHOD {
         return Err(Error::Input);
     }
+    // RFC 1950, section 2.2: CINFO above seven is not allowed.
+    if first >> 4 > WINDOW_CODE {
+        return Err(Error::Input);
+    }
     if u16::from_be_bytes([first, second]).wrapping_rem(CHECK) != 0 {
         return Err(Error::Input);
     }
