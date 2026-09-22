@@ -205,3 +205,27 @@ fn a_connection_over_a_file_that_was_there_reads_the_encoding_it_was_written_und
         [text(b"x"), text(b"y")]
     );
 }
+
+/// A file whose header names a schema format above four is refused, and
+/// one naming four or below is read.
+#[test]
+fn a_schema_format_the_library_does_not_hold_is_refused() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a)").unwrap();
+    let image = writer.written();
+    let formatted = |format: u8| {
+        let mut bytes = image.clone();
+        bytes[47] = format;
+        bytes
+    };
+    for format in 1..=4 {
+        assert!(
+            Database::open(&formatted(format)).is_ok(),
+            "format {format}"
+        );
+    }
+    assert_eq!(
+        Database::open(&formatted(5)).unwrap_err().message(),
+        "unsupported file format"
+    );
+}

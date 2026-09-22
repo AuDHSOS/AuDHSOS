@@ -133,8 +133,24 @@ fn what_a_close_leaves_of_the_log() {
         writer.did().last(),
         Some(&crate::change::Does::Remove(crate::change::Onto::Log))
     );
-    // A pragma naming another mode writes the header back to version
-    // one, which the file then answers with.
+    // The commit after the close makes a log again, because the header
+    // still says version two.
+    writer.run(b"INSERT INTO t VALUES(2)").unwrap();
+    assert!(writer.log().is_some());
+    let image = writer.written();
+    assert_eq!(
+        Database::open(&image)
+            .unwrap()
+            .query(b"SELECT count(*) FROM t")
+            .unwrap()
+            .rows,
+        [alloc::vec![Value::Int(1)]],
+        "the file holds what the log has not taken back"
+    );
+    // A pragma naming another mode, over a file whose log the close
+    // wrote back, writes the header to version one, which the file then
+    // answers with.
+    writer.closing();
     writer.run(b"PRAGMA journal_mode=delete").unwrap();
     assert_eq!(writer.journalled(), b"delete");
 }

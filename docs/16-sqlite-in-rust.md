@@ -1018,6 +1018,9 @@ Size: L.
      records.
 138. The database, the table and the column a result column comes from.
      Built, which D-406 records.
+139. The log a commit over a file in write-ahead logging makes again,
+     and the schema format the library refuses. Built, which D-408
+     records.
 
 ### Done when
 

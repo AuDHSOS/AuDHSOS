@@ -6971,3 +6971,12 @@ Document 16 step Q8.
 - A column of a table, one of a table under an alias, a bare `rowid`,
   one read through a statement written inside a `FROM`, and one that
   comes out of an expression.
+
+### 6.6.283 The log a commit makes again (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A commit after a close that wrote the log back, with the rows the file
+  holds and the mode it answers with.
+- A header naming each schema format from one to four, and one naming
+  five.

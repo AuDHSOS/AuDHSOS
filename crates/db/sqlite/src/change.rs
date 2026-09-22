@@ -3700,6 +3700,21 @@ fn commit_file(held: &mut HeldFile, was: &Header) -> Result<(), Error> {
     }
     held.header.pages = held.pages.count();
     (held.header.freelist, held.header.freelist_pages) = held.pages.freelist();
+    // `sqlite3PagerOpenWal`: a file whose header says version two is
+    // read and written through a log, so a connection over one that
+    // holds no log makes it, which a close that wrote the last log back
+    // into the file leaves.
+    if held.log.is_none() && held.header.write_version == 2 {
+        let log = Log::new(held.header.page_size, (0, 0), 0, false);
+        held.did.push(Does::Write {
+            onto: Onto::Log,
+            at: 0,
+            bytes: log.bytes().to_vec(),
+        });
+        held.did.push(Does::Sync(Onto::Log));
+        held.origin = Some(held.pages.committed(was));
+        held.log = Some(log);
+    }
     // `pager_write_changecounter`: a frame of page one holds the counter
     // the file holds and one, and no checkpoint writes the file, so every
     // commit writes the same counter there. A commit that writes the file

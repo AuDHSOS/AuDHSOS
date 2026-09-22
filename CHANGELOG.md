@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` makes the log again for a commit over a file whose header
+  says version two, and refuses a file whose header names a schema
+  format above four. D-408 records it. Catalog 6.6.283.
+  `walcrash.test` goes from 2283 cases passing back to 2574.
+
 - The suite harness answers `SQLITE_CANTOPEN` for a connection over a
   path whose directory is not on the machine, and answers
   `sqlite3_system_errno`. D-407 records it. `capi3.test` goes from 13

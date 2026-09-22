@@ -1667,7 +1667,8 @@ impl Session {
         // `sqlite3OsOpen` makes the file where it is not there, and
         // answers `SQLITE_CANTOPEN` where the directory that would hold
         // it is not there, which the machine says `ENOENT` for.
-        if let Some(over) = Path::new(path).parent()
+        if !path.starts_with("file:")
+            && let Some(over) = Path::new(path).parent()
             && !over.as_os_str().is_empty()
             && !over.is_dir()
         {

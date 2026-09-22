@@ -298,6 +298,9 @@ pub enum Error {
     /// A `PRAGMA encoding = value` naming no encoding the library holds,
     /// with the name it was written as.
     NoEncoding(Vec<u8>),
+    /// A file whose header names a schema format this library does not
+    /// hold, which is every number above four.
+    FileFormat,
     /// A `COMMIT` or a `ROLLBACK` on a connection with no transaction
     /// open, the truth naming which of the two the statement was.
     NoTransaction(bool),
@@ -769,6 +772,7 @@ impl Error {
             Error::BlobValue(kind) => alloc::format!("cannot open value of type {}", shown(kind)),
             Error::NoRowid(rowid) => alloc::format!("no such rowid: {rowid}"),
             Error::BlobRange => alloc::string::String::from("SQL logic error"),
+            Error::FileFormat => alloc::string::String::from("unsupported file format"),
             _ => return None,
         })
     }
@@ -1848,6 +1852,11 @@ impl Default for Naming {
     }
 }
 
+/// The highest schema format this library reads, which is the one
+/// `sqlite3CreateIndex` writes for an index that holds its entries
+/// backwards.
+const HELD_FORMAT: u32 = 4;
+
 /// Where a column of an answer comes from: the database, the table and
 /// the name the column carries there.
 ///
@@ -1976,6 +1985,12 @@ impl<'a> Database<'a> {
         image: Image<'a>,
         collating: &'static [crate::value::Collating],
     ) -> Result<Self, Error> {
+        // `sqlite3InitOne` of `research/sqlite/src/prepare.c` reads the
+        // schema format off the header every time it reads the schema,
+        // and refuses a file that names one the library does not hold.
+        if image.header().schema_format > HELD_FORMAT {
+            return Err(Error::FileFormat);
+        }
         let encoding = image.header().encoding;
         let tables = read_tables(&image, 0, encoding, collating)?;
         let mut database = Database {
