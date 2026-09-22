@@ -9,7 +9,7 @@ use crate::bench::{
     bytes_moved, chase_words, cycle, gigabytes_per_second, nanoseconds_per_step, stream_words,
     working_sets,
 };
-use crate::config::{Config, MEBIBYTE};
+use crate::config::{Config, MEBIBYTE, USAGE};
 
 fn arguments(items: &[&str]) -> Vec<String> {
     items.iter().map(|item| (*item).to_owned()).collect()
@@ -116,4 +116,16 @@ fn a_measurement_without_time_or_steps_reports_zero() {
     assert!((nanoseconds_per_step(1.0, 0) - 0.0).abs() < f64::EPSILON);
     assert!((gigabytes_per_second(2_000_000_000, 1.0) - 2.0).abs() < 1e-9);
     assert!((nanoseconds_per_step(1.0, 1_000_000_000) - 1.0).abs() < 1e-9);
+}
+
+#[test]
+fn the_readme_and_the_usage_name_the_same_options() {
+    let options = |text: &'static str| -> BTreeSet<&'static str> {
+        text.split(|character: char| !(character.is_ascii_alphanumeric() || character == '-'))
+            .filter(|word| word.starts_with("--"))
+            .collect()
+    };
+    let usage = options(USAGE);
+    assert!(usage.contains("--chase"), "the usage names --chase");
+    assert_eq!(options(include_str!("../README.md")), usage);
 }

@@ -6,7 +6,8 @@ xtask, which builds it with optimizations — a benchmark from the `dev`
 profile measures the bounds checks, not the machine:
 
 ```
-sh tools/xtask.sh membench [--size <mebibytes>] [--passes <count>] [--steps <count>]
+sh tools/xtask.sh membench [--size <mebibytes>] [--chase <mebibytes>]
+                           [--passes <count>] [--steps <count>]
 ```
 
 The numbers describe the host, not the system this repository builds.
