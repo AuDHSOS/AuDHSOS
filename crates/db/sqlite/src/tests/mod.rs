@@ -49,6 +49,7 @@ mod journal;
 mod journal_mode;
 mod json;
 mod key_tree;
+mod limits;
 mod listed;
 mod matrix;
 mod misuse;

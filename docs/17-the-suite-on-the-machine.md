@@ -505,6 +505,8 @@ Size: S.
     the rules `quotaStrglob` reads, which D-425 records.
 53. `sqlite3_test_errstr` answers the words the code of a name stands
     for, which D-426 records.
+54. `sqlite3_limit` reads and sets the limits of a connection, which
+    D-427 records.
 
 ### Produces
 

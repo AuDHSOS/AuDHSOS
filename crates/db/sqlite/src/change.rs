@@ -778,6 +778,8 @@ pub struct Writer {
     /// URI, which `SQLITE_CONFIG_URI` and the `SQLITE_OPEN_URI` flag of
     /// the open each set.
     uri: bool,
+    /// The limits the connection holds, which `sqlite3_limit` sets.
+    limits: crate::db::Limits,
     /// What the connection was told for each pragma of
     /// [`crate::pragma::HELD`], where it was told one.
     kept: Vec<Option<i64>>,
@@ -934,6 +936,7 @@ impl Writer {
             clock: None,
             zone: None,
             uri: false,
+            limits: crate::db::Limits::new(),
             kept: alloc::vec![None; crate::pragma::HELD.len()],
             running: Vec::new(),
             truth: Truths::default(),
@@ -1061,6 +1064,7 @@ impl Writer {
             clock: None,
             zone: None,
             uri: false,
+            limits: crate::db::Limits::new(),
             kept: alloc::vec![None; crate::pragma::HELD.len()],
             running: Vec::new(),
             truth: Truths::default(),
@@ -1121,6 +1125,13 @@ impl Writer {
     /// `SQLITE_OPEN_URI`, which the client says for the connection here.
     pub const fn reads_uri(&mut self, uri: bool) {
         self.uri = uri;
+    }
+
+    /// The limits the connection holds, which `sqlite3_limit` of
+    /// `research/sqlite/src/main.c:2990` sets and which a statement is
+    /// held to.
+    pub const fn limited(&mut self, limits: crate::db::Limits) {
+        self.limits = limits;
     }
 
     /// The zone the caller told the connection, and nothing where the
@@ -1552,7 +1563,8 @@ impl Writer {
     ///
     /// # Errors
     ///
-    /// [`Error::TooManyAttached`] past the tenth database,
+    /// [`Error::TooManyAttached`] past the databases the limits of the
+    /// connection hold it to,
     /// [`Error::DatabaseInUse`] for a name the connection already holds
     /// a database under, [`Error::NoDatabaseFile`] for a file name the
     /// opening function answers nothing for, [`Error::AttachEncoding`]
@@ -1576,8 +1588,10 @@ impl Writer {
             .iter()
             .filter(|held| held.called.place > 1)
             .count();
-        if held >= crate::db::ATTACHED {
-            return Err(Error::TooManyAttached);
+        let most = usize::try_from(self.limits.of(crate::db::Limit::AttachedDatabases))
+            .unwrap_or(crate::db::ATTACHED);
+        if held >= most {
+            return Err(Error::TooManyAttached(most));
         }
         if named_database(&name) || self.attached.iter().any(|held| named_as(held, &name)) {
             return Err(Error::DatabaseInUse(name));

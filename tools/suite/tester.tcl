@@ -2156,6 +2156,12 @@ proc btree_varint_test {start mult count incr} {
   return ""
 }
 
+# sqlite3_limit DB ID VALUE of test1.c: what the limit of that name was
+# on the connection, with the value set where it is not below nought.
+proc sqlite3_limit {db id value} {
+  return [lindex [harness_send limit $db $id $value] 0]
+}
+
 # sqlite3_test_errstr CODE of test1.c:3674: the words `sqlite3ErrStr`
 # answers for the code of that name, which is `unknown error` for a name
 # that stands for no code.

@@ -7065,3 +7065,12 @@ Document 16 step Q8.
 - Every primary code the table holds words for, the three codes that
   name words of their own, an extended code, a primary code the table
   holds no words for, and a code past every one the library holds.
+
+### 6.6.294 The limits a connection holds (`db-sqlite`)
+
+Document 16 step Q8.
+
+- The number each limit carries, the value a connection opens with, a
+  number no limit carries, a value the build takes, one above the hard
+  limit, one below the smallest a limit takes, a value below nought, and
+  an `ATTACH` past the databases the limit holds the connection to.

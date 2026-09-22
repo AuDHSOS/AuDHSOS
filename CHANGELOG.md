@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` holds the thirteen limits of a connection, which
+  `sqlite3_limit` reads and sets and which an `ATTACH` is held to.
+  D-427 records it. Catalog 6.6.294. `sqllimits1.test` goes from no case
+  passing to 48 and `e_createtable.test` from 34 to 145.
+
 - `db-sqlite` answers the words a result code names through
   `sqlite3_errstr`, and the suite harness answers
   `sqlite3_test_errstr`. D-426 records it. Catalog 6.6.293.

@@ -1036,6 +1036,9 @@ Size: L.
      Built, which D-423 records.
 147. The words a result code names, which `sqlite3_errstr` answers.
      Built, which D-426 records.
+148. The limits a connection holds, which `sqlite3_limit` reads and
+     sets, and the `ATTACH` one of them holds. Built, which D-427
+     records; the other limits are read and not yet held to.
 
 ### Done when
 

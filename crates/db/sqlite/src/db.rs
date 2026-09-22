@@ -278,10 +278,9 @@ pub enum Error {
     NoDatabase(Vec<u8>),
     /// A `DETACH` of `main` or of `temp`, which no statement takes away.
     KeptDatabase(Vec<u8>),
-    /// An `ATTACH` past the tenth database of a connection, which
-    /// `SQLITE_MAX_ATTACHED` of `research/sqlite/src/sqliteLimit.h:179`
-    /// holds it to.
-    TooManyAttached,
+    /// An `ATTACH` past the databases `SQLITE_LIMIT_ATTACHED` holds a
+    /// connection to, with that count.
+    TooManyAttached(usize),
     /// An `ATTACH` under a name the connection already holds a database
     /// under.
     DatabaseInUse(Vec<u8>),
@@ -509,8 +508,8 @@ impl Error {
             Error::KeptDatabase(name) => {
                 alloc::format!("cannot detach database {}", shown(name))
             }
-            Error::TooManyAttached => {
-                alloc::format!("too many attached databases - max {ATTACHED}")
+            Error::TooManyAttached(most) => {
+                alloc::format!("too many attached databases - max {most}")
             }
             Error::DatabaseInUse(name) => {
                 alloc::format!("database {} is already in use", shown(name))
@@ -1329,6 +1328,173 @@ const VIEW_DEPTH: u32 = 32;
 /// How many databases an `ATTACH` may add to one connection, which is
 /// `SQLITE_MAX_ATTACHED` of `research/sqlite/src/sqliteLimit.h:179`.
 pub const ATTACHED: usize = 10;
+
+/// How many limits a connection holds, which `SQLITE_N_LIMIT` of
+/// `research/sqlite/src/sqlite.h.in:4421` counts.
+pub const LIMITS: usize = 13;
+
+/// One limit a connection holds, which `sqlite3_limit` of
+/// `research/sqlite/src/main.c:2990` reads and sets by the number
+/// `research/sqlite/src/sqlite.h.in:4409` gives it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Limit {
+    /// `SQLITE_LIMIT_LENGTH`: how many bytes a string or a blob holds.
+    Length,
+    /// `SQLITE_LIMIT_SQL_LENGTH`: how many bytes one statement holds.
+    SqlLength,
+    /// `SQLITE_LIMIT_COLUMN`: how many columns a table, an index or a
+    /// statement holds.
+    Column,
+    /// `SQLITE_LIMIT_EXPR_DEPTH`: how deep the tree of one expression
+    /// runs.
+    ExprDepth,
+    /// `SQLITE_LIMIT_COMPOUND_SELECT`: how many terms a compound holds.
+    CompoundSelect,
+    /// `SQLITE_LIMIT_VDBE_OP`: how many instructions one statement is
+    /// built of, which this crate builds none of.
+    VdbeOp,
+    /// `SQLITE_LIMIT_FUNCTION_ARG`: how many values one call holds.
+    FunctionArg,
+    /// `SQLITE_LIMIT_ATTACHED`: how many databases an `ATTACH` adds.
+    AttachedDatabases,
+    /// `SQLITE_LIMIT_LIKE_PATTERN_LENGTH`: how many bytes a pattern of
+    /// `LIKE` or `GLOB` holds.
+    LikePattern,
+    /// `SQLITE_LIMIT_VARIABLE_NUMBER`: the largest place a parameter of
+    /// a statement is written at.
+    VariableNumber,
+    /// `SQLITE_LIMIT_TRIGGER_DEPTH`: how many triggers deep a write
+    /// reaches.
+    TriggerDepth,
+    /// `SQLITE_LIMIT_WORKER_THREADS`: how many threads one sort takes,
+    /// which this crate takes none of.
+    WorkerThreads,
+    /// `SQLITE_LIMIT_PARSER_DEPTH`: how deep the parser goes.
+    ParserDepth,
+}
+
+/// Every limit, in the order their numbers run.
+const EVERY_LIMIT: [Limit; LIMITS] = [
+    Limit::Length,
+    Limit::SqlLength,
+    Limit::Column,
+    Limit::ExprDepth,
+    Limit::CompoundSelect,
+    Limit::VdbeOp,
+    Limit::FunctionArg,
+    Limit::AttachedDatabases,
+    Limit::LikePattern,
+    Limit::VariableNumber,
+    Limit::TriggerDepth,
+    Limit::WorkerThreads,
+    Limit::ParserDepth,
+];
+
+impl Limit {
+    /// The limit a number names, and nothing for a number no limit
+    /// carries, which `sqlite3_limit` answers minus one for.
+    #[must_use]
+    pub fn of_number(number: i64) -> Option<Self> {
+        usize::try_from(number)
+            .ok()
+            .and_then(|at| EVERY_LIMIT.get(at).copied())
+    }
+
+    /// Where the limit stands in the list a connection holds, which is
+    /// the number `research/sqlite/src/sqlite.h.in:4409` gives it.
+    #[must_use]
+    pub fn place(self) -> usize {
+        EVERY_LIMIT
+            .iter()
+            .position(|held| *held == self)
+            .unwrap_or(0)
+    }
+
+    /// The largest value the build takes for it, which `aHardLimit` of
+    /// `research/sqlite/src/main.c:2963` holds and
+    /// `research/sqlite/src/sqliteLimit.h` sets.
+    #[must_use]
+    pub fn hard(self) -> i64 {
+        match self {
+            Limit::Length | Limit::SqlLength => 1_000_000_000,
+            Limit::Column => 2000,
+            Limit::ExprDepth => i64::from(crate::parse::MAX_DEPTH),
+            Limit::CompoundSelect => 500,
+            Limit::VdbeOp => 250_000_000,
+            Limit::FunctionArg | Limit::TriggerDepth | Limit::ParserDepth => 1000,
+            Limit::AttachedDatabases => i64::try_from(ATTACHED).unwrap_or(0),
+            Limit::LikePattern => i64::try_from(crate::func::MAX_PATTERN).unwrap_or(0),
+            Limit::VariableNumber => 32766,
+            // This crate takes no thread of its own for a sort.
+            Limit::WorkerThreads => 0,
+        }
+    }
+
+    /// The smallest value it takes, which `sqlite3_limit` holds a value
+    /// below to: thirty for the length of a value, which
+    /// `SQLITE_MIN_LENGTH` of `research/sqlite/src/sqliteLimit.h:26`
+    /// sets, and nought for every other limit.
+    #[must_use]
+    pub const fn least(self) -> i64 {
+        match self {
+            Limit::Length => 30,
+            _ => 0,
+        }
+    }
+}
+
+/// The limits one connection holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Limits {
+    /// What the connection holds for each limit, by the place of the
+    /// limit.
+    held: [i64; LIMITS],
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Limits {
+    /// The limits a connection opens with, which are the hard limits of
+    /// the build.
+    #[must_use]
+    pub fn new() -> Self {
+        let mut held = [0; LIMITS];
+        for (slot, limit) in held.iter_mut().zip(EVERY_LIMIT) {
+            *slot = limit.hard();
+        }
+        Limits { held }
+    }
+
+    /// What the connection holds for the limit, which the list holds one
+    /// value per limit for.
+    ///
+    /// Reading it costs O(1).
+    #[must_use]
+    pub fn of(&self, limit: Limit) -> i64 {
+        self.held.get(limit.place()).copied().unwrap_or_default()
+    }
+
+    /// Sets the limit and answers what it was, which is what
+    /// `sqlite3_limit` answers: a value above the hard limit of the
+    /// build is held to that, a value below the smallest the limit takes
+    /// is held to that, and a value below nought reads the limit and
+    /// leaves it where it stands.
+    pub fn set(&mut self, limit: Limit, value: i64) -> i64 {
+        let held = self.of(limit);
+        if value < 0 {
+            return held;
+        }
+        let value = value.min(limit.hard()).max(limit.least());
+        for slot in self.held.iter_mut().skip(limit.place()).take(1) {
+            *slot = value;
+        }
+        held
+    }
+}
 
 /// How many rows a `WITH` term that reads itself may answer.
 ///

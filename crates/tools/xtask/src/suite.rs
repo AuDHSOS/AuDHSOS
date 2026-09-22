@@ -1040,6 +1040,10 @@ struct Session {
     /// `research/sqlite/src/pager.c` counts and `btree_pager_stats`
     /// answers under `write`.
     writes: BTreeMap<String, u64>,
+    /// The limits each connection holds, which `sqlite3_limit` sets and
+    /// reads and which a connection that is opened again holds the hard
+    /// ones of.
+    limits: BTreeMap<String, db_sqlite::db::Limits>,
     /// Whether a file name that begins `file:` is read as a URI, which
     /// `sqlite3_config_uri` sets for every connection opened after it.
     uri: bool,
@@ -1108,6 +1112,7 @@ impl Session {
             searched: 0,
             errno: 0,
             writes: BTreeMap::new(),
+            limits: BTreeMap::new(),
             uri: false,
             uris: BTreeMap::new(),
             pragmas: BTreeMap::new(),
@@ -1311,10 +1316,23 @@ impl Session {
                 }
                 Ok(Vec::new())
             }
+            other => self.apart(other, args),
+        }
+    }
+
+    /// What one request that reads the library itself answers, rather
+    /// than a database or a connection the session holds.
+    fn apart(&mut self, verb: &str, args: &[String]) -> Result<Vec<String>, String> {
+        let first = args.first().map_or("", String::as_str);
+        let second = args.get(1).map_or("", String::as_str);
+        match verb {
             "varint" => varint(args),
             // `sqlite3_quota_glob` of
             // `research/sqlite/src/test_quota.c:254`.
             "strglob" => Ok(globbed(first, second)),
+            // `sqlite3_limit` of `research/sqlite/src/main.c:2990`,
+            // which answers what the limit was and sets it.
+            "limit" => Ok(self.limited(first, second, args.get(2).map_or("", String::as_str))),
             // `sqlite3_test_errstr` of
             // `research/sqlite/src/test1.c:3674`: the words the code of
             // that name stands for.
@@ -1759,6 +1777,21 @@ impl Session {
         Ok(vec![answer.to_string()])
     }
 
+    /// What the limit of that name was on the connection, with the value
+    /// set where it is not below nought, which is what `sqlite3_limit`
+    /// answers.
+    ///
+    /// A name no limit carries answers minus one, which `sqlite3_limit`
+    /// answers for a number out of range.
+    fn limited(&mut self, name: &str, limit: &str, value: &str) -> Vec<String> {
+        let Some(limit) = named_limit(limit) else {
+            return vec![String::from("-1")];
+        };
+        let held = self.limits.entry(name.to_owned()).or_default();
+        let value = value.parse::<i64>().unwrap_or(-1);
+        vec![held.set(limit, value).to_string()]
+    }
+
     /// Whether a file name that begins `file:` is read as a URI, which
     /// every connection opened after it reads one for.
     const fn reads_uri(&mut self, uri: bool) -> Vec<String> {
@@ -1884,6 +1917,7 @@ impl Session {
         self.tempers.retain(|_, held| held != name);
         self.collations.remove(name);
         self.functions.remove(name);
+        self.limits.remove(name);
         self.errno = 0;
         stood();
         vec![String::new()]
@@ -2689,6 +2723,7 @@ impl Session {
         // path reads the file as that transaction found it.
         let outside = self.owners.get(&path).is_some_and(|held| held != name);
         let uri = self.uris.get(name).copied().unwrap_or(false);
+        let limits = self.limits.get(name).copied().unwrap_or_default();
         let writer = self
             .held
             .get_mut(&path)
@@ -2711,6 +2746,7 @@ impl Session {
         writer.opens(opening);
         writer.in_zone(zoned);
         writer.reads_uri(uri);
+        writer.limited(limits);
         let mut waiting = self.waiting.contains(name);
         let (out, ran) = ran_each(
             writer,
@@ -3947,6 +3983,28 @@ fn varint(args: &[String]) -> Result<Vec<String>, String> {
         value = value.wrapping_add(step);
     }
     Ok(Vec::new())
+}
+
+/// The limit a name of `research/sqlite/src/sqlite.h.in:4409` stands
+/// for, and nothing for a name the library holds no limit under.
+fn named_limit(name: &str) -> Option<db_sqlite::db::Limit> {
+    use db_sqlite::db::Limit;
+    Some(match name.strip_prefix("SQLITE_LIMIT_")? {
+        "LENGTH" => Limit::Length,
+        "SQL_LENGTH" => Limit::SqlLength,
+        "COLUMN" => Limit::Column,
+        "EXPR_DEPTH" => Limit::ExprDepth,
+        "COMPOUND_SELECT" => Limit::CompoundSelect,
+        "VDBE_OP" => Limit::VdbeOp,
+        "FUNCTION_ARG" => Limit::FunctionArg,
+        "ATTACHED" => Limit::AttachedDatabases,
+        "LIKE_PATTERN_LENGTH" => Limit::LikePattern,
+        "VARIABLE_NUMBER" => Limit::VariableNumber,
+        "TRIGGER_DEPTH" => Limit::TriggerDepth,
+        "WORKER_THREADS" => Limit::WorkerThreads,
+        "PARSER_DEPTH" => Limit::ParserDepth,
+        _ => return None,
+    })
 }
 
 /// The result codes by name, which `sqlite3ErrName` of
