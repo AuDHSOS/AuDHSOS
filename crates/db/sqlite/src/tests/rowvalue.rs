@@ -331,11 +331,39 @@ fn what_a_statement_of_more_than_one_column_stands_as() {
         answered(&writer, "SELECT (SELECT 2,0) IN (SELECT x,y FROM u)"),
         ["0"]
     );
+    // A `CASE` compares its operand against every `WHEN` as a row.
+    assert_eq!(
+        answered(&writer, "SELECT CASE (2,2) WHEN (1,1) THEN 2 ELSE 1 END"),
+        ["1"]
+    );
+    assert_eq!(
+        answered(
+            &writer,
+            "SELECT CASE (2,2) WHEN (1,1) THEN 2 WHEN (2,2) THEN 3 END"
+        ),
+        ["3"]
+    );
+    assert_eq!(
+        answered(
+            &writer,
+            "SELECT CASE (SELECT 2,2) WHEN (2,2) THEN 2 ELSE 1 END"
+        ),
+        ["2"]
+    );
+    assert_eq!(answered(&writer, "SELECT CASE 2 WHEN 2 THEN 3 END"), ["3"]);
+    assert_eq!(
+        answered(&writer, "SELECT CASE WHEN 1 THEN 4 ELSE 5 END"),
+        ["4"]
+    );
     // A row against a statement of another width, and a row under an
     // operator that compares nothing, are both a misuse of a row.
     for sql in [
         "SELECT (SELECT 1,2) BETWEEN (1,1,1) AND (3,3,3)",
         "SELECT (SELECT 1) BETWEEN (1,2) AND (3,4)",
+        "SELECT CASE (2,2) WHEN (1,1,1) THEN 2 ELSE 1 END",
+        "SELECT CASE (2,2) WHEN 1 THEN 2 ELSE 1 END",
+        "SELECT CASE 1 WHEN (1,1) THEN 2 ELSE 1 END",
+        "SELECT CASE (SELECT 2,2) WHEN (1,1,1) THEN 2 ELSE 1 END",
     ] {
         assert_eq!(
             refusal(&writer, sql).message(),

@@ -1420,24 +1420,19 @@ const fn fit(one: Width, other: Width) -> bool {
 /// [`Error::RowValue`] names the misuse.
 pub fn rows_placed(arena: &Arena) -> Result<(), Error> {
     let mut allowed = alloc::vec![false; arena.len()];
-    let mark = |id: ExprId, allowed: &mut Vec<bool>| {
-        for slot in allowed.iter_mut().skip(id.place()).take(1) {
-            *slot = true;
-        }
-    };
     // A row of a `VALUES` is a row of the statement and not a value
     // written under an expression, so every one of them stands where it
     // may.
     for select in arena.all_selects() {
         for held in arena.children(select.values) {
-            mark(*held, &mut allowed);
+            marked(*held, &mut allowed);
         }
     }
     // `SET (a, b) = (1, 2)` writes one column per value of the row, so
     // the row stands where it may there as well.
     for set in arena.all_sets() {
         if set.at.is_some() {
-            mark(set.value, &mut allowed);
+            marked(set.value, &mut allowed);
         }
     }
     for (_, node) in arena.all() {
@@ -1461,8 +1456,8 @@ pub fn rows_placed(arena: &Arena) -> Result<(), Error> {
                 {
                     return Err(Error::RowValue);
                 }
-                mark(left, &mut allowed);
-                mark(right, &mut allowed);
+                marked(left, &mut allowed);
+                marked(right, &mut allowed);
             }
             Node::Between {
                 value, low, high, ..
@@ -1473,17 +1468,17 @@ pub fn rows_placed(arena: &Arena) -> Result<(), Error> {
                     // against one stand where they may and how wide it
                     // is is read when it runs.
                     if middle == Width::Unknown {
-                        mark(low, &mut allowed);
-                        mark(high, &mut allowed);
+                        marked(low, &mut allowed);
+                        marked(high, &mut allowed);
                     }
                     continue;
                 }
                 if !fit(middle, width(arena, low)) || !fit(middle, width(arena, high)) {
                     return Err(Error::RowValue);
                 }
-                mark(value, &mut allowed);
-                mark(low, &mut allowed);
-                mark(high, &mut allowed);
+                marked(value, &mut allowed);
+                marked(low, &mut allowed);
+                marked(high, &mut allowed);
             }
             Node::InList { value, list, .. } => {
                 let left = width(arena, value);
@@ -1495,13 +1490,16 @@ pub fn rows_placed(arena: &Arena) -> Result<(), Error> {
                     if !fit(left, held) {
                         return Err(Error::InTerms(counted(held), counted(left)));
                     }
-                    mark(*member, &mut allowed);
+                    marked(*member, &mut allowed);
                 }
-                mark(value, &mut allowed);
+                marked(value, &mut allowed);
             }
             Node::InSelect { value, .. } | Node::InTable { value, .. } => {
-                mark(value, &mut allowed);
+                marked(value, &mut allowed);
             }
+            Node::Case {
+                operand, branches, ..
+            } => case_placed(arena, operand, branches, &mut allowed)?,
             _ => {}
         }
     }
@@ -1510,6 +1508,47 @@ pub fn rows_placed(arena: &Arena) -> Result<(), Error> {
             return Err(Error::RowValue);
         }
     }
+    Ok(())
+}
+
+/// Marks the node as one that stands where a row may stand.
+fn marked(id: ExprId, allowed: &mut [bool]) {
+    for slot in allowed.iter_mut().skip(id.place()).take(1) {
+        *slot = true;
+    }
+}
+
+/// Marks the `WHEN` clauses of a `CASE` whose operand stands as a row,
+/// which `sqlite3ExprCodeVector` compares the operand against pair by
+/// pair.
+///
+/// # Errors
+///
+/// [`Error::RowValue`] where a `WHEN` holds another number of values
+/// than the operand.
+fn case_placed(
+    arena: &Arena,
+    operand: Option<ExprId>,
+    branches: crate::ast::Range,
+    allowed: &mut [bool],
+) -> Result<(), Error> {
+    let Some(operand) = operand else {
+        return Ok(());
+    };
+    let subject = width(arena, operand);
+    if subject == Width::One {
+        return Ok(());
+    }
+    let children = arena.children(branches);
+    let mut at = 0;
+    while let Some(when) = children.get(at) {
+        if subject.is_row() && !fit(subject, width(arena, *when)) {
+            return Err(Error::RowValue);
+        }
+        marked(*when, allowed);
+        at = at.saturating_add(2);
+    }
+    marked(operand, allowed);
     Ok(())
 }
 
@@ -1904,22 +1943,30 @@ fn case(
     row: &dyn Row,
     depth: u32,
 ) -> Result<Answer, Error> {
+    // The operand and every `WHEN` stand as rows, which
+    // `sqlite3ExprCodeVector` compares pair by pair: a row of one value
+    // is the one value every other expression answers.
     let subject = match operand {
-        Some(id) => Some(answer(arena, id, sql, row, depth)?),
+        Some(id) => Some(row_answers(arena, id, sql, row, depth)?),
         None => None,
     };
     let children = arena.children(branches);
     let mut at = 0;
     while let (Some(when), Some(then)) = (children.get(at), children.get(at.saturating_add(1))) {
-        let condition = answer(arena, *when, sql, row, depth)?;
         let taken = match &subject {
-            Some(subject) => logic(&comparison(
-                BinaryOp::Eq,
-                subject,
-                &condition,
-                row.collation(),
-            )),
-            None => logic(&condition.value),
+            Some(subject) => {
+                let condition = row_answers(arena, *when, sql, row, depth)?;
+                if condition.len() != subject.len() {
+                    return Err(Error::RowValue);
+                }
+                logic(&pairs_compared(
+                    BinaryOp::Eq,
+                    subject,
+                    &condition,
+                    row.collation(),
+                ))
+            }
+            None => logic(&answer(arena, *when, sql, row, depth)?.value),
         };
         if taken == Some(true) {
             return answer(arena, *then, sql, row, depth);

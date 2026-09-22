@@ -1032,6 +1032,8 @@ Size: L.
      values. Built, which D-421 records.
 145. `UPDATE ... SET (a, b) = value`, which writes one column per value
      of the row. Built, which D-422 records.
+146. The operand of a `CASE` and its `WHEN` clauses as rows of values.
+     Built, which D-423 records.
 
 ### Done when
 

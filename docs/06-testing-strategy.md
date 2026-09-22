@@ -7049,3 +7049,11 @@ Document 16 step Q8.
   column in brackets, a clause of one column beside a clause of more, a
   statement whose width cannot be counted before it runs, and a clause
   that writes another number of columns than the value holds.
+
+### 6.6.292 The operand of a CASE as a row (`db-sqlite`)
+
+Document 16 step Q8.
+
+- An operand that is a row and a `WHEN` that matches, one that does not,
+  a statement as the operand, a `CASE` of one value, a `CASE` of no
+  operand, and a `WHEN` of another width than the operand.

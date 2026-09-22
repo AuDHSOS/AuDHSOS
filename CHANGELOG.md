@@ -7,6 +7,10 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` reads the operand of a `CASE` and its `WHEN` clauses as
+  rows of values. D-423 records it. Catalog 6.6.292. `rowvalue.test`
+  goes from 288 cases passing to 290.
+
 - `db-sqlite` writes one column per value of the row for
   `UPDATE ... SET (a, b) = value`. D-422 records it. Catalog 6.6.291.
   `rowvalue7.test` goes from 1 case passing to 8 and `rowvalue.test`
