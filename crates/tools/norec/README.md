@@ -71,7 +71,8 @@ sqlite3 -batch :memory: < target/norec/norec-123.sql
 
 The seed of a case is the first seed plus its number, so `--seed 123 --runs
 1` runs case 123 again, and `--script` prints what it would run instead of
-running it.
+running it. The seed also picks the count style, `SELECT *` for an even seed
+and `SELECT COUNT(*)` for an odd one, so the rerun sends the same query.
 
 ## What it costs
 
