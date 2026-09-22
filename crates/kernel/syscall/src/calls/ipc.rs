@@ -469,7 +469,7 @@ fn take_message<
         received: [badge, opened.map_or(0, |(_, handle)| handle.raw())],
         status: status_of(moved.truncated),
     };
-    let outcome = endpoint::received(machine.objects, machine.scheduler, sender, caller, handover)?;
+    let outcome = endpoint::received(machine.objects, machine.scheduler, sender, handover)?;
     Ok(Taken::Message(outcome))
 }
 

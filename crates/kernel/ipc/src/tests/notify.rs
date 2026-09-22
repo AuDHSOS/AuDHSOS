@@ -225,6 +225,16 @@ fn a_signal_for_a_waiter_that_stopped_waiting_stays_in_the_word() {
     // The thread is suspended out of the wait, which clears the record and
     // the waiter of the notification.
     assert!(cancel(&mut fixture.objects, waiter));
+    assert_eq!(
+        fixture
+            .objects
+            .notifications
+            .get(notification)
+            .unwrap()
+            .waiter,
+        None,
+        "`deliver_word` returns before the guard for a waiter `cancel` took out"
+    );
     fixture
         .scheduler
         .suspend(&mut fixture.objects.threads, waiter)
@@ -262,8 +272,8 @@ fn a_waiter_that_is_no_longer_blocked_is_not_woken_twice() {
         notification,
     )
     .unwrap();
-    // The scheduler wakes the thread without the notification knowing, the
-    // way a `thread_resume` of a suspended thread does.
+    // The scheduler wakes the thread without `cancel`, which leaves a stale
+    // `waiter` in the notification.
     fixture
         .scheduler
         .on_wake(&mut fixture.objects.threads, waiter)

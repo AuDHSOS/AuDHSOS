@@ -198,7 +198,6 @@ fn a_reply_object_dropped_without_an_answer_wakes_its_caller() {
         &mut fixture.objects,
         &mut fixture.scheduler,
         caller,
-        receiver,
         Handover {
             reply: Some(reply),
             received: [0, 0],
