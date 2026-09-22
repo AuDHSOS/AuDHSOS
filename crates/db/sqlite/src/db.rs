@@ -1183,6 +1183,9 @@ struct Column {
     /// nothing where it came from an expression, which is what
     /// `sqlite3_column_decltype` answers.
     declared: Vec<u8>,
+    /// Where the column comes from, which the three
+    /// `sqlite3_column_*_name` answer.
+    origin: Origin,
 }
 
 /// The columns a side of a `FROM` answers.
@@ -1635,8 +1638,9 @@ fn untailed(name: &[u8]) -> Vec<u8> {
     name.to_vec()
 }
 
-/// The columns a table of the schema answers.
-fn shape_of(table: &Table) -> Shape {
+/// The columns a table of the schema answers, each naming the database,
+/// the table and the name it carries there.
+fn shape_of(schema: &[u8], table: &Table) -> Shape {
     Shape {
         nested: false,
         columns: table
@@ -1651,6 +1655,11 @@ fn shape_of(table: &Table) -> Shape {
                 collation: Some(column.collation),
                 datatype: classes_of(column.affinity),
                 declared: column.declared.clone(),
+                origin: Origin {
+                    schema: schema.to_vec(),
+                    table: table.name.clone(),
+                    column: column.name.clone(),
+                },
             })
             .collect(),
         keyed: !table.without_rowid,
@@ -1839,6 +1848,28 @@ impl Default for Naming {
     }
 }
 
+/// Where a column of an answer comes from: the database, the table and
+/// the name the column carries there.
+///
+/// `sqlite3_column_database_name`, `sqlite3_column_table_name` and
+/// `sqlite3_column_origin_name` of `research/sqlite/src/vdbeapi.c`
+/// answer these three, which `columnType` of
+/// `research/sqlite/src/select.c:1975` reads off the column a result
+/// column stands for. A column that comes out of an expression names
+/// none of the three.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Origin {
+    /// The database the table stands in: `main`, `temp` or the name an
+    /// `ATTACH` gave it.
+    pub schema: Vec<u8>,
+    /// The table, under the name the schema holds it by and not under
+    /// an alias the statement gave it.
+    pub table: Vec<u8>,
+    /// The column, under the name the table holds it by, which is
+    /// `rowid` for the key of a table that keeps its rows by one.
+    pub column: Vec<u8>,
+}
+
 /// What a statement answered.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Answer {
@@ -1848,6 +1879,9 @@ pub struct Answer {
     /// column that came from an expression, which is what
     /// `sqlite3_column_decltype` answers.
     pub declared: Vec<Vec<u8>>,
+    /// Where each column comes from, which the three
+    /// `sqlite3_column_*_name` answer.
+    pub origins: Vec<Origin>,
     /// The rows, each as many values as there are names.
     pub rows: Vec<Vec<Value>>,
     /// What the walks and the sorts of the statement counted.
@@ -3094,6 +3128,7 @@ impl<'a> Database<'a> {
                 b"detail".to_vec(),
             ],
             declared: alloc::vec![Vec::new(); 4],
+            origins: alloc::vec![Origin::default(); 4],
             rows,
             stepped: Stepped::default(),
         })
@@ -3201,6 +3236,7 @@ impl<'a> Database<'a> {
         let columns = setting.columns(&name, asked.value.is_some());
         let shaped = |rows: Vec<Vec<Value>>| Answer {
             declared: alloc::vec![Vec::new(); columns.len()],
+            origins: alloc::vec![Origin::default(); columns.len()],
             names: columns.clone(),
             rows,
             stepped: Stepped::default(),
@@ -3558,7 +3594,7 @@ impl<'a> Database<'a> {
                     } else if let Some(stored) = self.located(place, &named.name) {
                         indexed_held(stored, indexed, sql)?;
                         (
-                            shape_of(&stored.table),
+                            shape_of(&self.named_place(stored.place), &stored.table),
                             Source::Table(stored),
                             stored.table.name.clone(),
                             self.named_place(stored.place),
@@ -3731,7 +3767,7 @@ impl<'a> Database<'a> {
                     .located(place, &called)
                     .ok_or_else(|| Error::NoTable(called.clone()))?;
                 let side = Side {
-                    shape: shape_of(&stored.table),
+                    shape: shape_of(&self.named_place(stored.place), &stored.table),
                     source: Source::Table(stored),
                     schema: self.named_place(stored.place),
                     table: called.clone(),
@@ -3972,6 +4008,7 @@ impl<'a> Database<'a> {
                 Answered {
                     answer: Answer {
                         declared: answered.answer.declared.clone(),
+                        origins: answered.answer.origins.clone(),
                         names: answered.answer.names.clone(),
                         rows: alloc::vec![row],
                         stepped: Stepped::default(),
@@ -4562,12 +4599,14 @@ fn listed(
             collation: None,
             datatype: NUMBER,
             declared: Vec::new(),
+            origin: Origin::default(),
         });
         names.push(name);
     }
     Ok(Answered {
         answer: Answer {
             declared: alloc::vec![Vec::new(); names.len()],
+            origins: alloc::vec![Origin::default(); names.len()],
             names,
             rows,
             stepped: Stepped::default(),
@@ -5772,6 +5811,11 @@ fn shaped(shown: Vec<Vec<u8>>, shape: Shape, rows: Vec<Vec<Value>>) -> Answered 
                 .columns
                 .iter()
                 .map(|column| column.declared.clone())
+                .collect(),
+            origins: shape
+                .columns
+                .iter()
+                .map(|column| column.origin.clone())
                 .collect(),
             rows,
             stepped: Stepped::default(),
@@ -8252,6 +8296,7 @@ fn shape(
                     collation,
                     datatype: data_type(arena, expr, sql, sides, collating),
                     declared: declared_of(arena, expr, sql, sides),
+                    origin: origin_of(arena, expr, sql, sides),
                 });
             }
         }
@@ -8262,6 +8307,54 @@ fn shape(
         keyed: false,
         key: None,
     })
+}
+
+/// Where one result column comes from, and nothing where the result
+/// column is not one column of a side.
+///
+/// A bare `rowid` of a side that keeps its rows under a key comes out of
+/// that side under the name `rowid`, which `columnType` of
+/// `research/sqlite/src/select.c:2008` writes for it. A side that reads
+/// what another statement answered carries the origins of that
+/// statement's own result columns, so a column read through one names
+/// the table it began in.
+fn origin_of(arena: &Arena, expr: ExprId, sql: &[u8], sides: &[Side<'_>]) -> Origin {
+    let Some(Node::Column { table, column, .. }) = arena.node(expr) else {
+        return Origin::default();
+    };
+    let name = dequote(column.text(sql));
+    let named = table.map(|table| dequote(table.text(sql)));
+    for side in sides {
+        if named.as_ref().is_some_and(|named| !side.named(named)) {
+            continue;
+        }
+        if let Some(at) = side.shape.place(&name) {
+            return side
+                .shape
+                .columns
+                .get(at)
+                .map_or_else(Origin::default, |column| column.origin.clone());
+        }
+        if side.shape.keyed && rowid_named(&name) {
+            return keyed_origin(side);
+        }
+    }
+    Origin::default()
+}
+
+/// Where a bare `rowid` of a side comes from: the database and the table
+/// of the side's first column, under the name `rowid`.
+fn keyed_origin(side: &Side<'_>) -> Origin {
+    let held = side
+        .shape
+        .columns
+        .first()
+        .map_or_else(Origin::default, |column| column.origin.clone());
+    Origin {
+        schema: held.schema,
+        table: held.table,
+        column: b"rowid".to_vec(),
+    }
 }
 
 /// The type the schema declares for the column one result column names,

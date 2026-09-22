@@ -598,6 +598,9 @@ struct Prepared {
     names: Vec<String>,
     /// The type the schema declares for each of those columns.
     declared: Vec<String>,
+    /// The database, the table and the name each of those columns comes
+    /// from, and three empty texts for a column of an expression.
+    origins: Vec<[String; 3]>,
     /// The rows the statement answered, where it has run.
     rows: Vec<Vec<Value>>,
     /// Which row the reader stands on, counting from nought.
@@ -1850,6 +1853,7 @@ impl Session {
             bound: BTreeMap::new(),
             names: Vec::new(),
             declared: Vec::new(),
+            origins: Vec::new(),
             rows: Vec::new(),
             at: 0,
             ran: false,
@@ -1867,12 +1871,14 @@ impl Session {
         if pragmas(&text) {
             prepared.names = pragma_columns(&text);
             prepared.declared = prepared.names.iter().map(|_| String::new()).collect();
+            prepared.origins = prepared.names.iter().map(|_| nowhere()).collect();
         } else if reads(&text) {
             let read = self.read_statement(connection, &bound_into(&text, &BTreeMap::new()));
             match read {
                 Ok(answered) => {
                     prepared.names = texts(&answered.names);
                     prepared.declared = texts(&answered.declared);
+                    prepared.origins = origins_of(&answered.origins);
                 }
                 Err(message) => return vec![String::new(), tail, message],
             }
@@ -2069,6 +2075,7 @@ impl Session {
             if !answered.names.is_empty() {
                 held.names = texts(&answered.names);
                 held.declared = texts(&answered.declared);
+                held.origins = origins_of(&answered.origins);
             }
             held.row = !held.rows.is_empty();
         }
@@ -2186,6 +2193,20 @@ impl Session {
         }
         if which == "decltype" {
             let named = held.declared.get(place).cloned().unwrap_or_default();
+            return Ok(alloc_one(&named));
+        }
+        // `sqlite3_column_database_name`, `sqlite3_column_table_name`
+        // and `sqlite3_column_origin_name`.
+        if let Some(part) = ["database", "table", "origin"]
+            .iter()
+            .position(|held| *held == which)
+        {
+            let named = held
+                .origins
+                .get(place)
+                .and_then(|origin| origin.get(part))
+                .cloned()
+                .unwrap_or_default();
             return Ok(alloc_one(&named));
         }
         let value = held
@@ -3971,6 +3992,23 @@ fn listed(value: &Value, null: &str) -> String {
         }
         Value::Text(bytes) | Value::Blob(bytes) => String::from_utf8_lossy(bytes).into_owned(),
     }
+}
+
+/// The three empty texts a column of an expression names.
+const fn nowhere() -> [String; 3] {
+    [String::new(), String::new(), String::new()]
+}
+
+/// The database, the table and the name each column comes from, as the
+/// three texts the line carries.
+fn origins_of(origins: &[db_sqlite::db::Origin]) -> Vec<[String; 3]> {
+    origins
+        .iter()
+        .map(|origin| {
+            [&origin.schema, &origin.table, &origin.column]
+                .map(|text| String::from_utf8_lossy(text).into_owned())
+        })
+        .collect()
 }
 
 /// The names of a run of values, each as text.

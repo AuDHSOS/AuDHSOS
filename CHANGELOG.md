@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` names the database, the table and the column each result
+  column comes from, which the three `sqlite3_column_*_name` answer.
+  D-406 records it. Catalog 6.6.282. `capi3c.test` goes from 92 cases
+  passing to 140.
+
 - The suite harness treats the log and the rollback journal beside a
   database as files of their own, which a copy and a removal name.
   D-405 records it. `wal3.test` goes from 297 cases passing to 346.

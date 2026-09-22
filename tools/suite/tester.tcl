@@ -1812,17 +1812,49 @@ proc sqlite3_expired {stmt} { return [lindex [harness_send expired $stmt] 0] }
 proc sqlite3_column_count {stmt} { return [lindex [harness_send column $stmt count 0] 0] }
 proc sqlite3_data_count {stmt} { return [lindex [harness_send column $stmt data 0] 0] }
 proc sqlite3_column_name {stmt at} { return [lindex [harness_send column $stmt name $at] 0] }
-proc sqlite3_column_name16 {stmt at} { return [sqlite3_column_name $stmt $at] }
+# The UTF-16 a command whose name ends in 16 answers, which a file reads
+# back with `encoding convertfrom unicode`.
+proc harness_utf16 {text} { return [encoding convertto unicode $text] }
+proc sqlite3_column_name16 {stmt at} {
+  return [harness_utf16 [sqlite3_column_name $stmt $at]]
+}
 proc sqlite3_column_decltype {stmt at} {
   return [lindex [harness_send column $stmt decltype $at] 0]
 }
-proc sqlite3_column_decltype16 {stmt at} { return [sqlite3_column_decltype $stmt $at] }
+proc sqlite3_column_decltype16 {stmt at} {
+  return [harness_utf16 [sqlite3_column_decltype $stmt $at]]
+}
+# `sqlite3_column_database_name`, `sqlite3_column_table_name` and
+# `sqlite3_column_origin_name` of `research/sqlite/src/vdbeapi.c`: the
+# database, the table and the name one result column comes from, and
+# nothing for a column of an expression. The UTF-16 commands answer the
+# same text, because this line carries text.
+proc sqlite3_column_database_name {stmt at} {
+  return [lindex [harness_send column $stmt database $at] 0]
+}
+proc sqlite3_column_database_name16 {stmt at} {
+  return [harness_utf16 [sqlite3_column_database_name $stmt $at]]
+}
+proc sqlite3_column_table_name {stmt at} {
+  return [lindex [harness_send column $stmt table $at] 0]
+}
+proc sqlite3_column_table_name16 {stmt at} {
+  return [harness_utf16 [sqlite3_column_table_name $stmt $at]]
+}
+proc sqlite3_column_origin_name {stmt at} {
+  return [lindex [harness_send column $stmt origin $at] 0]
+}
+proc sqlite3_column_origin_name16 {stmt at} {
+  return [harness_utf16 [sqlite3_column_origin_name $stmt $at]]
+}
 proc sqlite3_column_type {stmt at} { return [lindex [harness_send column $stmt type $at] 0] }
 proc sqlite3_column_int {stmt at} { return [lindex [harness_send column $stmt int $at] 0] }
 proc sqlite3_column_int64 {stmt at} { return [sqlite3_column_int $stmt $at] }
 proc sqlite3_column_double {stmt at} { return [lindex [harness_send column $stmt double $at] 0] }
 proc sqlite3_column_text {stmt at} { return [lindex [harness_send column $stmt text $at] 0] }
-proc sqlite3_column_text16 {stmt at} { return [sqlite3_column_text $stmt $at] }
+proc sqlite3_column_text16 {stmt at} {
+  return [harness_utf16 [sqlite3_column_text $stmt $at]]
+}
 proc sqlite3_column_blob {stmt at} { return [sqlite3_column_text $stmt $at] }
 proc sqlite3_column_bytes {stmt at} { return [string length [sqlite3_column_text $stmt $at]] }
 proc sqlite3_column_bytes16 {stmt at} { return [expr {2*[sqlite3_column_bytes $stmt $at]}] }
@@ -1888,7 +1920,7 @@ proc sqlite3_errmsg {db} {
   if {$::harness_error eq ""} { return "not an error" }
   return $::harness_error
 }
-proc sqlite3_errmsg16 {db} { return [sqlite3_errmsg $db] }
+proc sqlite3_errmsg16 {db} { return [harness_utf16 [sqlite3_errmsg $db]] }
 
 # `sqlite3_connection_pointer` answers the pointer the C library holds
 # the connection at, which the commands that take one are stand-ins

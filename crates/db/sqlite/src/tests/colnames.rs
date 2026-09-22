@@ -252,3 +252,47 @@ fn what_type_the_schema_declares_for_each_column_answered() {
     assert_eq!(declared(b"SELECT 1"), [""]);
     assert_eq!(declared(b"VALUES(1,2)"), ["", ""]);
 }
+
+/// Where each result column comes from: the database, the table under
+/// the name the schema holds it by, and the name the column carries
+/// there.
+#[test]
+fn where_a_result_column_comes_from() {
+    let image = written();
+    let database = Database::open(&image).expect("a database");
+    let origins = |sql: &[u8]| {
+        database
+            .query(sql)
+            .expect("an answer")
+            .origins
+            .iter()
+            .map(|origin| {
+                (
+                    String::from_utf8_lossy(&origin.schema).into_owned(),
+                    String::from_utf8_lossy(&origin.table).into_owned(),
+                    String::from_utf8_lossy(&origin.column).into_owned(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let held = |column: &str| {
+        (
+            String::from("main"),
+            String::from("t1"),
+            String::from(column),
+        )
+    };
+    let nowhere = (String::new(), String::new(), String::new());
+    assert_eq!(origins(b"SELECT a, b FROM t1"), [held("a"), held("b")]);
+    // An alias moves the name the statement answers under and not the
+    // name the schema holds the table by.
+    assert_eq!(origins(b"SELECT x.a AS c FROM t1 AS x"), [held("a")]);
+    assert_eq!(origins(b"SELECT rowid FROM t1"), [held("rowid")]);
+    // A statement written inside a `FROM` carries the origins of its
+    // own result columns.
+    assert_eq!(origins(b"SELECT a FROM (SELECT a FROM t1)"), [held("a")]);
+    assert_eq!(
+        origins(b"SELECT a+1, 2 FROM t1"),
+        [nowhere.clone(), nowhere]
+    );
+}

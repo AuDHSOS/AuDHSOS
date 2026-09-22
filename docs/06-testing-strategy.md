@@ -6963,3 +6963,11 @@ Document 16 step Q8.
 - A close over a file that keeps a log and one over a file that keeps
   none, with the rows read out of the file afterwards and the mode the
   file answers with.
+
+### 6.6.282 Where a result column comes from (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A column of a table, one of a table under an alias, a bare `rowid`,
+  one read through a statement written inside a `FROM`, and one that
+  comes out of an expression.

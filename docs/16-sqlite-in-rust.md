@@ -1016,6 +1016,8 @@ Size: L.
      which D-403 records.
 137. The log a close writes back and gives up. Built, which D-404
      records.
+138. The database, the table and the column a result column comes from.
+     Built, which D-406 records.
 
 ### Done when
 
