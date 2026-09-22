@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The suite harness names a database by the path with the steps that name
+  nothing taken out, and a connection that wrote `BEGIN` while another
+  holds the transaction of the path waits, reading the file as that
+  transaction found it and refusing a write with `database is locked`.
+  D-400 records it. `lock.test` goes from 29 cases passing to 49.
+
 - The suite harness runs `crashsql` and `crash_on_write`, which leave the
   files of a database as a machine that lost power part way through a
   commit left them, and `db-sqlite` answers what a commit writes and

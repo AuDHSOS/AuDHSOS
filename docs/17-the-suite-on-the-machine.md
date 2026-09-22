@@ -475,6 +475,9 @@ Size: S.
     the log beside the file, which D-385 records.
 40. `crashsql` and `crash_on_write` run their statements over the files
     the session holds and stop part way through, which D-394 records.
+41. A database is named by the path with the steps that name nothing
+    taken out, and a connection that wrote `BEGIN` while another holds
+    the transaction of the path waits, which D-400 records.
 
 ### Produces
 

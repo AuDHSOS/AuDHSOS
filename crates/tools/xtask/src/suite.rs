@@ -794,6 +794,136 @@ impl Crashing {
     }
 }
 
+/// The values every statement of `sql` answered and the message the first
+/// one refused with, where one did.
+///
+/// `held` carries whether another connection holds the transaction of the
+/// path and whether this connection waits on it, which the statements of
+/// a text may change.
+fn ran_each(
+    writer: &mut Writer,
+    sql: &str,
+    reads_as: (&'static [Collating], &'static [Defined], &str),
+    held: (bool, &mut bool),
+) -> (Vec<String>, Result<(), String>) {
+    let (collating, defines, null) = reads_as;
+    let (outside, waiting) = held;
+    let mut out = Vec::new();
+    for statement in statements(sql) {
+        // The bytes after the last one that carries meaning are the
+        // statement's own: `SELECT 1 /* ` is a comment that runs to the
+        // end and `SELECT 1 /*` is a slash and a star.
+        let text = statement.trim_start();
+        if text.trim().is_empty() {
+            continue;
+        }
+        if outside {
+            match locked(text, waiting) {
+                Locked::Waits => continue,
+                Locked::Refused => return (out, Err("database is locked".to_owned())),
+                Locked::Reads => {}
+            }
+        }
+        match run_one(writer, text, collating, defines, outside) {
+            Ok(values) => out.extend(values.iter().map(|value| listed(value, null))),
+            Err(message) => return (out, Err(message)),
+        }
+    }
+    (out, Ok(()))
+}
+
+/// What one statement of a connection that does not hold the transaction
+/// of the path may do.
+enum Locked {
+    /// It waits: the statement opens or ends a transaction of its own,
+    /// which takes no lock and runs nothing.
+    Waits,
+    /// It reads the file as the transaction of the other connection found
+    /// it.
+    Reads,
+    /// It writes, which the lock the other connection holds refuses.
+    Refused,
+}
+
+/// What `text` may do while another connection holds the transaction of
+/// the path, and whether the connection is waiting on that transaction
+/// once the statement has run.
+///
+/// `sqlite3BeginTrans` opens a deferred transaction, which takes no lock,
+/// so the `BEGIN` runs nothing and the first write of it is what
+/// `sqlite3BtreeBeginTrans` refuses for a `RESERVED` lock another
+/// connection holds.
+fn locked(text: &str, waiting: &mut bool) -> Locked {
+    if begins(text) {
+        *waiting = true;
+        return Locked::Waits;
+    }
+    if *waiting && ends(text) {
+        *waiting = false;
+        return Locked::Waits;
+    }
+    if reads(text) {
+        Locked::Reads
+    } else {
+        Locked::Refused
+    }
+}
+
+/// Whether the statement begins a transaction, which `BEGIN` and `BEGIN
+/// TRANSACTION` both do.
+fn begins(text: &str) -> bool {
+    first_word(text).eq_ignore_ascii_case("begin")
+}
+
+/// Whether the statement ends one, which `COMMIT`, `END` and `ROLLBACK`
+/// all do.
+fn ends(text: &str) -> bool {
+    let word = first_word(text);
+    ["commit", "end", "rollback"]
+        .iter()
+        .any(|held| word.eq_ignore_ascii_case(held))
+}
+
+/// The first word of a statement, which is the letters it opens with.
+fn first_word(text: &str) -> &str {
+    let held = text.trim_start();
+    let at = held
+        .find(|held: char| !held.is_ascii_alphabetic())
+        .unwrap_or(held.len());
+    held.get(..at).unwrap_or_default()
+}
+
+/// One path with the steps that name nothing taken out: an empty step, a
+/// step of one dot, and a step of two dots with the step before it.
+///
+/// `sqlite3_open` names the file the path reaches, so two spellings of one
+/// path are one database, which `lock.test` opens a second connection
+/// over `./tempdir/../tempdir/t1/.//t2/../../..//test.db` to state.
+///
+/// Simplifying one path costs O(n) in its steps.
+fn simplified(path: &str) -> String {
+    let absolute = path.starts_with('/');
+    let mut steps: Vec<&str> = Vec::new();
+    for step in path.split('/') {
+        match step {
+            "" | "." => {}
+            ".." => {
+                // A step of two dots at the front of a relative path
+                // names the directory above, which no step before it
+                // names.
+                if steps.last().is_none_or(|held| *held == "..") {
+                    steps.push(step);
+                } else {
+                    steps.pop();
+                }
+            }
+            held => steps.push(held),
+        }
+    }
+    let held = steps.join("/");
+    if absolute { format!("/{held}") } else { held }
+}
+
 /// The file one thing a commit does reaches.
 const fn onto_of(held: &Does) -> Onto {
     match held {
@@ -851,6 +981,10 @@ struct Session {
     /// one does. A connection that did not begin it reads the file as
     /// the transaction found it.
     owners: BTreeMap<String, String>,
+    /// Which connections wrote a `BEGIN` the transaction of another
+    /// connection over the same path stood in the way of, which take no
+    /// lock until they write.
+    waiting: BTreeSet<String>,
     /// What the last statement of each connection counted, which
     /// `db status` answers.
     stepped: BTreeMap<String, db_sqlite::db::Stepped>,
@@ -914,6 +1048,7 @@ impl Session {
             stamps: BTreeMap::new(),
             counters: BTreeMap::new(),
             owners: BTreeMap::new(),
+            waiting: BTreeSet::new(),
             stepped: BTreeMap::new(),
             sorted: 0,
             searched: 0,
@@ -1480,7 +1615,7 @@ impl Session {
             self.opened = self.opened.saturating_add(1);
             format!("{path}\0{name}\0{}", self.opened)
         } else {
-            path.to_owned()
+            simplified(path)
         };
         let path = held.as_str();
         if !self.held.contains_key(path)
@@ -2184,23 +2319,17 @@ impl Session {
         WHO.with(|who| who.borrow_mut().clone_from(&name.to_owned()));
         NULLED.with(|text| text.borrow_mut().clone_from(&null));
         writer.opens(opening);
-        let mut out = Vec::new();
-        let mut ran = Ok(());
-        for statement in statements(sql) {
-            // The bytes after the last one that carries meaning are the
-            // statement's own: `SELECT 1 /* ` is a comment that runs to
-            // the end and `SELECT 1 /*` is a slash and a star.
-            let text = statement.trim_start();
-            if text.trim().is_empty() {
-                continue;
-            }
-            match run_one(writer, text, collating, defines, outside) {
-                Ok(values) => out.extend(values.iter().map(|value| listed(value, &null))),
-                Err(message) => {
-                    ran = Err(message);
-                    break;
-                }
-            }
+        let mut waiting = self.waiting.contains(name);
+        let (out, ran) = ran_each(
+            writer,
+            sql,
+            (collating, defines, &null),
+            (outside, &mut waiting),
+        );
+        if waiting {
+            self.waiting.insert(name.to_owned());
+        } else {
+            self.waiting.remove(name);
         }
         let counted = writer.counts();
         let kept = writer.kept();
