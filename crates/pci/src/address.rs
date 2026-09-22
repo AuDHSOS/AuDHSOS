@@ -32,8 +32,7 @@ pub const HEADER_LEN: u16 = 64;
 /// The highest offset a whole word starts at.
 const LAST_WORD: u16 = CONFIG_SPACE_LEN - 4;
 
-/// Number of bytes one bus takes in the window.
-pub const BYTES_PER_BUS: u64 = 1 << 20;
+pub use audhsos_abi::ecam::BYTES_PER_BUS;
 
 /// Number of bytes one device takes in the window.
 pub const BYTES_PER_DEVICE: u64 = 1 << 15;

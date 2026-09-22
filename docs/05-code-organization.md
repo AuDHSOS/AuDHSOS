@@ -159,14 +159,14 @@ AuDHSOS/
 | `audhsos-deflate` | 0 | all | no | yes | `test-support` behind the feature `test-strategies` |
 | `kernel-types` | 1 | all | no | yes | `audhsos-abi`; `test-support` behind the feature `test-strategies` |
 | `kernel-x86-tables` | 1 | all | no | yes | - |
-| `kernel-acpi` | 1 | all | no | yes, fuzz | `kernel-types`; `test-support` as a dev-dependency |
+| `kernel-acpi` | 1 | all | no | yes, fuzz | `audhsos-abi`, `kernel-types`; `test-support` as a dev-dependency |
 | `kernel-hal-api` | 1 | all | no | doubles are tested | `kernel-types`; features `test-doubles`, `port-io` |
 | `driver-uart16550` | 1 | all | no | yes | - (feature `test-doubles`) |
 | `driver-i8042` | 1 | all | no | yes, fuzz | - (feature `test-doubles`) |
 | `gfx` | 1 | all | no | yes | `audhsos-abi`; `test-support` behind the feature `test-strategies` |
 | `audhsos-symbols` | 1 | all | no | yes | `audhsos-elf`; `test-support` as a dev-dependency |
 | `virtio-queue` | 1 | all | no | yes | `audhsos-collections`; feature `test-doubles` |
-| `pci` | 1 | all | no | yes, fuzz | - (feature `test-doubles`); `test-support` as a dev-dependency |
+| `pci` | 1 | all | no | yes, fuzz | `audhsos-abi`; feature `test-doubles`; `test-support` as a dev-dependency |
 | `driver-virtio-net` | 2 | all | no | yes, fuzz | `virtio-queue` (feature `test-doubles` as a dev-dependency); `test-support` as a dev-dependency; feature `test-doubles`. It parses no capability, so it needs `pci` no more than `driver-virtio-blk` does (D-139) |
 | `driver-virtio-blk` | 2 | all | no | yes | `virtio-queue` (feature `test-doubles` as a dev-dependency); `test-support` as a dev-dependency; feature `test-doubles` |
 | `fs-fat` | 1 | all | no | yes | `audhsos-time`; `test-support` as a dev-dependency; feature `test-doubles` |
@@ -294,10 +294,10 @@ remains separate. The independent fuzz target is `json_codec`.
     the network crates never reference each other; the transport that
     joins them lives in a userland process.
 11. `audhsos-symbols`, `virtio-queue`, `fs-fat`, `fs-gpt`, and `pci` are
-    logic crates at layer 1. They depend on layer-0 crates only — `pci` on
-    nothing at all — and are used by the xtask, by `server-fs` for the two
-    file system crates, and by driver and server processes as the phases
-    reach them. `fs-gpt` is the one exception to the layer-0 rule: it
+    logic crates at layer 1. They depend on layer-0 crates only, including
+    `audhsos-abi` for PCI ECAM sizes, and are used by the xtask, by
+    `server-fs` for the two file system crates, and by driver and server
+    processes as the phases reach them. `fs-gpt` is the one exception to the layer-0 rule: it
     depends on `fs-fat`, which is layer 1, because the block device trait
     it reads through is defined there (D-138).
 12. `text-raster` is a logic crate at layer 1 and depends on `text-core`

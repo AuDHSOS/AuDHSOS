@@ -291,6 +291,7 @@ dependencies = [
 name = "kernel-acpi"
 version = "0.1.0"
 dependencies = [
+ "audhsos-abi",
  "kernel-types",
 ]
 
@@ -406,6 +407,9 @@ version = "0.1.0"
 [[package]]
 name = "pci"
 version = "0.1.0"
+dependencies = [
+ "audhsos-abi",
+]
 
 [[package]]
 name = "pci_config"

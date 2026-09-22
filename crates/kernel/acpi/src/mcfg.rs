@@ -17,6 +17,7 @@
 //! an error, because the window's length follows from the range and the
 //! kernel maps the base as frames.
 
+pub use audhsos_abi::ecam::{BYTES_PER_BUS, Ecam};
 use kernel_types::PhysAddr;
 
 use crate::error::AcpiError;
@@ -36,50 +37,8 @@ pub const ALLOCATION_LEN: usize = 16;
 /// Number of segment groups this kernel holds.
 pub const MAX_ECAM_ALLOCATIONS: usize = 4;
 
-/// Number of bytes the configuration space of one bus takes in the window,
-/// which is thirty-two devices of eight functions of four kibibytes.
-pub const BYTES_PER_BUS: u64 = 1 << 20;
-
-/// The bits a base address has to have clear, which make it the page the
-/// kernel maps it in.
+/// The alignment required for mapping the base as a frame.
 const BASE_ALIGNMENT_MASK: u64 = 0xFFF;
-
-/// One window: the configuration space of the buses of one segment group.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct Ecam {
-    /// Where the window starts.
-    pub base: PhysAddr,
-    /// The segment group the window covers.
-    pub segment: u16,
-    /// The first bus of the group the window holds.
-    pub first_bus: u8,
-    /// The last bus of the group the window holds.
-    pub last_bus: u8,
-}
-
-impl Ecam {
-    /// Number of buses the window covers, which is at least one because a
-    /// range that runs backwards is refused at the parse.
-    #[must_use]
-    pub fn buses(self) -> u16 {
-        u16::from(self.last_bus)
-            .saturating_sub(u16::from(self.first_bus))
-            .saturating_add(1)
-    }
-
-    /// Number of bytes the window covers.
-    #[must_use]
-    pub fn len(self) -> u64 {
-        u64::from(self.buses()).saturating_mul(BYTES_PER_BUS)
-    }
-
-    /// `true` when the window covers no bus, which no window this crate
-    /// hands out does: a range that runs backwards is refused at the parse.
-    #[must_use]
-    pub const fn is_empty(self) -> bool {
-        self.last_bus < self.first_bus
-    }
-}
 
 /// What the table says about the configuration windows of the machine.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -151,7 +110,9 @@ fn read_allocation(bytes: &[u8], offset: usize, length: usize) -> Result<Ecam, A
         return Err(AcpiError::Unaligned(raw));
     }
     Ok(Ecam {
-        base: PhysAddr::new(raw).map_err(|_| AcpiError::Address(raw))?,
+        base: PhysAddr::new(raw)
+            .map_err(|_| AcpiError::Address(raw))?
+            .as_u64(),
         segment,
         first_bus,
         last_bus,

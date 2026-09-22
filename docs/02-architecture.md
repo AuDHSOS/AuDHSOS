@@ -68,7 +68,7 @@ Three properties define the design:
 
 | Object | Purpose | Operations | Rights |
 |--------|---------|------------|--------|
-| `Process` | Address space, handle table, threads, quotas, fault handler | create, install handle, set fault handler, map/unmap/protect memory, kill | `MANAGE`, `MAP`, `INSTALL` |
+| `Process` | Address space, handle table, threads, quotas, fault handler | create, install handle, set fault handler, map/unmap/protect memory, kill, watch, unwatch | `MANAGE`, `MAP`, `INSTALL`, `INFO` |
 | `Thread` | Execution context inside a process | create, start, suspend, resume, set priority, kill, exit (self) | `MANAGE` |
 | `MemoryObject` | Contiguous range of physical frames; kind `Ram` or `Device` | split, map, query info | `READ`, `WRITE`, `EXECUTE`, `MAP`, `INFO` |
 | `Endpoint` | Synchronous rendezvous point | call, send, recv, reply-recv, badge | `SEND`, `RECV`, `BADGE` |
@@ -420,7 +420,7 @@ The message is a region of the IPC buffer:
 | Field | Size | Meaning |
 |-------|------|---------|
 | label | 8 bytes | protocol-defined tag |
-| word count | 8 bytes | number of payload words, `0..=MAX_WORDS` |
+| word count | 8 bytes | number of payload words, `0..=MAX_MESSAGE_WORDS` |
 | handle count | 8 bytes | number of handles, `0..=4` |
 | handles | 4 × 8 bytes | handles to transfer; must carry `TRANSFER`; copied into the receiver's table with the same rights; the sender keeps its handles |
 | words | up to 480 × 8 bytes | payload |
@@ -578,8 +578,9 @@ through shared memory objects.
    retrieves the final memory map, and calls `ExitBootServices`.
 6. The loader converts the UEFI memory map into the boot information
    structure (see [3.1.5](03-target-platform.md#315-boot-information-structure)).
-   The loader's own image becomes usable memory; page tables, boot stack,
-   kernel, and boot image are marked with their own kinds.
+   The loader reports its own image as usable memory and records the page
+   tables, boot stack, kernel, and boot image ranges in the header fields.
+   The HAL adapter assigns those four ranges their own region kinds.
 7. The loader's naked entry function writes the page-table root to `CR3`,
    switches to the boot stack, and jumps to the kernel entry point with the
    address of the boot information structure. The loader never regains

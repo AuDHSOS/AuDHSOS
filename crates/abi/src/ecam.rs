@@ -27,10 +27,12 @@ pub struct Ecam {
 }
 
 impl Ecam {
-    /// Number of buses the window covers, which is at least one for a
-    /// window whose range runs forwards.
+    /// Number of buses the window covers, or zero for an empty window.
     #[must_use]
     pub fn buses(self) -> u16 {
+        if self.is_empty() {
+            return 0;
+        }
         u16::from(self.last_bus)
             .saturating_sub(u16::from(self.first_bus))
             .saturating_add(1)
@@ -42,10 +44,9 @@ impl Ecam {
         u64::from(self.buses()).saturating_mul(BYTES_PER_BUS)
     }
 
-    /// `true` when the window covers no bus, which is what the four zero
-    /// words of a machine without an `MCFG` table read as.
+    /// `true` for an absent base or a reversed bus range.
     #[must_use]
     pub const fn is_empty(self) -> bool {
-        self.last_bus < self.first_bus
+        self.base == 0 || self.last_bus < self.first_bus
     }
 }

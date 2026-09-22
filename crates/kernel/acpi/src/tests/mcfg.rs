@@ -6,7 +6,6 @@
 #![allow(clippy::arithmetic_side_effects, clippy::indexing_slicing)]
 #![allow(clippy::as_conversions, clippy::cast_possible_truncation)]
 
-use kernel_types::PhysAddr;
 use kernel_types::phys::MAX_PHYS_ADDR;
 
 use crate::error::AcpiError;
@@ -26,7 +25,7 @@ fn a_table_of_one_allocation_is_read_in_full() {
     assert_eq!(
         parsed.first(),
         Some(Ecam {
-            base: PhysAddr::new(BASE).unwrap(),
+            base: BASE,
             segment: 0,
             first_bus: 0,
             last_bus: 255,
@@ -50,7 +49,7 @@ fn a_table_of_several_allocations_keeps_them_in_order() {
 #[test]
 fn the_window_covers_a_mebibyte_of_every_bus_it_names() {
     let window = Ecam {
-        base: PhysAddr::new(BASE).unwrap(),
+        base: BASE,
         segment: 0,
         first_bus: 0,
         last_bus: 255,
@@ -63,7 +62,7 @@ fn the_window_covers_a_mebibyte_of_every_bus_it_names() {
 #[test]
 fn a_window_of_one_bus_covers_that_one_bus() {
     let window = Ecam {
-        base: PhysAddr::new(BASE).unwrap(),
+        base: BASE,
         segment: 0,
         first_bus: 7,
         last_bus: 7,

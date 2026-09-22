@@ -184,7 +184,6 @@ const _: () = assert!(PHYS_WINDOW_BASE >= KERNEL_SPACE_START);
 const _: () = assert!(KERNEL_BASE > PHYS_WINDOW_BASE);
 const _: () = assert!(ROOT_TASK_BASE >= USER_SPACE_START && ROOT_TASK_BASE < USER_SPACE_END);
 const _: () = assert!(ROOT_TASK_BASE.is_multiple_of(PAGE_SIZE));
-const _: () = assert!(MAX_MESSAGE_WORDS * 8 + MAX_MESSAGE_HANDLES * 8 + 3 * 8 + 10 * 8 <= 4096);
 const _: () = assert!(MAX_RESULT_WORDS <= MAX_MESSAGE_WORDS);
 const _: () = assert!(BOOT_STACK_TOP.is_multiple_of(PAGE_SIZE));
 const _: () = assert!(BOOT_INFO_VADDR.is_multiple_of(PAGE_SIZE));

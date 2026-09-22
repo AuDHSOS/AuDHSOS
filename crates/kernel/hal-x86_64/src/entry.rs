@@ -9,7 +9,6 @@
 //! caller registered, and the debug console is programmed.
 
 use crate::processor::KernelToken;
-use audhsos_abi::Ecam;
 use audhsos_sync::Global;
 use kernel_hal_api::console::DebugConsole;
 use kernel_hal_api::exit::{ExitStatus, TestExit};
@@ -63,12 +62,7 @@ where
     if let Ok(mcfg) = unsafe { crate::acpi::find_mcfg(&platform) }
         && let Some(window) = mcfg.first()
     {
-        platform.set_ecam(Ecam {
-            base: window.base.as_u64(),
-            segment: window.segment,
-            first_bus: window.first_bus,
-            last_bus: window.last_bus,
-        });
+        platform.set_ecam(window);
     }
     main(&platform);
     halt_forever();

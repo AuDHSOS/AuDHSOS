@@ -40,6 +40,7 @@
 //! in the table of the process and the message only says what they are.
 
 use crate::ipc_buffer::{Buffer, BufferMut, MessageError};
+use crate::layout::MAX_MESSAGE_WORDS;
 use crate::{Error, Handle};
 
 /// The label of the startup message.
@@ -500,6 +501,9 @@ impl Writer {
     ) -> Result<(), StartupError> {
         let role_index = self.pairs.checked_mul(2).ok_or(StartupError::Full)?;
         let payload_index = role_index.checked_add(1).ok_or(StartupError::Full)?;
+        if payload_index >= MAX_MESSAGE_WORDS {
+            return Err(StartupError::Full);
+        }
         if !buffer.set_word(role_index, u64::from(role.code())) {
             return Err(StartupError::Full);
         }
