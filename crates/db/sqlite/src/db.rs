@@ -290,6 +290,15 @@ pub enum Error {
     NoDatabaseFile(Vec<u8>),
     /// An `ATTACH` of a file whose encoding is not the one of `main`.
     AttachEncoding,
+    /// A file name as a URI with a `%00` escape in it, which this
+    /// library is built to refuse.
+    UriEscape,
+    /// A file name as a URI whose authority is neither empty nor
+    /// `localhost`, with the authority.
+    UriAuthority(Vec<u8>),
+    /// A file name as a URI whose `mode=` or `cache=` parameter names no
+    /// mode the library holds, with which parameter and the value.
+    NoUriMode(Moded, Vec<u8>),
     /// A `VACUUM` on a connection with a transaction open.
     VacuumInTransaction,
     /// A `PRAGMA synchronous = value` on a connection with a transaction
@@ -509,6 +518,13 @@ impl Error {
             Error::AttachEncoding => alloc::string::String::from(
                 "attached databases must use the same text encoding as main database",
             ),
+            Error::UriEscape => alloc::string::String::from("unexpected %00 in uri"),
+            Error::UriAuthority(held) => {
+                alloc::format!("invalid uri authority: {}", shown(held))
+            }
+            Error::NoUriMode(which, value) => {
+                alloc::format!("no such {} mode: {}", which.words(), shown(value))
+            }
             _ => return None,
         })
     }
@@ -1890,6 +1906,29 @@ impl Altering {
             Altering::RenameColumn => "rename columns of",
             Altering::DropColumn => "drop column from",
             Altering::DropConstraint => "edit constraints of",
+        }
+    }
+}
+
+/// Which parameter of a URI file name carries a mode, which the refusal
+/// of a value names: `sqlite3ParseUri` of
+/// `research/sqlite/src/main.c:3243` writes `access` for `mode=` and
+/// `cache` for `cache=`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Moded {
+    /// `mode=`.
+    Access,
+    /// `cache=`.
+    Cache,
+}
+
+impl Moded {
+    /// The words the refusal names it by.
+    #[must_use]
+    pub const fn words(self) -> &'static str {
+        match self {
+            Moded::Access => "access",
+            Moded::Cache => "cache",
         }
     }
 }

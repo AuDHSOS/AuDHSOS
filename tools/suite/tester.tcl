@@ -549,6 +549,7 @@ proc sqlite3 {args} {
   set rest [lrange $args 1 end]
   set count [llength $rest]
   set file ""
+  set uri 0
   for {set i 0} {$i < $count} {incr i} {
     set word [lindex $rest $i]
     if {[string index $word 0] ne "-"} {
@@ -557,10 +558,16 @@ proc sqlite3 {args} {
       continue
     }
     if {$i == $count-1} { sqlite_usage }
+    if {$word eq "-uri"} { set uri [lindex $rest [expr {$i+1}]] }
     incr i
   }
   if {$file eq ""} { set file ":memory:" }
-  set ::harness_error [lindex [harness_send open $name $file] 0]
+  set uri [expr {[string is boolean -strict $uri] && $uri ? 1 : 0}]
+  set ::harness_error [lindex [harness_send open $name $file $uri] 0]
+  # `sqlite3_open_v2` of `tclsqlite.c:3820` answers the message the open
+  # was refused with and names no command, which is what a URI this
+  # library refuses raises here.
+  if {$::harness_error ne ""} { error $::harness_error }
   # A connection that is opened again holds no authorizer, no null value
   # and no callback, which `sqlite3_open` leaves null.
   catch { unset ::authorizers($name) }
@@ -1427,7 +1434,14 @@ proc sqlite3_test_control {args} {
   return 0
 }
 proc sqlite3_soft_heap_limit64 {args} { return 0 }
-proc sqlite3_config_uri {args} { return 0 }
+# `sqlite3_config SQLITE_CONFIG_URI` of
+# `research/sqlite/src/main.c:707`: whether a file name that begins
+# `file:` is read as a URI, which every connection opened after it
+# reads one for.
+proc sqlite3_config_uri {{on 1}} {
+  harness_send config_uri [expr {$on ? 1 : 0}]
+  return 0
+}
 proc sqlite3_register_cksumvfs {args} { return 0 }
 proc sqlite3_multiplex_initialize {args} { return 0 }
 proc sqlite3_config_pmasz {args} { return 0 }
@@ -2022,16 +2036,19 @@ set ::opened 0
 # its own and answers the pointer it stands at, which is the name the
 # harness holds it under. The file is there once the connection is open,
 # which `sqlite3_open` writes the first page of.
-proc sqlite3_open {{file :memory:} {vfs {}}} {
+proc sqlite3_open {{file :memory:} {vfs {}} {uri 0}} {
   incr ::opened
   set name "open$::opened"
   # The pointer stands for a connection of the tester's own, so it is
   # opened as `sqlite3 NAME FILE` opens one and answers to that name as a
-  # command of its own.
-  sqlite3 $name $file
+  # command of its own. An open that is refused answers the pointer all
+  # the same, which `sqlite3_errcode` reads the refusal off.
+  catch { sqlite3 $name $file -uri $uri }
   return $name
 }
-proc sqlite3_open_v2 {file flags vfs args} { return [sqlite3_open $file $vfs] }
+proc sqlite3_open_v2 {file flags vfs args} {
+  return [sqlite3_open $file $vfs [expr {[lsearch $flags SQLITE_OPEN_URI] >= 0}]]
+}
 
 # `sqlite3_open16` takes the name as UTF-16 with two bytes of nought
 # after it.

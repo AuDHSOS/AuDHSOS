@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` reads a file name that begins `file:` as a URI where the
+  client asks for it: the authority, the `%HH` escapes of the path, and
+  the parameters after it, with `%00` refused. D-419 records it. Catalog
+  6.6.288. `uri.test` goes from 37 cases passing to 43, `uri2.test` from
+  0 to 20 and `e_uri.test` from 3 to 8.
+
 - `db-sqlite` stops a walk once the rows a `LIMIT` takes are all there.
   D-418 records it. Catalog 6.6.287.
 

@@ -494,6 +494,10 @@ Size: S.
     and read the count the caller wrote, which D-411 records.
 49. A temp table belongs to the connection that made it, which D-412
     records.
+50. `sqlite3_config_uri` and the `SQLITE_OPEN_URI` flag say whether a
+    connection reads a file name that begins `file:` as a URI, and an
+    open the URI refuses raises the message it was refused with, which
+    D-419 records.
 
 ### Produces
 

@@ -74,6 +74,7 @@ mod token;
 mod tree;
 mod upfrom;
 mod upsert;
+mod uri;
 mod utf8;
 mod vacuum;
 mod value;

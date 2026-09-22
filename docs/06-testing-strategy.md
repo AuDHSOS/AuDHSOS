@@ -7010,3 +7010,13 @@ Document 16 step Q8.
 
 - A `LIMIT` the rows of a `RIGHT` join fill, one an ordinary walk fills,
   one with an `OFFSET`, and one that names a column.
+
+### 6.6.288 The file name written as a URI (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A name that begins `file:` and one that does not, an authority that is
+  empty, `localhost` and another, a `%HH` escape in the path, in the name
+  of a parameter and in its value, a `%` that two digits do not follow,
+  `%00`, a parameter of no name, one of no value, a fragment, and every
+  `mode=` and `cache=` value the library holds and one it does not.

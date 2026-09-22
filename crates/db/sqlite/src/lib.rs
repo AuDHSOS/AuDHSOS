@@ -39,6 +39,7 @@ pub mod rename;
 pub mod schema;
 pub mod token;
 pub mod tree;
+pub mod uri;
 pub mod utf8;
 pub mod value;
 pub mod wal;

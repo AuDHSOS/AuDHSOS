@@ -1029,6 +1029,12 @@ struct Session {
     /// `sqlite3_system_errno` reads: two for a directory that is not
     /// there, and nought where the file opened.
     errno: i32,
+    /// Whether a file name that begins `file:` is read as a URI, which
+    /// `sqlite3_config_uri` sets for every connection opened after it.
+    uri: bool,
+    /// Which connections read a file name as a URI: the setting above,
+    /// or the `SQLITE_OPEN_URI` flag the open carried.
+    uris: BTreeMap<String, bool>,
     /// What each connection was told for the pragmas it keeps a value
     /// for, which belong to a connection and not to the file.
     pragmas: BTreeMap<String, Kept>,
@@ -1090,6 +1096,8 @@ impl Session {
             synced: (0, 0),
             searched: 0,
             errno: 0,
+            uri: false,
+            uris: BTreeMap::new(),
             pragmas: BTreeMap::new(),
             collations: BTreeMap::new(),
             functions: BTreeMap::new(),
@@ -1165,7 +1173,14 @@ impl Session {
         // given its own before the request is answered.
         self.tempering(verb, first);
         match verb {
-            "open" => Ok(self.open(first, second)),
+            "open" => Ok(self.open(first, second, args.get(2).map_or("", String::as_str))),
+            // `sqlite3_config_uri` of `research/sqlite/src/main.c:707`,
+            // which every connection opened after it reads a file name
+            // that begins `file:` as a URI for.
+            "config_uri" => {
+                self.uri = first == "1";
+                Ok(Vec::new())
+            }
             // `sqlite3_system_errno` of `research/sqlite/src/main.c`:
             // what the machine answered the last open of a file with.
             "system_errno" => Ok(vec![self.errno.to_string()]),
@@ -1730,8 +1745,26 @@ impl Session {
     /// `research/sqlite/src/btree.c:2170` makes fresh for every
     /// connection and no other connection reads, so the harness holds
     /// one under a name no file has.
-    fn open(&mut self, name: &str, path: &str) -> Vec<String> {
+    fn open(&mut self, name: &str, path: &str, flag: &str) -> Vec<String> {
         let under = configured();
+        let uri = self.uri || flag == "1";
+        let named = match db_sqlite::uri::named(path.as_bytes(), uri) {
+            Ok(named) => named,
+            Err(refusal) => {
+                self.connections.insert(name.to_owned(), path.to_owned());
+                refused_as("SQLITE_ERROR", "1");
+                return vec![refusal.message()];
+            }
+        };
+        self.uris.insert(name.to_owned(), uri);
+        let path = String::from_utf8_lossy(&named.path).into_owned();
+        // A URI that asks for a database of the connection's own names
+        // no file, which `mode=memory` of `sqlite3ParseUri` says.
+        let path = if named.mode == Some(db_sqlite::uri::Mode::Memory) {
+            ":memory:"
+        } else {
+            path.as_str()
+        };
         let held = if path.is_empty() || path.eq_ignore_ascii_case(":memory:") {
             self.opened = self.opened.saturating_add(1);
             format!("{path}\0{name}\0{}", self.opened)
@@ -2583,6 +2616,7 @@ impl Session {
         // A connection that did not begin the transaction open on the
         // path reads the file as that transaction found it.
         let outside = self.owners.get(&path).is_some_and(|held| held != name);
+        let uri = self.uris.get(name).copied().unwrap_or(false);
         let writer = self
             .held
             .get_mut(&path)
@@ -2623,6 +2657,7 @@ impl Session {
         NULLED.with(|text| text.borrow_mut().clone_from(&null));
         writer.opens(opening);
         writer.in_zone(zoned);
+        writer.reads_uri(uri);
         let mut waiting = self.waiting.contains(name);
         let (out, ran) = ran_each(
             writer,
