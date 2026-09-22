@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Manuel Baesler and contributors
 use crate::{Error, Limits, Match, Options, Regex};
+use core::fmt::Write;
 fn find(pattern: &str, text: &str) -> Result<Option<Match>, Error> {
     let regex = Regex::compile(
         &pattern.encode_utf16().collect::<Vec<_>>(),
@@ -620,5 +621,42 @@ fn compile_and_runtime_shared_work_prevents_pathological_empty_expansion() -> Re
             .is_err()
         );
     }
+    Ok(())
+}
+
+#[test]
+fn predicate_charges_binary_search_bound() -> Result<(), Error> {
+    // 8192 disjoint single-unit ranges; issue #406.
+    let mut class = String::new();
+    for u in 0..8192u32 {
+        write!(class, "\\u{:04x}", u * 2).map_err(|_| Error::InvalidProgram)?;
+    }
+    let input = vec![1u16; 12_207];
+    for (pattern, matched) in [
+        (format!("(?=[{class}])x"), None),
+        (format!("(?![{class}])\\u0001"), Some(0..1)),
+    ] {
+        let units: Vec<u16> = pattern.encode_utf16().collect();
+        let regex = Regex::compile(&units, Options::default(), Limits::default())?;
+        let report = regex.find(&input, 0, false, Limits::default())?;
+        assert_eq!(report.matched.map(|m| m.range), matched, "{matched:?}");
+        let nfa =
+            audhsos_regex::Regex::compile(&units, Options::default(), Limits::default().core)?;
+        let bound = nfa.find(&input, 0, false, Limits::default().core)?.work;
+        assert!(
+            report.work <= bound.saturating_mul(4),
+            "{} {bound}",
+            report.work
+        );
+    }
+    let units: Vec<u16> = format!("(?=[{class}])x").encode_utf16().collect();
+    let regex = Regex::compile(&units, Options::default(), Limits::default())?;
+    assert_eq!(
+        regex
+            .find(&[120], 0, false, Limits::default())?
+            .matched
+            .map(|m| m.range),
+        Some(0..1)
+    );
     Ok(())
 }

@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Manuel Baesler and contributors
 use crate::{Error, Limits, Match, Regex, compile::Instruction};
 use alloc::{vec, vec::Vec};
-use audhsos_regex::syntax::newline;
+use audhsos_regex::syntax::{Class, newline};
 
 /// Evidence for a completed bounded search. Work is not a linear-time claim.
 #[derive(Clone, Debug)]
@@ -113,6 +113,12 @@ impl Regex {
         Ok(search.report)
     }
 }
+/// Work for one `Class::contains`: the binary-search bound over the ranges.
+fn class_cost(class: &Class) -> usize {
+    usize::try_from(usize::BITS.saturating_sub(class.ranges.len().leading_zeros()))
+        .unwrap_or(usize::MAX)
+        .saturating_add(1)
+}
 impl Search<'_> {
     fn charge(&mut self, n: usize) -> Result<(), Error> {
         self.report.work = self
@@ -214,13 +220,7 @@ impl Search<'_> {
                     }
                 }
                 Instruction::Class(class, backward, next) => {
-                    self.charge(
-                        usize::try_from(
-                            usize::BITS.saturating_sub(class.ranges.len().leading_zeros()),
-                        )
-                        .unwrap_or(usize::MAX)
-                        .saturating_add(1),
-                    )?;
+                    self.charge(class_cost(class))?;
                     if self
                         .unit_index(*backward)
                         .and_then(|i| self.input.get(i))
@@ -239,7 +239,7 @@ impl Search<'_> {
                     }
                 }
                 Instruction::Predicate(class, positive, next) => {
-                    self.charge(class.ranges.len().saturating_add(1))?;
+                    self.charge(class_cost(class))?;
                     if self
                         .input
                         .get(self.position)
