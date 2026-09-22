@@ -3528,30 +3528,7 @@ impl<'a> Database<'a> {
         let calls = aggregates(arena, &select, sql, &sides, self.grouped)?;
         let overs = overs(arena, &select, sql, self.grouped)?;
         let alone = overs.is_empty();
-        // An `ORDER BY` the walk already answers in needs no sort, which
-        // is what `sqlite3WhereIsOrdered` answers for the loops
-        // `sqlite3WhereBegin` chose. Only the walk of one table answers
-        // an order: a join answers the product, a group answers one row
-        // per group, and a window reads the rows it was given.
-        let walked = alone
-            && calls.is_empty()
-            && select.group.is_empty()
-            && in_order(
-                arena,
-                &select,
-                sql,
-                &mut sides,
-                Settling {
-                    format: self.schema_format(),
-                    collating: self.collating,
-                },
-            );
-        let gathered = alone && self.gathers(arena, &select, sql, &mut sides);
-        // A statement that gathers its rows into groups answers them in
-        // the order of the groups, so an `ORDER BY` that names the
-        // `GROUP BY` terms is answered by that order and sorts nothing
-        // of its own.
-        let held = walked || (alone && grouped_order(arena, &select, sql, &sides));
+        let (gathered, held) = self.ordering(arena, &select, sql, (&mut sides, alone, &calls));
         self.described(arena, &select, sql, &mut sides, (gathered, held, alone));
         // `EXPLAIN QUERY PLAN` names the plan of the statement and runs
         // no loop of it, so the walks are left where they stand and the
@@ -3571,11 +3548,20 @@ impl<'a> Database<'a> {
                 rows.push(sorted(arena, &select, sql, cursor, &keys)?);
             }
         } else if calls.is_empty() && select.group.is_empty() {
+            let stops = self.stops(
+                arena,
+                &select,
+                sql,
+                (whole && (keys.is_empty() || held), reach),
+            )?;
             self.scan(&sides, arena, sql, reach, &mut |cursor: &Cursor<'_>| {
                 if keep(arena, select.filter, sql, cursor)? {
                     rows.push(sorted(arena, &select, sql, cursor, &keys)?);
+                    if stops.is_some_and(|stops| rows.len() >= stops) {
+                        return Ok(Flow::Stop);
+                    }
                 }
-                Ok(())
+                Ok(Flow::Go)
             })?;
         } else {
             let gathering = Grouping {
@@ -3599,6 +3585,72 @@ impl<'a> Database<'a> {
             limit(arena, &select, sql, &mut rows, &cursor)?;
         }
         Ok(shaped(shown, shape, rows))
+    }
+
+    /// Whether the walk gathers the groups of the statement and whether
+    /// the order it answers the rows in is the one the statement asks
+    /// for.
+    ///
+    /// An `ORDER BY` the walk already answers in needs no sort, which is
+    /// what `sqlite3WhereIsOrdered` answers for the loops
+    /// `sqlite3WhereBegin` chose. Only the walk of one table answers an
+    /// order: a join answers the product, a group answers one row per
+    /// group, and a window reads the rows it was given. A statement that
+    /// gathers its rows into groups answers them in the order of the
+    /// groups, so an `ORDER BY` that names the `GROUP BY` terms is
+    /// answered by that order and sorts nothing of its own.
+    fn ordering(
+        &self,
+        arena: &Arena,
+        select: &Select,
+        sql: &[u8],
+        held: (&mut [Side<'_>], bool, &[Call]),
+    ) -> (bool, bool) {
+        let (sides, alone, calls) = held;
+        let walked = alone
+            && calls.is_empty()
+            && select.group.is_empty()
+            && in_order(
+                arena,
+                select,
+                sql,
+                sides,
+                Settling {
+                    format: self.schema_format(),
+                    collating: self.collating,
+                },
+            );
+        let gathered = alone && self.gathers(arena, select, sql, sides);
+        let held = walked || (alone && grouped_order(arena, select, sql, sides));
+        (gathered, held)
+    }
+
+    /// How many rows the walk of a statement answers before it stops,
+    /// and nothing where it reads every row.
+    ///
+    /// `sqlite3Select` leaves the loops once the rows a `LIMIT` takes
+    /// are all there, which it may do only where the walk answers them
+    /// in the order the statement asks for: a sort of its own reads
+    /// every row before the first one is answered, and so does a
+    /// `DISTINCT`.
+    ///
+    /// # Errors
+    ///
+    /// Whatever reading the `LIMIT` refuses.
+    fn stops(
+        &self,
+        arena: &Arena,
+        select: &Select,
+        sql: &[u8],
+        held: (bool, Reach<'_>),
+    ) -> Result<Option<usize>, Error> {
+        let (walks, reach) = held;
+        if !walks || select.distinct == Distinct::Distinct {
+            return Ok(None);
+        }
+        let cursor = Cursor::new(self.collation(), self.encoding, reach);
+        let (skip, most) = bounds(arena, select, sql, &cursor)?;
+        Ok(most.map(|most| skip.saturating_add(most)))
     }
 
     /// The sides of a `FROM` clause, and how each attaches to the ones
@@ -4142,15 +4194,19 @@ impl<'a> Database<'a> {
         arena: &Arena,
         sql: &[u8],
         reach: Reach<'b>,
-        each: &mut dyn FnMut(&Cursor<'b>) -> Result<(), Error>,
+        each: &mut dyn FnMut(&Cursor<'b>) -> Result<Flow, Error>,
     ) -> Result<(), Error> {
         let mut cursor = Cursor::new(self.collation(), self.encoding, reach);
         if sides.is_empty() {
             // A statement with no `FROM` reads one row of nothing.
-            return each(&cursor);
+            each(&cursor)?;
+            return Ok(());
         }
         let mut kept: Vec<Vec<i64>> = alloc::vec![Vec::new(); sides.len()];
-        self.nest(sides, 0, &mut cursor, arena, sql, each, &mut kept, None)?;
+        let flow = self.nest(sides, 0, &mut cursor, arena, sql, each, &mut kept, None)?;
+        if flow == Flow::Stop {
+            return Ok(());
+        }
         // Then the rows a `RIGHT` or a `FULL` join keeps that the nest
         // matched nothing to, with the levels before them empty. They
         // come after every row the nest answered, which is the order
@@ -4173,7 +4229,7 @@ impl<'a> Database<'a> {
             // counts as matched here, which is the row set
             // `sqlite3WhereRightJoinLoop` keeps for the whole statement.
             let matched = kept.get(at).map_or(&[][..], Vec::as_slice).to_vec();
-            self.nest(
+            let flow = self.nest(
                 sides,
                 at,
                 &mut cursor,
@@ -4184,6 +4240,9 @@ impl<'a> Database<'a> {
                 Some(&matched),
             )?;
             cursor.held.clear();
+            if flow == Flow::Stop {
+                return Ok(());
+            }
         }
         Ok(())
     }
@@ -4382,16 +4441,17 @@ impl<'a> Database<'a> {
         cursor: &mut Cursor<'b>,
         arena: &Arena,
         sql: &[u8],
-        each: &mut dyn FnMut(&Cursor<'b>) -> Result<(), Error>,
+        each: &mut dyn FnMut(&Cursor<'b>) -> Result<Flow, Error>,
         kept: &mut [Vec<i64>],
         spare: Option<&[i64]>,
-    ) -> Result<(), Error> {
+    ) -> Result<Flow, Error> {
         let Some(side) = sides.get(at) else {
             return each(cursor);
         };
         let deeper = at.saturating_add(1);
         let mut any = false;
         let mut ordinal = 0i64;
+        let mut flow = Flow::Go;
         let mut feed = self.feed(side, cursor);
         for step in feed.by_ref() {
             let (rowid, mut values) = step?;
@@ -4423,10 +4483,13 @@ impl<'a> Database<'a> {
                 // answered, which is what makes this a cost and not an
                 // answer.
                 if all_hold(arena, &side.pushed, sql, cursor)? {
-                    self.nest(sides, deeper, cursor, arena, sql, each, kept, None)?;
+                    flow = self.nest(sides, deeper, cursor, arena, sql, each, kept, None)?;
                 }
             }
             cursor.held.pop();
+            if flow == Flow::Stop {
+                break;
+            }
         }
         // `wherecode.c` counts a step for each row of a loop after the
         // first, and only for a loop no term holds to a key.
@@ -4443,10 +4506,10 @@ impl<'a> Database<'a> {
                 &side.name,
                 &side.using,
             ));
-            self.nest(sides, deeper, cursor, arena, sql, each, kept, None)?;
+            flow = self.nest(sides, deeper, cursor, arena, sql, each, kept, None)?;
             cursor.held.pop();
         }
-        Ok(())
+        Ok(flow)
     }
 
     /// Every row a statement answers over, kept so that a window
@@ -4485,7 +4548,7 @@ impl<'a> Database<'a> {
                     reach,
                 });
             }
-            Ok(())
+            Ok(Flow::Go)
         })?;
         Ok(out)
     }
@@ -4554,7 +4617,7 @@ impl<'a> Database<'a> {
         let mut groups: Vec<Group<'b>> = Vec::new();
         self.scan(sides, arena, sql, reach, &mut |cursor: &Cursor<'b>| {
             if !keep(arena, select.filter, sql, cursor)? {
-                return Ok(());
+                return Ok(Flow::Go);
             }
             let mut key = Vec::new();
             for term in &terms {
@@ -4580,7 +4643,8 @@ impl<'a> Database<'a> {
             };
             // A place read out of the list, or the end of a list just
             // pushed to: neither is ever nothing.
-            group.map_or(Ok(()), |group| group.step(arena, sql, cursor, calls))
+            group.map_or(Ok(()), |group| group.step(arena, sql, cursor, calls))?;
+            Ok(Flow::Go)
         })?;
         if terms.is_empty() && groups.is_empty() {
             // A statement that aggregates over no group answers one row
@@ -5602,6 +5666,19 @@ fn keyed_over(
                 )
         })
         .map(|over| over.value.clone())
+}
+
+/// Whether the walk of a statement goes on or stops where it stands.
+///
+/// `sqlite3WhereEnd` writes the jump that leaves a loop, and a statement
+/// whose rows are all there leaves every loop at once, which is what a
+/// `LIMIT` over a walk that answers the rows in their order does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Flow {
+    /// The walk reads the next row.
+    Go,
+    /// The walk stops where it stands.
+    Stop,
 }
 
 /// The rows of a walk that names no row, which a plan held to a rowid

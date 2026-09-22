@@ -7,6 +7,9 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` stops a walk once the rows a `LIMIT` takes are all there.
+  D-418 records it. Catalog 6.6.287.
+
 - `db-sqlite` writes the new name of a renamed table at the table a
   column reference names. D-417 records it. `altertab.test` goes from 66
   cases passing to 73.

@@ -7003,3 +7003,10 @@ Document 16 step Q8.
 - A moment carried into local time and back, one outside the years the
   zone answers for, one the text says is UTC, a zone that fails, and a
   connection told no zone.
+
+### 6.6.287 The rows a walk stops at (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A `LIMIT` the rows of a `RIGHT` join fill, one an ordinary walk fills,
+  one with an `OFFSET`, and one that names a column.

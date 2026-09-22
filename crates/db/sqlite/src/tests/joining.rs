@@ -397,3 +397,38 @@ fn what_the_terms_of_a_with_may_read() {
         "no such table: nowhere"
     );
 }
+
+/// A walk stops once the rows a `LIMIT` takes are all there, whichever
+/// loop answers the last of them, and a `LIMIT` that names a column is
+/// refused before the walk begins.
+#[test]
+fn what_a_limit_stops_the_walk_at() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE aa(a)".as_slice(),
+        b"CREATE TABLE bb(b)",
+        b"INSERT INTO aa VALUES(1),(2),(3)",
+        b"INSERT INTO bb VALUES(2),(3),(4)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let image = writer.written();
+    let database = Database::open(&image).unwrap();
+    let rows = |sql: &[u8]| database.query(sql).map(|answer| answer.rows);
+    // The rows a `RIGHT` join keeps that nothing matched come after
+    // every row the nest answered, so a `LIMIT` those rows fill stops
+    // the walk of that pass.
+    assert_eq!(
+        rows(b"SELECT a, b FROM aa RIGHT JOIN bb ON a=b LIMIT 3")
+            .unwrap()
+            .len(),
+        3
+    );
+    assert_eq!(rows(b"SELECT a FROM aa LIMIT 2").unwrap().len(), 2);
+    assert_eq!(rows(b"SELECT a FROM aa LIMIT 1 OFFSET 2").unwrap().len(), 1);
+    // A `LIMIT` reads no row, so one that names a column is refused.
+    assert_eq!(
+        rows(b"SELECT a FROM aa LIMIT a").unwrap_err().message(),
+        "no such column: a"
+    );
+}
