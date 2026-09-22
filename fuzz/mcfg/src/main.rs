@@ -39,7 +39,7 @@ fn check(bytes: &[u8]) {
             "an accepted window covers fewer bytes than it has buses"
         );
         assert_eq!(
-            window.base.as_u64() & 0xFFF,
+            window.base & 0xFFF,
             0,
             "an accepted window starts inside a page"
         );

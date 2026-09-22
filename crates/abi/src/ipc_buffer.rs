@@ -86,10 +86,8 @@ const _: () = assert!(WORDS + MAX_MESSAGE_WORDS * WORD == 4024);
 /// fault message the kernel builds carries such a label by construction.
 pub const KERNEL_LABEL_BASE: u64 = 0xFFFF_FFFF_FFFF_FF00;
 
-/// The base of the fault labels. The label of a fault message is this plus
-/// the code of its [`FaultKind`], so the six kinds occupy the first six
-/// labels of the reserved range and 250 are left for the kernel messages
-/// of later phases.
+/// The base plus the [`FaultKind`] code gives the fault label.
+/// Faults occupy offsets 1 through 6; offsets 0 and 7 through 255 remain available.
 pub const FAULT_LABEL_BASE: u64 = KERNEL_LABEL_BASE;
 
 /// The label of the fault message for `kind`.
@@ -110,16 +108,9 @@ pub const fn fault_kind_of(label: u64) -> Option<FaultKind> {
     let Some(code) = label.checked_sub(FAULT_LABEL_BASE) else {
         return None;
     };
-    if code > 0xFFFF_FFFF {
-        return None;
-    }
-    #[expect(
-        clippy::as_conversions,
-        clippy::cast_possible_truncation,
-        reason = "the bound above keeps the value inside u32, and the function is const"
-    )]
-    let code = code as u32;
-    FaultKind::from_code(code)
+    // The reserved range limits the difference to one byte.
+    let [code, ..] = code.to_le_bytes();
+    FaultKind::from_code(u32::from_le_bytes([code, 0, 0, 0]))
 }
 
 /// `true` for a label the kernel keeps for its own messages.

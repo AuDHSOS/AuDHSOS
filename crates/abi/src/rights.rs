@@ -41,7 +41,7 @@ rights! {
     WRITE = 1 => "write the contents of a memory object or an I/O port range",
     EXECUTE = 2 => "map a memory object executable",
     MAP = 3 => "map a memory object into an address space",
-    INFO = 4 => "query the physical range of a memory object",
+    INFO = 4 => "query memory information or references, or watch or unwatch the end of a process",
     SEND = 5 => "send on an endpoint",
     RECV = 6 => "receive on an endpoint",
     BADGE = 7 => "derive a badged send-only capability of an endpoint",

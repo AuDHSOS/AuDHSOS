@@ -209,6 +209,34 @@ fn a_full_message_leaves_the_count_at_what_fitted() {
 }
 
 #[test]
+fn a_full_message_preserves_every_byte_for_handles_and_values() {
+    let mut bytes = [0xA5; SIZE];
+    let mut writer = Writer::new();
+    let capacity = MAX_MESSAGE_WORDS.wrapping_div(2);
+    for _ in 0..capacity {
+        writer
+            .give(&mut BufferMut::new(&mut bytes), Role::Ram, handle(1))
+            .unwrap();
+    }
+    writer.finish(&mut BufferMut::new(&mut bytes)).unwrap();
+    let before = bytes;
+    assert_eq!(
+        writer.give(&mut BufferMut::new(&mut bytes), Role::Log, handle(2)),
+        Err(StartupError::Full)
+    );
+    assert_eq!(bytes, before);
+    assert_eq!(
+        writer.tell(&mut BufferMut::new(&mut bytes), Role::EcamBuses, 42),
+        Err(StartupError::Full)
+    );
+    assert_eq!(bytes, before);
+    assert_eq!(writer.len(), capacity);
+    writer.finish(&mut BufferMut::new(&mut bytes)).unwrap();
+    assert_eq!(bytes, before);
+    assert_eq!(pairs(&bytes).unwrap().len(), capacity);
+}
+
+#[test]
 fn every_error_has_a_message_and_an_error_code() {
     let cases = [
         StartupError::NotStartup,

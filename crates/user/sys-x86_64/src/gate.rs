@@ -1088,7 +1088,7 @@ impl Gate {
             framebuffer,
             // Four zero words are a window over no bus, which is what a
             // machine whose firmware published no `MCFG` table answers.
-            ecam: (ecam.base != 0 && !ecam.is_empty()).then_some(ecam),
+            ecam: (!ecam.is_empty()).then_some(ecam),
         })
     }
 

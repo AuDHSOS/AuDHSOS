@@ -376,6 +376,7 @@ dependencies = [
 name = "kernel-acpi"
 version = "0.1.0"
 dependencies = [
+ "audhsos-abi",
  "kernel-types",
  "test-support",
 ]
@@ -615,6 +616,7 @@ version = "0.1.0"
 name = "pci"
 version = "0.1.0"
 dependencies = [
+ "audhsos-abi",
  "test-support",
 ]
 

@@ -388,3 +388,15 @@ fn a_message_says_whether_its_label_is_the_kernels() {
 fn a_label_far_above_the_range_names_no_fault_kind() {
     assert_eq!(fault_kind_of(u64::MAX), None);
 }
+
+#[test]
+fn only_offsets_one_through_six_name_faults_in_the_reserved_range() {
+    const FIRST: Option<FaultKind> = fault_kind_of(FAULT_LABEL_BASE + 1);
+    assert_eq!(FIRST, Some(FaultKind::PageFault));
+    for code in 0..=u8::MAX {
+        let label = FAULT_LABEL_BASE.wrapping_add(u64::from(code));
+        assert_eq!(fault_kind_of(label), FaultKind::from_code(u32::from(code)));
+        assert_eq!(fault_kind_of(label).is_some(), (1..=6).contains(&code));
+    }
+    assert_eq!(fault_kind_of(0), None);
+}

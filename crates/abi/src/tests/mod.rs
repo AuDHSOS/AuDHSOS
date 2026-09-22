@@ -6,6 +6,7 @@
 
 mod boot_image;
 mod boot_info;
+mod ecam;
 mod error;
 mod handle;
 mod ipc_buffer;
