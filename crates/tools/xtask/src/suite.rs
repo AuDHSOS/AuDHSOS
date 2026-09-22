@@ -1014,6 +1014,13 @@ struct Session {
     /// which `sqlite3_search_count` counts and `::sqlite_search_count`
     /// answers.
     searched: i64,
+    /// The temp schema each connection holds, which is a database of its
+    /// own that no other connection reads.
+    temps: BTreeMap<String, Vec<u8>>,
+    /// Which connection's temp schema the writer of each path carries,
+    /// because the harness holds one writer per path and a temp schema
+    /// belongs to a connection.
+    tempers: BTreeMap<String, String>,
     /// The directory the interpreter runs in, which is where a file the
     /// session holds is written when the tester opens it as a file of
     /// the machine.
@@ -1067,6 +1074,8 @@ impl Session {
     /// A run that has answered nothing.
     fn new(file: &str) -> Self {
         Session {
+            temps: BTreeMap::new(),
+            tempers: BTreeMap::new(),
             over: std::env::temp_dir().join(format!("audhsos-suite-{file}")),
             file: file.to_owned(),
             held: BTreeMap::new(),
@@ -1151,6 +1160,10 @@ impl Session {
     fn answered(&mut self, verb: &str, args: &[String]) -> Result<Vec<String>, String> {
         let first = args.first().map_or("", String::as_str);
         let second = args.get(1).map_or("", String::as_str);
+        // The writer of a path carries the temp schema of the connection
+        // that last read it, so the connection this request names is
+        // given its own before the request is answered.
+        self.tempering(verb, first);
         match verb {
             "open" => Ok(self.open(first, second)),
             // `sqlite3_system_errno` of `research/sqlite/src/main.c`:
@@ -1601,7 +1614,16 @@ impl Session {
         {
             writer.closing();
         }
+        if let Some(path) = self.connections.get(name).cloned()
+            && self.tempers.get(&path).is_some_and(|held| held == name)
+        {
+            self.tempers.remove(&path);
+            if let Some(writer) = self.held.get_mut(&path) {
+                let _ = writer.temps(None);
+            }
+        }
         self.connections.remove(name);
+        self.temps.remove(name);
         self.nulls.remove(name);
         self.counters.remove(name);
         self.pragmas.remove(name);
@@ -1753,7 +1775,10 @@ impl Session {
         self.counters.insert(name.to_owned(), Counted::default());
         self.pragmas.insert(name.to_owned(), Kept::default());
         // `sqlite3_create_collation` holds a collation on one
-        // connection, so a connection that opens again defines none.
+        // connection, so a connection that opens again defines none, and
+        // the temp tables of the connection that closed are gone.
+        self.temps.remove(name);
+        self.tempers.retain(|_, held| held != name);
         self.collations.remove(name);
         self.functions.remove(name);
         self.errno = 0;
@@ -1886,7 +1911,7 @@ impl Session {
             "finalize" => Ok(self.finalize(first)),
             "reset" => Ok(self.reset_statement(first, false)),
             "clear_binds" => Ok(self.reset_statement(first, true)),
-            "bind" => self.bind(first, second, third),
+            "bind" => self.bind(first, second, third, args.get(3).map(String::as_str)),
             "column" => self.column(first, second, third),
             "next_stmt" => Ok(self.next_statement(first, second)),
             "readonly" | "busy" | "isexplain" | "expired" => {
@@ -2238,10 +2263,26 @@ impl Session {
 
     /// `sqlite3_bind_* STMT N VALUE`: the value the parameter at `at`
     /// stands for, written as a literal.
-    fn bind(&mut self, name: &str, at: &str, value: &str) -> Result<Vec<String>, String> {
+    fn bind(
+        &mut self,
+        name: &str,
+        at: &str,
+        value: &str,
+        kind: Option<&str>,
+    ) -> Result<Vec<String>, String> {
         let place: usize = at
             .parse()
             .map_err(|source| format!("a place is a whole number: {source}"))?;
+        // A text and a blob are carried as the digits of their bytes,
+        // because a value of the tester may hold a quote, a nought and
+        // bytes that are no text at all; every other kind is carried as
+        // the literal the tester wrote.
+        let value = match kind {
+            Some("text") => quoted_text(&bytes_of_hex(value)),
+            Some("blob") => format!("X'{value}'"),
+            _ => value.to_owned(),
+        };
+        let value = value.as_str();
         if let Some(held) = self.statements.get_mut(name) {
             // `sqlite3_bind_*` refuses a place below one and one past
             // the parameters the statement holds, which
@@ -2453,6 +2494,64 @@ impl Session {
             return self.names(name, &sql);
         }
         self.eval(name, &sql)
+    }
+
+    /// The temp schema of the connection this request names handed to the
+    /// writer of its path, where the request reads one.
+    ///
+    /// A request that names a statement names its connection through it.
+    fn tempering(&mut self, verb: &str, first: &str) {
+        match verb {
+            "eval" | "names" | "exec" | "exec_names" | "prepare" | "deserialize" | "serialize"
+            | "columnmeta" | "blob_bytes" | "blob_read" | "blob_write" => self.tempered(first),
+            "step" | "column" | "stmt" | "bind" | "finalize" | "reset" | "clear_binds" => {
+                if let Some(connection) = self
+                    .statements
+                    .get(first)
+                    .map(|held| held.connection.clone())
+                {
+                    self.tempered(&connection);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// The writer of the path the connection reads given the temp schema
+    /// of that connection, and the one it carried handed back to
+    /// whichever connection made it.
+    ///
+    /// A temp table belongs to the connection that made it, which
+    /// `sqlite3TwoPartName` of `research/sqlite/src/build.c` writes into
+    /// the schema at place one, and this harness holds one writer per
+    /// path, so the writer carries the temp schema of the connection
+    /// that last read it. Swapping one costs O(n) in the pages of the
+    /// two temp schemas.
+    fn tempered(&mut self, connection: &str) {
+        let Some(path) = self.connections.get(connection).cloned() else {
+            return;
+        };
+        let held = self.tempers.get(&path).cloned();
+        if held.as_deref() == Some(connection) {
+            return;
+        }
+        if let Some(made) = held
+            && let Some(writer) = self.held.get(&path)
+        {
+            match writer.temp() {
+                Some(bytes) => {
+                    self.temps.insert(made, bytes);
+                }
+                None => {
+                    self.temps.remove(&made);
+                }
+            }
+        }
+        let wanted = self.temps.get(connection).cloned();
+        if let Some(writer) = self.held.get_mut(&path) {
+            let _ = writer.temps(wanted.as_deref());
+        }
+        self.tempers.insert(path, connection.to_owned());
     }
 
     /// The statements of one text, in order, answered as one list.
@@ -3247,6 +3346,43 @@ fn escaped(text: &str) -> String {
         at = at.saturating_add(3);
     }
     out
+}
+
+/// The bytes a run of hexadecimal digits names.
+fn bytes_of_hex(digits: &str) -> Vec<u8> {
+    let held: Vec<u8> = digits
+        .bytes()
+        .filter_map(|digit| char::from(digit).to_digit(16))
+        .filter_map(|half| u8::try_from(half).ok())
+        .collect();
+    held.chunks(2)
+        .map(|pair| {
+            pair.first()
+                .copied()
+                .unwrap_or(0)
+                .wrapping_shl(4)
+                .wrapping_add(pair.get(1).copied().unwrap_or(0))
+        })
+        .collect()
+}
+
+/// A text literal holding those bytes, with every quote doubled.
+///
+/// A byte the line cannot carry as text is held as the character
+/// `carried_text` writes for it, which `sql_bytes` reads back where the
+/// statement reaches the engine, so the literal carries the bytes
+/// themselves whatever encoding the database keeps its text in.
+fn quoted_text(bytes: &[u8]) -> String {
+    let mut held = Vec::with_capacity(bytes.len().saturating_add(2));
+    held.push(b'\'');
+    for byte in bytes {
+        if *byte == b'\'' {
+            held.push(b'\'');
+        }
+        held.push(*byte);
+    }
+    held.push(b'\'');
+    carried_text(&held)
 }
 
 /// Whether the character stands for a byte the line cannot carry as
@@ -4106,13 +4242,14 @@ fn listed(value: &Value, null: &str) -> String {
         }
         // `dbEvalColumnValue` of `research/sqlite/src/tclsqlite.c` hands
         // the tester a text as a C string, which ends at the first
-        // nought, and a blob as the bytes it holds.
+        // nought and which the interpreter holds as text, and a blob as
+        // the bytes it holds.
         Value::Text(bytes) => {
             let end = bytes
                 .iter()
                 .position(|byte| *byte == 0)
                 .unwrap_or(bytes.len());
-            carried_text(bytes.get(..end).unwrap_or_default())
+            String::from_utf8_lossy(bytes.get(..end).unwrap_or_default()).into_owned()
         }
         Value::Blob(bytes) => carried_text(bytes),
     }

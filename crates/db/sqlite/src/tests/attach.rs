@@ -833,3 +833,35 @@ fn a_trigger_of_main_writes_the_database_it_stands_in() {
             .is_empty()
     );
 }
+
+/// The temp schema of a connection is a database of its own, which a
+/// caller that shares one writer between connections takes off one
+/// connection and hands to another.
+#[test]
+fn what_the_temp_schema_of_a_connection_holds() {
+    let mut writer = opened();
+    assert!(writer.temp().is_none());
+    writer.run(b"CREATE TEMP TABLE tt(a)").unwrap();
+    writer.run(b"INSERT INTO tt VALUES(1)").unwrap();
+    let held = writer.temp().expect("a temp schema");
+    // A connection given no temp schema reads none of its tables.
+    writer.temps(None).unwrap();
+    assert!(writer.temp().is_none());
+    assert!(writer.run(b"INSERT INTO tt VALUES(2)").is_err());
+    // The same schema handed back answers the rows it held.
+    writer.temps(Some(&held)).unwrap();
+    writer.run(b"INSERT INTO tt VALUES(2)").unwrap();
+    let temp = writer.temp().expect("a temp schema");
+    let image = writer.written();
+    let database = crate::db::Database::open(&image)
+        .unwrap()
+        .attaching(b"temp", &temp)
+        .unwrap();
+    assert_eq!(
+        database.query(b"SELECT a FROM tt").unwrap().rows,
+        [[Value::Int(1)], [Value::Int(2)]]
+    );
+    // A schema of no bytes is no schema at all.
+    writer.temps(Some(&[])).unwrap();
+    assert!(writer.temp().is_none());
+}

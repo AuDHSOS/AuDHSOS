@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` hands the temp schema of a connection over as a database
+  of its own, and the suite harness carries a bound text or blob as the
+  bytes of the value and the kind it is. D-412 records it. Catalog
+  6.6.284. `temptable.test` goes from 34 cases passing to 56.
+
 - The suite harness binds a value as the digits of its bytes, reads the
   count of bytes the caller wrote, and refuses a place the statement
   does not hold. D-411 records it. `bind.test` goes from 77 cases

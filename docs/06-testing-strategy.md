@@ -6980,3 +6980,10 @@ Document 16 step Q8.
   holds and the mode it answers with.
 - A header naming each schema format from one to four, and one naming
   five.
+
+### 6.6.284 The temp schema of a connection (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A connection with a temp table, the schema taken off it, the same
+  schema handed back, and a schema of no bytes.

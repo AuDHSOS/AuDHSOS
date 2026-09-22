@@ -58,9 +58,10 @@ proc harness_send {verb args} {
   if {[lindex $head 0] eq "ERR"} {
     set msg [encoding convertfrom utf-8 [read $h $n]]
     gets $h
-    # `sqlite3_errmsg` answers the message of the last call that was
-    # refused, which this is one of.
-    set ::harness_error $msg
+    # `sqlite3_bind_*` leaves the message of the refusal on the
+    # connection, which `sqlite3_errmsg` answers; every other command
+    # that raises here says so by raising.
+    if {$verb eq "bind"} { set ::harness_error $msg }
     error $msg
   }
   set out {}
@@ -1927,7 +1928,7 @@ proc sqlite3_bind_text {stmt at value args} {
 proc harness_bind_text {stmt at held} {
   set hex ""
   binary scan [encoding convertto utf-8 $held] H* hex
-  harness_send bind $stmt $at "CAST(X'$hex' AS TEXT)"
+  harness_send bind $stmt $at $hex text
   return {}
 }
 # `sqlite3_bind_text16` counts the bytes of the UTF-16 text, so two per
@@ -1959,7 +1960,7 @@ proc sqlite3_bind_blob {stmt at value args} {
   if {$bytes ne "" && $bytes >= 0} { set held [string range $value 0 [expr {$bytes - 1}]] }
   set hex ""
   binary scan $held H* hex
-  harness_send bind $stmt $at "X'$hex'"
+  harness_send bind $stmt $at $hex blob
   return {}
 }
 proc sqlite3_bind_parameter_count {stmt} { return [lindex [harness_send stmt $stmt binds] 0] }

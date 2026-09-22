@@ -492,6 +492,8 @@ Size: S.
     digits, which D-410 records.
 48. The commands that bind a value carry it as the digits of its bytes
     and read the count the caller wrote, which D-411 records.
+49. A temp table belongs to the connection that made it, which D-412
+    records.
 
 ### Produces
 

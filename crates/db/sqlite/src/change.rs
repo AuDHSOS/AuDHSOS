@@ -1162,6 +1162,49 @@ impl Writer {
         self.held.log = Some(log);
     }
 
+    /// The temp schema the connection holds, and nothing where it holds
+    /// none.
+    ///
+    /// A temp table belongs to the connection that made it, which
+    /// `sqlite3TwoPartName` of `research/sqlite/src/build.c` writes into
+    /// the schema at place one, so a caller that shares one writer
+    /// between connections carries this itself. Building the image costs
+    /// O(n) in the pages of the temp schema.
+    #[must_use]
+    pub fn temp(&self) -> Option<Vec<u8>> {
+        self.attached
+            .iter()
+            .find(|held| named_as(held, b"temp"))
+            .map(|held| written_image(&held.held))
+    }
+
+    /// The temp schema of the connection set to what `bytes` holds, and
+    /// given up where the caller hands over nothing.
+    ///
+    /// Reading the image costs O(n) in its pages.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] names what the header of the image breaks.
+    pub fn temps(&mut self, bytes: Option<&[u8]>) -> Result<(), Error> {
+        self.attached.retain(|held| !named_as(held, b"temp"));
+        let Some(bytes) = bytes.filter(|bytes| !bytes.is_empty()) else {
+            return Ok(());
+        };
+        let mut held = self.opened_file(b":memory:")?;
+        held.header = Header::parse(bytes)?;
+        held.pages = Pages::opened(bytes, &held.header)?;
+        self.attached.push(Attached {
+            called: Called {
+                name: b"temp".to_vec(),
+                file: Vec::new(),
+                place: 1,
+            },
+            held,
+        });
+        Ok(())
+    }
+
     /// The encoding the connection keeps its text in, which a reader
     /// built over a file of no page is told by [`Database::encoded`].
     #[must_use]
