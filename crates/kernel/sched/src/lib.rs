@@ -5,6 +5,7 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
+mod deadline;
 pub mod processors;
 pub mod scheduler;
 pub use processors::Processors;

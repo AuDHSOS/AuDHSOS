@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Manuel Baesler and contributors
 
-//! The deadline list of `crate::scheduler`, covering the deadline items of
+//! The deadline heap of `crate::scheduler`, covering the deadline items of
 //! the catalog 6.6.59.
 
 use audhsos_abi::layout::PRIORITY_COUNT;
@@ -82,7 +82,7 @@ fn a_thread_that_blocks_with_a_deadline_carries_it() {
 #[test]
 fn inserts_land_in_order_wherever_they_come_from() {
     let (mut scheduler, mut threads) = machine();
-    // Into an empty list, at the back, at the front, and in the middle.
+    // Deadlines arrive in mixed order.
     let middle = running(&mut scheduler, &mut threads);
     block_until(&mut scheduler, &mut threads, middle, 200);
     let last = running(&mut scheduler, &mut threads);
@@ -129,7 +129,7 @@ fn a_deadline_at_now_expires_and_one_a_microsecond_later_does_not() {
 }
 
 #[test]
-fn a_tick_that_expires_nothing_leaves_the_list_alone() {
+fn a_tick_that_expires_nothing_leaves_the_heap_alone() {
     let (mut scheduler, mut threads) = machine();
     let id = running(&mut scheduler, &mut threads);
     block_until(&mut scheduler, &mut threads, id, 1_000);
@@ -139,7 +139,7 @@ fn a_tick_that_expires_nothing_leaves_the_list_alone() {
 }
 
 #[test]
-fn an_expired_thread_is_out_of_the_list_and_carries_no_deadline() {
+fn an_expired_thread_is_out_of_the_heap_and_carries_no_deadline() {
     let (mut scheduler, mut threads) = machine();
     let id = running(&mut scheduler, &mut threads);
     block_until(&mut scheduler, &mut threads, id, 100);
@@ -147,7 +147,7 @@ fn an_expired_thread_is_out_of_the_list_and_carries_no_deadline() {
     assert_eq!(threads.get(id).unwrap().deadline, None);
     assert_eq!(scheduler.waiting_until(), 0);
     assert_eq!(scheduler.next_deadline(), None);
-    // Making it ready is the caller's; the list has let go either way.
+    // Making it ready is the caller's; the heap has let go either way.
     assert_eq!(
         threads.get(id).unwrap().state,
         ThreadState::BlockedNotification
@@ -157,7 +157,7 @@ fn an_expired_thread_is_out_of_the_list_and_carries_no_deadline() {
 }
 
 #[test]
-fn a_thread_woken_before_its_deadline_leaves_the_list_with_its_state() {
+fn a_thread_woken_before_its_deadline_leaves_the_heap_with_its_state() {
     let (mut scheduler, mut threads) = machine();
     let signalled = running(&mut scheduler, &mut threads);
     block_until(&mut scheduler, &mut threads, signalled, 100);
@@ -193,7 +193,7 @@ fn a_thread_that_leaves_the_wait_any_other_way_leaves_no_entry_behind() {
 }
 
 #[test]
-fn every_thread_of_a_list_whose_deadlines_have_passed_comes_out_at_once() {
+fn every_thread_of_a_heap_whose_deadlines_have_passed_comes_out_at_once() {
     let (mut scheduler, mut threads) = machine();
     let mut waiting = Vec::new();
     for step in 1..=5_u64 {
@@ -207,10 +207,8 @@ fn every_thread_of_a_list_whose_deadlines_have_passed_comes_out_at_once() {
 }
 
 #[test]
-fn a_torn_entry_that_is_the_only_one_empties_the_list() {
-    // The same as the test above with nothing behind it: both ends of the
-    // list have to let go, or the tail would go on naming a thread that is
-    // in no list.
+fn a_torn_entry_that_is_the_only_one_empties_the_heap() {
+    // Removing the only stale entry permits the next insertion.
     let (mut scheduler, mut threads) = machine();
     let torn = running(&mut scheduler, &mut threads);
     block_until(&mut scheduler, &mut threads, torn, 100);
@@ -226,7 +224,7 @@ fn a_torn_entry_that_is_the_only_one_empties_the_list() {
 }
 
 #[test]
-fn a_refused_block_leaves_the_thread_out_of_the_list() {
+fn a_refused_block_leaves_the_thread_out_of_the_heap() {
     let (mut scheduler, mut threads) = machine();
     let id = running(&mut scheduler, &mut threads);
     scheduler.suspend(&mut threads, id).unwrap();
@@ -240,12 +238,7 @@ fn a_refused_block_leaves_the_thread_out_of_the_list() {
 }
 
 #[test]
-fn a_head_the_pool_has_dropped_lets_the_whole_list_go() {
-    // The invariant says a thread in the list is a thread of the pool. A
-    // head that is not cannot be followed to what stands behind it, so the
-    // list is let go of whole: what must not happen is that it stays and
-    // answers "nothing is due" for ever, because that would stop every
-    // deadline made after it as well.
+fn a_stale_minimum_preserves_other_deadlines() {
     let (mut scheduler, mut threads) = machine();
     let gone = running(&mut scheduler, &mut threads);
     block_until(&mut scheduler, &mut threads, gone, 100);
@@ -253,22 +246,21 @@ fn a_head_the_pool_has_dropped_lets_the_whole_list_go() {
     block_until(&mut scheduler, &mut threads, behind, 200);
     threads.force_release(gone);
 
-    assert_eq!(scheduler.expired(&mut threads, 1_000), None);
+    let after = running(&mut scheduler, &mut threads);
+    assert_eq!(after.index(), gone.index());
+    assert_ne!(after.generation(), gone.generation());
+    block_until(&mut scheduler, &mut threads, after, 300);
+    assert_eq!(
+        expire(&mut scheduler, &mut threads, 1_000),
+        vec![behind, after]
+    );
     assert_eq!(scheduler.waiting_until(), 0);
     assert_eq!(scheduler.next_deadline(), None);
-    // And the list takes waiters again, which is what a head left in place
-    // would have denied every one of them.
-    let after = running(&mut scheduler, &mut threads);
-    block_until(&mut scheduler, &mut threads, after, 300);
-    assert_eq!(expire(&mut scheduler, &mut threads, 1_000), vec![after]);
 }
 
 #[test]
 fn an_entry_without_a_deadline_comes_out_and_the_walk_goes_on() {
-    // The same invariant from the other side: the deadline is what says
-    // the thread is in the list, so an entry without one cannot be woken
-    // by one. It leaves the list rather than standing at the front of it,
-    // where it would stop every deadline behind it.
+    // A stale minimum must not prevent other waiters from expiring.
     let (mut scheduler, mut threads) = machine();
     let torn = running(&mut scheduler, &mut threads);
     block_until(&mut scheduler, &mut threads, torn, 100);
@@ -282,20 +274,18 @@ fn an_entry_without_a_deadline_comes_out_and_the_walk_goes_on() {
     assert_eq!(threads.get(torn).unwrap().deadline, None);
 }
 
-/// The list against a sorted vector of the same deadlines.
+/// The heap against a sorted vector of the same deadlines.
 #[test]
-fn model_the_list_agrees_with_a_sorted_vector() {
+fn model_the_heap_agrees_with_a_sorted_vector() {
     let (mut scheduler, mut threads) = machine();
     let deadlines = [70_u64, 10, 50, 10, 90, 30];
     let mut model: Vec<(u64, ThreadId)> = Vec::new();
-    for (order, deadline) in deadlines.iter().enumerate() {
+    for deadline in deadlines {
         let id = running(&mut scheduler, &mut threads);
-        block_until(&mut scheduler, &mut threads, id, *deadline);
-        model.push((*deadline, id));
-        let _ = order;
+        block_until(&mut scheduler, &mut threads, id, deadline);
+        model.push((deadline, id));
     }
-    // A stable sort by deadline is the order the list is in, because the
-    // insert puts an equal deadline behind the one that was there.
+    // Equal deadlines expire in insertion order.
     model.sort_by_key(|(deadline, _)| *deadline);
 
     // One removal, which both sides make.
@@ -311,4 +301,78 @@ fn model_the_list_agrees_with_a_sorted_vector() {
     }
     assert!(model.is_empty());
     assert_eq!(scheduler.waiting_until(), 0);
+}
+
+#[test]
+fn a_duplicate_timed_wait_preserves_the_original_deadline() {
+    let (mut scheduler, mut threads) = machine();
+    let id = running(&mut scheduler, &mut threads);
+    block_until(&mut scheduler, &mut threads, id, 100);
+    assert_eq!(
+        scheduler.on_block_until(&mut threads, id, Event::BlockNotification, 50),
+        Err(Error::InvalidState)
+    );
+    assert_eq!(threads.get(id).unwrap().deadline, Some(100));
+    assert_eq!(scheduler.expired(&mut threads, 50), None);
+    assert_eq!(scheduler.expired(&mut threads, 100), Some(id));
+}
+
+#[test]
+fn unsupported_timed_waits_leave_the_running_thread_unchanged() {
+    for event in [
+        Event::BlockSend,
+        Event::BlockRecv,
+        Event::BlockReply,
+        Event::Yield,
+    ] {
+        let (mut scheduler, mut threads) = machine();
+        let id = running(&mut scheduler, &mut threads);
+        let slice = threads.get(id).unwrap().time_slice;
+        assert_eq!(
+            scheduler.on_block_until(&mut threads, id, event, 100),
+            Err(Error::InvalidArgument)
+        );
+        assert_eq!(scheduler.current(), Some(id));
+        assert_eq!(threads.get(id).unwrap().state, ThreadState::Running);
+        assert_eq!(threads.get(id).unwrap().time_slice, slice);
+        assert_eq!(threads.get(id).unwrap().deadline_index, None);
+        assert_eq!(scheduler.waiting_until(), 0);
+    }
+}
+
+#[test]
+fn a_full_heap_refuses_a_wait_before_blocking_the_thread() {
+    use kernel_objects::config::THREADS;
+
+    let mut scheduler = Scheduler::new();
+    let mut threads = Pool::<Thread, { THREADS + 1 }>::new();
+    let frame = PhysFrame::containing(PhysAddr::new(0x20_0000).unwrap());
+    for _ in 0..THREADS {
+        let mut thread = Thread::new(ObjectId::new(0, 1), 1, 31, 0, frame).unwrap();
+        thread.state = ThreadState::Running;
+        let id = threads.allocate(thread).unwrap();
+        scheduler
+            .on_block_until(&mut threads, id, Event::BlockNotification, 100)
+            .unwrap();
+    }
+    let id = threads
+        .allocate(Thread::new(ObjectId::new(0, 1), 1, 31, 0, frame).unwrap())
+        .unwrap();
+    scheduler.start(&mut threads, id).unwrap();
+    assert_eq!(scheduler.pick_next(&mut threads), Ok(id));
+    let slice = threads.get(id).unwrap().time_slice;
+    assert_eq!(
+        scheduler.on_block_until(&mut threads, id, Event::BlockNotification, 1),
+        Err(Error::PoolExhausted)
+    );
+    assert_eq!(scheduler.current(), Some(id));
+    assert_eq!(threads.get(id).unwrap().state, ThreadState::Running);
+    assert_eq!(threads.get(id).unwrap().time_slice, slice);
+    assert_eq!(threads.get(id).unwrap().deadline, None);
+    let expired = scheduler.expired(&mut threads, 100).unwrap();
+    assert_ne!(expired, id);
+    scheduler
+        .on_block_until(&mut threads, id, Event::BlockNotification, 1)
+        .unwrap();
+    assert_eq!(scheduler.expired(&mut threads, 1), Some(id));
 }

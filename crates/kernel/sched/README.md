@@ -12,6 +12,12 @@ The queues are intrusive: a thread carries the links of the queue it is in,
 so enqueueing costs no memory and no allocation. The scheduler therefore
 receives the thread pool with every call.
 
-What a thread may do next is a table, not a series of conditions: every
-legal transition is one row of `transition::TRANSITIONS`, and every pair the
-table does not name is an error rather than a panic.
+`transition::TRANSITIONS` defines legal state changes. A const lookup table
+built from those rows answers each state/event pair in O(1). Missing pairs
+return `InvalidState`.
+
+Each processor keeps a deadline min-heap with `kernel_objects::config::THREADS`
+entries and no allocation. Insertion, expiry, and cancellation cost O(log n);
+checking an unexpired minimum costs O(1). Threads record their heap positions
+for cancellation. Equal deadlines expire in FIFO order. Stale entries are
+removed individually without discarding other deadlines.

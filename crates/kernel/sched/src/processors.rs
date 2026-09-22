@@ -24,6 +24,10 @@ impl Default for Processors {
 impl Processors {
     /// Empty queues, initially using only the boot processor.
     #[must_use]
+    #[expect(
+        clippy::large_stack_arrays,
+        reason = "the kernel const-initializes these queues in the static machine cell"
+    )]
     pub const fn new() -> Self {
         Self {
             queues: [const { Scheduler::new() }; CPUS],
@@ -167,7 +171,7 @@ impl Processors {
             .get_mut(self.caller)
             .map_or(Outcome::NOTHING, |queue| queue.tick(threads))
     }
-    /// Removes one expired deadline across the fixed processor array, O(CPUS).
+    /// Finds an expired deadline in O(CPUS) and removes it in O(log n).
     pub fn expired<const N: usize>(
         &mut self,
         threads: &mut Pool<Thread, N>,

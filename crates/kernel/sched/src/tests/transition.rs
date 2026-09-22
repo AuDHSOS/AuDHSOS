@@ -12,26 +12,15 @@ use crate::transition::{Event, TRANSITIONS, is_legal, next};
 
 #[test]
 fn every_pair_of_state_and_event_is_a_transition_or_an_error() {
-    // The exhaustive test the catalog asks for: every one of the ten
-    // states against every one of the thirteen events.
     for &state in ThreadState::ALL {
         for &event in Event::ALL {
-            match next(state, event) {
-                Ok(to) => assert!(
-                    TRANSITIONS.contains(&(state, event, to)),
-                    "{} + {} landed in {} without a row",
-                    state.name(),
-                    event.name(),
-                    to.name()
-                ),
-                Err(error) => assert_eq!(
-                    error,
-                    Error::InvalidState,
-                    "{} + {} failed with the wrong error",
-                    state.name(),
-                    event.name()
-                ),
-            }
+            let expected = TRANSITIONS
+                .iter()
+                .find(|(from, on, _)| *from == state && *on == event)
+                .map(|(_, _, to)| *to)
+                .ok_or(Error::InvalidState);
+            assert_eq!(next(state, event), expected, "{state:?} + {event:?}");
+            assert_eq!(is_legal(state, event), expected.is_ok());
         }
     }
 }
