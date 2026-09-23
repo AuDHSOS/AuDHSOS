@@ -77,27 +77,29 @@ impl<T> MemoryFrameAccess<T> {
         self.tables.insert(frame, Box::new(table));
     }
 
-    /// Makes `frame` unreachable and returns its content.
+    /// Removes the recorded content of `frame` and returns its table, if any.
+    /// A frame in the lazy range can materialize again on a modifying access.
     pub fn remove(&mut self, frame: PhysFrame) -> Option<T> {
+        self.bytes.remove(&frame);
         self.tables.remove(&frame).map(|boxed| *boxed)
     }
 
-    /// `true` if `frame` is reachable.
+    /// `true` if `frame` has a recorded table or bytes.
     #[must_use]
     pub fn contains(&self, frame: PhysFrame) -> bool {
-        self.tables.contains_key(&frame)
+        self.tables.contains_key(&frame) || self.bytes.contains_key(&frame)
     }
 
-    /// The number of reachable frames.
+    /// The number of frames with recorded content.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.tables.len()
+        self.tables.len().saturating_add(self.bytes.len())
     }
 
-    /// `true` if no frame is reachable.
+    /// `true` if no frame has recorded content.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.tables.is_empty()
+        self.tables.is_empty() && self.bytes.is_empty()
     }
 
     /// Makes the bytes of `frame` reachable, filled with zeros, in place of
