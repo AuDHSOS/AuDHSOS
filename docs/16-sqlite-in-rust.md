@@ -1044,6 +1044,9 @@ Size: L.
      records.
 150. The columns an `INSERT` with no column list writes, which leave out
      the computed ones. Built, which D-429 records.
+151. The `ORDER BY` inside the brackets of an aggregate, which says
+     which order it reads the rows of its group in. Built, which D-430
+     records.
 
 ### Done when
 

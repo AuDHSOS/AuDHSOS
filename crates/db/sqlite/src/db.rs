@@ -4956,7 +4956,8 @@ impl<'a> Database<'a> {
             groups.sort_by(|left, right| order_of_keys(&left.key, &right.key));
         }
         let mut out = Vec::new();
-        for group in &groups {
+        for group in &mut groups {
+            group.ordered_steps()?;
             let mut answers = Vec::new();
             for (call, accumulator) in calls.iter().zip(&group.accumulators) {
                 let held = accumulator.finish()?;
@@ -5520,6 +5521,7 @@ fn alike_nodes(mine: Written<'_>, one: Node, theirs: Written<'_>, other: Node) -
                 distinct: false,
                 star: false,
                 filter: None,
+                ..
             },
             Node::Call {
                 name: other,
@@ -5527,6 +5529,7 @@ fn alike_nodes(mine: Written<'_>, one: Node, theirs: Written<'_>, other: Node) -
                 distinct: false,
                 star: false,
                 filter: None,
+                ..
             },
         ) => named(one, other) && alike_each(mine, args, theirs, their_args),
         _ => false,
@@ -8072,6 +8075,9 @@ struct Call {
     /// The node it was written as, which is what answers it: two
     /// `count(*)` in one statement are one column each.
     id: ExprId,
+    /// The `ORDER BY` written inside its brackets, which it reads the
+    /// rows of its group in the order of.
+    ordered: Range,
     /// Which aggregate.
     which: Aggregate,
     /// Whether `DISTINCT` precedes its arguments.
@@ -8092,6 +8098,37 @@ struct Group<'a> {
     magnet: Option<Vec<Held<'a>>>,
     /// One accumulator per aggregate call.
     accumulators: Vec<Accumulator>,
+    /// The rows an aggregate that reads them in an order of its own has
+    /// not stepped yet, one run per call.
+    waiting: Vec<Vec<Waiting<'a>>>,
+}
+
+/// One row of a group an aggregate with an `ORDER BY` of its own has not
+/// stepped yet.
+struct Waiting<'a> {
+    /// What the terms of that `ORDER BY` answered for the row.
+    keys: Vec<Waited>,
+    /// The arguments of the call.
+    values: Vec<Value>,
+    /// Which of those arguments carry JSON of their own.
+    carried: Vec<bool>,
+    /// The collation the first argument compares under.
+    collation: Collation,
+    /// The row itself, which the bare columns of the group come from
+    /// where a `min` or a `max` takes it.
+    held: Vec<Held<'a>>,
+}
+
+/// One term of an aggregate's `ORDER BY` as it answered for one row.
+struct Waited {
+    /// What the term answered.
+    value: Value,
+    /// The collation it compares under.
+    collation: Collation,
+    /// Whether the term was written `DESC`.
+    descending: bool,
+    /// Which end the nulls of the term go to, where the term said.
+    nulls: crate::ast::Nulls,
 }
 
 impl<'a> Group<'a> {
@@ -8104,7 +8141,34 @@ impl<'a> Group<'a> {
                 .iter()
                 .map(|call| Accumulator::new(call.which, call.distinct))
                 .collect(),
+            waiting: calls.iter().map(|_| Vec::new()).collect(),
         }
+    }
+
+    /// Steps every aggregate that reads the rows of its group in an
+    /// order of its own with those rows, sorted by the terms of its
+    /// `ORDER BY`.
+    ///
+    /// Sorting the rows of one group costs O(n log n) in their number.
+    ///
+    /// # Errors
+    ///
+    /// Whatever a step of the aggregate refuses.
+    fn ordered_steps(&mut self) -> Result<(), Error> {
+        let mut waiting = core::mem::take(&mut self.waiting);
+        for (rows, accumulator) in waiting.iter_mut().zip(&mut self.accumulators) {
+            rows.sort_by(|left, right| order_of_terms(&left.keys, &right.keys));
+            for row in rows.iter() {
+                accumulator.step(&row.values, &row.carried, row.collation)?;
+                // `sqlite3SkipAccumulatorLoad` keeps the row a `min` or a
+                // `max` took, which the bare columns of the group come
+                // from.
+                if accumulator.magnet() {
+                    self.magnet = Some(row.held.clone());
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Adds one row to every accumulator, and keeps the row where it is
@@ -8124,7 +8188,11 @@ impl<'a> Group<'a> {
     ) -> Result<(), Error> {
         let first = self.magnet.is_none();
         let mut magnet = None;
-        for (call, accumulator) in calls.iter().zip(&mut self.accumulators) {
+        for ((call, accumulator), waiting) in calls
+            .iter()
+            .zip(&mut self.accumulators)
+            .zip(&mut self.waiting)
+        {
             // A `FILTER` decides which rows the aggregate is stepped
             // with, which is `sqlite3ExprIfFalse` jumping over the step.
             if !keep(arena, call.filter, sql, cursor)? {
@@ -8147,6 +8215,29 @@ impl<'a> Group<'a> {
                     values.push(value);
                     carried.push(json);
                 }
+            }
+            if !call.ordered.is_empty() {
+                // The rows are read in the order the `ORDER BY` of the
+                // call says, which is not the order the walk answers
+                // them in, so they wait until the group is whole.
+                let mut keys = Vec::new();
+                for term in arena.orders(call.ordered) {
+                    let (value, collation) = evaluate_collated(arena, term.expr, sql, cursor)?;
+                    keys.push(Waited {
+                        value,
+                        collation,
+                        descending: term.order == crate::ast::Order::Descending,
+                        nulls: term.nulls,
+                    });
+                }
+                waiting.push(Waiting {
+                    keys,
+                    values,
+                    carried,
+                    collation,
+                    held: cursor.held.clone(),
+                });
+                continue;
             }
             accumulator.step(&values, &carried, collation)?;
             if accumulator.magnet() {
@@ -8569,6 +8660,7 @@ impl Gathering<'_> {
             distinct,
             star,
             filter,
+            ordered,
         } = node
         {
             let count = if star {
@@ -8592,6 +8684,7 @@ impl Gathering<'_> {
                     distinct,
                     args,
                     filter,
+                    ordered,
                     name: called,
                 });
                 under = true;
@@ -9746,6 +9839,44 @@ fn order_of_keys(left: &[(Value, Collation)], right: &[(Value, Collation)]) -> c
         let order = compare(&first.0, &second.0, first.1);
         if order != core::cmp::Ordering::Equal {
             return order;
+        }
+    }
+    core::cmp::Ordering::Equal
+}
+
+/// Which of two rows of a group an aggregate with an `ORDER BY` of its
+/// own reads first: the first term that tells them apart says, and a
+/// term written `DESC` reads the other way round.
+fn order_of_terms(left: &[Waited], right: &[Waited]) -> core::cmp::Ordering {
+    for (first, second) in left.iter().zip(right) {
+        let (one, other) = (first.value == Value::Null, second.value == Value::Null);
+        if one || other {
+            if one && other {
+                continue;
+            }
+            // A null is the smallest value, so it stands first where the
+            // sort runs upwards; `NULLS FIRST` and `NULLS LAST` say
+            // which end it goes to whichever way the sort runs, which is
+            // `sqlite3ExprIsNullsFirst` reading the term.
+            let held = if one {
+                core::cmp::Ordering::Less
+            } else {
+                core::cmp::Ordering::Greater
+            };
+            let last = match first.nulls {
+                crate::ast::Nulls::First => false,
+                crate::ast::Nulls::Last => true,
+                crate::ast::Nulls::Unspecified => first.descending,
+            };
+            return if last { held.reverse() } else { held };
+        }
+        let order = compare(&first.value, &second.value, first.collation);
+        if order != core::cmp::Ordering::Equal {
+            return if first.descending {
+                order.reverse()
+            } else {
+                order
+            };
         }
     }
     core::cmp::Ordering::Equal

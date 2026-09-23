@@ -191,6 +191,7 @@ fn write(arena: &Arena, id: ExprId, sql: &[u8], out: &mut String) {
             distinct,
             star,
             filter,
+            ..
         } => {
             out.push_str("(call ");
             out.push_str(&text(name));

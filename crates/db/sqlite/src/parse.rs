@@ -2695,6 +2695,7 @@ impl<'a> Parser<'a> {
         let mut star = false;
         let mut distinct = false;
         let mut args = Vec::new();
+        let mut ordered = Range::default();
         if self.eat(Kind::Star) {
             star = true;
         } else if !self.at(Kind::Rp) {
@@ -2702,12 +2703,21 @@ impl<'a> Parser<'a> {
             if self.eat_keyword(Keyword::All) {
                 // `ALL` is the default and means nothing.
             }
-            loop {
-                args.push(self.expression()?);
-                if !self.eat(Kind::Comma) {
-                    break;
+            // `count(ORDER BY x)` names no argument and an order all
+            // the same, which `aggregate_orderby` of the grammar takes.
+            if !self.at_keyword(Keyword::Order) {
+                loop {
+                    args.push(self.expression()?);
+                    if !self.eat(Kind::Comma) {
+                        break;
+                    }
                 }
             }
+            // `f(args ORDER BY terms)`, which
+            // `sqlite3ExprAddFunctionOrderBy` of
+            // `research/sqlite/src/expr.c` hangs on the call and an
+            // aggregate reads the rows of its group in the order of.
+            ordered = self.order_by()?;
         }
         self.expect(Kind::Rp, Expected::CloseParen)?;
         // `f(...) WITHIN GROUP (ORDER BY Y)` is `f(Y,...)`, which is
@@ -2762,6 +2772,7 @@ impl<'a> Parser<'a> {
             distinct,
             star,
             filter,
+            ordered,
         })
     }
 

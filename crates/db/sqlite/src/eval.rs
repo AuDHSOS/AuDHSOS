@@ -101,6 +101,9 @@ pub enum Error {
     /// The second argument of `likelihood` is not a fraction written as
     /// a literal.
     BadProbability,
+    /// An `ORDER BY` inside the brackets of a call that is no
+    /// aggregate, with the name of the function.
+    OrderedCall(Vec<u8>),
     /// A `LIKE` or `GLOB` pattern longer than the engine takes.
     PatternTooBig,
     /// A blob or a string longer than `SQLITE_MAX_LENGTH`, which is what
@@ -169,6 +172,10 @@ impl Error {
             // library writes these words for.
             Error::TooBig => "string or blob too big".to_string(),
             Error::PatternTooBig => "LIKE or GLOB pattern too complex".to_string(),
+            Error::OrderedCall(name) => alloc::format!(
+                "ORDER BY may not be used with non-aggregate {}()",
+                shown(name)
+            ),
             Error::Overflow => "integer overflow".to_string(),
             Error::Json(refused) => refused.message(),
             Error::Regexp(why) => (*why).to_string(),
@@ -631,12 +638,12 @@ fn answer(
         // and so is a scalar function carrying a `FILTER`, which only
         // an aggregate reads.
         Node::Call {
-            name, args, filter, ..
-        } => match row.aggregate(id) {
-            Some(value) => Ok(Answer::plain(value)),
-            None if filter.is_some() => Err(Error::Filtered(named_as(name, sql))),
-            None => called(arena, name, args, sql, row, deeper),
-        },
+            name,
+            args,
+            filter,
+            ordered,
+            ..
+        } => calling(arena, (id, name, args), (filter, ordered), sql, row, deeper),
         Node::Over { name, .. } => row
             .aggregate(id)
             .map(Answer::plain)
@@ -693,6 +700,37 @@ fn raised(
     match text {
         Ok(text) => Error::Raised(action, text),
         Err(refused) => refused,
+    }
+}
+
+/// One call of a function: what the group or the row it stands for
+/// answered where it is an aggregate or a window function, and what the
+/// function answers for its arguments otherwise.
+///
+/// A `FILTER` and an `ORDER BY` inside the brackets are each written for
+/// an aggregate alone, so a call that is none and carries one is a
+/// misuse of it, which `sqlite3ExprAddFunctionOrderBy` of
+/// `research/sqlite/src/expr.c` refuses.
+///
+/// # Errors
+///
+/// [`Error::Filtered`] and [`Error::OrderedCall`] name the function, and
+/// whatever the call refuses otherwise.
+fn calling(
+    arena: &Arena,
+    held: (ExprId, Span, crate::ast::Range),
+    written: (Option<ExprId>, crate::ast::Range),
+    sql: &[u8],
+    row: &dyn Row,
+    deeper: u32,
+) -> Result<Answer, Error> {
+    let (id, name, args) = held;
+    let (filter, ordered) = written;
+    match row.aggregate(id) {
+        Some(value) => Ok(Answer::plain(value)),
+        None if filter.is_some() => Err(Error::Filtered(named_as(name, sql))),
+        None if !ordered.is_empty() => Err(Error::OrderedCall(named_as(name, sql))),
+        None => called(arena, name, args, sql, row, deeper),
     }
 }
 

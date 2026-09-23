@@ -7,6 +7,10 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` reads the rows of a group in the order the `ORDER BY`
+  inside an aggregate's brackets says. D-430 records it. Catalog
+  6.6.297. `aggorderby.test` goes from 3 cases passing to 28.
+
 - `db-sqlite` writes one value per column no expression computes for an
   `INSERT` that names no column, and refuses a statement that writes a
   computed column. D-429 records it. Catalog 6.6.296. `gencol1.test`

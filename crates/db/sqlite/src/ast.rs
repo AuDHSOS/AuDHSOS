@@ -281,6 +281,9 @@ pub enum Node {
         /// The `FILTER (WHERE ...)`, which holds which rows an
         /// aggregate reads.
         filter: Option<ExprId>,
+        /// The `ORDER BY` written inside the brackets, which an
+        /// aggregate reads the rows of its group in the order of.
+        ordered: Range,
     },
     /// `CASE operand WHEN a THEN b ... ELSE c END`, with the whens in
     /// pairs.
@@ -1498,7 +1501,23 @@ impl Arena {
                     under(escape);
                 }
             }
-            Node::Call { args, filter, .. } | Node::Over { args, filter, .. } => {
+            Node::Call {
+                args,
+                filter,
+                ordered,
+                ..
+            } => {
+                for arg in self.children(args) {
+                    under(*arg);
+                }
+                if let Some(id) = filter {
+                    under(id);
+                }
+                for term in self.orders(ordered) {
+                    under(term.expr);
+                }
+            }
+            Node::Over { args, filter, .. } => {
                 for arg in self.children(args) {
                     under(*arg);
                 }

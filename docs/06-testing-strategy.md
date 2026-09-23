@@ -7091,3 +7091,12 @@ Document 16 step Q8.
 - An `INSERT` of one value per column no expression computes, the count
   in the refusal, an `INSERT` that names a computed column, an `UPDATE`
   that writes one, and a table that keeps its rows in the key's own tree.
+
+### 6.6.297 The order an aggregate reads its group in (`db-sqlite`)
+
+Document 16 step Q8.
+
+- One term, a term that sorts backwards, two terms, `NULLS FIRST` and
+  `NULLS LAST`, one order per group, a `DISTINCT` beside the order, the
+  row a `max` took, a call of no argument, an `ORDER BY` on a call that
+  is no aggregate, and an aggregate inside the terms.
