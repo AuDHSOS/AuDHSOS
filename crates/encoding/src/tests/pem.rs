@@ -141,7 +141,16 @@ fn a_pad_before_the_last_body_line_is_refused() {
 #[test]
 fn a_label_the_rfc_does_not_allow_is_refused() {
     let mut out = [0u8; 128];
-    for label in [" CERTIFICATE", "CERTIFICATE ", "TWO  SPACES", "WITH-HYPHEN"] {
+    for label in [
+        " CERTIFICATE",
+        "CERTIFICATE ",
+        "TWO  SPACES",
+        "-FIRST",
+        "LAST-",
+        "A--B",
+        "A- B",
+        "A -B",
+    ] {
         assert_eq!(
             encode(label, &[1, 2, 3], &mut out),
             Err(EncodingError::Label),
@@ -149,6 +158,11 @@ fn a_label_the_rfc_does_not_allow_is_refused() {
         );
     }
     assert!(encode("PRIVATE KEY", &[1, 2, 3], &mut out).is_ok());
+    assert!(encode("WITH-HYPHEN", &[1, 2, 3], &mut out).is_ok());
+    assert_eq!(
+        read(b"-----BEGIN A-B-----\nAQID\n-----END A-B-----\n"),
+        Ok(("A-B".to_owned(), vec![1, 2, 3]))
+    );
     assert!(encode("", &[1, 2, 3], &mut out).is_ok());
     assert_eq!(
         read(b"-----BEGIN A\x7fB-----\nAQID\n-----END A\x7fB-----\n"),
@@ -161,7 +175,12 @@ fn carriage_returns_are_accepted_as_part_of_the_terminator() {
     let bytes = payload();
     let rendered = String::from_utf8(write_block("CERTIFICATE", &bytes)).expect("ascii");
     let crlf = rendered.replace('\n', "\r\n");
-    assert_eq!(read(crlf.as_bytes()), Ok(("CERTIFICATE".to_owned(), bytes)));
+    assert_eq!(
+        read(crlf.as_bytes()),
+        Ok(("CERTIFICATE".to_owned(), bytes.clone()))
+    );
+    let cr = rendered.replace('\n', "\r");
+    assert_eq!(read(cr.as_bytes()), Ok(("CERTIFICATE".to_owned(), bytes)));
 }
 
 #[test]
@@ -170,6 +189,16 @@ fn a_buffer_that_is_too_small_is_an_error() {
     let text = write_block("CERTIFICATE", &bytes);
     let mut out = [0u8; 8];
     assert_eq!(decode(&text, &mut out), Err(EncodingError::BufferTooSmall));
+    assert_eq!(out, [0u8; 8]);
+    let mut partial = [0xA5u8; 4];
+    assert_eq!(
+        decode(
+            b"-----BEGIN X-----\nAQIDBAUGBwgJ\n-----END X-----\n",
+            &mut partial
+        ),
+        Err(EncodingError::BufferTooSmall)
+    );
+    assert_eq!(partial, [0xA5; 4]);
     let mut small = vec![0u8; text.len() - 1];
     assert_eq!(
         encode("CERTIFICATE", &bytes, &mut small),
@@ -253,6 +282,23 @@ fn a_body_wrapped_at_seventy_reads_back_what_it_was_written_with() {
             bytes: &bytes
         }
     );
+}
+
+#[test]
+fn a_pad_split_across_odd_width_lines_reads_back() {
+    let width = NonZeroUsize::new(3).expect("nonzero");
+    let text = write_wrapped("X", &[1], width);
+    assert_eq!(text, b"-----BEGIN X-----\nAQ=\n=\n-----END X-----\n");
+    let mut out = [0u8; 1];
+    let block = decode_wrapped(&text, &mut out, width).expect("a block");
+    assert_eq!(block.bytes, &[1]);
+}
+
+#[test]
+fn a_second_block_is_trailing_data() {
+    let text =
+        b"-----BEGIN X-----\nAQID\n-----END X-----\n-----BEGIN X-----\nAQID\n-----END X-----\n";
+    assert_eq!(read(text), Err(EncodingError::TrailingData));
 }
 
 #[test]
@@ -347,6 +393,13 @@ fn a_character_error_in_a_wrapped_body_names_its_offset_in_the_body() {
 #[test]
 fn a_wrapped_buffer_that_is_too_small_is_an_error_and_writes_nothing() {
     let bytes = payload();
+    let text = write_wrapped("X", &bytes, seventy());
+    let mut decoded = vec![0xA5u8; bytes.len() - 1];
+    assert_eq!(
+        decode_wrapped(&text, &mut decoded, seventy()),
+        Err(EncodingError::BufferTooSmall)
+    );
+    assert!(decoded.iter().all(|byte| *byte == 0xA5));
     let needed = encoded_len_wrapped("X", bytes.len(), seventy()).expect("a length");
     let mut small = vec![0u8; needed - 1];
     assert_eq!(

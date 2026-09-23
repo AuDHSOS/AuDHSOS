@@ -195,7 +195,7 @@ fn split(
         .ok_or(EncodingError::BufferTooSmall)
 }
 
-/// Reads the first PEM block of `input`, writing its bytes into `out`.
+/// Reads the one PEM block of `input`, writing its bytes into `out`.
 ///
 /// # Errors
 ///
@@ -205,9 +205,9 @@ fn split(
 /// [`EncodingError::LineLength`] for a body line before the last that is
 /// not [`LINE`] characters, [`EncodingError::EmptyPayload`] for a block
 /// with no body, [`EncodingError::TrailingData`] for anything but line
-/// terminators after the end line, whatever [`base64::decode`] reports for
-/// the body, and [`EncodingError::BufferTooSmall`] when `out` is too
-/// short.
+/// terminators after the end line, including a second block, whatever
+/// [`base64::decode`] reports for the body, and
+/// [`EncodingError::BufferTooSmall`] when `out` is too short.
 pub fn decode<'label, 'bytes>(
     input: &'label [u8],
     out: &'bytes mut [u8],
@@ -215,7 +215,7 @@ pub fn decode<'label, 'bytes>(
     read(input, out, STRICT, true)
 }
 
-/// Reads the first block of `input` whose body lines are no longer than
+/// Reads the one block of `input` whose body lines are no longer than
 /// `longest`, writing its bytes into `out`. A text written by
 /// [`encode_wrapped`] at that width reads back here; so does one some
 /// other writer wrapped more narrowly, because no standard fixes the width
@@ -286,6 +286,27 @@ fn read<'label, 'bytes>(
         return Err(EncodingError::EmptyPayload);
     }
 
+    let characters = body
+        .iter()
+        .filter(|byte| **byte != b'\r' && **byte != b'\n')
+        .count();
+    let pad = body
+        .iter()
+        .rev()
+        .filter(|byte| **byte != b'\r' && **byte != b'\n')
+        .take_while(|byte| **byte == PAD)
+        .count();
+    let maximum =
+        base64::decoded_len(characters).unwrap_or(characters.wrapping_div(4).wrapping_mul(3));
+    let needed = if characters % 4 == 0 {
+        maximum.saturating_sub(pad.min(2))
+    } else {
+        maximum
+    };
+    if out.len() < needed {
+        return Err(EncodingError::BufferTooSmall);
+    }
+
     // A line is handed over only once the next one is known, because the
     // rule for the last body line is not the rule for the others.
     let mut quanta = Quanta::new(out);
@@ -347,10 +368,8 @@ impl<'out> Quanta<'out> {
                 wrap: width,
             });
         }
-        // Only the last line may carry a pad. Saying so here rather than
-        // letting the quantum say it keeps the complaint about the pad and
-        // not about the bits under it.
-        if !last && line.contains(&PAD) {
+        // A strict block permits padding only on its last line.
+        if exact && !last && line.contains(&PAD) {
             return Err(EncodingError::Padding);
         }
         for byte in line {
@@ -420,23 +439,22 @@ fn framed<'a>(line: &'a [u8], opening: &[u8]) -> Option<&'a [u8]> {
     rest.strip_suffix(DASHES)
 }
 
-/// Checks a label against the characters RFC 7468 allows: printable ASCII
-/// without the hyphen, with single spaces between words and none at either
-/// edge.
+/// Checks a label against RFC 7468: printable ASCII with single spaces or
+/// hyphens between label characters, and neither at either edge.
 fn check_label(label: &[u8]) -> Result<(), EncodingError> {
-    if label.first() == Some(&b' ') || label.last() == Some(&b' ') {
+    if matches!(label.first(), Some(b' ' | b'-')) || matches!(label.last(), Some(b' ' | b'-')) {
         return Err(EncodingError::Label);
     }
-    let mut previous_space = false;
+    let mut previous_separator = false;
     for byte in label {
-        let space = *byte == b' ';
-        if space && previous_space {
+        let separator = *byte == b' ' || *byte == b'-';
+        if separator && previous_separator {
             return Err(EncodingError::Label);
         }
-        if !space && !matches!(byte, 0x21..=0x2C | 0x2E..=0x7E) {
+        if !separator && !matches!(byte, 0x21..=0x2C | 0x2E..=0x7E) {
             return Err(EncodingError::Label);
         }
-        previous_space = space;
+        previous_separator = separator;
     }
     Ok(())
 }
@@ -451,9 +469,8 @@ fn write(out: &mut [u8], at: usize, what: &[u8]) -> Result<usize, EncodingError>
     Ok(end)
 }
 
-/// The lines of a text, split at a newline, with a carriage return before
-/// it removed. A text that does not end in a newline still yields its last
-/// line.
+/// The lines of a text, split at CRLF, CR, or LF. A text without a final
+/// terminator still yields its last line.
 struct Lines<'a> {
     rest: &'a [u8],
     done: bool,
@@ -475,9 +492,17 @@ impl<'a> Iterator for Lines<'a> {
         if self.done {
             return None;
         }
-        let line = if let Some(at) = self.rest.iter().position(|byte| *byte == b'\n') {
+        let line = if let Some(at) = self
+            .rest
+            .iter()
+            .position(|byte| *byte == b'\r' || *byte == b'\n')
+        {
             let (line, rest) = self.rest.split_at_checked(at)?;
-            self.rest = rest.get(1..).unwrap_or(&[]);
+            self.rest = if rest.starts_with(b"\r\n") {
+                rest.get(2..).unwrap_or(&[])
+            } else {
+                rest.get(1..).unwrap_or(&[])
+            };
             line
         } else {
             self.done = true;
@@ -485,6 +510,6 @@ impl<'a> Iterator for Lines<'a> {
             self.rest = &[];
             line
         };
-        Some(line.strip_suffix(b"\r").unwrap_or(line))
+        Some(line)
     }
 }
