@@ -32,6 +32,7 @@ AuDHSOS/
 │   ├── gfx/                   gfx: framebuffer logic, bitmap font, damage tracking
 │   ├── text-core/             text-core: sans-I/O font parsing, shaping, Unicode, and layout (document 17)
 │   ├── text-raster/           text-raster: outlines and paint streams to coverage in a caller's surface (document 18)
+│   ├── text-demo/             text-demo: throwaway host rasterizer for inspecting text-core output
 │   ├── pci/                   pci: configuration space, BARs, capabilities, MSI-X, the virtio capabilities (document 13)
 │   ├── sync/                  audhsos-sync: Global<T> and Preset<T> cells (unsafe allowed)
 │   ├── time/                  audhsos-time: UnixTime, CivilTime, Instant, Duration (document 12)
@@ -225,6 +226,7 @@ AuDHSOS/
 | `doc-pdf` | host | host | no | yes | `audhsos-deflate` |
 | `doc-svg` | host | host | no | yes | `doc-html`, `doc-pdf` |
 | `docpdf` | host | host | no | yes, without a coverage gate, as `xtask` | `doc-html`, `doc-markdown`, `doc-pdf`, `doc-svg` |
+| `text-demo` | host | host | no | no | `text-core` |
 | `membench` | host | host | no | yes, without a coverage gate, as `xtask`; the measurements themselves are not tested, only what they are built from | - |
 | `norec` | host | host | no | yes | - (drives the `sqlite3` shell as a child process) |
 | `jrs` | logic | all, with an allocator supplied by the embedding | no | yes, property and fuzz | `audhsos-regex`, `audhsos-event-target`, `audhsos-timer-queue`, `audhsos-json`, `audhsos-math`, `audhsos-utf16`; `test-support` as a dev-dependency |
@@ -319,11 +321,15 @@ remains separate. The independent fuzz target is `json_codec`.
 ## 5.4 Workspace configuration
 
 - `[workspace.package]` holds version, edition (`2024`), license
-  (`AGPL-3.0-only`), repository, and `rust-version`. Every crate inherits
-  them with `.workspace = true`.
+  (`AGPL-3.0-only`), authors, and `rust-version`. Every crate except
+  `text-demo` inherits them with `.workspace = true`; `text-demo` declares
+  its own version and edition.
 - `[workspace.dependencies]` lists only workspace members by path.
 - `[workspace.lints]` holds the complete lint configuration. Every crate
-  declares `[lints] workspace = true`. Crate roots contain only the
+  except `text-demo` declares `[lints] workspace = true`. The throwaway
+  `text-demo` uses indexing, `f64`, and unchecked
+  arithmetic, so applying the workspace lints would require rewriting it.
+  The R7 lint guarantee does not cover `text-demo`. Crate roots contain only the
   attributes that differ per crate: `#![no_std]`, `#![forbid(unsafe_code)]`
   or the adapter header, and the crate documentation.
 - Bare-metal targets abort on panic by definition; host test crates keep
