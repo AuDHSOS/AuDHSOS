@@ -81,8 +81,26 @@ fn align_up_at_the_hole_and_at_the_top() {
     );
     assert_eq!(
         VirtAddr::new(HOLE_END + 1).unwrap().align_down(page),
-        VirtAddr::KERNEL_MIN
+        Ok(VirtAddr::KERNEL_MIN)
     );
+}
+
+#[test]
+fn align_down_rejects_noncanonical_kernel_results() {
+    let large = Alignment::new(1 << 48).unwrap();
+    assert_eq!(
+        VirtAddr::KERNEL_MIN.align_down(large),
+        Err(Error::CrossesCanonicalHole)
+    );
+    assert_eq!(
+        VirtAddr::KERNEL_MIN.align_down(Alignment::new(1 << 63).unwrap()),
+        Err(Error::CrossesCanonicalHole)
+    );
+    assert_eq!(
+        VirtAddr::KERNEL_MIN.align_down(Alignment::new(1 << 47).unwrap()),
+        Ok(VirtAddr::KERNEL_MIN)
+    );
+    assert_eq!(VirtAddr::USER_MAX.align_down(large), Ok(VirtAddr::ZERO));
 }
 
 #[test]
@@ -129,6 +147,7 @@ fn page_arithmetic_stays_in_the_half() {
 fn ranges_empty_single_crossing_and_overflowing() {
     let first = VirtAddr::ZERO.page();
     let empty = PageRange::new(first, 0).unwrap();
+    assert_eq!(empty, PageRange::EMPTY);
     assert!(empty.is_empty() && empty.last().is_none() && empty.iter().count() == 0);
     let single = PageRange::new(first, 1).unwrap();
     assert_eq!(single.bytes(), 4096);
@@ -140,6 +159,10 @@ fn ranges_empty_single_crossing_and_overflowing() {
     assert_eq!(whole_user_half.end_address(), None);
     assert_eq!(
         PageRange::new(first, user_pages + 1),
+        Err(Error::CrossesCanonicalHole)
+    );
+    assert_eq!(
+        PageRange::new(VirtAddr::new(0x1000).unwrap().page(), u64::MAX),
         Err(Error::CrossesCanonicalHole)
     );
     let kernel_pages = (u64::MAX - HOLE_END + 1) >> 12;
