@@ -174,10 +174,15 @@ fn a_used_element_longer_than_the_buffer_is_refused_by_the_queue() {
     assert_eq!(
         error,
         NetError::Queue(virtio_queue::QueueError::UsedLength {
+            head,
             reported: STRIDE + 1,
             writable: STRIDE
         })
     );
+    assert!(!net.posted[0]);
+    assert_eq!(net.taken[usize::from(head)], crate::NO_BUFFER);
+    assert_eq!(net.fill(&mut queue, &mut memory, &area), Ok(1));
+    assert_eq!(queue.free_count(), 0);
 }
 
 #[test]
@@ -225,4 +230,40 @@ fn a_used_element_naming_a_buffer_the_area_does_not_hold_is_refused() {
     let mut into = [0u8; 64];
     let error = refusal(net.receive(&mut queue, &mut memory, &shorter, &mut into));
     assert_eq!(error, NetError::UnknownBuffer(head));
+    assert!(!net.posted[usize::from(QUEUE_SIZE - 1)]);
+    assert_eq!(net.fill(&mut queue, &mut memory, &area), Ok(1));
+}
+
+#[test]
+fn receive_buffers_below_the_virtio_minimum_are_refused() {
+    let mut registers = device();
+    let mut net = live(&mut registers);
+    let (mut memory, mut queue) = queue();
+    let short = crate::doubles::RamFrames::new(1, 1525, 0x30_0000);
+    assert_eq!(
+        refusal(net.fill(&mut queue, &mut memory, &short)),
+        NetError::BufferTooShort(1525)
+    );
+    assert_eq!(memory.available_index(), 0);
+    let minimum = crate::doubles::RamFrames::new(1, 1526, 0x30_0000);
+    assert_eq!(net.fill(&mut queue, &mut memory, &minimum), Ok(1));
+}
+
+#[test]
+fn an_oversized_receive_queue_is_refused_before_any_descriptor_is_used() {
+    let mut registers = device();
+    let mut net = live(&mut registers);
+    let mut memory = virtio_queue::doubles::RamQueue::new(16);
+    let mut queue = virtio_queue::Queue::<1>::new(&mut memory, 16).expect("a queue");
+    let area = frames(Side::Receive);
+    let mut into = [0u8; 64];
+    assert_eq!(
+        refusal(net.fill(&mut queue, &mut memory, &area)),
+        NetError::Slots(16)
+    );
+    assert_eq!(
+        refusal(net.receive(&mut queue, &mut memory, &area, &mut into)),
+        NetError::Slots(16)
+    );
+    assert_eq!(memory.available_index(), 0);
 }

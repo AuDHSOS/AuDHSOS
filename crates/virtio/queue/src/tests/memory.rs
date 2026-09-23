@@ -160,6 +160,7 @@ fn every_area_and_error_says_what_it_is() {
     );
     assert_eq!(
         QueueError::UsedLength {
+            head: 0,
             reported: 66,
             writable: 65,
         }

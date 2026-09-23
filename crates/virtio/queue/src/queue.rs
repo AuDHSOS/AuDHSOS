@@ -388,6 +388,7 @@ impl<const WORDS: usize> Queue<WORDS> {
         let writable = self.free_chain(memory, head)?;
         if length > writable {
             return Err(QueueError::UsedLength {
+                head,
                 reported: length,
                 writable,
             });

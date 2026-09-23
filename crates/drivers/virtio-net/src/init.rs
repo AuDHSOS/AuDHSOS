@@ -59,6 +59,8 @@ pub struct Net<const SLOTS: usize> {
     pub(crate) sending: [u16; SLOTS],
     /// Which transmit buffers are with the device.
     pub(crate) busy: [bool; SLOTS],
+    /// The first transmit buffer checked after a completion.
+    pub(crate) free_hint: u16,
 }
 
 impl<const SLOTS: usize> Net<SLOTS> {
@@ -77,6 +79,7 @@ impl<const SLOTS: usize> Net<SLOTS> {
             posted: [false; SLOTS],
             sending: [NO_BUFFER; SLOTS],
             busy: [false; SLOTS],
+            free_hint: 0,
         }
     }
 
@@ -97,6 +100,7 @@ impl<const SLOTS: usize> Net<SLOTS> {
         self.posted = [false; SLOTS];
         self.sending = [NO_BUFFER; SLOTS];
         self.busy = [false; SLOTS];
+        self.free_hint = 0;
     }
 
     /// Whether the device has finished the reset it was asked for.

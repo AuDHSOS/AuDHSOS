@@ -21,8 +21,8 @@ pub enum NetError {
     /// A queue size that is zero, not a power of two, or larger than the
     /// rings the caller prepared. The number is what was asked for.
     QueueSize(u16),
-    /// A queue of more descriptors than the driver has slots for. The
-    /// number is the size the device and the rings agreed on.
+    /// A queue or frame area larger than the driver has slots for.
+    /// The number is the size the caller supplied.
     Slots(u16),
     /// The device would not take the interrupt vector: it read back as
     /// `NO_VECTOR` after a vector was written (virtio 4.1.5.1.3, step 5).
@@ -44,6 +44,9 @@ pub enum NetError {
     /// A used element of the receive queue that does not even hold the
     /// header. The number is what the device reported.
     ShortFrame(u32),
+    /// A receive buffer shorter than the 1526 bytes required without
+    /// merged receive buffers or guest offloads.
+    BufferTooShort(u32),
     /// A used element naming a buffer this driver did not post, or a
     /// buffer index outside the area. The number is the descriptor.
     UnknownBuffer(u16),
@@ -79,10 +82,9 @@ impl fmt::Display for NetError {
             }
             NetError::NoQueue(side) => write!(formatter, "the device has no {side} queue"),
             NetError::QueueSize(size) => write!(formatter, "a queue of {size} descriptors"),
-            NetError::Slots(size) => write!(
-                formatter,
-                "a queue of {size} descriptors is more than this driver holds"
-            ),
+            NetError::Slots(size) => {
+                write!(formatter, "{size} slots are more than this driver holds")
+            }
             NetError::NoVector(vector) => {
                 write!(formatter, "the device would not take vector {vector}")
             }
@@ -101,6 +103,9 @@ impl fmt::Display for NetError {
                     formatter,
                     "the device wrote {length} bytes, less than a header"
                 )
+            }
+            NetError::BufferTooShort(length) => {
+                write!(formatter, "a receive buffer of {length} bytes is too short")
             }
             NetError::UnknownBuffer(descriptor) => {
                 write!(

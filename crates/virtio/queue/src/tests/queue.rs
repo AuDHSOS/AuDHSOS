@@ -363,6 +363,7 @@ fn a_device_reporting_more_than_it_was_given_room_for_is_refused() {
     assert_eq!(
         queue.next_used(&device, &memory),
         Err(QueueError::UsedLength {
+            head,
             reported: 66,
             writable: 65,
         })
@@ -384,6 +385,7 @@ fn a_chain_the_device_only_reads_may_report_nothing_and_nothing_else() {
     assert_eq!(
         queue.next_used(&device, &memory),
         Err(QueueError::UsedLength {
+            head,
             reported: 1,
             writable: 0,
         })
@@ -411,6 +413,7 @@ fn only_the_writable_descriptors_of_a_chain_count_towards_the_room() {
     assert_eq!(
         queue.next_used(&device, &memory),
         Err(QueueError::UsedLength {
+            head,
             reported: 100,
             writable: 64,
         })

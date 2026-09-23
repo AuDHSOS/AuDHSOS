@@ -23,29 +23,49 @@ impl<const SLOTS: usize> Net<SLOTS> {
     /// # Errors
     ///
     /// [`NetError::UnknownBuffer`] for a used element naming a descriptor
-    /// this driver did not hand out, and [`NetError::Queue`] for what the
-    /// queue refused. The elements taken before the refusal stay taken.
+    /// this driver did not hand out, [`NetError::Slots`] for an oversized
+    /// queue, and [`NetError::Queue`] for what the queue refused. The
+    /// elements taken before the refusal stay taken.
     pub fn drain<const WORDS: usize>(
         &mut self,
         queue: &mut Queue<WORDS>,
         memory: &impl QueueMemory,
     ) -> Result<u16, NetError> {
+        if usize::from(queue.size()) > SLOTS {
+            return Err(NetError::Slots(queue.size()));
+        }
         let mut drained = 0u16;
-        while let Some(completion) = queue.next_used(&self.device, memory)? {
-            let slot = usize::from(completion.head);
-            let owner = self
-                .sending
-                .get_mut(slot)
-                .ok_or(NetError::UnknownBuffer(completion.head))?;
-            let index = core::mem::replace(owner, NO_BUFFER);
-            let busy = self
-                .busy
-                .get_mut(usize::from(index))
-                .ok_or(NetError::UnknownBuffer(completion.head))?;
-            *busy = false;
+        loop {
+            let completion = match queue.next_used(&self.device, memory) {
+                Err(error @ virtio_queue::QueueError::UsedLength { head, .. }) => {
+                    let _released = self.release_transmit(head);
+                    return Err(NetError::Queue(error));
+                }
+                result => result?,
+            };
+            let Some(completion) = completion else {
+                break;
+            };
+            self.release_transmit(completion.head)?;
             drained = drained.saturating_add(1);
         }
         Ok(drained)
+    }
+
+    /// Clears ownership after the queue frees a transmit descriptor.
+    fn release_transmit(&mut self, head: u16) -> Result<(), NetError> {
+        let owner = self
+            .sending
+            .get_mut(usize::from(head))
+            .ok_or(NetError::UnknownBuffer(head))?;
+        let index = core::mem::replace(owner, NO_BUFFER);
+        let busy = self
+            .busy
+            .get_mut(usize::from(index))
+            .ok_or(NetError::UnknownBuffer(head))?;
+        *busy = false;
+        self.free_hint = index;
+        Ok(())
     }
 
     /// Writes `frame` into a free transmit buffer behind a zeroed header
@@ -59,11 +79,11 @@ impl<const SLOTS: usize> Net<SLOTS> {
     ///
     /// [`NetError::FrameTooLong`] for a frame longer than one buffer holds
     /// behind the header, [`NetError::NoBuffer`] when every buffer is with
-    /// the device, [`NetError::Slots`] for an area of more buffers than
-    /// this driver holds, [`NetError::Buffer`] for a buffer the area would
-    /// not name, and [`NetError::Queue`] for what the queue refused.
-    /// Nothing is written in any of them, so a caller that drains and
-    /// tries again sends the same frame.
+    /// the device, [`NetError::Slots`] for a queue or area larger than this
+    /// driver holds, [`NetError::Buffer`] for a buffer the area would not
+    /// name, and [`NetError::Queue`] for what the queue refused.
+    /// A queue refusal may leave the frame in a free buffer that the
+    /// device does not hold. A retry writes the frame again.
     pub fn send<const WORDS: usize>(
         &mut self,
         queue: &mut Queue<WORDS>,
@@ -71,6 +91,9 @@ impl<const SLOTS: usize> Net<SLOTS> {
         frames: &mut impl Frames,
         frame: &[u8],
     ) -> Result<bool, NetError> {
+        if usize::from(queue.size()) > SLOTS {
+            return Err(NetError::Slots(queue.size()));
+        }
         let count = frames.count();
         if usize::from(count) > SLOTS {
             return Err(NetError::Slots(count));
@@ -107,8 +130,16 @@ impl<const SLOTS: usize> Net<SLOTS> {
         self.should_notify(queue, memory)
     }
 
-    /// The first transmit buffer the device does not hold.
+    /// The first free transmit buffer, starting at the last completion.
     fn free(&self, count: u16) -> Option<u16> {
-        (0..count).find(|index| !self.busy.get(usize::from(*index)).copied().unwrap_or(true))
+        (0..count)
+            .map(|step| {
+                let index = usize::from(self.free_hint)
+                    .saturating_add(usize::from(step))
+                    .checked_rem(usize::from(count))
+                    .unwrap_or(0);
+                u16::try_from(index).unwrap_or(u16::MAX)
+            })
+            .find(|index| !self.busy.get(usize::from(*index)).copied().unwrap_or(true))
     }
 }
