@@ -96,26 +96,3 @@ impl TlbControl for NoTlb {
 
     fn flush_all(&mut self) {}
 }
-
-/// The number of frames the tables of a mapping of `bytes` bytes need, the
-/// root table excluded: one table per 2 MiB, per 1 GiB, and per 512 GiB.
-pub(crate) const fn tables_for(bytes: u64) -> u64 {
-    let level1 = bytes.div_ceil(1 << 21);
-    let level2 = bytes.div_ceil(1 << 30);
-    let level3 = bytes.div_ceil(1 << 39);
-    level1.saturating_add(level2).saturating_add(level3)
-}
-
-/// The number of frames the pool needs for a machine whose highest
-/// physical address is `highest`: the root, the tables of the physical
-/// window, the tables of the identity mapping, and a reserve for the
-/// kernel image, the boot stack, and the boot information page.
-pub(crate) const fn pool_frames(highest: u64) -> u64 {
-    let mapping = tables_for(highest);
-    1u64.saturating_add(mapping.saturating_mul(2))
-        .saturating_add(RESERVE_FRAMES)
-}
-
-/// Frames the pool keeps for the mappings that are not the physical window
-/// or the identity mapping.
-const RESERVE_FRAMES: u64 = 24;

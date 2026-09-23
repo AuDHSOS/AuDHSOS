@@ -31,9 +31,9 @@ use crate::bootinfo::{self, Range, Ranges};
 use crate::files::{self, LoadError, Volume};
 use crate::firmware::{Firmware, MemoryMapInfo};
 use crate::memory;
-use crate::paging::{IdentityAccess, NoTlb, PoolFrames, pool_frames};
+use crate::paging::{IdentityAccess, NoTlb, PoolFrames};
 use crate::placement::{self, PlaceError, Placement};
-use crate::{entry, exit, graphics};
+use crate::{entry, exit, exit_retry, graphics, loader_math};
 
 /// Path of the kernel on the boot volume.
 const KERNEL_PATH: &str = "AUDHSOS\\KERNEL.ELF";
@@ -43,12 +43,6 @@ const BOOT_IMAGE_PATH: &str = "AUDHSOS\\BOOT.IMG";
 
 /// Frames the first attempt at the memory map buffer asks for.
 const MAP_BUFFER_PAGES: u64 = 16;
-
-/// Frames the last attempt at the memory map buffer asks for.
-const MAX_MAP_BUFFER_PAGES: u64 = 256;
-
-/// How often the loader retries `ExitBootServices` with a fresh map key.
-const EXIT_ATTEMPTS: u32 = 3;
 
 /// The bounds the kernel image has to lie in.
 const KERNEL_BOUNDS: Constraints = Constraints {
@@ -141,7 +135,11 @@ fn load(firmware: &Firmware<'_>) -> Result<Infallible, Failure> {
     let placement = placement::place(firmware, &image).map_err(Failure::Place)?;
     let stack = allocate(firmware, "the boot stack", BOOT_STACK_PAGES)?;
     let info_page = allocate(firmware, "the boot information page", 1)?;
-    let pool = allocate(firmware, "the page tables", pool_frames(ram_end))?;
+    let pool = allocate(
+        firmware,
+        "the page tables",
+        loader_math::pool_frames(ram_end, placement.span_start, placement.frames.bytes()),
+    )?;
     exit::report(
         firmware,
         format_args!(
@@ -221,17 +219,20 @@ fn map_buffer(firmware: &Firmware<'_>) -> Result<(PhysFrameRange, MemoryMapInfo)
     loop {
         let frames = allocate(firmware, "the memory map buffer", pages)?;
         let outcome = read_map(firmware, frames, frames.bytes());
-        match outcome {
-            Ok(info) => return Ok((frames, info)),
-            Err(status) if status == Status::BUFFER_TOO_SMALL && pages < MAX_MAP_BUFFER_PAGES => {
-                firmware.free_pages(frames);
-                pages = pages.saturating_mul(2);
-            }
-            Err(status) => {
-                firmware.free_pages(frames);
-                return Err(Failure::Firmware("the memory map", status));
-            }
-        }
+        let next = match outcome {
+            Ok(info) => match loader_math::map_buffer_pages(pages, info.size) {
+                Some(next) if next == pages => return Ok((frames, info)),
+                Some(next) => Ok(next),
+                None => Err(Status::BUFFER_TOO_SMALL),
+            },
+            Err(status) if status == Status::BUFFER_TOO_SMALL => pages
+                .checked_mul(2)
+                .filter(|next| *next <= loader_math::MAX_MAP_BUFFER_PAGES)
+                .ok_or(status),
+            Err(status) => Err(status),
+        };
+        firmware.free_pages(frames);
+        pages = next.map_err(|status| Failure::Firmware("the memory map", status))?;
     }
 }
 
@@ -394,18 +395,15 @@ fn leave_boot_services(
     firmware: &Firmware<'_>,
     map_frames: PhysFrameRange,
 ) -> Result<MemoryMapInfo, Failure> {
-    let mut attempt = 0u32;
-    loop {
-        let map = read_map(firmware, map_frames, map_frames.bytes())
-            .map_err(|status| Failure::Firmware("the memory map", status))?;
-        let status = firmware.exit_boot_services(map.key);
-        if status.is_success() {
-            return Ok(map);
+    match exit_retry::leave(
+        || read_map(firmware, map_frames, map_frames.bytes()).map(|map| (map, map.key)),
+        |key| firmware.exit_boot_services(key),
+    ) {
+        Ok(map) => Ok(map),
+        Err(exit_retry::ExitError::BeforeExit(status)) => {
+            Err(Failure::Firmware("the memory map", status))
         }
-        attempt = attempt.saturating_add(1);
-        if attempt >= EXIT_ATTEMPTS {
-            return Err(Failure::Firmware("leaving the boot services", status));
-        }
+        Err(exit_retry::ExitError::AfterExit) => exit::die(),
     }
 }
 

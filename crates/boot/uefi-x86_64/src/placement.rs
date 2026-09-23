@@ -16,9 +16,10 @@ use audhsos_abi::layout::{PAGE_SHIFT, PAGE_SIZE};
 use audhsos_elf::image::{Image, MAX_SEGMENTS, Segment};
 use audhsos_uefi::status::Status;
 use kernel_mm::page_table::Permissions;
-use kernel_types::{Alignment, PageRange, PhysFrameRange, VirtAddr};
+use kernel_types::{PageRange, PhysFrameRange, VirtAddr};
 
 use crate::firmware::Firmware;
+use crate::loader_math::{self, SpanError};
 
 /// One segment after it has been placed.
 #[derive(Clone, Copy, Debug)]
@@ -36,6 +37,8 @@ pub(crate) struct PlacedSegment {
 pub(crate) struct Placement {
     /// The frames holding the whole image.
     pub(crate) frames: PhysFrameRange,
+    /// The first virtual address occupied by the image.
+    pub(crate) span_start: u64,
     /// The entry point, a virtual address.
     pub(crate) entry: u64,
     segments: [Option<PlacedSegment>; MAX_SEGMENTS],
@@ -78,27 +81,10 @@ impl fmt::Display for PlaceError {
 /// The page-aligned virtual range the whole image occupies, as start and
 /// length.
 pub(crate) fn span(image: &Image<'_>) -> Result<(u64, u64), PlaceError> {
-    let mut lowest = u64::MAX;
-    let mut highest = 0u64;
-    let mut seen = false;
-    for segment in image.segments() {
-        let end = segment.end().ok_or(PlaceError::Overflow)?;
-        lowest = lowest.min(segment.vaddr);
-        highest = highest.max(end);
-        seen = true;
-    }
-    if !seen {
-        return Err(PlaceError::NoSegments);
-    }
-    let start = Alignment::PAGE.align_down(lowest);
-    let end = Alignment::PAGE
-        .align_up(highest)
-        .ok_or(PlaceError::Overflow)?;
-    let len = end.checked_sub(start).ok_or(PlaceError::Overflow)?;
-    if len == 0 {
-        return Err(PlaceError::NoSegments);
-    }
-    Ok((start, len))
+    loader_math::image_span(image.segments()).map_err(|error| match error {
+        SpanError::NoSegments => PlaceError::NoSegments,
+        SpanError::Overflow => PlaceError::Overflow,
+    })
 }
 
 /// What a segment may do once it is mapped.
@@ -129,6 +115,9 @@ pub(crate) fn place(firmware: &Firmware<'_>, image: &Image<'_>) -> Result<Placem
     let mut segments: [Option<PlacedSegment>; MAX_SEGMENTS] = [None; MAX_SEGMENTS];
     let mut count = 0usize;
     for segment in image.segments() {
+        if segment.mem_size == 0 {
+            continue;
+        }
         if !segment.vaddr.is_multiple_of(PAGE_SIZE) {
             return Err(PlaceError::Unaligned(segment.vaddr));
         }
@@ -144,6 +133,7 @@ pub(crate) fn place(firmware: &Firmware<'_>, image: &Image<'_>) -> Result<Placem
     }
     Ok(Placement {
         frames,
+        span_start,
         entry: image.entry,
         segments,
         count,
