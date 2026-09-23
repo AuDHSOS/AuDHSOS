@@ -15,7 +15,8 @@ use crate::madt::{
 };
 use crate::sdt::SDT_HEADER_LEN;
 use crate::tests::build::{
-    fix_table, io_apic, lapic_override, local_apic, madt, source_override, table, unknown,
+    completing, fix_table, io_apic, lapic_override, local_apic, madt, source_override, table,
+    unknown,
 };
 
 /// The address QEMU puts the local APIC at.
@@ -157,8 +158,23 @@ fn a_table_that_ends_before_the_flags_is_refused() {
         fix_table(&mut bytes);
         assert_eq!(
             parse(&bytes),
-            Err(AcpiError::TooShort(length)),
+            Err(AcpiError::Length(length as u32)),
             "a table of {length} bytes"
+        );
+    }
+}
+
+#[test]
+fn a_table_cannot_read_header_fields_beyond_its_announced_length() {
+    for length in [SDT_HEADER_LEN, SDT_HEADER_LEN + 4, MADT_HEADER_LEN - 1] {
+        let mut bytes = madt(LAPIC, PCAT_COMPAT, &[]);
+        bytes[4..8].copy_from_slice(&(length as u32).to_le_bytes());
+        bytes[9] = 0;
+        bytes[9] = completing(&bytes[..length]);
+        assert_eq!(
+            parse(&bytes),
+            Err(AcpiError::Length(length as u32)),
+            "a table announcing {length} bytes"
         );
     }
 }

@@ -24,7 +24,7 @@ pub enum AcpiError {
     /// The bytes end where a table header or an entry header has to start.
     TooShort(usize),
     /// The table announces a length the bytes do not cover, or one below
-    /// the header.
+    /// its required fields.
     Length(u32),
     /// The sum of the bytes the table's length names is not zero, which
     /// section 5.2.6 requires.

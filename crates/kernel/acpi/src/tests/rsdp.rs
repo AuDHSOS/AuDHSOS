@@ -33,6 +33,14 @@ fn a_revision_two_pointer_names_the_xsdt_and_the_kernel_reads_that_one() {
 }
 
 #[test]
+fn a_revision_two_pointer_without_an_xsdt_uses_the_rsdt() {
+    let bytes = rsdp(REVISION_V2, 0x000E_0000, 0);
+    let parsed = parse_rsdp(&bytes).expect("the pointer is well formed");
+    assert_eq!(parsed.xsdt, None);
+    assert_eq!(parsed.root(), parsed.rsdt);
+}
+
+#[test]
 fn a_pointer_with_another_signature_is_refused() {
     let mut bytes = rsdp(REVISION_V2, 1, 2);
     bytes[0] = b'X';
