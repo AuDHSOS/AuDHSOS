@@ -262,3 +262,28 @@ fn cos_kernel_raw(value: f64) -> f64 {
     }
     sum
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{PRODUCT_LIMBS, fraction_pair};
+
+    #[test]
+    fn fraction_pair_preserves_bits_below_f64_precision() {
+        const TINY: f64 = f64::from_bits(0x3c30_0000_0000_0000);
+        let mut product = [0u32; PRODUCT_LIMBS];
+        product[2] = 1 << 20;
+        let small = fraction_pair(&product, 128, false);
+        assert_eq!((small.0, small.1), (TINY, 0.0));
+
+        product[5] = 1 << 7;
+        let pair = fraction_pair(&product, 128, false);
+        assert_eq!((pair.0, pair.1), (0.5, TINY));
+
+        product[2] = 0xf0_0000;
+        product[3] = 0xff_ffff;
+        product[4] = 0xff_ffff;
+        product[5] = 0xff;
+        let rounded_up = fraction_pair(&product, 128, true);
+        assert_eq!((rounded_up.0, rounded_up.1), (TINY, 0.0));
+    }
+}
