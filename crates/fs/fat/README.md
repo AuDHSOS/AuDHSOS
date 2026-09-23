@@ -43,10 +43,27 @@ table disagree about what is in use; the bad-cluster marker; and a number
 outside the table. Only the first is success.
 
 A directory entry is skipped when it is deleted, when it is the volume
-label, and when it belongs to a long file name. It is refused when its
-eleven bytes are not a name this crate would write — a lower-case letter
-is the case that matters, because the short form has no room for the flag
-that would say what the case meant.
+label, when it belongs to a long file name, when its eleven bytes are not
+a name this crate would write, and when its date names no day. A
+lower-case letter, a code page byte above `0x7F` and a first byte of
+`0x05` are such names: the short form has no room for the flag that would
+say what the case meant, and this crate reads no code page. A walk
+returns the entries after a skipped entry. `create` and `create_dir`
+refuse a name that equals a skipped entry's name ignoring case.
+
+`next_entry` refuses an entry with `Error::Cluster` when its first
+cluster is outside the data region, or zero for a directory; the cursor
+then points at the slot after that entry. `find` refuses only the entry
+it names. `mount` refuses a boot sector that claims more sectors than the
+device has. `parse` refuses a table with fewer entries than the volume
+has clusters, and a volume of more than `MAX_CLUSTERS` clusters.
+
+A walk reads each directory sector once: the volume caches the last
+directory sector it read, and every write through the volume to that
+sector updates the cache.
+
+The FAT32 File System Specification 1.03 is kept at
+`docs/microsoft/fatgen103.doc`.
 
 The time in a directory entry goes through `audhsos-time`. FAT counts
 years from 1980 and seconds in twos, so what round-trips is an even

@@ -86,12 +86,6 @@ impl Name {
     pub const fn as_bytes(&self) -> &[u8; NAME_LEN] {
         &self.0
     }
-
-    /// Whether the name is one of the two a directory keeps for itself.
-    #[must_use]
-    pub fn is_dot(&self) -> bool {
-        *self == Name::DOT || *self == Name::DOT_DOT
-    }
 }
 
 impl fmt::Display for Name {

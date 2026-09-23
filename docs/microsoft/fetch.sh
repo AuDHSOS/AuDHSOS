@@ -45,3 +45,8 @@ for script in arabic hebrew hangul; do
         -o "$dir/script-$script.html"
     printf '%s  %s\n' "$(shasum -a 256 "$dir/script-$script.html" | cut -d' ' -f1)" "script-$script.html"
 done
+
+# The FAT32 File System Specification, one Word document.
+fat=https://download.microsoft.com/download/1/6/1/161ba512-40e2-4cc9-843a-923143f3456c/fatgen103.doc
+curl -sSL --fail --max-time 120 "$fat" -o "$dir/fatgen103.doc"
+printf '%s  %s\n' "$(shasum -a 256 "$dir/fatgen103.doc" | cut -d' ' -f1)" fatgen103.doc

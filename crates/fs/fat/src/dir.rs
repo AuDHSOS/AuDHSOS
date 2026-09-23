@@ -121,45 +121,51 @@ pub(crate) enum Slot {
     /// Something this crate walks past: the volume label, a long file
     /// name, or one of the two entries a directory keeps for itself.
     Skip,
+    /// An entry whose name or date this crate cannot carry, with its
+    /// eleven raw bytes. A walk passes it; a new name that equals it
+    /// ignoring case is taken.
+    Hidden([u8; NAME_LEN]),
     /// An entry.
     Used(Entry),
 }
 
-/// Reads one slot.
-///
-/// # Errors
-///
-/// [`Error::EntryName`] where the eleven bytes are not a name this crate
-/// would have written, and [`Error::Time`] where the date and the time
-/// name no moment.
-pub(crate) fn decode(bytes: &[u8], location: Location) -> Result<Slot, Error> {
+/// Reads one slot. An entry whose name is not one this crate would write,
+/// or whose date and time name no moment, is [`Slot::Hidden`].
+pub(crate) fn decode(bytes: &[u8], location: Location) -> Slot {
     let first = *bytes.first().unwrap_or(&0);
     if first == 0 {
-        return Ok(Slot::End);
+        return Slot::End;
     }
     if first == DELETED {
-        return Ok(Slot::Free);
+        return Slot::Free;
     }
     let attributes = *bytes.get(11).unwrap_or(&0);
     if attributes & ATTR_LONG_NAME == ATTR_LONG_NAME
         || attributes & ATTR_VOLUME_ID != 0
         || first == b'.'
     {
-        return Ok(Slot::Skip);
+        return Slot::Skip;
     }
     let mut raw = [0u8; NAME_LEN];
-    let source = bytes.get(..NAME_LEN).ok_or(Error::EntryName)?;
+    let Some(source) = bytes.get(..NAME_LEN) else {
+        return Slot::Skip;
+    };
     raw.copy_from_slice(source);
-    let name = Name::from_entry(raw)?;
+    let Ok(name) = Name::from_entry(raw) else {
+        return Slot::Hidden(raw);
+    };
+    let Ok(modified) = time::from_entry(read_u16(bytes, 24), read_u16(bytes, 22)) else {
+        return Slot::Hidden(raw);
+    };
     let first_cluster = (u32::from(read_u16(bytes, 20)) << 16) | u32::from(read_u16(bytes, 26));
-    Ok(Slot::Used(Entry {
+    Slot::Used(Entry {
         name,
         attributes,
         first_cluster,
         size: read_u32(bytes, 28),
-        modified: time::from_entry(read_u16(bytes, 24), read_u16(bytes, 22))?,
+        modified,
         location,
-    }))
+    })
 }
 
 /// The thirty-two bytes of an entry.

@@ -283,3 +283,19 @@ T10 script guidance: `script-arabic.html`, retrieved 2026-09-17 from
 T10 script guidance: `script-hangul.html`, retrieved 2026-09-17 from
 `https://learn.microsoft.com/en-us/typography/script-development/hangul`,
 229064 bytes, SHA-256 `0af3e428e3c2313a25fb44bb9bb33d27d5ec2f631c197c757ac2d83b18feb6b3`.
+
+## FAT32 File System Specification
+
+| File | Document | Retrieved | Bytes | SHA-256 |
+|------|----------|-----------|-------|---------|
+| `fatgen103.doc` | *Microsoft Extensible Firmware Initiative FAT32 File System Specification*, version 1.03, December 6, 2000 | 2026-09-22 from `https://download.microsoft.com/download/1/6/1/161ba512-40e2-4cc9-843a-923143f3456c/fatgen103.doc` | 222720 | `b17d66c796d9cd3070adf4ccbc00add5a8b6b6f5491fe8ea949df778fce60172` |
+
+- Format: a Word 97 binary document, byte for byte as served.
+- Citation: `fs-fat` names a section by its title, such as "FAT Data
+  Structure"; the document has no section numbers.
+- Terms: the license agreement at the start of the document grants
+  reproduction "solely for the purposes of creating portions of products
+  which comply with the Specification in unmodified form" and states
+  "Microsoft reserves all other rights". The copy stands under the second
+  case of D-124, as the OpenType pages do: unmodified, not republished
+  from this repository, and removed if Microsoft objects.

@@ -19,14 +19,18 @@ pub enum Error {
     /// [`MAX_SECTORS_PER_CLUSTER`](crate::boot::MAX_SECTORS_PER_CLUSTER)
     /// sectors.
     ClusterSize(u32),
-    /// The volume claims no file allocation table, or more than one
-    /// table's worth of reserved sectors is missing.
+    /// The volume claims no file allocation table, no reserved sectors,
+    /// or a table with fewer entries than it has clusters.
     Layout,
     /// The volume is a FAT12 or a FAT16 one: it has a fixed root
     /// directory, a sixteen-bit table size, or fewer clusters than the
-    /// 65525 that make a volume FAT32. The number is what it holds.
+    /// 65525 that make a volume FAT32. Also a volume of more clusters than
+    /// [`MAX_CLUSTERS`](crate::boot::MAX_CLUSTERS). The number is what it
+    /// holds.
     NotFat32(u32),
-    /// The device is too small for the tables and one data cluster.
+    /// The device is too small for the tables and one data cluster, or
+    /// for the sectors its boot sector claims. The number is the
+    /// device's sector count.
     TooSmall(u32),
     /// A cluster number outside the data region of this volume.
     Cluster(u32),
@@ -77,7 +81,9 @@ impl fmt::Display for Error {
             Error::ClusterSize(sectors) => {
                 write!(f, "{sectors} sectors per cluster is not a power of two")
             }
-            Error::Layout => f.write_str("the volume declares no file allocation table"),
+            Error::Layout => {
+                f.write_str("the volume declares no file allocation table that fits it")
+            }
             Error::NotFat32(clusters) => {
                 write!(f, "a volume of {clusters} clusters is not a FAT32 one")
             }

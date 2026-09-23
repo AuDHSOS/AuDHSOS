@@ -75,8 +75,6 @@ fn a_name_writes_itself_back_the_way_it_was_given() {
         let name = Name::new(text).expect("name");
         assert_eq!(std::format!("{name}"), text);
     }
-    assert!(Name::DOT.is_dot() && Name::DOT_DOT.is_dot());
-    assert!(!Name::new("A.B").expect("name").is_dot());
 }
 
 #[test]
@@ -131,29 +129,161 @@ fn the_volume_label_and_a_long_name_are_walked_past() {
     assert_eq!(fs.next_entry(&mut cursor).expect("walk"), None);
 }
 
-#[test]
-fn an_entry_whose_name_is_not_one_is_refused() {
-    let mut fs = volume();
+/// The thirty-two bytes of an entry with a valid date, built by hand so
+/// that `name` and `first_cluster` may be what no writer of this crate
+/// would write.
+fn raw(name: &[u8; 11], attributes: u8, first_cluster: u32, size: u32) -> [u8; ENTRY_LEN] {
+    let (date, _) = crate::time::to_entry(moment()).expect("time");
     let mut entry = [0u8; ENTRY_LEN];
-    put(&mut entry, 0, b"lower   bin");
-    put(&mut entry, 11, &[ATTR_ARCHIVE]);
-    put_slot(&mut fs, 0, &entry);
-    let root = fs.root();
-    let mut cursor = fs.entries(root);
-    assert_eq!(fs.next_entry(&mut cursor), Err(Error::EntryName));
+    put(&mut entry, 0, name);
+    put(&mut entry, 11, &[attributes]);
+    let cluster = first_cluster.to_le_bytes();
+    put(&mut entry, 20, &cluster[2..]);
+    put(&mut entry, 24, &date.to_le_bytes());
+    put(&mut entry, 26, &cluster[..2]);
+    put(&mut entry, 28, &size.to_le_bytes());
+    entry
 }
 
 #[test]
-fn an_entry_whose_date_names_no_day_is_refused() {
+fn an_entry_whose_name_or_date_this_crate_cannot_carry_is_walked_past() {
     let mut fs = volume();
-    let mut entry = [0u8; ENTRY_LEN];
-    put(&mut entry, 0, b"BAD     BIN");
-    put(&mut entry, 11, &[ATTR_ARCHIVE]);
-    put(&mut entry, 24, &0u16.to_le_bytes());
-    put_slot(&mut fs, 0, &entry);
+    put_slot(&mut fs, 0, &raw(b"lower   bin", ATTR_ARCHIVE, 0, 0));
+    put_slot(&mut fs, 1, &raw(b"\x05ANJI   BIN", ATTR_ARCHIVE, 0, 0));
+    put_slot(&mut fs, 2, &raw(b"CODE\x80   BIN", ATTR_ARCHIVE, 0, 0));
+    let mut undated = raw(b"BAD     BIN", ATTR_ARCHIVE, 0, 0);
+    put(&mut undated, 24, &0u16.to_le_bytes());
+    put_slot(&mut fs, 3, &undated);
+    put_slot(&mut fs, 4, &raw(b"GOOD    BIN", ATTR_ARCHIVE, 0, 0));
+    let root = fs.root();
+    let good = Name::new("GOOD.BIN").expect("name");
+    let mut cursor = fs.entries(root);
+    let found = fs.next_entry(&mut cursor).expect("walk").expect("an entry");
+    assert_eq!(found.name, good);
+    assert_eq!(fs.next_entry(&mut cursor).expect("walk"), None);
+    assert_eq!(
+        fs.find(root, &good).expect("find").map(|e| e.name),
+        Some(good)
+    );
+}
+
+#[test]
+fn a_name_a_walked_past_entry_carries_is_taken() {
+    let mut fs = volume();
+    let mut undated = raw(b"BAD     BIN", ATTR_ARCHIVE, 0, 0);
+    put(&mut undated, 24, &0u16.to_le_bytes());
+    put_slot(&mut fs, 0, &undated);
+    put_slot(&mut fs, 1, &raw(b"lower   bin", ATTR_ARCHIVE, 0, 0));
+    let root = fs.root();
+    for text in ["BAD.BIN", "LOWER.BIN"] {
+        let name = Name::new(text).expect("name");
+        assert_eq!(fs.create(root, &name, moment()), Err(Error::Exists));
+        assert_eq!(fs.create_dir(root, &name, moment()), Err(Error::Exists));
+    }
+}
+
+#[test]
+fn an_entry_whose_first_cluster_is_outside_the_data_region_is_refused() {
+    let mut fs = volume();
+    let last = fs.geometry().last_cluster();
+    put_slot(&mut fs, 0, &raw(b"ONE     BIN", ATTR_ARCHIVE, 1, 512));
+    put_slot(&mut fs, 1, &raw(b"ZERO       ", ATTR_DIRECTORY, 0, 0));
+    put_slot(
+        &mut fs,
+        2,
+        &raw(b"PAST    BIN", ATTR_ARCHIVE, last + 1, 512),
+    );
+    put_slot(&mut fs, 3, &raw(b"EMPTY   BIN", ATTR_ARCHIVE, 0, 0));
     let root = fs.root();
     let mut cursor = fs.entries(root);
-    assert_eq!(fs.next_entry(&mut cursor), Err(Error::Time));
+    // Each refusal leaves the walk behind the entry it refused (#215).
+    assert_eq!(fs.next_entry(&mut cursor), Err(Error::Cluster(1)));
+    assert_eq!(fs.next_entry(&mut cursor), Err(Error::Cluster(0)));
+    assert_eq!(fs.next_entry(&mut cursor), Err(Error::Cluster(last + 1)));
+    let empty = fs.next_entry(&mut cursor).expect("walk").expect("an entry");
+    assert_eq!(empty.name, Name::new("EMPTY.BIN").expect("name"));
+    assert_eq!(fs.next_entry(&mut cursor).expect("walk"), None);
+    let one = Name::new("ONE.BIN").expect("name");
+    assert_eq!(fs.open(root, &one), Err(Error::Cluster(1)));
+    let zero = Name::new("ZERO").expect("name");
+    assert_eq!(fs.open_dir(root, &zero), Err(Error::Cluster(0)));
+    // `find` refuses only the entry it names; the others stay reachable.
+    let empty = Name::new("EMPTY.BIN").expect("name");
+    assert!(fs.open(root, &empty).is_ok());
+    let new = Name::new("NEW.BIN").expect("name");
+    assert!(fs.create(root, &new, moment()).is_ok());
+    assert_eq!(fs.create(root, &one, moment()), Err(Error::Exists));
+}
+
+/// A device that counts the sectors read from it.
+struct Counting {
+    disk: crate::doubles::RamDisk,
+    reads: core::cell::Cell<u32>,
+}
+
+impl BlockDevice for Counting {
+    fn sectors(&self) -> u32 {
+        self.disk.sectors()
+    }
+
+    fn read(&self, sector: u32, into: &mut [u8; SECTOR]) -> Result<(), Error> {
+        self.reads.set(self.reads.get().saturating_add(1));
+        self.disk.read(sector, into)
+    }
+
+    fn write(&mut self, sector: u32, from: &[u8; SECTOR]) -> Result<(), Error> {
+        self.disk.write(sector, from)
+    }
+}
+
+#[test]
+fn a_walk_reads_each_directory_sector_once() {
+    let mut fs = volume();
+    let root = fs.root();
+    for index in 0..32u32 {
+        let name = Name::new(&std::format!("F{index:03}.BIN")).expect("name");
+        fs.create(root, &name, moment()).expect("create");
+    }
+    let disk = Counting {
+        disk: fs.into_device(),
+        reads: core::cell::Cell::new(0),
+    };
+    let fs = FileSystem::mount(disk).expect("mount");
+    assert_eq!(fs.chain_length(root.cluster()), Ok(2));
+    fs.device().reads.set(0);
+    let mut cursor = fs.entries(root);
+    let mut seen = 0u32;
+    while fs.next_entry(&mut cursor).expect("walk").is_some() {
+        seen += 1;
+    }
+    assert_eq!(seen, 32);
+    // Two directory sectors and one table read per cluster (#224).
+    assert_eq!(fs.device().reads.get(), 4);
+}
+
+#[test]
+fn a_walk_sees_what_was_written_into_the_sector_it_holds() {
+    let mut fs = volume();
+    let root = fs.root();
+    let names: Vec<Name> = ["A.BIN", "B.BIN", "C.BIN"]
+        .iter()
+        .map(|text| Name::new(text).expect("name"))
+        .collect();
+    fs.create(root, &names[0], moment()).expect("create");
+    fs.create(root, &names[1], moment()).expect("create");
+    let mut cursor = fs.entries(root);
+    let first = fs.next_entry(&mut cursor).expect("walk").expect("an entry");
+    assert_eq!(first.name, names[0]);
+    fs.create(root, &names[2], moment()).expect("create");
+    let mut seen = std::vec![first.name];
+    while let Some(entry) = fs.next_entry(&mut cursor).expect("walk") {
+        seen.push(entry.name);
+    }
+    assert_eq!(seen, names);
+    // A write through `device_mut` drops the cached sector as well.
+    put_slot(&mut fs, 3, &raw(b"D       BIN", ATTR_ARCHIVE, 0, 0));
+    let d = Name::new("D.BIN").expect("name");
+    assert_eq!(fs.find(root, &d).expect("find").map(|e| e.name), Some(d));
 }
 
 #[test]

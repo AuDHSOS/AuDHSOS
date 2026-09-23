@@ -16,6 +16,12 @@ pub const ROOT_CLUSTER: u32 = 2;
 /// device cannot hold a FAT32 file system at all.
 pub const MIN_CLUSTERS: u32 = 65525;
 
+/// The most data clusters a FAT32 volume has. More would make cluster
+/// `0x0FFFFFF7`, the bad-cluster mark, allocatable, which no FAT32 volume
+/// may (Microsoft FAT32 File System Specification 1.03, "FAT Data
+/// Structure", `docs/microsoft/fatgen103.doc`).
+pub const MAX_CLUSTERS: u32 = 0x0FFF_FFF5;
+
 /// The largest cluster this crate reads, in sectors. A cluster of more
 /// than 128 sectors is above the 64 kibibytes the format settled on.
 pub const MAX_SECTORS_PER_CLUSTER: u32 = 128;
@@ -160,7 +166,7 @@ pub(crate) const SECTOR_U32: u32 = 512;
 /// [`Error::ClusterSize`] for a cluster size that is not a power of two,
 /// [`Error::Layout`] for no table at all, [`Error::TooSmall`] for a device
 /// that cannot hold the tables, and [`Error::NotFat32`] for one that holds
-/// fewer than [`MIN_CLUSTERS`] clusters.
+/// fewer than [`MIN_CLUSTERS`] or more than [`MAX_CLUSTERS`] clusters.
 pub fn geometry_for(sectors: u32, options: &FormatOptions) -> Result<Geometry, Error> {
     check_cluster_size(options.sectors_per_cluster)?;
     if options.fat_count == 0 || options.reserved_sectors == 0 {
@@ -180,7 +186,7 @@ pub fn geometry_for(sectors: u32, options: &FormatOptions) -> Result<Geometry, E
             .saturating_mul(4)
             .div_ceil(SECTOR_U32);
         if needed <= fat_sectors {
-            if clusters < MIN_CLUSTERS {
+            if !(MIN_CLUSTERS..=MAX_CLUSTERS).contains(&clusters) {
                 return Err(Error::NotFat32(clusters));
             }
             return Ok(Geometry {
@@ -202,7 +208,9 @@ pub fn geometry_for(sectors: u32, options: &FormatOptions) -> Result<Geometry, E
 /// # Errors
 ///
 /// [`Error::Signature`], [`Error::SectorSize`], [`Error::ClusterSize`],
-/// [`Error::Layout`], [`Error::NotFat32`] for a FAT12 or FAT16 volume, and
+/// [`Error::Layout`] also for a table too small for the clusters,
+/// [`Error::NotFat32`] for a FAT12 or FAT16 volume or one of more than
+/// [`MAX_CLUSTERS`] clusters, and
 /// [`Error::Cluster`] for a root directory outside the data region.
 pub fn parse(boot: &[u8; SECTOR]) -> Result<Geometry, Error> {
     if boot.get(510..512) != Some(&[0x55, 0xAA]) {
@@ -236,8 +244,14 @@ pub fn parse(boot: &[u8; SECTOR]) -> Result<Geometry, Error> {
         .saturating_sub(overhead)
         .checked_div(sectors_per_cluster)
         .unwrap_or(0);
-    if clusters < MIN_CLUSTERS {
+    if !(MIN_CLUSTERS..=MAX_CLUSTERS).contains(&clusters) {
         return Err(Error::NotFat32(clusters));
+    }
+    // One table sector holds 128 entries; the table needs one per cluster
+    // and the two reserved ones.
+    let entries = u64::from(fat_sectors).saturating_mul(u64::from(SECTOR_U32 / 4));
+    if entries < u64::from(clusters).saturating_add(u64::from(ROOT_CLUSTER)) {
+        return Err(Error::Layout);
     }
     let geometry = Geometry {
         sectors,
