@@ -7,6 +7,18 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` answers the elementary functions of the math library:
+  `sqrt`, `exp`, `ln`, `log`, `log2`, `log10`, `pow`, `power`, `atan2`,
+  the three circular functions with their inverses, and the three
+  hyperbolic functions with theirs, which it reads out of
+  `audhsos-math`. D-437 records it. Catalog 6.6.303 and 6.6.304.
+  `func7.test` goes from 21 cases passing to 72, which is every case of
+  the file.
+
+- `audhsos-math` answers the elementary functions of binary64 beside
+  `pow`, each from a bounded series in two-component arithmetic with no
+  host math library called. D-437 records it. Catalog 6.6.304.
+
 - `db-sqlite` refuses a date function that reads the clock or the zone
   for a value of the schema, which is an expression of an index, a
   `CHECK` constraint or a generated column. D-436 records it. Catalog

@@ -560,7 +560,7 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "db-sqlite",
         path: "crates/db/sqlite",
         kind: Kind::Logic,
-        deps: &[],
+        deps: &["audhsos-math"],
         coverage_gate: true,
         target: Target::Host,
     },

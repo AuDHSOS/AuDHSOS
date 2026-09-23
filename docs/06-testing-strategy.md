@@ -7144,3 +7144,33 @@ Document 16 step Q8.
   index and against a generated column, a `localtime` and a `utc`
   modifier in an index, a `CREATE INDEX` over a row carrying `now`, and a
   modifier that reads neither the clock nor the zone.
+
+### 6.6.303 The elementary functions (`db-sqlite`)
+
+Document 16 step Q8.
+
+- One statement per family of `func7.test`, against the text the C library
+  writes: the logarithms with a base of ten, of two and of a number the
+  call names, the exponential, the square root, the power, the three
+  circular functions with their inverses, and the three hyperbolic
+  functions with theirs.
+- What answers nothing: an argument that is no number, a logarithm of
+  nought or under it, a base of one, an arc sine outside its range, an
+  inverse hyperbolic cosine under one, a negative base raised to a power
+  that is no whole number, and a remainder by nought.
+- The kernels themselves are compared with the host library in
+  `crates/math`, which 6.6.304 records.
+
+### 6.6.304 The kernels of the elementary functions (`audhsos-math`)
+
+- Every function against the host library over a deterministic run of
+  arguments at a tolerance of four units in the last place, with the
+  square root compared bit for bit over the ranges where correct rounding
+  is decided.
+- The special values of each function: both zeros, both infinities, a
+  NaN, the ends of the range, and the arguments outside the domain.
+- `atanh` near one against the hyperbolic tangent of its own answer,
+  because the host formula loses the digits of the argument there.
+- A power of two and a power of ten are answered exactly by the logarithm
+  of that base, which `format('%.30f', log10(100.0))` of `func7.test`
+  reads.

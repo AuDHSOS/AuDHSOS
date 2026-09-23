@@ -4,7 +4,12 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
+mod elementary;
 mod integer;
+pub use elementary::{
+    acos, acosh, asin, asinh, atan, atan2, atanh, cos, cosh, exp, ln, log2, log10, sin, sinh, sqrt,
+    tan, tanh,
+};
 pub use integer::RadixInteger;
 
 // Exact comparisons below classify IEEE special values and representable integers.
@@ -71,9 +76,9 @@ pub fn pow(base: f64, exponent: f64) -> f64 {
 }
 
 #[derive(Clone, Copy)]
-struct Wide(f64, f64);
+pub(crate) struct Wide(pub(crate) f64, pub(crate) f64);
 impl Wide {
-    fn add(self, r: Self) -> Self {
+    pub(crate) fn add(self, r: Self) -> Self {
         let s = self.0 + r.0;
         let v = s - self.0;
         let e = (self.0 - (s - v)) + (r.0 - v) + self.1 + r.1;
@@ -83,10 +88,10 @@ impl Wide {
         let s = a + b;
         Self(s, b - (s - a))
     }
-    fn neg(self) -> Self {
+    pub(crate) fn neg(self) -> Self {
         Self(-self.0, -self.1)
     }
-    fn mul(self, r: Self) -> Self {
+    pub(crate) fn mul(self, r: Self) -> Self {
         let p = self.0 * r.0;
         // Bit splitting avoids overflow from Dekker's usual 2^27+1 multiplier.
         let ah = f64::from_bits(self.0.to_bits() & !0x7ff_ffff);
@@ -100,14 +105,14 @@ impl Wide {
             + self.1 * r.1;
         Self::normalize(p, e)
     }
-    fn div(self, r: Self) -> Self {
+    pub(crate) fn div(self, r: Self) -> Self {
         let q = self.0 / r.0;
         let remainder = self.add(r.mul(Self(q, 0.0)).neg());
         let correction = (remainder.0 + remainder.1) / r.0;
         Self::normalize(q, correction)
     }
 }
-const LN2: Wide = Wide(core::f64::consts::LN_2, 2.319_046_813_846_299_6e-17);
+pub(crate) const LN2: Wide = Wide(core::f64::consts::LN_2, 2.319_046_813_846_299_6e-17);
 
 #[expect(
     clippy::cast_possible_truncation,
@@ -134,7 +139,7 @@ fn small_integer_pow(base: f64, exponent: f64) -> f64 {
     result.0 + result.1
 }
 
-fn logarithm(mut x: f64) -> Wide {
+pub(crate) fn logarithm(mut x: f64) -> Wide {
     let mut adjustment = 0;
     if x < f64::MIN_POSITIVE {
         x *= 18_014_398_509_481_984.0;
@@ -163,11 +168,6 @@ fn logarithm(mut x: f64) -> Wide {
     sum.mul(Wide(2.0, 0.0))
         .add(LN2.mul(Wide(f64::from(exponent), 0.0)))
 }
-#[expect(
-    clippy::cast_possible_truncation,
-    clippy::as_conversions,
-    reason = "range-checked exponential reduction is in [-1075,1024]"
-)]
 fn positive_pow(base: f64, exponent: f64) -> f64 {
     let log = logarithm(base);
     let approximate = log.0 * exponent;
@@ -177,7 +177,21 @@ fn positive_pow(base: f64, exponent: f64) -> f64 {
     if approximate < -746.0 {
         return 0.0;
     }
-    let value = log.mul(Wide(exponent, 0.0));
+    exponential(log.mul(Wide(exponent, 0.0)))
+}
+
+/// `e` raised to a two-component power, which the caller has held inside
+/// the range a double carries.
+///
+/// The power is split into a count of halvings of two and what is left of
+/// it, which the series of the exponential covers, and the count is put
+/// back as a power of two.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::as_conversions,
+    reason = "range-checked exponential reduction is in [-1075,1024]"
+)]
+pub(crate) fn exponential(value: Wide) -> f64 {
     let units = value.0 * core::f64::consts::LOG2_E;
     let n = (units + if units >= 0.0 { 0.5 } else { -0.5 }) as i32;
     let r = value.add(LN2.mul(Wide(f64::from(n), 0.0)).neg());
@@ -196,7 +210,7 @@ fn positive_pow(base: f64, exponent: f64) -> f64 {
         significand * power_of_two(n)
     }
 }
-fn power_of_two(exponent: i32) -> f64 {
+pub(crate) fn power_of_two(exponent: i32) -> f64 {
     f64::from_bits(u64::try_from(exponent.saturating_add(1023)).unwrap_or(0) << 52)
 }
 

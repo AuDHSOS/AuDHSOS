@@ -52,6 +52,7 @@ mod json;
 mod key_tree;
 mod limits;
 mod listed;
+mod math;
 mod matrix;
 mod misuse;
 mod newrowid;

@@ -1057,6 +1057,9 @@ Size: L.
      holds. Built, which D-434 and D-435 record.
 156. The clock and the zone, which a value of the schema may not be
      answered from. Built, which D-436 records.
+157. The elementary functions of binary64, which `SQLITE_ENABLE_MATH_FUNCTIONS`
+     adds: the root, the exponential, the logarithms, the circular
+     functions and the hyperbolic ones. Built, which D-437 records.
 
 ### Done when
 

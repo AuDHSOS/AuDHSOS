@@ -63,6 +63,56 @@ pub enum Json {
     Valid,
 }
 
+/// One function of the math library that takes one number and answers
+/// one, which `math1Func` of `research/sqlite/src/func.c:2574` calls
+/// through.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Math {
+    /// `acos(X)`.
+    Acos,
+    /// `acosh(X)`.
+    Acosh,
+    /// `asin(X)`.
+    Asin,
+    /// `asinh(X)`.
+    Asinh,
+    /// `atan(X)`.
+    Atan,
+    /// `atanh(X)`.
+    Atanh,
+    /// `cos(X)`.
+    Cos,
+    /// `cosh(X)`.
+    Cosh,
+    /// `exp(X)`.
+    Exp,
+    /// `sin(X)`.
+    Sin,
+    /// `sinh(X)`.
+    Sinh,
+    /// `sqrt(X)`.
+    Sqrt,
+    /// `tan(X)`.
+    Tan,
+    /// `tanh(X)`.
+    Tanh,
+}
+
+/// Which base a logarithm is read to, which `logFunc` of
+/// `research/sqlite/src/func.c:2519` reads out of the name and the count
+/// of arguments.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Based {
+    /// `ln(X)`, which is the logarithm of base `e`.
+    Natural,
+    /// `log(X)` and `log10(X)`.
+    Ten,
+    /// `log2(X)`.
+    Two,
+    /// `log(B,X)`, which names the base itself.
+    Chosen,
+}
+
 /// A function this engine has.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Function {
@@ -145,6 +195,15 @@ pub enum Function {
     LastRowid,
     /// `mod(X,Y)`.
     Modulo,
+    /// One of the functions of the math library that take one number and
+    /// answer one.
+    Math(Math),
+    /// `atan2(Y,X)`.
+    Atan2,
+    /// `pow(X,Y)` and `power(X,Y)`.
+    Power,
+    /// `ln(X)`, `log(X)`, `log10(X)`, `log2(X)` and `log(B,X)`.
+    Logarithm(Based),
     /// `length(X)`.
     Length,
     /// `like(P,X)` and `like(P,X,E)`, and the operator.
@@ -236,6 +295,48 @@ const TABLE: &[Entry] = &[
         least: 1,
         most: Some(1),
         function: Function::Abs,
+    },
+    Entry {
+        name: b"acos",
+        least: 1,
+        most: Some(1),
+        function: Function::Math(Math::Acos),
+    },
+    Entry {
+        name: b"acosh",
+        least: 1,
+        most: Some(1),
+        function: Function::Math(Math::Acosh),
+    },
+    Entry {
+        name: b"asin",
+        least: 1,
+        most: Some(1),
+        function: Function::Math(Math::Asin),
+    },
+    Entry {
+        name: b"asinh",
+        least: 1,
+        most: Some(1),
+        function: Function::Math(Math::Asinh),
+    },
+    Entry {
+        name: b"atan",
+        least: 1,
+        most: Some(1),
+        function: Function::Math(Math::Atan),
+    },
+    Entry {
+        name: b"atan2",
+        least: 2,
+        most: Some(2),
+        function: Function::Atan2,
+    },
+    Entry {
+        name: b"atanh",
+        least: 1,
+        most: Some(1),
+        function: Function::Math(Math::Atanh),
     },
     Entry {
         name: b"date",
@@ -520,6 +621,18 @@ const TABLE: &[Entry] = &[
         function: Function::Char,
     },
     Entry {
+        name: b"cos",
+        least: 1,
+        most: Some(1),
+        function: Function::Math(Math::Cos),
+    },
+    Entry {
+        name: b"cosh",
+        least: 1,
+        most: Some(1),
+        function: Function::Math(Math::Cosh),
+    },
+    Entry {
         name: b"degrees",
         least: 1,
         most: Some(1),
@@ -530,6 +643,12 @@ const TABLE: &[Entry] = &[
         least: 1,
         most: Some(1),
         function: Function::Floor,
+    },
+    Entry {
+        name: b"exp",
+        least: 1,
+        most: Some(1),
+        function: Function::Math(Math::Exp),
     },
     Entry {
         name: b"format",
@@ -620,6 +739,36 @@ const TABLE: &[Entry] = &[
         least: 1,
         most: Some(1),
         function: Function::Unlikely,
+    },
+    Entry {
+        name: b"ln",
+        least: 1,
+        most: Some(1),
+        function: Function::Logarithm(Based::Natural),
+    },
+    Entry {
+        name: b"log",
+        least: 1,
+        most: Some(1),
+        function: Function::Logarithm(Based::Ten),
+    },
+    Entry {
+        name: b"log",
+        least: 2,
+        most: Some(2),
+        function: Function::Logarithm(Based::Chosen),
+    },
+    Entry {
+        name: b"log10",
+        least: 1,
+        most: Some(1),
+        function: Function::Logarithm(Based::Ten),
+    },
+    Entry {
+        name: b"log2",
+        least: 1,
+        most: Some(1),
+        function: Function::Logarithm(Based::Two),
     },
     Entry {
         name: b"lower",
@@ -718,6 +867,18 @@ const TABLE: &[Entry] = &[
         function: Function::Pi,
     },
     Entry {
+        name: b"pow",
+        least: 2,
+        most: Some(2),
+        function: Function::Power,
+    },
+    Entry {
+        name: b"power",
+        least: 2,
+        most: Some(2),
+        function: Function::Power,
+    },
+    Entry {
         name: b"radians",
         least: 1,
         most: Some(1),
@@ -766,6 +927,24 @@ const TABLE: &[Entry] = &[
         function: Function::CompileOption(false),
     },
     Entry {
+        name: b"sin",
+        least: 1,
+        most: Some(1),
+        function: Function::Math(Math::Sin),
+    },
+    Entry {
+        name: b"sinh",
+        least: 1,
+        most: Some(1),
+        function: Function::Math(Math::Sinh),
+    },
+    Entry {
+        name: b"sqrt",
+        least: 1,
+        most: Some(1),
+        function: Function::Math(Math::Sqrt),
+    },
+    Entry {
         name: b"sign",
         least: 1,
         most: Some(1),
@@ -788,6 +967,18 @@ const TABLE: &[Entry] = &[
         least: 1,
         most: Some(2),
         function: Function::Trim,
+    },
+    Entry {
+        name: b"tan",
+        least: 1,
+        most: Some(1),
+        function: Function::Math(Math::Tan),
+    },
+    Entry {
+        name: b"tanh",
+        least: 1,
+        most: Some(1),
+        function: Function::Math(Math::Tanh),
     },
     Entry {
         name: b"time",
@@ -1092,6 +1283,23 @@ pub fn call(
                 (Some(left), Some(right)) => real(remainder(left, right)),
                 _ => Value::Null,
             },
+            Function::Power => match (numeric(first), numeric(arg(1))) {
+                (Some(left), Some(right)) => real(raised(left, right)),
+                _ => Value::Null,
+            },
+            Function::Atan2 => match (numeric(first), numeric(arg(1))) {
+                (Some(left), Some(right)) => real(audhsos_math::atan2(left, right)),
+                _ => Value::Null,
+            },
+            Function::Math(which) => {
+                numeric(first).map_or(Value::Null, |number| real(calculated(which, number)))
+            }
+            // `logFunc`: the argument of a logarithm stands over nought,
+            // and a base names the logarithm it is read to, which stands
+            // over nought as well. The second argument of `log(B,X)` is
+            // read as a double whatever it is, because the function reads
+            // the type of the first for both.
+            Function::Logarithm(based) => logged(based, first, &arg(1)),
             // `math1Func`: a value that is not a number after the numeric
             // affinity is one the function answers nothing for.
             Function::Degrees => {
@@ -2024,6 +2232,69 @@ const fn real(number: f64) -> Value {
         return Value::Null;
     }
     Value::Real(number)
+}
+
+/// One of the functions of the math library that take one number.
+fn calculated(which: Math, number: f64) -> f64 {
+    match which {
+        Math::Acos => audhsos_math::acos(number),
+        Math::Acosh => audhsos_math::acosh(number),
+        Math::Asin => audhsos_math::asin(number),
+        Math::Asinh => audhsos_math::asinh(number),
+        Math::Atan => audhsos_math::atan(number),
+        Math::Atanh => audhsos_math::atanh(number),
+        Math::Cos => audhsos_math::cos(number),
+        Math::Cosh => audhsos_math::cosh(number),
+        Math::Exp => audhsos_math::exp(number),
+        Math::Sin => audhsos_math::sin(number),
+        Math::Sinh => audhsos_math::sinh(number),
+        Math::Sqrt => audhsos_math::sqrt(number),
+        Math::Tan => audhsos_math::tan(number),
+        Math::Tanh => audhsos_math::tanh(number),
+    }
+}
+
+/// `pow(X,Y)`, which answers no number where a negative base is raised to
+/// a power that is no whole number.
+///
+/// C's `pow` answers one for a base of one and for a power of nought
+/// whatever the other operand is, which the base of this engine answers
+/// nothing for.
+#[expect(
+    clippy::float_cmp,
+    reason = "a base of one and a power of nought are the exact values C answers one for"
+)]
+fn raised(base: f64, power: f64) -> f64 {
+    if base == 1.0 || power == 0.0 {
+        return 1.0;
+    }
+    audhsos_math::pow(base, power)
+}
+
+/// One logarithm: the argument, and the base where the call named one.
+///
+/// A value that is no number, an argument at nought or under it, and a
+/// base at one or under it each answer nothing.
+fn logged(based: Based, value: Value, base: &Value) -> Value {
+    let Some(number) = numeric(value) else {
+        return Value::Null;
+    };
+    if number <= 0.0 {
+        return Value::Null;
+    }
+    if based == Based::Chosen {
+        let held = audhsos_math::ln(number);
+        let over = base.to_real();
+        if held <= 0.0 || over <= 0.0 {
+            return Value::Null;
+        }
+        return real(audhsos_math::ln(over) / held);
+    }
+    real(match based {
+        Based::Two => audhsos_math::log2(number),
+        Based::Ten => audhsos_math::log10(number),
+        Based::Natural | Based::Chosen => audhsos_math::ln(number),
+    })
 }
 
 /// A value as the double it is, where it is a number once the numeric
