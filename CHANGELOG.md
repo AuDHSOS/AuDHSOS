@@ -274,6 +274,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- The SQLite suite harness names a connection under the command `sqlite`
+  as well as `sqlite3`, which the files written for the library of version
+  two read. Document 17 item 59. `misc7.test` goes from no case passing to
+  12 and from 1381 failing to 10.
+
 - The SQLite suite harness passes over a statement of a `crashsql` script
   that only reads, so the script runs to its end and the crash counts the
   syncs the statements after it make. Document 17 item 58. `crash.test`

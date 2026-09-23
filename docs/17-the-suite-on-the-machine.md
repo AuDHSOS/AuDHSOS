@@ -521,6 +521,9 @@ Size: S.
     rather than run, because the writer answers a reader's statement with
     a refusal and the script would stop at it, while the machine that
     loses power writes no byte for such a statement.
+59. The command `sqlite` names a connection as `sqlite3` does, which
+    `Sqlite3_Init` of `research/sqlite/src/tclsqlite.c:4447` keeps for the
+    files written for the library of version two.
 
 ### Produces
 

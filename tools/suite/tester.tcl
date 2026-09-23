@@ -532,6 +532,11 @@ proc sqlite_usage {} {
       ?-nomutex BOOLEAN? ?-fullmutex BOOLEAN? ?-uri BOOLEAN?\""
 }
 
+# `Sqlite3_Init` of `research/sqlite/src/tclsqlite.c:4447` names the
+# command `sqlite` as well as `sqlite3`, which the files written for the
+# library of version two read.
+proc sqlite {args} { uplevel 1 [list sqlite3 {*}$args] }
+
 # A connection: the command `sqlite3` makes one and names it.
 proc sqlite3 {args} {
   if {[llength $args] == 0} { sqlite_usage }
