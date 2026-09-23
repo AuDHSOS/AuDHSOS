@@ -133,7 +133,8 @@ impl CivilTime {
     ///
     /// # Errors
     ///
-    /// [`TimeError`] for the first field that is out of range.
+    /// [`TimeError`] for the first of `hour`, `minute`, and `second` that is
+    /// out of range.
     pub fn seconds_of_day(&self) -> Result<u32, TimeError> {
         if self.hour > 23 {
             return Err(TimeError::Hour(self.hour));

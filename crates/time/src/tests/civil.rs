@@ -251,6 +251,21 @@ fn the_seconds_of_a_day_check_their_own_fields() {
 }
 
 #[test]
+fn the_seconds_of_a_day_do_not_check_the_date_fields() {
+    // Regression (#396): `seconds_of_day` checks only hour, minute, and second.
+    let time = CivilTime {
+        year: MAX_YEAR.saturating_add(1),
+        month: 13,
+        day: 40,
+        hour: 1,
+        minute: 0,
+        second: 0,
+    };
+    assert_eq!(time.seconds_of_day(), Ok(3600));
+    assert_eq!(time.validate(), Err(TimeError::Year(10_000)));
+}
+
+#[test]
 fn a_day_outside_the_calendar_is_out_of_range() {
     assert_eq!(
         civil_from_days(LAST_DAY.saturating_add(1)),
