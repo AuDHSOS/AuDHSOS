@@ -13,7 +13,7 @@
 //!
 //! ```text
 //! high    ss      = the ring three data selector
-//!         rsp     = where the thread stands in its own address space
+//!         rsp     = the user stack top, aligned down to 16, less 8
 //!         rflags  = interrupts on, nothing else
 //!         cs      = the ring three code selector
 //!         rip     = where the thread starts        <- `iretq` reads from here
@@ -44,6 +44,16 @@ pub const SAVED_REGISTERS: usize = 6;
 /// The flags a thread starts with: interrupts on, every other bit off but
 /// the one the processor always reads as set.
 pub const INITIAL_RFLAGS: u64 = 0x202;
+
+/// The alignment psABI 3.2.2 requires of the stack pointer before a `call`
+/// (`docs/x86-psabi/x86-64-psABI-1.0.pdf`, page 22; D-193).
+pub const STACK_ALIGNMENT: u64 = 16;
+
+/// Bytes between the aligned user stack top and the stack pointer a thread
+/// starts with: the slot a `call` pushes its return address into. `rsp + 8`
+/// is then a multiple of 16 at the entry of `_start`, as psABI 3.2.2
+/// requires (`docs/x86-psabi/x86-64-psABI-1.0.pdf`, page 23; D-193).
+pub const RETURN_SLOT: u64 = 8;
 
 /// Offset of the return address of the switch, in words from the saved
 /// context.
@@ -95,9 +105,16 @@ pub fn prepare_user(
     *frame.get_mut(RIP_WORD)? = entry;
     *frame.get_mut(CS_WORD)? = u64::from(USER_CODE_SELECTOR.as_u16());
     *frame.get_mut(RFLAGS_WORD)? = INITIAL_RFLAGS;
-    *frame.get_mut(RSP_WORD)? = user_stack;
+    *frame.get_mut(RSP_WORD)? = start_pointer(user_stack);
     *frame.get_mut(SS_WORD)? = u64::from(USER_DATA_SELECTOR.as_u16());
     Some(base)
+}
+
+/// The stack pointer a thread with stack top `user_stack` starts with: the
+/// top aligned down to [`STACK_ALIGNMENT`], less [`RETURN_SLOT`].
+#[must_use]
+pub const fn start_pointer(user_stack: u64) -> u64 {
+    (user_stack & !(STACK_ALIGNMENT - 1)).wrapping_sub(RETURN_SLOT)
 }
 
 /// The frame as it stands on a stack, for reading one back.
@@ -109,7 +126,8 @@ pub struct Frame {
     pub code_selector: u64,
     /// The flags it starts with.
     pub rflags: u64,
-    /// Where it stands in its own address space.
+    /// The stack pointer it starts with, [`start_pointer`] of the stack top
+    /// `prepare_user` was given.
     pub user_stack: u64,
     /// The data selector of that stack.
     pub stack_selector: u64,

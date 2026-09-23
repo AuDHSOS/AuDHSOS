@@ -27,6 +27,7 @@ fn main(ipc_buffer: u64) -> ! {
 }
 
 #[panic_handler]
-const fn panic(_info: &core::panic::PanicInfo<'_>) -> ! {
-    loop {}
+fn panic(_info: &core::panic::PanicInfo<'_>) -> ! {
+    // D-193: the thread stops in `Faulted`.
+    sys::stop()
 }

@@ -855,11 +855,12 @@ pub(crate) const CRATES: &[Crate] = &[
         name: "user-sys-x86_64",
         path: "crates/user/sys-x86_64",
         // The eight accessors of `mmio.rs`, the unsafe constructor they
-        // rest on, the safe one over a slice, and the sub-window raised
-        // this from 21 (Phase 13, 13.7).
+        // rest on, and the safe one over a slice raised this from 21
+        // (Phase 13, 13.7). `stop`, the `ud2` of the panic handler, takes
+        // the site of the removed sub-window and the second `asm!` (D-193).
         kind: Kind::Adapter {
             unsafe_budget: 32,
-            asm_budget: 1,
+            asm_budget: 2,
         },
         deps: &["audhsos-abi", "user-rt"],
         coverage_gate: false,

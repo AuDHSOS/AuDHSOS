@@ -52,6 +52,12 @@ static READ_KERNEL_MEMORY: &[u8] = include_bytes!(concat!(
 static HLT_IN_USER: &[u8] =
     include_bytes!(concat!(env!("AUDHSOS_USER_TESTS_DIR"), "/hlt_in_user.bin"));
 
+/// The program that panics into a handler that calls `sys::stop`.
+static PANIC_IN_USER: &[u8] = include_bytes!(concat!(
+    env!("AUDHSOS_USER_TESTS_DIR"),
+    "/panic_in_user.bin"
+));
+
 /// The program that ends itself and nothing else, which is what runs after
 /// a fault to show that the machine still runs threads.
 static THREAD_EXIT: &[u8] =
@@ -62,6 +68,9 @@ const PAGE_FAULT: u32 = 14;
 
 /// The vector of a general protection fault.
 const GENERAL_PROTECTION: u32 = 13;
+
+/// The vector of an invalid-opcode fault.
+const INVALID_OPCODE: u32 = 6;
 
 /// Runs `program` in a thread of its own until it faults, and returns that
 /// thread. Fails the image when the thread came back without faulting.
@@ -124,6 +133,26 @@ fn a_thread_that_reads_kernel_memory_faults_and_the_machine_runs_on() {
 fn a_thread_that_halts_faults_and_the_machine_runs_on() {
     let thread = until_it_faults(HLT_IN_USER, "halts");
     assert_faulted(thread, "halts");
+    assert_the_machine_runs_on();
+}
+
+/// A user thread that panics faults with an invalid opcode, stops in
+/// `Faulted`, and leaves the rest of the system running.
+///
+/// Regression test for issue #112: the panic handler of `sys::program!`
+/// spun in `loop {}`, so the thread stayed runnable and the fault handler
+/// of the process received no report.
+#[test_case]
+fn a_thread_that_panics_faults_and_the_machine_runs_on() {
+    let thread = until_it_faults(PANIC_IN_USER, "panics");
+    assert_faulted(thread, "panics");
+    let vector = support::last_fault().vector;
+    if vector != INVALID_OPCODE {
+        testing::fail(format_args!(
+            "the panic raised vector {vector}, not {INVALID_OPCODE}"
+        ));
+    }
+    say!("the panic raised vector {vector}");
     assert_the_machine_runs_on();
 }
 

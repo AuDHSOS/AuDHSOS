@@ -8,6 +8,7 @@
 pub mod handle;
 pub mod heap;
 pub mod message;
+pub mod mmio;
 pub mod report;
 pub mod startup;
 

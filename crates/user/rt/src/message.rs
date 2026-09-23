@@ -21,7 +21,7 @@
 //! anything at all is walked without a panic.
 
 use audhsos_abi::ipc_buffer::{Buffer, BufferMut, MessageError, WORD};
-use audhsos_abi::layout::{MAX_MESSAGE_HANDLES, MAX_MESSAGE_WORDS};
+use audhsos_abi::layout::{MAX_MESSAGE_BYTES, MAX_MESSAGE_HANDLES, MAX_MESSAGE_WORDS};
 use audhsos_abi::{Error, Handle, Message};
 
 /// The widest byte string a message holds: everything the message area
@@ -96,6 +96,22 @@ impl core::fmt::Display for CodecError {
 /// How many words `len` bytes occupy.
 const fn words_for(len: usize) -> usize {
     len.div_ceil(WORD)
+}
+
+/// The word count and the bytes of the last word of a line of `len` bytes
+/// written plain into the message area, as `debug_log` reads it: the label
+/// carries the second number. `None` when the line exceeds the area, because
+/// a cut line loses its end without a report (issue #102).
+#[must_use]
+pub const fn plain_counts(len: usize) -> Option<(usize, usize)> {
+    if len > MAX_MESSAGE_BYTES {
+        return None;
+    }
+    let trailing = match len.wrapping_rem(WORD) {
+        0 => WORD,
+        rest => rest,
+    };
+    Some((words_for(len), trailing))
 }
 
 /// Appends fields to the message area of a buffer.

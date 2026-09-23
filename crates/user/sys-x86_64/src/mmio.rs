@@ -10,10 +10,12 @@
 //! register does not, so each accessor here is one `read_volatile` or one
 //! `write_volatile` (13.7).
 //!
-//! Invariant: every access is checked against the length the region was
-//! made with, so an offset outside it answers `None` and writes nothing.
-//! That check is what makes the `unsafe` local: the precondition of each
-//! access is the bound, and the bound is tested on the host (D-113).
+//! Invariant: every access lies whole inside the region and at an address
+//! that is a multiple of its width, or it answers `None` and writes
+//! nothing. `user_rt::mmio::checked_offset` decides both and is tested on
+//! the host (D-113).
+
+use user_rt::mmio::checked_offset;
 
 /// A mapped device window.
 ///
@@ -47,8 +49,8 @@ impl<'a> Mmio<'a> {
         }
     }
 
-    /// The window over the bytes of `mapping`, which is the safe way in
-    /// when the caller already holds the mapping as a slice.
+    /// The window over the bytes of `mapping`: the safe constructor for a
+    /// caller that holds the mapping as a slice.
     #[must_use]
     pub const fn of(mapping: &'a mut [u8]) -> Mmio<'a> {
         // SAFETY: a slice the caller holds is a mapping of its own length
@@ -84,7 +86,7 @@ impl<'a> Mmio<'a> {
     pub fn read_u16(&self, offset: usize) -> Option<u16> {
         let at = self.address::<u16>(offset)?;
         // SAFETY: `address` answered, so the whole value lies inside the
-        // mapping and the offset is a multiple of its width.
+        // mapping and its address is a multiple of its width.
         Some(unsafe { at.read_volatile() })
     }
 
@@ -93,7 +95,7 @@ impl<'a> Mmio<'a> {
     pub fn read_u32(&self, offset: usize) -> Option<u32> {
         let at = self.address::<u32>(offset)?;
         // SAFETY: `address` answered, so the whole value lies inside the
-        // mapping and the offset is a multiple of its width.
+        // mapping and its address is a multiple of its width.
         Some(unsafe { at.read_volatile() })
     }
 
@@ -102,7 +104,7 @@ impl<'a> Mmio<'a> {
     pub fn read_u64(&self, offset: usize) -> Option<u64> {
         let at = self.address::<u64>(offset)?;
         // SAFETY: `address` answered, so the whole value lies inside the
-        // mapping and the offset is a multiple of its width.
+        // mapping and its address is a multiple of its width.
         Some(unsafe { at.read_volatile() })
     }
 
@@ -123,7 +125,7 @@ impl<'a> Mmio<'a> {
             return false;
         };
         // SAFETY: `address_mut` answered, so the whole value lies inside the
-        // mapping, the offset is a multiple of its width, and this value is
+        // mapping, its address is a multiple of its width, and this value is
         // the only one that reaches it.
         unsafe { at.write_volatile(value) };
         true
@@ -135,7 +137,7 @@ impl<'a> Mmio<'a> {
             return false;
         };
         // SAFETY: `address_mut` answered, so the whole value lies inside the
-        // mapping, the offset is a multiple of its width, and this value is
+        // mapping, its address is a multiple of its width, and this value is
         // the only one that reaches it.
         unsafe { at.write_volatile(value) };
         true
@@ -147,30 +149,14 @@ impl<'a> Mmio<'a> {
             return false;
         };
         // SAFETY: `address_mut` answered, so the whole value lies inside the
-        // mapping, the offset is a multiple of its width, and this value is
+        // mapping, its address is a multiple of its width, and this value is
         // the only one that reaches it.
         unsafe { at.write_volatile(value) };
         true
     }
 
-    /// A window over the `len` bytes at `offset` of this one, or `None`
-    /// when they do not lie whole inside it. A driver takes the structure
-    /// it was told the offset of this way and can then reach no further.
-    #[must_use]
-    pub fn window(&mut self, offset: usize, len: usize) -> Option<Mmio<'_>> {
-        let end = offset.checked_add(len)?;
-        if end > self.len {
-            return None;
-        }
-        let base = self.base.wrapping_add(offset);
-        // SAFETY: the range lies inside this window's own mapping, which
-        // the borrow of `self` keeps alive and exclusive for the life of
-        // the value answered.
-        Some(unsafe { Mmio::new(base, len) })
-    }
-
     /// The pointer to a `T` at `offset`, if the value lies whole inside the
-    /// window and the offset is a multiple of its width.
+    /// window and its address is a multiple of its width.
     fn address<T>(&self, offset: usize) -> Option<*const T> {
         self.checked::<T>(offset).map(|at| at.cast_const().cast())
     }
@@ -183,16 +169,9 @@ impl<'a> Mmio<'a> {
     }
 
     /// The byte pointer at `offset`, checked against the length and the
-    /// width of `T`.
+    /// alignment of `T`.
     fn checked<T>(&self, offset: usize) -> Option<*mut u8> {
-        let width = size_of::<T>();
-        let end = offset.checked_add(width)?;
-        if end > self.len {
-            return None;
-        }
-        if offset.checked_rem(width)? != 0 {
-            return None;
-        }
+        let offset = checked_offset(self.base.addr(), self.len, offset, size_of::<T>())?;
         Some(self.base.wrapping_add(offset))
     }
 }

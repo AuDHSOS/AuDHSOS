@@ -39,6 +39,16 @@ pub unsafe fn syscall() {
     }
 }
 
+/// Stops the calling thread with an invalid-opcode fault, which the kernel
+/// reports to the fault handler of the process (D-193).
+pub fn stop() -> ! {
+    // SAFETY: `ud2` touches no memory and no register; the processor raises
+    // the fault in place of executing it.
+    unsafe {
+        asm!("ud2", options(nomem, nostack, noreturn));
+    }
+}
+
 /// The IPC buffer of the calling thread, as the kernel handed it over.
 ///
 /// # Safety
@@ -49,10 +59,12 @@ pub unsafe fn syscall() {
 #[must_use]
 pub unsafe fn buffer<'a>(address: u64) -> BufferMut<'a> {
     let pointer =
-        core::ptr::without_provenance_mut::<[u8; SIZE]>(usize::try_from(address).unwrap_or(0));
+        core::ptr::with_exposed_provenance_mut::<[u8; SIZE]>(usize::try_from(address).unwrap_or(0));
     // SAFETY: the kernel mapped one page of memory there, read and write,
     // for this thread alone, and the caller promises this is the only
-    // reference to it.
+    // reference to it. The page lies outside the abstract machine, so the
+    // pointer takes exposed provenance; a pointer without provenance
+    // reaches no memory (issue #101).
     BufferMut::new(unsafe { &mut *pointer })
 }
 
@@ -125,11 +137,11 @@ pub fn startup(gate: &Gate) -> Startup {
 /// program that has nothing left to do ends its thread with
 /// [`Gate::thread_exit`].
 ///
-/// The macro writes the panic handler too. It halts: the workspace lint set
-/// denies `panic!`, `unwrap`, `expect`, indexing, and unchecked arithmetic
-/// in product code, so nothing of a program of this system reaches it, and
-/// a handler that made a system call would need the buffer of the thread
-/// that panicked, which the language hands it no way of naming.
+/// The macro writes the panic handler too. It calls [`stop`], so the kernel
+/// stops the thread in `Faulted` and reports the fault to the fault handler
+/// of the process (D-193). A handler that made a system call would need the
+/// buffer of the thread that panicked, which the language hands it no way
+/// of naming.
 #[macro_export]
 macro_rules! program {
     ($main:path) => {
@@ -160,8 +172,8 @@ macro_rules! program {
         }
 
         #[panic_handler]
-        const fn panic(_info: &core::panic::PanicInfo) -> ! {
-            loop {}
+        fn panic(_info: &core::panic::PanicInfo) -> ! {
+            $crate::stop()
         }
     };
 }

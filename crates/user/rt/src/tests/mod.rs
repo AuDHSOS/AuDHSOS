@@ -7,5 +7,6 @@
 mod handle;
 mod heap;
 mod message;
+mod mmio;
 mod report;
 mod startup;

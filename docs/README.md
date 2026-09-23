@@ -85,7 +85,9 @@ normative form (D-155), [itu/](itu) for the JPEG Recommendations,
 is a datasheet from a manufacturer rather than a standard from a
 standards body, [uefi/](uefi) for what the UEFI Forum publishes — the
 firmware interface the loader is written against and the ACPI tables the
-kernel finds its interrupt controllers through — and [openssh/](openssh)
+kernel finds its interrupt controllers through —, [x86-psabi/](x86-psabi)
+for the calling convention a user thread starts under (D-193), and
+[openssh/](openssh)
 for what OpenSSH specified and no standards body did (D-134): the one
 cipher of the Secure Shell client, kept as the OpenSSH document it came
 from and the IETF draft that replaced it, and the private key format a
@@ -100,10 +102,10 @@ obtained, not whether its licence permits the copy. `rfc/`, `oasis/`,
 `w3c/`, `ecma/`, `openssh/` and `adobe/` hold documents that may be
 redistributed, and so do the property and test files of `unicode/`,
 which the Unicode License v3 covers. `itu/`, `cipa/`, `ti/`, `uefi/`,
-`acm/`, `microsoft/`, `iso/` and the seven annexes and reports of
+`acm/`, `microsoft/`, `iso/`, `x86-psabi/` and the seven annexes and reports of
 `unicode/` hold documents that the ITU, CIPA, Texas Instruments, the
-UEFI Forum, Microsoft, ISO/IEC, Unicode and, for the paper in `acm/`,
-its first author serve to anyone at no charge but do not licence for
+UEFI Forum, Microsoft, ISO/IEC, Unicode, the psABI maintainers and, for
+the paper in `acm/`, its first author serve to anyone at no charge but do not licence for
 redistribution; the copies are kept regardless, and each of those
 READMEs quotes the restriction it stands against and states what follows
 from it. Five of them record something further. `ti/` does, because the
