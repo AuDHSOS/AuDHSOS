@@ -6,7 +6,7 @@
 use audhsos_abi::{Error, Handle, Rights};
 use user_proto::Name;
 
-use crate::registry::{CAPACITY, HANDED_OUT, Handles, Registry};
+use crate::registry::{CAPACITY, HANDED_OUT, Handles, PER_OWNER_LIMIT, Registry};
 
 /// A handle every table could hand out.
 fn handle(index: u32) -> Handle {
@@ -20,7 +20,7 @@ fn name(text: &[u8]) -> Name {
 
 /// A registry holding the three servers of the boot sequence.
 fn filled() -> Registry {
-    let mut registry = Registry::new();
+    let mut registry = Registry::new(PER_OWNER_LIMIT);
     for (owner, text, index) in [
         (1, &b"console"[..], 10),
         (2, b"memory", 20),
@@ -66,7 +66,7 @@ impl Handles for Table {
 
 #[test]
 fn an_empty_registry_holds_nothing() {
-    let registry = Registry::new();
+    let registry = Registry::new(PER_OWNER_LIMIT);
     assert!(registry.is_empty());
     assert_eq!(registry.len(), 0);
     assert_eq!(registry.entries().count(), 0);
@@ -120,7 +120,7 @@ fn a_name_another_client_holds_is_refused() {
         registry
             .register(9, name(b"console"), handle(99))
             .unwrap_err(),
-        Error::AlreadyExists
+        (handle(99), Error::AlreadyExists)
     );
     assert_eq!(
         registry.lookup(&name(b"console")).unwrap(),
@@ -131,30 +131,31 @@ fn a_name_another_client_holds_is_refused() {
 
 #[test]
 fn a_message_without_a_badge_registers_nothing() {
-    let mut registry = Registry::new();
+    let mut registry = Registry::new(PER_OWNER_LIMIT);
     assert_eq!(
         registry
             .register(0, name(b"console"), handle(1))
             .unwrap_err(),
-        Error::InvalidArgument
+        (handle(1), Error::InvalidArgument)
     );
     assert!(registry.is_empty());
 }
 
 #[test]
 fn a_full_registry_takes_no_further_name() {
-    let mut registry = Registry::new();
+    let mut registry = Registry::new(PER_OWNER_LIMIT);
     for index in 0..CAPACITY {
         let raw = u32::try_from(index).unwrap().wrapping_add(1);
         let text = [b'n', raw.to_le_bytes()[0], raw.to_le_bytes()[1]];
-        let _fresh = registry.register(1, name(&text), handle(raw)).unwrap();
+        let owner = u64::try_from(index / PER_OWNER_LIMIT).unwrap() + 1;
+        let _fresh = registry.register(owner, name(&text), handle(raw)).unwrap();
     }
     assert_eq!(registry.len(), CAPACITY);
     assert_eq!(
         registry
-            .register(1, name(b"one more"), handle(1))
+            .register(9, name(b"one more"), handle(1))
             .unwrap_err(),
-        Error::PoolExhausted
+        (handle(1), Error::PoolExhausted)
     );
     // A replacement still works: it needs no slot.
     let replaced = registry
@@ -162,6 +163,58 @@ fn a_full_registry_takes_no_further_name() {
         .unwrap();
     assert_eq!(replaced, Some(handle(1)));
     assert_eq!(registry.lookup(&name(b"n\x01\x00")).unwrap(), handle(77));
+}
+
+#[test]
+fn an_owner_cannot_use_another_owners_quota() {
+    let mut registry = Registry::new(2);
+    assert_eq!(registry.register(1, name(b"first"), handle(1)), Ok(None));
+    assert_eq!(registry.register(1, name(b"second"), handle(2)), Ok(None));
+    assert_eq!(
+        registry.register(1, name(b"third"), handle(3)),
+        Err((handle(3), Error::PoolExhausted))
+    );
+    assert_eq!(registry.register(2, name(b"third"), handle(4)), Ok(None));
+    assert_eq!(registry.len(), 3);
+    assert_eq!(
+        registry.register(1, name(b"first"), handle(5)),
+        Ok(Some(handle(1)))
+    );
+    assert_eq!(registry.forget(1, &name(b"second")), Ok(handle(2)));
+    assert_eq!(registry.register(1, name(b"fourth"), handle(6)), Ok(None));
+}
+
+#[test]
+fn the_server_limit_keeps_slots_for_other_owners() {
+    const { assert!(PER_OWNER_LIMIT < CAPACITY) };
+    let mut registry = Registry::default();
+    for index in 0..PER_OWNER_LIMIT {
+        let raw = u32::try_from(index).unwrap() + 1;
+        let text = [b'n', u8::try_from(index).unwrap()];
+        assert_eq!(registry.register(1, name(&text), handle(raw)), Ok(None));
+    }
+    assert_eq!(
+        registry.register(1, name(b"extra"), handle(100)),
+        Err((handle(100), Error::PoolExhausted))
+    );
+    assert_eq!(registry.register(2, name(b"extra"), handle(101)), Ok(None));
+}
+
+#[test]
+fn a_quota_refusal_closes_the_received_and_narrowed_handles() {
+    let mut registry = Registry::new(1);
+    let mut table = Table::default();
+    registry
+        .accept(&mut table, 1, name(b"first"), handle(10))
+        .unwrap();
+    table.closed.clear();
+    assert_eq!(
+        registry.accept(&mut table, 1, name(b"second"), handle(20)),
+        Err(Error::PoolExhausted)
+    );
+    assert_eq!(table.closed, vec![handle(20), handle(FIRST_NARROWED + 2)]);
+    assert_eq!(registry.len(), 1);
+    assert_eq!(registry.lookup(&name(b"second")), Err(Error::NotFound));
 }
 
 #[test]
@@ -253,7 +306,7 @@ fn what_a_lookup_hands_out_carries_no_recv_and_no_badge() {
 
 #[test]
 fn a_registration_stores_a_handle_narrowed_to_what_a_lookup_may_hand_out() {
-    let mut registry = Registry::new();
+    let mut registry = Registry::new(PER_OWNER_LIMIT);
     let mut table = Table::default();
     registry
         .accept(&mut table, 1, name(b"console"), handle(10))
@@ -279,7 +332,7 @@ fn a_registration_stores_a_handle_narrowed_to_what_a_lookup_may_hand_out() {
 
 #[test]
 fn a_replaced_registration_gives_the_handle_it_held_up() {
-    let mut registry = Registry::new();
+    let mut registry = Registry::new(PER_OWNER_LIMIT);
     let mut table = Table::default();
     registry
         .accept(&mut table, 1, name(b"console"), handle(10))
@@ -304,7 +357,7 @@ fn a_replaced_registration_gives_the_handle_it_held_up() {
 
 #[test]
 fn a_refused_registration_gives_every_handle_up() {
-    let mut registry = Registry::new();
+    let mut registry = Registry::new(PER_OWNER_LIMIT);
     let mut table = Table::default();
     registry
         .accept(&mut table, 1, name(b"console"), handle(10))
@@ -330,7 +383,7 @@ fn a_refused_registration_gives_every_handle_up() {
 
 #[test]
 fn a_registration_whose_narrowing_is_refused_gives_the_sent_handle_up() {
-    let mut registry = Registry::new();
+    let mut registry = Registry::new(PER_OWNER_LIMIT);
     let mut table = Table {
         refuses: true,
         ..Table::default()
@@ -347,7 +400,7 @@ fn a_registration_whose_narrowing_is_refused_gives_the_sent_handle_up() {
 
 #[test]
 fn a_registration_without_a_badge_stores_nothing_and_gives_every_handle_up() {
-    let mut registry = Registry::new();
+    let mut registry = Registry::new(PER_OWNER_LIMIT);
     let mut table = Table::default();
     assert_eq!(
         registry

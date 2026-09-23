@@ -31,7 +31,7 @@ use user_loader as _;
 use virtio_queue as _;
 
 use audhsos_abi::{Error, Handle, Rights};
-use server_name::{Handles, Registry};
+use server_name::{Handles, PER_OWNER_LIMIT, Registry};
 use user_programs::serve::{Serving, receive};
 use user_proto::handles::Carried;
 use user_proto::name::{Reply, Request};
@@ -49,7 +49,7 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
     let Some(endpoint) = startup.own_endpoint else {
         gate.thread_exit()
     };
-    let mut registry = Registry::new();
+    let mut registry = Registry::new(PER_OWNER_LIMIT);
     let mut serving = Serving::default();
     loop {
         if receive(&mut gate, endpoint, &mut serving).is_err() {

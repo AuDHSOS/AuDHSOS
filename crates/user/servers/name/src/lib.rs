@@ -7,7 +7,7 @@
 
 pub mod registry;
 
-pub use registry::{CAPACITY, HANDED_OUT, Handles, Registered, Registry};
+pub use registry::{CAPACITY, HANDED_OUT, Handles, PER_OWNER_LIMIT, Registered, Registry};
 
 #[cfg(test)]
 mod tests;
