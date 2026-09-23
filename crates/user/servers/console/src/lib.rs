@@ -7,7 +7,7 @@
 
 pub mod console;
 
-pub use console::{Console, RECEIVE_CAPACITY};
+pub use console::{Console, DRAIN, DRAIN_WORDS, RECEIVE_CAPACITY, encode_drain};
 
 #[cfg(test)]
 mod tests;

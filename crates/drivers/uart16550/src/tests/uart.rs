@@ -8,9 +8,10 @@
 use crate::doubles::{Access, RecordingRegisters};
 use crate::uart::{
     FIFO_CONTROL_ENABLE, FIFO_DEPTH, INTERRUPT_FIFO_ENABLED, INTERRUPT_NONE, INTERRUPT_RECEIVE,
-    INTERRUPT_TRANSMIT, LINE_CONTROL_8N1, LINE_CONTROL_DIVISOR_LATCH, LINE_STATUS_DATA_READY,
-    LINE_STATUS_TRANSMIT_EMPTY, MODEM_CONTROL_READY, NO_FIFO_DEPTH, POLL_LIMIT, REGISTER_COUNT,
-    Register, Uart16550, UartError,
+    INTERRUPT_TRANSMIT, InterruptSource, LINE_CONTROL_8N1, LINE_CONTROL_DIVISOR_LATCH,
+    LINE_STATUS_BREAK, LINE_STATUS_DATA_READY, LINE_STATUS_ERRORS, LINE_STATUS_FRAMING,
+    LINE_STATUS_OVERRUN, LINE_STATUS_PARITY, LINE_STATUS_TRANSMIT_EMPTY, MODEM_CONTROL_READY,
+    NO_FIFO_DEPTH, POLL_LIMIT, REGISTER_COUNT, Received, Register, Uart16550, UartError,
 };
 use test_support::generators::{range, vec};
 use test_support::property::check;
@@ -287,7 +288,7 @@ fn a_read_with_data_returns_the_byte() {
 #[test]
 fn the_interrupt_enable_register_carries_the_requested_sources() {
     let mut uart = Uart16550::new(RecordingRegisters::new());
-    uart.enable_receive_interrupt();
+    uart.enable_interrupts(true, false);
     uart.enable_interrupts(true, true);
     uart.enable_interrupts(false, true);
     uart.enable_interrupts(false, false);
@@ -307,22 +308,235 @@ fn the_interrupt_enable_register_carries_the_requested_sources() {
     );
 }
 
+/// Regression for #332: one read of the identification register names the
+/// source, so a THRE the read reset is not lost.
 #[test]
-fn a_pending_interrupt_shows_as_a_clear_bit_zero() {
+fn the_interrupt_source_is_decoded_from_bits_three_to_zero() {
+    // SLLS597E page 35, table 5, and page 36; bits 7 and 6 are the FIFO
+    // bits and do not change the source.
+    let table = [
+        (INTERRUPT_NONE, InterruptSource::NotPending),
+        (0x06, InterruptSource::LineStatus),
+        (0x04, InterruptSource::ReceivedData),
+        (0x0C, InterruptSource::CharacterTimeout),
+        (0x02, InterruptSource::TransmitterEmpty),
+        (0x00, InterruptSource::ModemStatus),
+        (0x08, InterruptSource::Reserved(0x08)),
+        (0x0A, InterruptSource::Reserved(0x0A)),
+        (0x0E, InterruptSource::Reserved(0x0E)),
+    ];
+    for (bits, source) in table {
+        for fifo in [0, INTERRUPT_FIFO_ENABLED] {
+            let mut registers = RecordingRegisters::new();
+            registers.script(Register::FifoControl, &[bits | fifo]);
+            let mut uart = Uart16550::new(registers);
+            assert_eq!(uart.interrupt_source(), source, "bits {bits:#04x}");
+            assert_eq!(uart.into_registers().reads_of(Register::FifoControl), 1);
+        }
+    }
+    for odd in (1u8..=0x0F).step_by(2) {
+        assert_eq!(InterruptSource::decode(odd), InterruptSource::NotPending);
+    }
+}
+
+/// A block whose line status reads `status` once and then reads 0; the
+/// data register holds `data`.
+fn line(status: u8, data: u8) -> RecordingRegisters {
     let mut registers = RecordingRegisters::new();
-    registers.script(Register::FifoControl, &[INTERRUPT_NONE, 0x04, 0x02]);
+    registers.script(Register::LineStatus, &[status]);
+    registers.script(Register::Data, &[data]);
+    registers
+}
+
+/// Regression for #324: a break, a parity error and a framing error are
+/// errors and not data, and the read advances the FIFO past the byte.
+#[test]
+fn a_byte_with_a_line_error_is_an_error_and_is_discarded() {
+    for bit in [LINE_STATUS_PARITY, LINE_STATUS_FRAMING, LINE_STATUS_BREAK] {
+        let mut uart = Uart16550::new(line(LINE_STATUS_DATA_READY | bit, 0));
+        assert_eq!(uart.read_byte(), Err(UartError::Line(bit)));
+        let registers = uart.into_registers();
+        assert_eq!(
+            registers.reads_of(Register::LineStatus),
+            1,
+            "bit {bit:#04x}"
+        );
+        assert_eq!(
+            registers.reads_of(Register::Data),
+            1,
+            "the byte is read so the FIFO advances"
+        );
+    }
+}
+
+#[test]
+fn an_overrun_is_an_error_and_keeps_the_valid_byte_for_the_next_read() {
+    let mut registers = line(LINE_STATUS_DATA_READY | LINE_STATUS_OVERRUN, b'k');
+    registers.set(Register::LineStatus, LINE_STATUS_DATA_READY);
     let mut uart = Uart16550::new(registers);
-    assert!(!uart.interrupt_pending(), "bit zero set means no interrupt");
-    assert!(uart.interrupt_pending(), "a received byte is pending");
-    assert!(
-        uart.interrupt_pending(),
-        "an empty holding register is pending"
+    assert_eq!(uart.read_byte(), Err(UartError::Line(LINE_STATUS_OVERRUN)));
+    assert_eq!(uart.registers().reads_of(Register::Data), 0);
+    assert_eq!(uart.read_byte(), Ok(b'k'));
+}
+
+#[test]
+fn an_overrun_with_a_byte_error_discards_the_byte() {
+    let status = LINE_STATUS_DATA_READY | LINE_STATUS_OVERRUN | LINE_STATUS_PARITY;
+    let mut uart = Uart16550::new(line(status, b'?'));
+    assert_eq!(
+        uart.read_byte(),
+        Err(UartError::Line(LINE_STATUS_OVERRUN | LINE_STATUS_PARITY))
+    );
+    assert_eq!(uart.into_registers().reads_of(Register::Data), 1);
+
+    let mut uart = Uart16550::new(line(status, b'?'));
+    let received = uart.read_bytes(&mut [0u8; 4]);
+    assert_eq!(
+        (received.count, received.discarded, received.overruns),
+        (0, 1, 1)
+    );
+    assert_eq!(received.line_errors(), 2);
+}
+
+#[test]
+fn an_error_without_data_is_still_reported() {
+    let mut uart = Uart16550::new(line(LINE_STATUS_OVERRUN, 0));
+    assert_eq!(uart.read_byte(), Err(UartError::Line(LINE_STATUS_OVERRUN)));
+    assert_eq!(uart.into_registers().reads_of(Register::Data), 0);
+}
+
+#[test]
+fn the_error_carries_only_bits_one_to_four() {
+    let mut uart = Uart16550::new(line(0xFF, 0));
+    assert_eq!(uart.read_byte(), Err(UartError::Line(LINE_STATUS_ERRORS)));
+}
+
+/// Regression for #328: one call drains every waiting byte.
+#[test]
+fn a_drain_takes_every_waiting_byte() {
+    let mut registers = RecordingRegisters::new();
+    registers.script(Register::LineStatus, &[LINE_STATUS_DATA_READY; 5]);
+    registers.script(Register::Data, b"paste");
+    let mut uart = Uart16550::new(registers);
+    let mut into = [0u8; 16];
+    let received = uart.read_bytes(&mut into);
+    assert_eq!(
+        received,
+        Received {
+            count: 5,
+            ..Received::default()
+        }
+    );
+    assert_eq!(into.get(..5).unwrap(), b"paste");
+    let registers = uart.into_registers();
+    assert_eq!(
+        registers.reads_of(Register::LineStatus),
+        6,
+        "the last is clear"
+    );
+    assert_eq!(registers.reads_of(Register::Data), 5);
+}
+
+#[test]
+fn a_drain_stops_after_one_fifo_of_reads() {
+    let mut registers = RecordingRegisters::new();
+    registers.set(Register::LineStatus, LINE_STATUS_DATA_READY);
+    let mut uart = Uart16550::new(registers);
+    let mut into = [0u8; 64];
+    assert_eq!(uart.read_bytes(&mut into).count, usize::from(FIFO_DEPTH));
+    assert_eq!(
+        uart.into_registers().reads_of(Register::Data),
+        usize::from(FIFO_DEPTH)
+    );
+}
+
+#[test]
+fn a_drain_stops_when_the_destination_is_full() {
+    let mut registers = RecordingRegisters::new();
+    registers.set(Register::LineStatus, LINE_STATUS_DATA_READY);
+    let mut uart = Uart16550::new(registers);
+    let mut into = [0u8; 3];
+    assert_eq!(uart.read_bytes(&mut into).count, 3);
+    assert_eq!(uart.registers().reads_of(Register::Data), 3);
+    assert_eq!(uart.read_bytes(&mut []).count, 0);
+    assert_eq!(
+        uart.into_registers().reads_of(Register::LineStatus),
+        3,
+        "an empty destination reads nothing"
+    );
+}
+
+#[test]
+fn a_drain_discards_bytes_with_errors_and_counts_overruns() {
+    let mut registers = RecordingRegisters::new();
+    registers.script(
+        Register::LineStatus,
+        &[
+            LINE_STATUS_DATA_READY,
+            LINE_STATUS_DATA_READY | LINE_STATUS_BREAK,
+            LINE_STATUS_DATA_READY | LINE_STATUS_OVERRUN,
+            LINE_STATUS_DATA_READY | LINE_STATUS_PARITY,
+            LINE_STATUS_DATA_READY,
+        ],
+    );
+    registers.script(Register::Data, &[b'a', 0, b'b', b'?', b'c']);
+    let mut uart = Uart16550::new(registers);
+    let mut into = [0u8; 16];
+    let received = uart.read_bytes(&mut into);
+    assert_eq!(
+        received,
+        Received {
+            count: 3,
+            discarded: 2,
+            overruns: 1,
+            errors: LINE_STATUS_BREAK | LINE_STATUS_OVERRUN | LINE_STATUS_PARITY,
+        }
+    );
+    assert_eq!(received.line_errors(), 3);
+    assert_eq!(into.get(..3).unwrap(), b"abc", "the break's 0 is no byte");
+}
+
+#[test]
+fn a_drain_of_an_empty_fifo_takes_nothing() {
+    let mut uart = Uart16550::new(RecordingRegisters::new());
+    let mut into = [0u8; 4];
+    assert_eq!(uart.read_bytes(&mut into), Received::default());
+    let registers = uart.into_registers();
+    assert_eq!(registers.reads_of(Register::LineStatus), 1);
+    assert_eq!(registers.reads_of(Register::Data), 0);
+}
+
+#[test]
+fn property_a_drain_is_bounded_and_counts_every_data_read() {
+    check(
+        "uart_drain_bounded",
+        &vec(range(0u8..=u8::MAX), 0..=40),
+        |statuses| {
+            let mut registers = RecordingRegisters::new();
+            registers.script(Register::LineStatus, statuses);
+            registers.set(Register::LineStatus, LINE_STATUS_DATA_READY);
+            let mut uart = Uart16550::new(registers);
+            let mut into = [0u8; 64];
+            let received = uart.read_bytes(&mut into);
+            let data_reads = uart.into_registers().reads_of(Register::Data);
+            if data_reads > usize::from(FIFO_DEPTH) {
+                return Err(format!("{data_reads} data reads"));
+            }
+            if received.count + usize::from(received.discarded) != data_reads {
+                return Err(format!("{received:?} after {data_reads} data reads"));
+            }
+            Ok(())
+        },
     );
 }
 
 #[test]
 fn the_error_renders_a_message() {
-    for error in [UartError::Timeout, UartError::WouldBlock] {
+    for error in [
+        UartError::Timeout,
+        UartError::WouldBlock,
+        UartError::Line(LINE_STATUS_BREAK),
+    ] {
         assert!(!format!("{error}").is_empty());
     }
 }

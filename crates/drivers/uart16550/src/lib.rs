@@ -9,7 +9,9 @@
 pub mod doubles;
 pub mod uart;
 
-pub use uart::{POLL_LIMIT, Register, Registers, Uart16550, UartError};
+pub use uart::{
+    FIFO_DEPTH, InterruptSource, POLL_LIMIT, Received, Register, Registers, Uart16550, UartError,
+};
 
 #[cfg(test)]
 mod tests;
