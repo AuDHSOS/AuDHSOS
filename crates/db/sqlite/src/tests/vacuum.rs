@@ -640,3 +640,119 @@ fn what_the_connection_was_told_for_fullfsync() {
     writer.run(b"PRAGMA fullfsync=OFF").unwrap();
     assert!(!writer.kept().fullfsync());
 }
+
+/// The steps of `incrvacuum3.test`: a file in incremental vacuum that a
+/// transaction writes, vacuums and rolls back stands after every one of
+/// them.
+#[test]
+fn what_a_vacuum_inside_a_transaction_leaves() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.randomness(11);
+    let check = |writer: &Writer, at: usize| {
+        let rows = answered(writer, "PRAGMA integrity_check");
+        let held = rows
+            .first()
+            .and_then(|row| row.first())
+            .and_then(Value::text)
+            .unwrap_or_default();
+        assert_eq!(
+            alloc::string::String::from_utf8_lossy(&held),
+            "ok",
+            "step {at}"
+        );
+        // The file the connection holds is read again from its bytes,
+        // which is what a copy of it is read as.
+        let image = writer.written();
+        let database = Database::open(&image).unwrap_or_else(|_| panic!("step {at} opens"));
+        let rows = database
+            .query(b"PRAGMA integrity_check")
+            .expect("rows")
+            .rows;
+        let held = rows
+            .first()
+            .and_then(|row| row.first())
+            .and_then(Value::text)
+            .unwrap_or_default();
+        assert_eq!(
+            alloc::string::String::from_utf8_lossy(&held),
+            "ok",
+            "step {at} read again"
+        );
+    };
+    for (at, sql) in [
+        "PRAGMA auto_vacuum = 2",
+        "CREATE TABLE t1(x UNIQUE)",
+        "INSERT INTO t1 VALUES(randomblob(400))",
+        "INSERT INTO t1 VALUES(randomblob(400))",
+        "INSERT INTO t1 SELECT randomblob(400) FROM t1",
+        "INSERT INTO t1 SELECT randomblob(400) FROM t1",
+        "INSERT INTO t1 SELECT randomblob(400) FROM t1",
+        "INSERT INTO t1 SELECT randomblob(400) FROM t1",
+        "DELETE FROM t1 WHERE rowid%8",
+        "BEGIN",
+        "PRAGMA incremental_vacuum = 100",
+        "INSERT INTO t1 SELECT randomblob(400) FROM t1",
+        "ROLLBACK",
+        "INSERT INTO t1 SELECT randomblob(400) FROM t1",
+        "PRAGMA incremental_vacuum = 1000",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        writer.run(sql.as_bytes()).unwrap_or_else(|error| {
+            panic!("step {at} `{sql}`: {}", error.message());
+        });
+        check(&writer, at);
+    }
+}
+
+/// A file in incremental vacuum whose free list is given up page by
+/// page stands, and the pages come off the end of the file.
+#[test]
+fn what_an_incremental_vacuum_of_many_pages_leaves() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.randomness(7);
+    for sql in [
+        "PRAGMA auto_vacuum = 2",
+        "CREATE TABLE t1(x UNIQUE)",
+        "INSERT INTO t1 VALUES(randomblob(400))",
+        "INSERT INTO t1 VALUES(randomblob(400))",
+        "INSERT INTO t1 SELECT randomblob(400) FROM t1",
+        "INSERT INTO t1 SELECT randomblob(400) FROM t1",
+        "INSERT INTO t1 SELECT randomblob(400) FROM t1",
+        "INSERT INTO t1 SELECT randomblob(400) FROM t1",
+        "INSERT INTO t1 SELECT randomblob(400) FROM t1",
+        "DELETE FROM t1 WHERE rowid%8",
+    ] {
+        writer.run(sql.as_bytes()).expect(sql);
+    }
+    // Every page the deletions freed is given up, and the file holds
+    // what it held before them.
+    let free = |writer: &Writer| -> i64 {
+        answered(writer, "PRAGMA freelist_count")
+            .first()
+            .and_then(|row| row.first())
+            .map_or(-1, Value::to_integer)
+    };
+    assert!(free(&writer) > 0, "the deletions freed pages");
+    writer.run(b"PRAGMA incremental_vacuum = 1000").unwrap();
+    assert_eq!(free(&writer), 0);
+    assert_eq!(
+        answered(&writer, "PRAGMA integrity_check")
+            .first()
+            .and_then(|row| row.first())
+            .and_then(Value::text),
+        Some(b"ok".to_vec())
+    );
+    // The file the connection wrote is read again from its bytes, which
+    // is what a copy of it is read as.
+    let image = writer.written();
+    let database = Database::open(&image).unwrap();
+    let rows = database.query(b"PRAGMA integrity_check").unwrap().rows;
+    assert_eq!(
+        rows.first()
+            .and_then(|row| row.first())
+            .and_then(Value::text),
+        Some(b"ok".to_vec())
+    );
+}

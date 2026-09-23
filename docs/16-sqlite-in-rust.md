@@ -1047,6 +1047,8 @@ Size: L.
 151. The `ORDER BY` inside the brackets of an aggregate, which says
      which order it reads the rows of its group in. Built, which D-430
      records.
+152. The length a rollback writes the file back to, where the
+     transaction gave pages up at its end. Built, which D-431 records.
 
 ### Done when
 

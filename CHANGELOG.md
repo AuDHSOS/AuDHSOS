@@ -203,6 +203,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` writes the file back to the length it had when the
+  transaction began, where the transaction gave pages up at its end.
+  D-431 records it. Catalog 6.6.298. `incrvacuum3.test` goes from 22
+  cases passing to 52 and `incrvacuum.test` from 50 to 355.
+
 - `db-sqlite` gives a new root of a file that keeps pointer maps the page
   after the largest root it holds, moving the page that lies there, so
   the roots run from page three up with no gap. D-399 records it. Catalog

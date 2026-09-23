@@ -7100,3 +7100,11 @@ Document 16 step Q8.
   `NULLS LAST`, one order per group, a `DISTINCT` beside the order, the
   row a `max` took, a call of no argument, an `ORDER BY` on a call that
   is no aggregate, and an aggregate inside the terms.
+
+### 6.6.298 The file a rollback writes back (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A transaction that vacuums the file and rolls back, the integrity of
+  the file after every step of `incrvacuum3.test`, and the file read
+  again from its bytes.

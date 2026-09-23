@@ -729,11 +729,20 @@ impl Pages {
 
     /// The file cut back to `last` pages.
     fn shorten(&mut self, last: u32) {
+        // What a page held when the transaction began is kept for every
+        // page the file held then, because a rollback writes the file
+        // back to that length and every one of those pages with it:
+        // `sqlite3PagerRollback` plays the journal back over a file
+        // `bDoTruncate` has not cut yet.
+        for number in last.saturating_add(1)..=self.count() {
+            self.keep(number);
+        }
         self.held.truncate(size(u64::from(last)));
-        self.before.truncate(size(u64::from(last)));
-        self.started.truncate(size(u64::from(last)));
-        self.skipped.truncate(size(u64::from(last)));
-        self.freed.truncate(size(u64::from(last)));
+        let held = size(u64::from(last.max(self.origin)));
+        self.before.truncate(held);
+        self.started.truncate(held);
+        self.skipped.truncate(held);
+        self.freed.truncate(held);
     }
 
     /// One page past the end the file is cut back to moved into a free
@@ -879,6 +888,11 @@ impl Pages {
     ///
     /// A rollback costs O(n) in the pages the transaction opened.
     pub fn rollback(&mut self) {
+        // A transaction that gave pages up at the end of the file left
+        // it shorter than it was, and the rollback writes it back to the
+        // length it had before every page of it is written back.
+        self.held
+            .resize(size(u64::from(self.origin)), alloc::vec![0; self.page_size]);
         for (slot, before) in self.held.iter_mut().zip(&self.before) {
             if let Some(bytes) = before {
                 slot.clone_from(bytes);
@@ -921,6 +935,10 @@ impl Pages {
         self.freelist = freelist;
         self.freelist_count = freelist_count;
         let pages = size(u64::from(count));
+        // A statement that gave pages up at the end of the file left it
+        // shorter than it was, and undoing the statement writes it back
+        // to the length it had.
+        self.held.resize(pages, alloc::vec![0; self.page_size]);
         self.held.truncate(pages);
         self.before.truncate(pages);
         self.started.truncate(pages);
