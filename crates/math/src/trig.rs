@@ -3,6 +3,8 @@
 
 //! Bounded binary64 trigonometric argument reduction and kernels.
 
+use crate::Wide;
+
 const LIMB_BITS: usize = 24;
 const LIMB_MASK: u64 = (1 << LIMB_BITS) - 1;
 
@@ -23,8 +25,12 @@ const TWO_OVER_PI: [u32; 66] = [
 
 const PRODUCT_LIMBS: usize = TWO_OVER_PI.len() + 3;
 const TWO_OVER_PI_BITS: usize = TWO_OVER_PI.len() * LIMB_BITS;
-const PIO2_FIRST: f64 = 1.570_796_326_734_125_6;
-const PIO2_FIRST_TAIL: f64 = 6.077_100_506_506_192e-11;
+// Consecutive 33-bit pieces of pi/2 and the remaining tail.
+const PIO2_1: f64 = 1.570_796_326_734_125_6;
+const PIO2_2: f64 = 6.077_100_506_303_966e-11;
+const PIO2_3: f64 = 2.022_266_248_711_166_5e-21;
+const PIO2_3T: f64 = 8.478_427_660_368_9e-32;
+const PIO2: Wide = Wide(core::f64::consts::FRAC_PI_2, 6.123_233_995_736_766e-17);
 const CODY_WAITE_LIMIT: f64 = 262_144.0;
 
 /// Returns an implementation-approximated sine for every binary64 input.
@@ -38,7 +44,7 @@ pub fn sin(value: f64) -> f64 {
     }
     let magnitude = value.abs();
     let (quadrant, reduced) = if magnitude <= core::f64::consts::FRAC_PI_4 {
-        (0, magnitude)
+        (0, Wide(magnitude, 0.0))
     } else if magnitude < CODY_WAITE_LIMIT {
         reduce_cody_waite(magnitude)
     } else {
@@ -63,10 +69,13 @@ pub fn sin(value: f64) -> f64 {
     clippy::cast_sign_loss,
     reason = "bounded nonnegative quotient is below 2^18"
 )]
-fn reduce_cody_waite(value: f64) -> (u8, f64) {
+fn reduce_cody_waite(value: f64) -> (u8, Wide) {
     let quotient = (value * core::f64::consts::FRAC_2_PI + 0.5) as u32;
     let quotient_float = f64::from(quotient);
-    let reduced = (value - quotient_float * PIO2_FIRST) - quotient_float * PIO2_FIRST_TAIL;
+    let reduced = Wide(value - quotient_float * PIO2_1, 0.0)
+        .add(Wide(-quotient_float * PIO2_2, 0.0))
+        .add(Wide(-quotient_float * PIO2_3, 0.0))
+        .add(Wide(-quotient_float * PIO2_3T, 0.0));
     ((quotient & 3) as u8, reduced)
 }
 
@@ -74,7 +83,7 @@ fn reduce_cody_waite(value: f64) -> (u8, f64) {
     clippy::arithmetic_side_effects,
     reason = "masked 24-bit limbs and an eleven-bit exponent fit their targets"
 )]
-fn reduce_payne_hanek(value: f64) -> (u8, f64) {
+fn reduce_payne_hanek(value: f64) -> (u8, Wide) {
     let bits = value.to_bits();
     let exponent = i32::try_from((bits >> 52) & 0x7ff)
         .unwrap_or(0)
@@ -91,7 +100,7 @@ fn reduce_payne_hanek(value: f64) -> (u8, f64) {
         for (right_index, right) in TWO_OVER_PI.iter().rev().copied().enumerate() {
             let index = left_index + right_index;
             let Some(slot) = product.get_mut(index) else {
-                return (0, value);
+                return (0, Wide(value, 0.0));
             };
             let total = u64::from(*slot) + u64::from(left) * u64::from(right) + carry;
             *slot = u32::try_from(total & LIMB_MASK).unwrap_or(0);
@@ -117,19 +126,74 @@ fn reduce_payne_hanek(value: f64) -> (u8, f64) {
     let round_up = half && (any_product_bit_below(&product, half_bit) || quotient_low & 1 != 0);
     let quadrant = quotient_low.wrapping_add(u8::from(round_up)) & 3;
 
-    let mut fraction = 0.0;
-    let mut weight = 0.5;
-    for offset in 0..64 {
-        if product_bit(&product, half_bit.saturating_sub(offset)) {
-            fraction += weight;
-        }
-        weight *= 0.5;
+    let fraction = fraction_pair(&product, shift, round_up);
+    let reduced = fraction.mul(PIO2);
+    (quadrant, if round_up { reduced.neg() } else { reduced })
+}
+
+#[expect(
+    clippy::arithmetic_side_effects,
+    clippy::as_conversions,
+    clippy::cast_precision_loss,
+    reason = "bounded indices and 53-bit integers fit their operations exactly"
+)]
+fn fraction_pair(product: &[u32; PRODUCT_LIMBS], shift: usize, round_up: bool) -> Wide {
+    let mut magnitude = *product;
+    let full_limbs = shift / LIMB_BITS;
+    let remaining = shift % LIMB_BITS;
+    let limb_mask = u32::try_from(LIMB_MASK).unwrap_or(0);
+    for limb in magnitude
+        .iter_mut()
+        .skip(full_limbs + usize::from(remaining != 0))
+    {
+        *limb = 0;
+    }
+    if remaining != 0
+        && let Some(limb) = magnitude.get_mut(full_limbs)
+    {
+        *limb &= (1 << remaining) - 1;
     }
     if round_up {
-        fraction -= 1.0;
+        let mut carry = 1u32;
+        for limb in magnitude.iter_mut().take(full_limbs) {
+            let total = (limb_mask ^ *limb) + carry;
+            *limb = total & limb_mask;
+            carry = total >> LIMB_BITS;
+        }
+        if remaining != 0 {
+            let mask = (1 << remaining) - 1;
+            if let Some(limb) = magnitude.get_mut(full_limbs) {
+                *limb = ((!*limb) & mask).wrapping_add(carry) & mask;
+            }
+        }
     }
-    let reduced = fraction * core::f64::consts::FRAC_PI_2 + fraction * 6.123_233_995_736_766e-17;
-    (quadrant, reduced)
+    let Some(top) = (0..shift).rev().find(|&bit| product_bit(&magnitude, bit)) else {
+        return Wide(0.0, 0.0);
+    };
+    let mut hi = 0u64;
+    let mut lo = 0u64;
+    for offset in 0..106 {
+        let bit = top
+            .checked_sub(offset)
+            .is_some_and(|bit| product_bit(&magnitude, bit));
+        if offset < 53 {
+            hi = (hi << 1) | u64::from(bit);
+        } else {
+            lo = (lo << 1) | u64::from(bit);
+        }
+    }
+    let leading_zeros = shift - top - 1;
+    let scale = if leading_zeros <= 1022 {
+        f64::from_bits(u64::try_from(1023 - leading_zeros).unwrap_or(0) << 52)
+    } else if leading_zeros <= 1074 {
+        f64::from_bits(1u64 << (1074 - leading_zeros))
+    } else {
+        0.0
+    };
+    let high = (hi as f64 * (1.0 / 9_007_199_254_740_992.0)) * scale;
+    let low =
+        (lo as f64 * (1.0 / 9_007_199_254_740_992.0)) * (1.0 / 9_007_199_254_740_992.0) * scale;
+    Wide(high, low)
 }
 
 fn product_bit(product: &[u32; PRODUCT_LIMBS], bit: usize) -> bool {
@@ -158,23 +222,36 @@ fn any_product_bit_below(product: &[u32; PRODUCT_LIMBS], bit: usize) -> bool {
     clippy::arithmetic_side_effects,
     reason = "the fixed loop index is in 1..=12"
 )]
-fn sin_kernel(value: f64) -> f64 {
-    let square = value * value;
-    let mut term = value;
-    let mut sum = value;
+fn sin_kernel(value: Wide) -> f64 {
+    let square = value.0 * value.0;
+    let mut term = value.0;
+    let mut sum = value.0;
     for index in 1i32..=12 {
         let twice = index * 2;
         term *= -square / f64::from(twice * (twice + 1));
         sum += term;
     }
-    sum
+    if value.1 == 0.0 {
+        sum
+    } else {
+        sum + value.1 * cos_kernel_raw(value.0)
+    }
+}
+
+fn cos_kernel(value: Wide) -> f64 {
+    let result = cos_kernel_raw(value.0);
+    if value.1 == 0.0 {
+        result
+    } else {
+        result - value.1 * sin_kernel(Wide(value.0, 0.0))
+    }
 }
 
 #[expect(
     clippy::arithmetic_side_effects,
     reason = "the fixed loop index is in 1..=12"
 )]
-fn cos_kernel(value: f64) -> f64 {
+fn cos_kernel_raw(value: f64) -> f64 {
     let square = value * value;
     let mut term = 1.0;
     let mut sum = 1.0;

@@ -58,6 +58,7 @@ fn exact_integer_powers_and_range_edges() {
         (0.25, 0.5, 0.5),
         (2.0, 1024.0, f64::INFINITY),
         (2.0, -1075.0, 0.0),
+        (0.5, 1076.0, 0.0),
         (1e300, 100.0, f64::INFINITY),
         (1e-300, 100.0, 0.0),
     ] {
@@ -185,6 +186,9 @@ fn sine_special_values_quadrants_and_signed_zero() {
 #[test]
 fn sine_reduction_paths_agree_with_host_math() {
     for value in [
+        f64::from_bits(0x4106_5a1d_d290_660f),
+        f64::from_bits(0x436c_e638_ef85_d9f8),
+        f64::from_bits(0x4ac8_d999_b501_d972),
         262_143.999_999_999_97,
         262_144.0,
         262_144.000_000_000_06,
@@ -198,13 +202,13 @@ fn sine_reduction_paths_agree_with_host_math() {
         let actual = sin(value);
         let expected = value.sin();
         assert!(
-            (actual - expected).abs() <= 2.0e-15,
+            actual.to_bits().abs_diff(expected.to_bits()) <= 4,
             "sin({value:?}) = {actual:?}, expected {expected:?}"
         );
     }
 
     let mut seed = 0x5349_4e45_u64;
-    for _ in 0..20_000 {
+    for _ in 0..100_000 {
         seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
         let value = f64::from_bits(seed & 0x7fff_ffff_ffff_ffff);
         if !value.is_finite() {
@@ -213,8 +217,30 @@ fn sine_reduction_paths_agree_with_host_math() {
         let actual = sin(value);
         let expected = value.sin();
         assert!(
-            (actual - expected).abs() <= 2.0e-15,
+            actual.to_bits().abs_diff(expected.to_bits()) <= 4,
             "sin({value:?}) = {actual:?}, expected {expected:?}"
         );
+    }
+}
+
+#[test]
+fn sine_near_reduction_cancellation() {
+    for center in [
+        f64::from_bits(0x4106_5a1d_d290_660f),
+        f64::from_bits(0x436c_e638_ef85_d9f8),
+        f64::from_bits(0x4ac8_d999_b501_d972),
+        116_570.0 * core::f64::consts::FRAC_PI_2,
+        166_886.0 * core::f64::consts::FRAC_PI_2,
+    ] {
+        for bits in [center.to_bits() - 1, center.to_bits(), center.to_bits() + 1] {
+            for value in [f64::from_bits(bits), -f64::from_bits(bits)] {
+                let actual = sin(value);
+                let expected = value.sin();
+                assert!(
+                    actual.to_bits().abs_diff(expected.to_bits()) <= 4,
+                    "sin({value:?}) = {actual:?}, expected {expected:?}"
+                );
+            }
+        }
     }
 }

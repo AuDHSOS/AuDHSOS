@@ -168,7 +168,7 @@ fn logarithm(mut x: f64) -> Wide {
 #[expect(
     clippy::cast_possible_truncation,
     clippy::as_conversions,
-    reason = "range-checked exponential reduction is in [-1075,1024]"
+    reason = "range-checked exponential reduction is in [-1076,1024]"
 )]
 fn positive_pow(base: f64, exponent: f64) -> f64 {
     let log = logarithm(base);
