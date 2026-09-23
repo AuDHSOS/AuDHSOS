@@ -147,6 +147,35 @@ pub fn named_tables(sql: &[u8]) -> Vec<(Option<Span>, Span)> {
     out
 }
 
+/// The tables a statement reads, written under no schema, and none for a
+/// statement the parser refuses.
+///
+/// `sqlite3FixSelect` of `research/sqlite/src/attach.c:547` refuses a
+/// source of a view that names another database, so a source that
+/// carries a schema names the database the view lives in and reads the
+/// same table a source that carries none reads. A name a `WITH` term
+/// carries stands for that term and names no table of the schema.
+///
+/// Reading the tree costs O(n) in its sources.
+#[must_use]
+pub fn named_sources(sql: &[u8]) -> Vec<Span> {
+    let Ok((arena, _)) = crate::parse::definition(sql) else {
+        return Vec::new();
+    };
+    let terms: Vec<Span> = arena.all_ctes().map(|cte| cte.name).collect();
+    let mut out = Vec::new();
+    for source in arena.all_sources() {
+        let crate::ast::SourceKind::Table { schema, name, .. } = source.kind else {
+            continue;
+        };
+        let held = crate::schema::dequote(name.text(sql));
+        if schema.is_none() && !terms.iter().any(|term| same(term.text(sql), &held)) {
+            out.push(name);
+        }
+    }
+    out
+}
+
 /// The table each step of a trigger writes, and none for a statement the
 /// parser refuses.
 ///

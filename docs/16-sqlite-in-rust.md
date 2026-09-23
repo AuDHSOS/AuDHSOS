@@ -1077,6 +1077,9 @@ Size: L.
      D-444 records.
 164. The database an integrity check reads, which is the one the schema
      in front of the pragma names. Built, which D-445 records.
+165. The views a rename resolves before it writes one of them, which
+     refuse the rename where a source reads a table no database holds.
+     Built, which D-446 records.
 
 ### Done when
 

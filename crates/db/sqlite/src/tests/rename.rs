@@ -689,6 +689,28 @@ fn every_table_a_statement_names() {
         out
     };
     assert_eq!(stepped(b"CREATE TABLE"), "");
+    let sourced = |sql: &[u8]| {
+        let mut out = alloc::string::String::new();
+        for name in crate::rename::named_sources(sql) {
+            out.push_str(&alloc::string::String::from_utf8_lossy(name.text(sql)));
+            out.push(' ');
+        }
+        out
+    };
+    assert_eq!(sourced(b"CREATE TABLE"), "");
+    assert_eq!(sourced(b"CREATE VIEW v AS SELECT a FROM t, u"), "t u ");
+    // A statement in brackets is no table, a source that carries a
+    // schema reads the database the view lives in, and a name a `WITH`
+    // term carries stands for that term.
+    assert_eq!(
+        sourced(b"CREATE VIEW v AS SELECT a FROM (SELECT 1 AS a)"),
+        ""
+    );
+    assert_eq!(sourced(b"CREATE VIEW v AS SELECT a FROM main.t"), "");
+    assert_eq!(
+        sourced(b"CREATE VIEW v AS WITH t(x) AS (SELECT 1) SELECT x FROM t"),
+        ""
+    );
     assert_eq!(
         stepped(
             b"CREATE TRIGGER tr AFTER INSERT ON t BEGIN INSERT INTO a VALUES(1); \
@@ -857,4 +879,67 @@ fn a_legacy_rename_that_leaves_a_statement_unreadable_is_refused() {
         ],
     );
     assert!(schema(&writer).contains("CREATE TABLE \"x\"(c)"));
+}
+
+#[test]
+fn a_view_that_reads_a_table_no_database_holds_refuses_a_rename() {
+    let mut writer = writer();
+    ran(
+        &mut writer,
+        &[
+            b"CREATE TABLE t1(a,b,c)",
+            b"CREATE VIEW v1 AS SELECT * FROM t2",
+        ],
+    );
+    assert_eq!(
+        writer
+            .run(b"ALTER TABLE t1 RENAME TO t3")
+            .unwrap_err()
+            .message(),
+        "error in view v1: no such table: main.t2"
+    );
+    // A name a `WITH` term carries stands for that term, so a view that
+    // reads one names no table of the schema.
+    ran(
+        &mut writer,
+        &[
+            b"DROP VIEW v1",
+            b"CREATE VIEW v1 AS WITH t2(x) AS (SELECT 1) SELECT x FROM t2",
+            b"ALTER TABLE t1 RENAME TO t3",
+        ],
+    );
+    assert!(schema(&writer).contains("CREATE TABLE \"t3\"(a,b,c)"));
+}
+
+#[test]
+fn a_view_of_the_temp_schema_reads_the_table_of_every_database() {
+    let mut writer = writer();
+    ran(
+        &mut writer,
+        &[
+            b"CREATE TABLE t1(a)",
+            b"CREATE TEMP TABLE u1(b)",
+            b"CREATE TEMP VIEW v1 AS SELECT * FROM t1",
+            b"ALTER TABLE u1 RENAME TO u2",
+        ],
+    );
+    // The view reads a table of `main`, so the rename of the temp table
+    // is taken.
+    assert!(temped(&writer).contains("CREATE TABLE \"u2\"(b)"));
+    ran(
+        &mut writer,
+        &[
+            b"DROP VIEW v1",
+            b"CREATE TEMP VIEW v1 AS SELECT * FROM gone",
+        ],
+    );
+    // A table no database holds refuses the rename, and the refusal
+    // names the table under no schema.
+    assert_eq!(
+        writer
+            .run(b"ALTER TABLE u2 RENAME TO u3")
+            .unwrap_err()
+            .message(),
+        "error in view v1: no such table: gone"
+    );
 }

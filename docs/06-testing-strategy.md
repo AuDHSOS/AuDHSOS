@@ -7260,3 +7260,16 @@ Document 16 step Q8.
 - A check that names a schema, over a table of that database and over a
   table only another database holds; and a check that names none, over
   the table of the attached database.
+
+### 6.6.313 The views a rename resolves (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A view that reads a table no database holds, against a rename of
+  another table; and one that reads a name a `WITH` term carries, which
+  the rename is taken over.
+- A view of the temp schema that reads a table of `main`, and one that
+  reads a table no database holds.
+- The tables one statement reads under no schema, for a view over two
+  tables, a statement in brackets, a source that carries a schema, a name
+  a `WITH` term carries, and a statement the parser refuses.

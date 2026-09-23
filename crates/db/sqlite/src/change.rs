@@ -1788,10 +1788,15 @@ impl Writer {
         for (_, values) in rows {
             let text = |at: usize| values.get(at).and_then(Value::text).unwrap_or_default();
             let kind = text(0);
-            if !kind.eq_ignore_ascii_case(b"trigger") {
+            let sql = text(4);
+            let named = if kind.eq_ignore_ascii_case(b"trigger") {
+                crate::rename::named_steps(&sql)
+            } else if kind.eq_ignore_ascii_case(b"view") {
+                crate::rename::named_sources(&sql)
+            } else {
                 continue;
-            }
-            let Some(missing) = self.missing_table(&images, &text(4)) else {
+            };
+            let Some(missing) = self.missing_table(&images, &named, &sql) else {
                 continue;
             };
             return Err(Error::InObject(
@@ -1803,38 +1808,37 @@ impl Writer {
         Ok(())
     }
 
-    /// The table a step of the trigger `sql` writes that no database of
-    /// the connection holds, with the schema in front of it, and nothing
-    /// where every step of the trigger names a table.
+    /// The table `named` holds that no database of the connection holds,
+    /// with the schema in front of it, and nothing where every one of
+    /// them names a table.
     ///
     /// `renameParseSql` of `research/sqlite/src/alter.c:1240` reads the
-    /// statement under the database of the rename, so a step that names
-    /// no schema names the table of that database alone. A statement of
-    /// the temp schema is read under no database, so a step of it reads
-    /// every database in the order `sqlite3FindTable` reads them in.
+    /// statement under the database of the rename, so a name written
+    /// under no schema names the table of that database alone. A
+    /// statement of the temp schema is read under no database, so a name
+    /// of it reads every database in the order `sqlite3FindTable` reads
+    /// them in.
     ///
-    /// Reading the steps costs O(n) in them.
-    fn missing_table(&self, images: &Images, sql: &[u8]) -> Option<Vec<u8>> {
+    /// Reading the names costs O(n) in them.
+    fn missing_table(&self, images: &Images, named: &[Span], sql: &[u8]) -> Option<Vec<u8>> {
         let temping = self.called.name.eq_ignore_ascii_case(b"temp");
-        crate::rename::named_steps(sql)
-            .into_iter()
-            .find_map(|name| {
-                let named = crate::schema::dequote(name.text(sql));
-                if temping {
-                    let holds = self
-                        .reading_beside(images)
-                        .ok()
-                        .and_then(|held| held.writing(false).holding(&named))
-                        .is_some();
-                    return (!holds).then_some(named);
-                }
+        named.iter().copied().find_map(|name| {
+            let named = crate::schema::dequote(name.text(sql));
+            if temping {
                 let holds = self
-                    .reading(&images.held)
+                    .reading_beside(images)
                     .ok()
-                    .and_then(|held| held.holding(&named))
+                    .and_then(|held| held.writing(false).holding(&named))
                     .is_some();
-                (!holds).then(|| under_schema(&self.called.name, &named))
-            })
+                return (!holds).then_some(named);
+            }
+            let holds = self
+                .reading(&images.held)
+                .ok()
+                .and_then(|held| held.holding(&named))
+                .is_some();
+            (!holds).then(|| under_schema(&self.called.name, &named))
+        })
     }
 
     /// `run` told which database a statement of the temp schema that

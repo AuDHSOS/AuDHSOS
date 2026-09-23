@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` resolves every view of the schema before a rename writes
+  one of them, and refuses the rename `error in view <name>: no such
+  table: <table>` where a source of a view reads a table no database of
+  the connection holds. D-446 records it. Catalog 6.6.313.
+  `altertab.test` goes from 83 cases passing to 88.
+
 - `db-sqlite` reads `PRAGMA legacy_alter_table`, which holds a rename of
   a table to the name each statement carries the table under, resolves no
   trigger, and refuses the rename `error in <type> <name> after rename:
