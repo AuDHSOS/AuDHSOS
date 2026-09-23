@@ -895,3 +895,32 @@ fn a_declared_baseline_does_not_move_a_run_off_the_alphabetic_baseline() {
         }
     }
 }
+
+#[test]
+fn one_layout_shares_one_shaping_budget() {
+    use super::shape::{Bin, coverage, featured, lookup};
+    let mut none = Bin::words(&[1, 0, 0]);
+    none.child(2, coverage(&[]));
+    let gsub = featured(vec![lookup(1, 0, none)], *b"ccmp", &vec![0; 65_535]);
+    let original = Font::parse(include_bytes!("fixtures/DejaVu-shaping.ttf")).unwrap();
+    let bytes = super::metrics::sfnt(
+        original
+            .tables()
+            .filter(|t| t.tag != *b"GSUB")
+            .map(|t| (t.tag, t.data.to_vec()))
+            .chain([(*b"GSUB", gsub.0)])
+            .collect(),
+    );
+    let fonts = [Font::parse(&bytes).unwrap()];
+    let set = FontSet {
+        ui: &fonts,
+        mono: &fonts,
+        generation: 0,
+    };
+    let style = TextStyle::default();
+    assert!(layout::measure(&set, &style, &"a\n".repeat(100), None).is_ok());
+    assert_eq!(
+        layout::measure(&set, &style, &"a\n".repeat(1000), None),
+        Err(TextError::Font(crate::FontError::LimitExceeded))
+    );
+}

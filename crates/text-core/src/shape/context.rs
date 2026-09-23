@@ -164,16 +164,17 @@ impl<'a> Engine<'a, '_> {
         let mask = 1_u16
             .checked_shl(u32::try_from(sub(self.depth, 1)?).map_err(|_| FontError::LimitExceeded)?)
             .ok_or(FontError::LimitExceeded)?;
-        for glyph in buffer.glyphs_mut() {
-            self.tick()?;
-            glyph.context &= !mask;
-        }
         for position in positions.get(..count).ok_or(FontError::LimitExceeded)? {
             let mut glyph = buffer.get(*position)?;
             glyph.context |= mask;
             buffer.put(*position, glyph)?;
         }
-        self.actions(buffer, table, at, actions, mask)?;
+        let span = Span {
+            start: i,
+            end: add(pos, 1)?,
+            inserted: buffer.inserted,
+        };
+        self.actions(buffer, table, at, actions, mask, span)?;
         for (j, g) in buffer.glyphs().iter().enumerate().skip(i) {
             self.tick()?;
             if g.source_order > last_order {
@@ -189,13 +190,21 @@ impl<'a> Engine<'a, '_> {
         at: usize,
         count: usize,
         mask: u16,
+        span: Span,
     ) -> Result<(), FontError> {
         for a in 0..count {
             self.tick()?;
             let record = add(at, mul(a, 4)?)?;
             let mut sequence = table.u(record)?;
             let mut target = None;
-            for (j, glyph) in buffer.glyphs().iter().enumerate() {
+            let end = span.end(buffer)?;
+            for (j, glyph) in buffer
+                .glyphs()
+                .iter()
+                .enumerate()
+                .take(end)
+                .skip(span.start)
+            {
                 self.tick()?;
                 if glyph.context & mask != 0 {
                     if sequence == 0 {
@@ -211,10 +220,28 @@ impl<'a> Engine<'a, '_> {
                 target.ok_or(FontError::InvalidTable)?,
             )?;
         }
-        for glyph in buffer.glyphs_mut() {
+        let end = span.end(buffer)?;
+        for glyph in buffer.glyphs_mut().iter_mut().take(end).skip(span.start) {
             self.tick()?;
             glyph.context &= !mask;
         }
         Ok(())
+    }
+}
+
+/// Glyphs that may carry one rule's context bit.
+///
+/// Nested lookups change glyphs at or after the first match only, and each
+/// insertion moves a marked glyph at most one position toward the end.
+/// `Engine::run` clears every bit before each lookup pass.
+#[derive(Clone, Copy)]
+struct Span {
+    start: usize,
+    end: usize,
+    inserted: usize,
+}
+impl Span {
+    fn end(self, buffer: &Buffer<'_>) -> Result<usize, FontError> {
+        Ok(add(self.end, sub(buffer.inserted, self.inserted)?)?.min(buffer.len))
     }
 }

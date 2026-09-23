@@ -72,7 +72,7 @@ impl Context<'_, '_, '_> {
         Ok(first)
     }
     fn font_run(
-        &self,
+        &mut self,
         workspace: &mut Workspace<'_>,
         run: &Run,
         from: usize,
@@ -119,6 +119,7 @@ impl Context<'_, '_, '_> {
                 run.coordinates(),
                 run.level & 1 != 0,
                 &mut buffer,
+                &mut self.shaping,
             )?;
         }
         buffer.set_classes(gdef)?;
@@ -163,6 +164,7 @@ impl Context<'_, '_, '_> {
                     run.coordinates(),
                     run.level & 1 != 0,
                     &mut buffer,
+                    &mut self.shaping,
                 )?;
             }
             shape::finish(&mut buffer, run.level & 1 != 0)?;

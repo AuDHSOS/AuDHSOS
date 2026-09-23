@@ -5,6 +5,7 @@ use super::{LayoutBuffers, LayoutInfo, LayoutView, MAX_SCALARS, Workspace};
 use crate::{
     Fixed, FontSet, TextError, TextStyle, bidi, resolve,
     segment::{self, Break},
+    shape::Budget,
     variation::Instance,
 };
 
@@ -16,6 +17,7 @@ pub(super) struct Context<'a, 's, 'f> {
     pub runs: usize,
     pub breaks: usize,
     pub work: usize,
+    pub shaping: Budget,
     pub base: [Fixed; 3],
     pub tab: Fixed,
 }
@@ -89,6 +91,7 @@ impl<'a, 's, 'f> Context<'a, 's, 'f> {
             runs,
             breaks,
             work: 0,
+            shaping: Budget::default(),
             base,
             tab,
         })

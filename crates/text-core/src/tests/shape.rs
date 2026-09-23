@@ -8,7 +8,7 @@
 
 use crate::{
     Fixed, FontError,
-    shape::{self, Buffer, Feature, Gdef, Glyph, LayoutTable},
+    shape::{self, Budget, Buffer, Feature, Gdef, Glyph, LayoutTable},
 };
 
 pub(super) struct Bin(pub(super) Vec<u8>);
@@ -341,6 +341,7 @@ fn shape_font(
             &[],
             rtl,
             &mut buffer,
+            &mut Budget::default(),
         )?;
     }
     buffer.set_advances(|id| Ok(Fixed::from_i32(i32::from(metrics.horizontal(id)?.0))))?;
@@ -353,6 +354,7 @@ fn shape_font(
             &[],
             rtl,
             &mut buffer,
+            &mut Budget::default(),
         )?;
     }
     shape::finish(&mut buffer, rtl)?;
@@ -450,6 +452,7 @@ fn language_required_and_variation_feature_selection() {
                 coords,
                 false,
                 &mut buffer,
+                &mut Budget::default(),
             )
             .unwrap();
         buffer.glyphs()[0].id
@@ -697,18 +700,149 @@ fn contextual_depth_expansion_and_work_limits() {
         lookup(1, 0, single(2, 42)),
     ]);
     assert_eq!(ids(&execute(&b.0, true, &[1, 2, 2]).unwrap()), [3, 4, 2, 2]);
-    let b = layout(vec![lookup(1, 0, single(1, 2))]);
-    let mut glyphs = vec![Glyph::new(1, 0, 1); 340_000];
-    let mut buffer = Buffer::new(&mut glyphs, 340_000).unwrap();
+}
+
+/// A table whose default language system selects one feature over `refs`.
+pub(super) fn featured(lookups: Vec<Bin>, tag: [u8; 4], refs: &[u16]) -> Bin {
+    let mut b = layout(lookups);
+    let mut script = Bin::words(&[0, 0]);
+    script.child(0, Bin::words(&[0, 65535, 1, 0]));
+    let mut scripts = Bin::words(&[1, 0x4446, 0x4c54, 0]);
+    scripts.child(6, script);
+    b.child(4, scripts);
+    let mut feature = Bin::words(&[0, u16::try_from(refs.len()).expect("count")]);
+    feature.0.extend(refs.iter().flat_map(|v| v.to_be_bytes()));
+    let mut features = Bin::words(&[
+        1,
+        u16::from_be_bytes([tag[0], tag[1]]),
+        u16::from_be_bytes([tag[2], tag[3]]),
+        0,
+    ]);
+    features.child(6, feature);
+    b.child(6, features);
+    b
+}
+
+/// Apply `lookups` to `len` copies of glyph 1.
+fn long_line(len: usize, lookups: Vec<Bin>, budget: &mut Budget) -> Result<(), FontError> {
+    let refs: Vec<u16> = (0..u16::try_from(lookups.len()).expect("count")).collect();
+    let b = featured(lookups, *b"test", &refs);
+    let mut glyphs = vec![Glyph::new(1, 0, 1); len];
+    let mut buffer = Buffer::new(&mut glyphs, len)?;
+    LayoutTable::parse(&b.0, true)?.apply(
+        *b"DFLT",
+        *b"dflt",
+        &[Feature {
+            tag: *b"test",
+            value: 1,
+        }],
+        Gdef::default(),
+        &[],
+        false,
+        &mut buffer,
+        budget,
+    )
+}
+
+/// `n` single substitutions that cover glyph 1.
+fn covering(n: usize) -> Vec<Bin> {
+    (0..n).map(|_| lookup(1, 0, single(1, 1))).collect()
+}
+
+#[test]
+fn a_line_of_65536_glyphs_runs_sixteen_lookups() {
+    let mut budget = Budget::default();
+    assert_eq!(long_line(65_536, covering(16), &mut budget), Ok(()));
+    assert!(budget.spent() >= 32 * 65_536);
+}
+
+#[test]
+fn lookups_without_subtables_spend_one_operation_per_glyph() {
+    let empty = |n| (0..n).map(|_| Bin::words(&[1, 0, 0])).collect();
+    let mut budget = Budget::default();
+    assert_eq!(long_line(16_384, empty(64), &mut budget), Ok(()));
+    assert!(budget.spent() >= 64 * 16_384);
     assert_eq!(
-        LayoutTable::parse(&b.0, true).unwrap().apply_lookup(
-            0,
+        long_line(16_384, empty(128), &mut Budget::default()),
+        Err(FontError::LimitExceeded)
+    );
+}
+
+#[test]
+fn applications_sharing_a_budget_stop_at_its_limit() {
+    let mut budget = Budget::default();
+    long_line(65_536, covering(8), &mut budget).unwrap();
+    let one = budget.spent();
+    long_line(65_536, covering(8), &mut budget).unwrap();
+    assert_eq!(budget.spent(), 2 * one);
+    let mut budget = Budget {
+        spent: Budget::LIMIT - one + 1,
+    };
+    assert_eq!(
+        long_line(65_536, covering(8), &mut budget),
+        Err(FontError::LimitExceeded)
+    );
+    assert_eq!(budget.spent(), Budget::LIMIT + 1);
+}
+
+#[test]
+fn selected_lookups_run_in_list_order_across_bitset_words() {
+    let mut lookups: Vec<Bin> = (0..130).map(|_| lookup(1, 0, single(999, 999))).collect();
+    for (index, glyph) in [(0, 1), (63, 2), (64, 3), (129, 4)] {
+        lookups[index] = lookup(1, 0, single(glyph, glyph + 1));
+    }
+    let b = featured(lookups, *b"test", &[129, 64, 0, 63, 129]);
+    let mut glyphs = [Glyph::new(1, 0, 1)];
+    let mut buffer = Buffer::new(&mut glyphs, 1).unwrap();
+    LayoutTable::parse(&b.0, true)
+        .unwrap()
+        .apply(
+            *b"DFLT",
+            *b"dflt",
+            &[Feature {
+                tag: *b"test",
+                value: 1,
+            }],
             Gdef::default(),
             &[],
             false,
-            &mut buffer
-        ),
-        Err(FontError::LimitExceeded)
+            &mut buffer,
+            &mut Budget::default(),
+        )
+        .unwrap();
+    assert_eq!(ids(buffer.glyphs()), [5]);
+}
+
+#[test]
+fn contextual_matches_cost_their_span_not_the_line() {
+    let mut context = Bin::words(&[3, 1, 1, 0, 0, 1]);
+    context.child(6, coverage(&[1]));
+    let b = layout(vec![lookup(5, 0, context), lookup(1, 0, single(1, 2))]);
+    let mut glyphs = vec![Glyph::new(1, 0, 1); 4096];
+    let mut buffer = Buffer::new(&mut glyphs, 4096).unwrap();
+    LayoutTable::parse(&b.0, true)
+        .unwrap()
+        .apply_lookup(0, Gdef::default(), &[], false, &mut buffer)
+        .unwrap();
+    assert!(buffer.glyphs().iter().all(|g| g.id == 2));
+}
+
+#[test]
+fn context_actions_reach_marked_glyphs_moved_by_insertions() {
+    let mut context = Bin::words(&[3, 2, 2, 0, 0, 0, 1, 3, 2]);
+    context.child(6, coverage(&[1]));
+    context.child(8, coverage(&[2]));
+    let mut multiple = Bin::words(&[1, 0, 1, 0]);
+    multiple.child(2, coverage(&[1]));
+    multiple.child(6, Bin::words(&[3, 3, 4, 5]));
+    let b = layout(vec![
+        lookup(5, 0, context),
+        lookup(2, 0, multiple),
+        lookup(1, 0, single(2, 42)),
+    ]);
+    assert_eq!(
+        ids(&execute(&b.0, true, &[1, 2, 2]).unwrap()),
+        [3, 4, 5, 42, 2]
     );
 }
 
@@ -766,6 +900,7 @@ fn coverage_ranges_alternate_values_and_anchor_formats() {
                 &[],
                 false,
                 &mut buffer,
+                &mut Budget::default(),
             )
             .unwrap();
         assert_eq!(buffer.glyphs()[0].id, expected);
@@ -893,6 +1028,7 @@ fn repeated_feature_references_spend_the_work_budget() {
             &[],
             false,
             &mut buffer,
+            &mut Budget::default(),
         ),
         Err(FontError::LimitExceeded)
     );

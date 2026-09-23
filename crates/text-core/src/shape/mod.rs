@@ -72,6 +72,7 @@ impl Glyph {
 pub struct Buffer<'a> {
     data: &'a mut [Glyph],
     len: usize,
+    inserted: usize,
 }
 impl<'a> Buffer<'a> {
     /// Adopt an initialized prefix.
@@ -81,7 +82,11 @@ impl<'a> Buffer<'a> {
         if len > data.len() {
             return Err(FontError::BufferTooSmall);
         }
-        Ok(Self { data, len })
+        Ok(Self {
+            data,
+            len,
+            inserted: 0,
+        })
     }
     /// Return the initialized glyphs.
     #[must_use]
@@ -155,6 +160,7 @@ impl<'a> Buffer<'a> {
         self.data.copy_within(i..self.len, add(i, 1)?);
         *self.data.get_mut(i).ok_or(FontError::BufferTooSmall)? = glyph;
         self.len = add(self.len, 1)?;
+        self.inserted = add(self.inserted, 1)?;
         Ok(())
     }
     fn remove(&mut self, i: usize) -> Result<(), FontError> {
@@ -172,6 +178,25 @@ pub struct Feature {
     pub tag: [u8; 4],
     /// One-based alternate selector; zero disables the stage.
     pub value: u16,
+}
+
+/// Operation counter shared by the `LayoutTable::apply` calls of one layout.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Budget {
+    pub(crate) spent: usize,
+}
+impl Budget {
+    /// Operations all applications drawing on one budget may spend together.
+    pub const LIMIT: usize = 64_000_000;
+    /// Operations one application may spend, before `PER_GLYPH`.
+    pub const PER_APPLICATION: usize = 1_000_000;
+    /// Operations one application may spend per glyph of its input.
+    pub const PER_GLYPH: usize = 64;
+    /// Operations spent so far.
+    #[must_use]
+    pub const fn spent(self) -> usize {
+        self.spent
+    }
 }
 
 /// A borrowed GSUB or GPOS table.
@@ -227,7 +252,8 @@ impl<'a> LayoutTable<'a> {
         rtl: bool,
         buffer: &mut Buffer<'_>,
     ) -> Result<(), FontError> {
-        Engine::new(self, gdef, coords, rtl).run(index, buffer)
+        let mut budget = Budget::default();
+        Engine::new(self, gdef, coords, rtl, buffer, &mut budget)?.run(index, buffer)
     }
 }
 
@@ -237,29 +263,41 @@ struct Engine<'a, 'c> {
     coords: &'c [Fixed],
     rtl: bool,
     work: usize,
+    limit: usize,
+    budget: &'c mut Budget,
     active: [usize; 16],
     depth: usize,
     feature: Feature,
 }
 impl<'a, 'c> Engine<'a, 'c> {
-    const fn new(layout: LayoutTable<'a>, gdef: Gdef<'a>, coords: &'c [Fixed], rtl: bool) -> Self {
-        Self {
+    fn new(
+        layout: LayoutTable<'a>,
+        gdef: Gdef<'a>,
+        coords: &'c [Fixed],
+        rtl: bool,
+        buffer: &Buffer<'_>,
+        budget: &'c mut Budget,
+    ) -> Result<Self, FontError> {
+        Ok(Self {
             layout,
             gdef,
             coords,
             rtl,
             work: 0,
+            limit: add(Budget::PER_APPLICATION, mul(Budget::PER_GLYPH, buffer.len)?)?,
+            budget,
             active: [usize::MAX; 16],
             depth: 0,
             feature: Feature {
                 tag: [0; 4],
                 value: 1,
             },
-        }
+        })
     }
     fn tick(&mut self) -> Result<(), FontError> {
         self.work = add(self.work, 1)?;
-        if self.work > 1_000_000 {
+        self.budget.spent = add(self.budget.spent, 1)?;
+        if self.work > self.limit || self.budget.spent > Budget::LIMIT {
             Err(FontError::LimitExceeded)
         } else {
             Ok(())
@@ -344,6 +382,7 @@ impl<'a, 'c> Engine<'a, 'c> {
             && (kind == 8 || (kind == 7 && lookup.u(4)? != 0 && lookup.child(6)?.u(2)? == 8));
         if reverse {
             for i in (0..buffer.len).rev() {
+                self.tick()?;
                 if self.enabled(buffer.get(i)?) {
                     self.apply(index, buffer, i)?;
                 }
@@ -368,7 +407,6 @@ impl<'a, 'c> Engine<'a, 'c> {
         buffer: &mut Buffer<'_>,
         i: usize,
     ) -> Result<Option<usize>, FontError> {
-        self.tick()?;
         if self.depth >= self.active.len() {
             return Err(FontError::LimitExceeded);
         }
