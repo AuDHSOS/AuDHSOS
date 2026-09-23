@@ -86,20 +86,9 @@ pub fn any_page_range() -> BoxGen<PageRange> {
                 1 << (64 - PAGE_SHIFT)
             };
             let count = count.min(limit.saturating_sub(start.number()));
-            PageRange::new(start, count).unwrap_or_else(|_| {
-                PageRange::new(start, 0).unwrap_or_else(|_| unreachable_page_range())
-            })
+            PageRange::new(start, count).unwrap_or(PageRange::EMPTY)
         })
         .boxed()
-}
-
-/// Never called: an empty range at any page is always valid.
-#[expect(
-    clippy::panic,
-    reason = "unreachable by construction; a count of zero always fits"
-)]
-fn unreachable_page_range<T>() -> T {
-    panic!("an empty page range must be valid")
 }
 
 /// Any alignment from one byte to one gibibyte, shrinking toward one byte.

@@ -78,12 +78,19 @@ impl VirtAddr {
         alignment.is_aligned(self.0)
     }
 
-    /// Rounds down to a multiple of `alignment`. The result stays in the
-    /// same half, because both half boundaries are aligned to every
-    /// alignment up to `2^47`.
-    #[must_use]
-    pub const fn align_down(self, alignment: Alignment) -> VirtAddr {
-        VirtAddr(alignment.align_down(self.0))
+    /// Rounds down to a multiple of `alignment`; fails if the result leaves
+    /// the kernel half for an alignment above `2^47`.
+    ///
+    /// # Errors
+    ///
+    /// `CrossesCanonicalHole` if rounding leaves the half of the address space.
+    pub const fn align_down(self, alignment: Alignment) -> Result<VirtAddr, Error> {
+        let raw = alignment.align_down(self.0);
+        if is_canonical(raw) && (raw < USER_SPACE_END) == self.is_user() {
+            Ok(VirtAddr(raw))
+        } else {
+            Err(Error::CrossesCanonicalHole)
+        }
     }
 
     /// Rounds up to a multiple of `alignment`; fails if the result would
@@ -134,7 +141,7 @@ impl VirtAddr {
     /// The page containing the address.
     #[must_use]
     pub const fn page(self) -> Page {
-        Page(self.align_down(Alignment::PAGE))
+        Page(VirtAddr(Alignment::PAGE.align_down(self.0)))
     }
 }
 
@@ -249,6 +256,12 @@ const KERNEL_END_PAGE: u64 = 1 << (64 - PAGE_SHIFT);
 const _: () = assert!(VIRT_ADDR_BITS == 48);
 
 impl PageRange {
+    /// The empty range at address zero.
+    pub const EMPTY: PageRange = PageRange {
+        start: Page(VirtAddr::ZERO),
+        count: 0,
+    };
+
     /// `count` pages starting at `start`; fails if the range would leave the
     /// half of `start`.
     ///
@@ -264,7 +277,7 @@ impl PageRange {
         };
         match start.number().checked_add(count) {
             Some(end) if end <= limit => Ok(PageRange { start, count }),
-            Some(_) if start.is_user() => Err(Error::CrossesCanonicalHole),
+            _ if start.is_user() => Err(Error::CrossesCanonicalHole),
             _ => Err(Error::Overflow),
         }
     }

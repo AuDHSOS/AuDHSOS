@@ -90,22 +90,9 @@ pub fn any_user_page_range() -> BoxGen<PageRange> {
                 .ok()
                 .and_then(|address| Page::from_start(address).ok())
                 .unwrap_or_else(|| VirtAddr::ZERO.page());
-            PageRange::new(page, count).unwrap_or_else(|_| fallback_range(page))
+            PageRange::new(page, count).unwrap_or(PageRange::EMPTY)
         })
         .boxed()
-}
-
-fn fallback_range(page: Page) -> PageRange {
-    PageRange::new(page, 0).unwrap_or_else(|_| unreachable_range())
-}
-
-/// Never called: an empty range at any page is valid.
-#[expect(
-    clippy::panic,
-    reason = "unreachable by construction; a count of zero always fits"
-)]
-fn unreachable_range<T>() -> T {
-    panic!("an empty page range must be valid")
 }
 
 /// One operation of the region table model test.
