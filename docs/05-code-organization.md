@@ -152,7 +152,7 @@ AuDHSOS/
 | `audhsos-elf` | 0 | all | no | yes, fuzz | `test-support` behind the feature `test-strategies` |
 | `text-core` | 0 | all | no | yes, fuzz | none; caller buffers or optional alloc wrappers |
 | `text-raster` | 1 | all | no | yes, fuzz | `text-core`; caller buffers only, no `alloc` feature (D-179) |
-| `audhsos-uefi` | 0 | all | no | yes (layouts) | `audhsos-abi`, `audhsos-time` |
+| `audhsos-uefi` | 0 | all | no | yes (layouts, memory map conversion, framebuffer description, UTF-16 encoding) | `audhsos-abi`, `audhsos-time` |
 | `audhsos-sync` | 0 | all | allowlisted | Miri | - |
 | `audhsos-time` | 0 | all | no | yes | `test-support` behind the feature `test-strategies` |
 | `audhsos-encoding` | 0 | all | no | yes, fuzz | `test-support` behind the feature `test-strategies` |
@@ -181,7 +181,7 @@ AuDHSOS/
 | `kernel-hal-x86_64` | 5 | `x86_64-unknown-none` | allowlisted | the pure parts live in `kernel-x86-tables` and `kernel-acpi` | `kernel-acpi`, `kernel-hal-api`, `kernel-types`, `audhsos-abi`, `driver-uart16550`, `audhsos-sync`, `kernel-x86-tables`, `kernel-mm`, `kernel-test-harness` |
 | `kernel-test-harness` | 5 | all | no | yes | `kernel-hal-api` |
 | `audhsos-kernel` | 6 | `x86_64-unknown-none` | allowlisted (the entry point, the memory and interrupt bring-up, and the test images) | QEMU | `kernel-core`, `kernel-hal-api`, `kernel-hal-x86_64`, `kernel-ipc`, `kernel-types`, `audhsos-abi`; `kernel-mm`, `kernel-objects`, `kernel-syscall`, `audhsos-sync` for the test images |
-| `boot-uefi-x86_64` | b | `x86_64-unknown-uefi` | allowlisted | pure sub-modules | `audhsos-abi`, `audhsos-elf`, `audhsos-uefi`, `kernel-types`, `kernel-mm`, `kernel-hal-api` |
+| `boot-uefi-x86_64` | b | `x86_64-unknown-uefi` | allowlisted | yes (loader bounds and exit retry library tests; binary test harness disabled) | `audhsos-abi`, `audhsos-elf`, `audhsos-uefi`, `kernel-types`, `kernel-mm`, `kernel-hal-api` |
 | `user-rt` | u0 | all | no | yes | `audhsos-abi`, `audhsos-collections`; `test-support` as a dev-dependency |
 | `user-sys-x86_64` | u1 | `x86_64-unknown-none` | allowlisted | through the programs of `user-test-programs` in QEMU | `audhsos-abi`, `user-rt` |
 | `user-test-programs` | u1 | `x86_64-unknown-none` | allowlisted | QEMU: they are what the kernel test images run in user mode | `audhsos-abi`, `user-rt`, `user-sys-x86_64` |

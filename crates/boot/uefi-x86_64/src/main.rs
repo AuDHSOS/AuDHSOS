@@ -23,6 +23,7 @@ use core::panic::PanicInfo;
 use audhsos_uefi::status::Status;
 use audhsos_uefi::tables::SystemTable;
 use audhsos_uefi::types::Handle;
+use boot_uefi_x86_64::{exit_retry, loader_math};
 
 use crate::firmware::Firmware;
 
