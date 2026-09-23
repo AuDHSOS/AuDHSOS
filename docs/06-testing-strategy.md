@@ -7212,3 +7212,17 @@ Document 16 step Q8.
 - The tables one statement of the schema names, each with the schema
   written in front of it, for a trigger, a view, a statement in brackets
   and a statement the parser refuses.
+
+### 6.6.309 The triggers a rename resolves (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A trigger whose step writes a table no database holds, against a
+  rename of a table and a rename of a column of another table, with the
+  schema unchanged after each refusal, and the same rename taken once
+  that table is there.
+- A trigger of the temp schema whose step writes a table of `main`, and
+  one whose step writes a table no database holds.
+- The table each step of a trigger writes, for the three steps that
+  write one, a step that writes none, and a statement the parser
+  refuses.

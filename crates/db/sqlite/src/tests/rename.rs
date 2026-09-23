@@ -660,11 +660,91 @@ fn every_table_a_statement_names() {
     );
     // A statement in brackets is no table, so it names none.
     assert_eq!(shown(b"CREATE VIEW v AS SELECT a FROM (SELECT 1 AS a)"), "");
+    let stepped = |sql: &[u8]| {
+        let mut out = alloc::string::String::new();
+        for name in crate::rename::named_steps(sql) {
+            out.push_str(&alloc::string::String::from_utf8_lossy(name.text(sql)));
+            out.push(' ');
+        }
+        out
+    };
+    assert_eq!(stepped(b"CREATE TABLE"), "");
+    assert_eq!(
+        stepped(
+            b"CREATE TRIGGER tr AFTER INSERT ON t BEGIN INSERT INTO a VALUES(1); \
+              UPDATE b SET c=1; DELETE FROM d; SELECT 1 FROM e; END"
+        ),
+        "a b d "
+    );
     assert_eq!(
         shown(
             b"CREATE TRIGGER tr AFTER INSERT ON main.t BEGIN INSERT INTO one.a VALUES(1); \
               UPDATE two.b SET c=1; DELETE FROM three.d; SELECT 1 FROM four.e; END"
         ),
         "main.t four.e one.a two.b three.d "
+    );
+}
+
+#[test]
+fn a_trigger_that_names_a_table_no_database_holds_refuses_a_rename() {
+    let mut writer = writer();
+    ran(
+        &mut writer,
+        &[
+            b"CREATE TABLE t1(a,b)",
+            b"CREATE TABLE t3(e,f)",
+            b"CREATE TRIGGER tr1 AFTER INSERT ON t1 BEGIN INSERT INTO t2 VALUES(new.a, new.b); END",
+        ],
+    );
+    // The rename is over `t3`, which the trigger names nothing of, and
+    // the trigger of `t1` refuses it all the same.
+    for sql in [
+        b"ALTER TABLE t3 RENAME TO t4".as_slice(),
+        b"ALTER TABLE t3 RENAME e TO eee",
+    ] {
+        assert_eq!(
+            writer.run(sql).unwrap_err().message(),
+            "error in trigger tr1: no such table: main.t2",
+            "{sql:?}"
+        );
+    }
+    // The refusal leaves the statement that made the table as it stands.
+    assert!(schema(&writer).contains("CREATE TABLE t3(e,f)"));
+    // A trigger every step of which names a table takes the rename.
+    ran(
+        &mut writer,
+        &[b"CREATE TABLE t2(c)", b"ALTER TABLE t3 RENAME TO t4"],
+    );
+    assert!(schema(&writer).contains("CREATE TABLE \"t4\"(e,f)"));
+}
+
+#[test]
+fn a_trigger_of_the_temp_schema_names_the_table_of_every_database() {
+    let mut writer = writer();
+    ran(
+        &mut writer,
+        &[
+            b"CREATE TABLE t1(a)",
+            b"CREATE TEMP TABLE u7(x,y)",
+            b"CREATE TEMP TABLE u9(z)",
+            b"CREATE TEMP TRIGGER u9t AFTER INSERT ON u9 BEGIN INSERT INTO t1 VALUES(new.z); END",
+            b"ALTER TABLE u7 RENAME x TO xxx",
+        ],
+    );
+    // The step names `t1`, which `main` holds, so the rename of the temp
+    // table is taken and the temp schema carries the new name.
+    assert!(temped(&writer).contains("CREATE TABLE u7(xxx,y)"));
+    // A step that names a table no database holds refuses the rename,
+    // and the refusal names the table under no schema.
+    ran(
+        &mut writer,
+        &[b"CREATE TEMP TRIGGER u8t AFTER INSERT ON u9 BEGIN INSERT INTO u8 VALUES(new.z); END"],
+    );
+    assert_eq!(
+        writer
+            .run(b"ALTER TABLE u7 RENAME y TO yyy")
+            .unwrap_err()
+            .message(),
+        "error in trigger u8t: no such table: u8"
     );
 }

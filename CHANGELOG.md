@@ -7,6 +7,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` resolves every trigger of the schema before a rename
+  writes one of them, and refuses the rename `error in trigger <name>:
+  no such table: <table>` where a step of a trigger writes a table no
+  database of the connection holds. D-442 records it. Catalog 6.6.309.
+  `altertab3.test` goes from 77 cases passing to 81 and `altercol.test`
+  from 198 to 200.
+
 - `db-sqlite` writes the views and the triggers of the temp schema again
   under the new name where a rename of a table or of a column is over
   another database, and leaves a statement that names a table of the

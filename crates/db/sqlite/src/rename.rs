@@ -117,6 +117,28 @@ pub fn named_tables(sql: &[u8]) -> Vec<(Option<Span>, Span)> {
             out.push((schema, name));
         }
     }
+    out.extend(stepped(&arena));
+    out
+}
+
+/// The table each step of a trigger writes, and none for a statement the
+/// parser refuses.
+///
+/// `trigger_cmd` of `research/sqlite/src/parse.y:1770` refuses a schema
+/// in front of that table, so a step of a trigger the parser took names
+/// the table alone. Reading the steps costs O(n) in them.
+#[must_use]
+pub fn named_steps(sql: &[u8]) -> Vec<Span> {
+    let Ok((arena, _)) = crate::parse::definition(sql) else {
+        return Vec::new();
+    };
+    stepped(&arena).into_iter().map(|(_, name)| name).collect()
+}
+
+/// The table each step of the tree writes, with the schema written in
+/// front of it.
+fn stepped(arena: &Arena) -> Vec<(Option<Span>, Span)> {
+    let mut out = Vec::new();
     for step in arena.all_steps() {
         match step {
             TriggerStep::Insert(statement) => out.push((statement.schema, statement.name)),

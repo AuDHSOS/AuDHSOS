@@ -370,6 +370,9 @@ pub enum Error {
     /// was dropped: what it makes, its name, and what reading it
     /// refused.
     AfterDrop(Vec<u8>, Vec<u8>, alloc::string::String),
+    /// A statement of the schema that no longer reads before a rename
+    /// writes it: what it makes, its name, and what reading it refused.
+    InObject(Vec<u8>, Vec<u8>, alloc::string::String),
     /// A statement of the schema that no longer reads after a column
     /// was renamed: what it makes, its name, and what reading it
     /// refused.
@@ -848,6 +851,12 @@ impl Error {
             ),
             Error::AfterDrop(kind, name, refused) => alloc::format!(
                 "error in {} {} after drop column: {}",
+                alloc::string::String::from_utf8_lossy(kind),
+                alloc::string::String::from_utf8_lossy(name),
+                refused
+            ),
+            Error::InObject(kind, name, refused) => alloc::format!(
+                "error in {} {}: {}",
                 alloc::string::String::from_utf8_lossy(kind),
                 alloc::string::String::from_utf8_lossy(name),
                 refused

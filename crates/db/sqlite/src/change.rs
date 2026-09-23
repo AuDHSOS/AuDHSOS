@@ -1650,6 +1650,11 @@ impl Writer {
             return Err(Error::Named(to));
         }
         drop(database);
+        // A rename resolves every statement of the schema before it
+        // writes one, so a trigger that names a table no database holds
+        // refuses the rename and leaves the schema as it stands.
+        self.resolved()?;
+        self.in_temp(|writer| writer.resolved())?;
         // The temp schema holds views and triggers over the tables of
         // every database, so a rename of a table another database holds
         // writes those too. The temp schema is written first, because
@@ -1715,7 +1720,19 @@ impl Writer {
         run: impl FnOnce(&mut Self, Standing<'_>) -> Result<(), Error>,
     ) -> Result<(), Error> {
         let database = self.called.name.clone();
-        if database.eq_ignore_ascii_case(b"temp") {
+        self.in_temp(|writer| writer.standing(table, &database, run))
+    }
+
+    /// `run` against the temp schema, and nothing where the connection
+    /// holds none or already writes it.
+    ///
+    /// The two swaps cost O(1).
+    ///
+    /// # Errors
+    ///
+    /// What `run` answers.
+    fn in_temp(&mut self, run: impl FnOnce(&mut Self) -> Result<(), Error>) -> Result<(), Error> {
+        if self.called.name.eq_ignore_ascii_case(b"temp") {
             return Ok(());
         }
         let Some(at) = self
@@ -1726,9 +1743,75 @@ impl Writer {
             return Ok(());
         };
         self.switch(at);
-        let answer = self.standing(table, &database, run);
+        let answer = run(self);
         self.switch(at);
         answer
+    }
+
+    /// Raises where a trigger of the schema the connection writes names
+    /// a table no database holds, which is `renameResolveTrigger` of
+    /// `research/sqlite/src/alter.c:1341` resolving every statement of
+    /// the schema before a rename writes one of them.
+    ///
+    /// Reading the rows costs O(n) in them and O(m) in the steps of
+    /// each.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InObject`] names the trigger and the table.
+    fn resolved(&self) -> Result<(), Error> {
+        let images = self.images();
+        let rows = self.reading(&images.held)?.rows_of(SCHEMA_TABLE)?;
+        for (_, values) in rows {
+            let text = |at: usize| values.get(at).and_then(Value::text).unwrap_or_default();
+            let kind = text(0);
+            if !kind.eq_ignore_ascii_case(b"trigger") {
+                continue;
+            }
+            let Some(missing) = self.missing_table(&images, &text(4)) else {
+                continue;
+            };
+            return Err(Error::InObject(
+                kind,
+                text(1),
+                Error::NoTable(missing).message(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// The table a step of the trigger `sql` writes that no database of
+    /// the connection holds, with the schema in front of it, and nothing
+    /// where every step of the trigger names a table.
+    ///
+    /// `renameParseSql` of `research/sqlite/src/alter.c:1240` reads the
+    /// statement under the database of the rename, so a step that names
+    /// no schema names the table of that database alone. A statement of
+    /// the temp schema is read under no database, so a step of it reads
+    /// every database in the order `sqlite3FindTable` reads them in.
+    ///
+    /// Reading the steps costs O(n) in them.
+    fn missing_table(&self, images: &Images, sql: &[u8]) -> Option<Vec<u8>> {
+        let temping = self.called.name.eq_ignore_ascii_case(b"temp");
+        crate::rename::named_steps(sql)
+            .into_iter()
+            .find_map(|name| {
+                let named = crate::schema::dequote(name.text(sql));
+                if temping {
+                    let holds = self
+                        .reading_beside(images)
+                        .ok()
+                        .and_then(|held| held.writing(false).holding(&named))
+                        .is_some();
+                    return (!holds).then_some(named);
+                }
+                let holds = self
+                    .reading(&images.held)
+                    .ok()
+                    .and_then(|held| held.holding(&named))
+                    .is_some();
+                (!holds).then(|| under_schema(&self.called.name, &named))
+            })
     }
 
     /// `run` told which database a statement of the temp schema that
@@ -2158,6 +2241,8 @@ impl Writer {
             return Err(Error::NoSuchColumn(from));
         }
         drop(database);
+        self.resolved()?;
+        self.in_temp(|writer| writer.resolved())?;
         let written = Column {
             table: &name,
             from: &from,

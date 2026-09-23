@@ -1066,6 +1066,9 @@ Size: L.
      connection's limit and the stack bound. Built, which D-440 records.
 160. The views and the triggers of the temp schema, which a rename of a
      table of another database writes again. Built, which D-441 records.
+161. The triggers a rename resolves before it writes one of them, which
+     refuse the rename where a step writes a table no database holds.
+     Built, which D-442 records.
 
 ### Done when
 
