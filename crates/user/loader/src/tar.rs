@@ -66,7 +66,8 @@ pub const MAX_PATH: usize = PREFIX_LEN + 1 + NAME_LEN;
 /// Why an archive could not be read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TarError {
-    /// The bytes end inside a header or inside the file it describes.
+    /// The bytes end inside the file a header describes. A final block
+    /// shorter than a header ends the archive instead.
     Truncated {
         /// Where the reader stood.
         at: usize,
@@ -651,8 +652,8 @@ impl<'a> Builder<'a> {
 /// Splits a name into the prefix field and the name field.
 ///
 /// A name of at most a hundred bytes goes into the name field alone. A
-/// longer one is cut at the last slash that leaves at most a hundred bytes
-/// behind it, which is where the format says the prefix ends.
+/// longer one is cut at the first slash that leaves at most a hundred bytes
+/// behind it and at most 155 in front of it.
 fn split_name(name: &[u8]) -> Result<(&[u8], &[u8]), WriteError> {
     if name.len() <= NAME_LEN {
         return Ok((&[], name));

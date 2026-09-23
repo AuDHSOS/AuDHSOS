@@ -506,3 +506,29 @@ fn a_name_of_the_full_width_of_both_fields_comes_back_whole() {
     let (read_name, _, _) = read.first().unwrap();
     assert_eq!(read_name.as_slice(), name.as_slice());
 }
+
+#[test]
+fn a_search_for_a_name_in_a_header_cut_short_finds_nothing() {
+    // Issue #130: a final block shorter than a header ends the archive.
+    let bytes = archive(&[(b"one", b"x"), (b"two", b"y")]);
+    let cut = bytes
+        .get(..BLOCK.wrapping_mul(2).wrapping_add(100))
+        .unwrap();
+    assert!(Archive::new(cut).find(b"two").unwrap().is_none());
+    assert_eq!(Archive::new(cut).find(b"one").unwrap().unwrap().data, b"x");
+}
+
+#[test]
+fn a_long_name_is_cut_at_the_first_slash_that_fits() {
+    // Issue #133: both slashes leave at most 100 bytes behind them; the
+    // writer cuts at the first.
+    let name: Vec<u8> = [b"prefix/second/".as_slice(), &[b'c'; 90]].concat();
+    assert!(name.len() > 100);
+    let bytes = archive(&[(&name, b"x")]);
+    let prefix = bytes.get(PREFIX..PREFIX.wrapping_add(7)).unwrap();
+    assert_eq!(prefix, b"prefix\0");
+    let field = bytes.get(NAME..NAME.wrapping_add(7)).unwrap();
+    assert_eq!(field, b"second/");
+    let (read, _, _) = entries(&bytes).unwrap().into_iter().next().unwrap();
+    assert_eq!(read, name);
+}
