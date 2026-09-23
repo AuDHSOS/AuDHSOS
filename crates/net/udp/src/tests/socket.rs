@@ -158,6 +158,49 @@ fn a_socket_bound_to_one_address_takes_only_what_names_it() {
 }
 
 #[test]
+fn an_address_bound_socket_has_no_wildcard_fallback() {
+    let mut mine = [0u8; 128];
+    let mut wildcard = [0u8; 128];
+    let mut sockets = Sockets::<2>::new();
+    let id = sockets
+        .bind(Some(HERE), Port::new(53), &mut mine)
+        .expect("a free port");
+    assert_eq!(
+        sockets.bind(None, Port::new(53), &mut wildcard),
+        Err(UdpError::PortInUse(Port::new(53)))
+    );
+
+    let mut bytes = [0u8; 64];
+    let len = datagram(PEER, ALSO_HERE, 1024, 53, b"other", &mut bytes);
+    assert_eq!(
+        sockets.receive(PEER, ALSO_HERE, &bytes[..len]),
+        Delivery::PortUnreachable
+    );
+    assert!(sockets.get(id).expect("the socket").is_empty());
+}
+
+#[test]
+fn a_wildcard_socket_excludes_an_address_bound_socket_on_its_port() {
+    let mut wildcard = [0u8; 128];
+    let mut mine = [0u8; 128];
+    let mut sockets = Sockets::<2>::new();
+    let id = sockets
+        .bind(None, Port::new(53), &mut wildcard)
+        .expect("a free port");
+    assert_eq!(
+        sockets.bind(Some(HERE), Port::new(53), &mut mine),
+        Err(UdpError::PortInUse(Port::new(53)))
+    );
+
+    let mut bytes = [0u8; 64];
+    let len = datagram(PEER, ALSO_HERE, 1024, 53, b"other", &mut bytes);
+    assert_eq!(
+        sockets.receive(PEER, ALSO_HERE, &bytes[..len]),
+        Delivery::Delivered(id)
+    );
+}
+
+#[test]
 fn a_port_is_held_once() {
     let mut first = [0u8; 64];
     let mut second = [0u8; 64];

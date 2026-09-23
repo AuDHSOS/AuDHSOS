@@ -9,8 +9,8 @@
 //! that port, including those addressed to a broadcast or a multicast
 //! group, which is what a DHCP client needs before it has an address of
 //! its own. Bound to one, it takes only what was addressed to exactly that
-//! address, and a datagram that names another one is offered to the
-//! wildcard socket instead.
+//! address. A datagram to another address at that port is reported as port
+//! unreachable.
 //!
 //! A port is held once, whichever address holds it. Two sockets on one
 //! port with different local addresses is a distinction this system has no
@@ -79,8 +79,9 @@ pub enum Delivery {
         /// Why it did not go in.
         reason: DropReason,
     },
-    /// No socket holds the port. The layer below decides whether an ICMP
-    /// destination-unreachable message with the port code may go back.
+    /// No socket matches the port and destination address. The layer below
+    /// decides whether an ICMP destination-unreachable message with the
+    /// port code may go back.
     PortUnreachable,
     /// The datagram is not one, and nothing was delivered.
     Malformed(UdpError),
