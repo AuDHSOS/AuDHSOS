@@ -12,13 +12,13 @@
 
 use virtio_queue::{
     DeviceError, F_VERSION_1, Phase, QueueError, STATUS_ACKNOWLEDGE, STATUS_DRIVER,
-    STATUS_DRIVER_OK, STATUS_FEATURES_OK,
+    STATUS_DRIVER_OK, STATUS_FAILED, STATUS_FEATURES_OK,
 };
 
 use crate::blk::{Blk, Chain, ISR_CONFIG, ISR_QUEUE, Rings, Segment, Vectors};
 use crate::common::{self, NO_VECTOR};
-use crate::config::SECTOR_LEN;
-use crate::doubles::{RamDevice, Refusal};
+use crate::config::{ATTEMPTS, SECTOR_LEN};
+use crate::doubles::{Access, RamDevice, Refusal};
 use crate::error::BlkError;
 use crate::features::{F_FLUSH, F_RO, F_SEG_MAX, WANTED};
 use crate::registers::{Registers, Structure, Width};
@@ -518,4 +518,166 @@ fn the_driver_asks_for_what_it_wants_and_no_more() {
     let mut registers = device();
     let blk = live(&mut registers);
     assert_eq!(blk.features() & !WANTED, 0);
+}
+
+#[test]
+fn the_capacity_is_read_before_driver_ok() {
+    let mut registers = device();
+    let _blk = live(&mut registers);
+    let log = registers.log();
+    let capacity = log
+        .iter()
+        .position(|access| {
+            matches!(
+                access,
+                Access::Read(Structure::Device, crate::config::CAPACITY, ..)
+            )
+        })
+        .expect("the capacity is read");
+    let driver_ok = log
+        .iter()
+        .position(|access| {
+            matches!(access, Access::Write(Structure::Common, common::DEVICE_STATUS, _, value)
+                if *value & u64::from(STATUS_DRIVER_OK) != 0)
+        })
+        .expect("DRIVER_OK is written");
+    let queue = log
+        .iter()
+        .position(|access| {
+            matches!(
+                access,
+                Access::Write(Structure::Common, common::QUEUE_ENABLE, ..)
+            )
+        })
+        .expect("the queue is enabled");
+    assert!(capacity < queue, "the capacity is read before the queue");
+    assert!(queue < driver_ok);
+}
+
+#[test]
+fn a_configuration_that_will_not_stand_still_leaves_the_device_not_live() {
+    let mut registers = RamDevice::new(OFFERED, QUEUE_SIZE, CAPACITY).refusing(Refusal::Generation);
+    let mut blk = Blk::new(MULTIPLIER);
+    blk.reset(&mut registers);
+    assert_eq!(
+        refusal(blk.initialize(&mut registers, &RINGS, &VECTORS)),
+        BlkError::Generation(ATTEMPTS)
+    );
+    assert!(!blk.device().is_live());
+    assert_eq!(registers.status() & STATUS_DRIVER_OK, 0);
+    assert_eq!(
+        registers.common_field(common::QUEUE_ENABLE, Width::B16),
+        0,
+        "the queue is not enabled"
+    );
+    assert_eq!(blk.capacity(), 0);
+    assert_eq!(blk.features(), 0);
+    assert_ne!(registers.status() & STATUS_FAILED, 0, "the driver gave up");
+    let (mut memory, mut queue) = queue();
+    assert_eq!(
+        refusal(blk.submit(&mut queue, &mut memory, &Request::flush(), &FLUSH_CHAIN)),
+        BlkError::Device(DeviceError::OutOfOrder),
+        "a flush is refused by a device that is not live"
+    );
+    let before = registers.writes().len();
+    blk.notify(&mut registers);
+    assert_eq!(registers.writes().len(), before, "no doorbell is written");
+    assert_eq!(
+        refusal(blk.initialize(&mut registers, &RINGS, &VECTORS)),
+        BlkError::NotReset(registers.status()),
+        "the next attempt needs a reset"
+    );
+}
+
+#[test]
+fn a_refreshed_capacity_bounds_the_next_request() {
+    let mut registers = device();
+    let mut blk = live(&mut registers);
+    let (mut memory, mut queue) = queue();
+    blk.submit(&mut queue, &mut memory, &Request::read(1500), &CHAIN)
+        .expect("sector 1500 of 2048");
+    registers.write(Structure::Device, crate::config::CAPACITY, Width::B64, 1024);
+    registers.set_interrupt_status(ISR_CONFIG);
+    assert_ne!(blk.interrupt_status(&registers) & ISR_CONFIG, 0);
+    assert_eq!(blk.refresh_capacity(&mut registers), Ok(1024));
+    assert_eq!(blk.capacity(), 1024);
+    assert_eq!(
+        refusal(blk.submit(&mut queue, &mut memory, &Request::read(1500), &CHAIN)),
+        BlkError::Capacity {
+            sector: 1500,
+            sectors: 1,
+            capacity: 1024,
+        }
+    );
+    blk.submit(&mut queue, &mut memory, &Request::read(1023), &CHAIN)
+        .expect("the last sector of 1024");
+}
+
+#[test]
+fn a_capacity_that_grows_is_refreshed_too() {
+    let mut registers = device();
+    let mut blk = live(&mut registers);
+    registers.write(Structure::Device, crate::config::CAPACITY, Width::B64, 4096);
+    assert_eq!(blk.refresh_capacity(&mut registers), Ok(4096));
+    assert_eq!(blk.capacity(), 4096);
+}
+
+#[test]
+fn a_refused_refresh_stores_zero() {
+    let mut registers = device();
+    let mut blk = live(&mut registers);
+    let mut flapping = RamDevice::new(OFFERED, QUEUE_SIZE, CAPACITY).refusing(Refusal::Generation);
+    assert_eq!(
+        blk.refresh_capacity(&mut flapping),
+        Err(BlkError::Generation(ATTEMPTS))
+    );
+    assert_eq!(blk.capacity(), 0);
+    let (mut memory, mut queue) = queue();
+    assert_eq!(
+        refusal(blk.submit(&mut queue, &mut memory, &Request::read(0), &CHAIN)),
+        BlkError::Capacity {
+            sector: 0,
+            sectors: 1,
+            capacity: 0,
+        }
+    );
+    assert_eq!(blk.refresh_capacity(&mut registers), Ok(CAPACITY));
+}
+
+#[test]
+fn a_device_that_is_not_live_is_not_refreshed() {
+    let mut registers = device();
+    let mut blk = Blk::new(MULTIPLIER);
+    assert_eq!(
+        blk.refresh_capacity(&mut registers),
+        Err(BlkError::Device(DeviceError::OutOfOrder))
+    );
+    blk.reset(&mut registers);
+    assert_eq!(
+        blk.refresh_capacity(&mut registers),
+        Err(BlkError::Device(DeviceError::OutOfOrder))
+    );
+    assert_eq!(blk.capacity(), 0);
+}
+
+#[test]
+fn a_failed_device_is_refused_with_its_reason() {
+    let mut registers = device();
+    let mut blk = live(&mut registers);
+    registers.write(
+        Structure::Common,
+        common::DEVICE_STATUS,
+        Width::B8,
+        u64::from(virtio_queue::STATUS_DEVICE_NEEDS_RESET),
+    );
+    assert_eq!(
+        blk.refresh_capacity(&mut registers),
+        Err(BlkError::Device(DeviceError::NeedsReset)),
+        "the refresh reads the status first"
+    );
+    let (mut memory, mut queue) = queue();
+    assert_eq!(
+        refusal(blk.submit(&mut queue, &mut memory, &Request::read(0), &CHAIN)),
+        BlkError::Device(DeviceError::NeedsReset)
+    );
 }

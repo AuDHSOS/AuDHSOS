@@ -4,7 +4,7 @@
 //! The driver: bringing one block device up, and putting requests into
 //! its queue.
 
-use virtio_queue::{Buffer, Device, Queue, QueueMemory};
+use virtio_queue::{Buffer, Device, DeviceError, Phase, Queue, QueueMemory, STATUS_FAILED};
 
 use crate::common::{self, Common};
 use crate::config::{self, SECTOR_LEN};
@@ -148,7 +148,9 @@ impl Blk {
     /// queue of virtio 4.1.5.1.3 between the feature set and `DRIVER_OK`.
     ///
     /// The device must have been reset and have shown it: this refuses a
-    /// status that is not zero rather than waiting for one.
+    /// status that is not zero rather than waiting for one. A refusal
+    /// after `ACKNOWLEDGE` sets `FAILED` (virtio 3.1.1), so the device
+    /// needs a reset before the next attempt.
     ///
     /// # Errors
     ///
@@ -172,11 +174,36 @@ impl Blk {
         if status != 0 {
             return Err(BlkError::NotReset(status));
         }
+        let result = self.bring_up(registers, rings, *vectors);
+        if result.is_err() {
+            let status = self.status(registers);
+            if status & STATUS_FAILED == 0 {
+                registers.write(
+                    Structure::Common,
+                    common::DEVICE_STATUS,
+                    Width::B8,
+                    u64::from(status | STATUS_FAILED),
+                );
+            }
+        }
+        result
+    }
+
+    /// Steps 2 to 8 of virtio 3.1.1 on a device that shows zero.
+    fn bring_up(
+        &mut self,
+        registers: &mut impl Registers,
+        rings: &Rings,
+        vectors: Vectors,
+    ) -> Result<(), BlkError> {
         let mut common = Common::new(registers);
         self.device.acknowledge(&mut common)?;
         self.device.driver(&mut common)?;
         common.read_offered();
         let features = self.device.negotiate(&mut common, WANTED)?;
+        // Step 7 of virtio 3.1.1: the configuration is read before
+        // `DRIVER_OK`, so a refused read leaves the device not live.
+        let capacity = config::capacity(common.registers())?;
         let queue_size = configure_queue(&mut common, rings, vectors.queue)?;
         let notify_offset = notify_offset(&common, self.notify_multiplier)?;
         common.set_u16(common::CONFIG_MSIX_VECTOR, vectors.config);
@@ -186,7 +213,7 @@ impl Blk {
         // What was learned is kept only once every step has held, so a
         // refusal part way leaves the driver knowing nothing rather than
         // half of it.
-        self.capacity = config::capacity(registers)?;
+        self.capacity = capacity;
         self.features = features;
         self.queue_size = queue_size;
         self.notify_offset = notify_offset;
@@ -197,6 +224,28 @@ impl Blk {
     #[must_use]
     pub const fn capacity(&self) -> u64 {
         self.capacity
+    }
+
+    /// Reads the capacity again and stores it, for the caller to run when
+    /// [`Blk::interrupt_status`] carries [`ISR_CONFIG`] or the
+    /// configuration vector fires (virtio 5.2.6.1).
+    ///
+    /// A refused read stores zero, so [`Blk::submit`] refuses every read
+    /// and write until a later refresh succeeds.
+    ///
+    /// # Errors
+    ///
+    /// [`BlkError::Device`] with the failure reason for a failed device,
+    /// including one that set `DEVICE_NEEDS_RESET` (virtio 2.1.2), and
+    /// [`DeviceError::OutOfOrder`] for one not yet live;
+    /// [`BlkError::Generation`] for a configuration that will not stand
+    /// still.
+    pub fn refresh_capacity(&mut self, registers: &mut impl Registers) -> Result<u64, BlkError> {
+        self.poll(registers)?;
+        self.live()?;
+        let capacity = config::capacity(registers);
+        self.capacity = capacity.unwrap_or(0);
+        capacity
     }
 
     /// Whether the device refuses to be written.
@@ -242,6 +291,7 @@ impl Blk {
     ///
     /// # Errors
     ///
+    /// [`BlkError::Device`] for a device that is not live,
     /// [`BlkError::Framing`], [`BlkError::DataLength`],
     /// [`BlkError::Capacity`], [`BlkError::ReadOnly`],
     /// [`BlkError::FlushSector`], and [`BlkError::Queue`] for what the
@@ -253,6 +303,7 @@ impl Blk {
         request: &Request,
         chain: &Chain,
     ) -> Result<u16, BlkError> {
+        self.live()?;
         if request.kind.changes_device() && self.is_read_only() {
             return Err(BlkError::ReadOnly);
         }
@@ -286,8 +337,13 @@ impl Blk {
     ///
     /// The address is the one virtio 4.1.4.4 derives, and what is written
     /// is the queue index, which is zero for the one queue a block device
-    /// has without `VIRTIO_BLK_F_MQ`.
+    /// has without `VIRTIO_BLK_F_MQ`. A device that is not live is not
+    /// written, since virtio 3.1.1 forbids a notification before
+    /// `DRIVER_OK` and [`Blk::submit`] puts nothing into its queue.
     pub fn notify(&self, registers: &mut impl Registers) {
+        if !self.device.is_live() {
+            return;
+        }
         registers.write(
             Structure::Notify,
             self.notify_offset,
@@ -312,6 +368,16 @@ impl Blk {
     pub fn poll(&mut self, registers: &mut impl Registers) -> Result<(), BlkError> {
         let common = Common::new(registers);
         Ok(self.device.poll(&common)?)
+    }
+
+    /// That the device is live: the failure reason for a failed device,
+    /// and [`DeviceError::OutOfOrder`] for one not yet live.
+    const fn live(&self) -> Result<(), BlkError> {
+        match self.device.phase() {
+            Phase::Live => Ok(()),
+            Phase::Failed(reason) => Err(BlkError::Device(reason)),
+            _ => Err(BlkError::Device(DeviceError::OutOfOrder)),
+        }
     }
 
     /// That the data of a read or a write is whole sectors, and that the

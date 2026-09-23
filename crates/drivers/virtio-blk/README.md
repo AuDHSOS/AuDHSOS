@@ -15,13 +15,15 @@ constants names the section it came from.
 
 `Blk::reset` writes zero to the status and `Blk::is_reset` says when the
 device has finished: the wait between them is the caller's, because a
-logic crate has no clock. `Blk::initialize` then walks steps 2 to 8 of
-section 3.1.1 over the state machine of `virtio-queue`, configures the
-one request queue with the rings the caller allocated, and reads the
-capacity. From there `Blk::submit` puts a request into the queue and
-`Blk::notify` tells the device it is there; the completion comes back
-through `Queue::next_used`, and the status byte the device wrote is read
-by the caller and judged by `request::status`.
+logic crate has no clock. `Blk::initialize` then performs steps 2 to 8
+of section 3.1.1 with the state machine of `virtio-queue`, reads the
+capacity, and configures the one request queue with the rings the caller
+allocated, all before `DRIVER_OK`. `Blk::refresh_capacity` reads the
+capacity again, for the caller to run on a configuration change
+notification (section 5.2.6.1). From there `Blk::submit` puts a request
+into the queue and `Blk::notify` tells the device it is there; the
+completion comes back through `Queue::next_used`, and the status byte
+the device wrote is read by the caller and judged by `request::status`.
 
 The three parts of a request are the caller's memory: it writes the
 header with `Request::write_header`, hands over the addresses in a
