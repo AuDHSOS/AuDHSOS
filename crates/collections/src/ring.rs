@@ -70,13 +70,16 @@ impl<T, const N: usize> RingBuffer<T, N> {
     ///
     /// # Errors
     ///
-    /// [`CollectionError::Full`] when the buffer is at its capacity.
-    pub fn push(&mut self, value: T) -> Result<(), CollectionError> {
+    /// [`CollectionError::Full`] when the buffer is at its capacity. The
+    /// error returns `value` to the caller.
+    pub fn push(&mut self, value: T) -> Result<(), (T, CollectionError)> {
         if self.is_full() {
-            return Err(CollectionError::Full);
+            return Err((value, CollectionError::Full));
         }
         let at = Self::wrap(self.head.wrapping_add(self.len));
-        let slot = self.slots.get_mut(at).ok_or(CollectionError::Full)?;
+        let Some(slot) = self.slots.get_mut(at) else {
+            return Err((value, CollectionError::Full));
+        };
         *slot = Some(value);
         self.len = self.len.wrapping_add(1);
         Ok(())

@@ -64,12 +64,14 @@ impl<T, const N: usize> ArrayVec<T, N> {
     /// # Errors
     ///
     /// [`CollectionError::Full`] when the vector is at its capacity. The
-    /// value is returned to nobody: a caller that needs it back keeps it.
-    pub fn push(&mut self, value: T) -> Result<(), CollectionError> {
+    /// error returns `value` to the caller.
+    pub fn push(&mut self, value: T) -> Result<(), (T, CollectionError)> {
         if self.is_full() {
-            return Err(CollectionError::Full);
+            return Err((value, CollectionError::Full));
         }
-        let slot = self.slots.get_mut(self.len).ok_or(CollectionError::Full)?;
+        let Some(slot) = self.slots.get_mut(self.len) else {
+            return Err((value, CollectionError::Full));
+        };
         *slot = Some(value);
         self.len = self.len.wrapping_add(1);
         Ok(())
@@ -119,23 +121,28 @@ impl<T, const N: usize> ArrayVec<T, N> {
     /// # Errors
     ///
     /// [`CollectionError::Full`] when the vector is at its capacity, and
-    /// [`CollectionError::Index`] when `index` is beyond the length.
-    pub fn insert(&mut self, index: usize, value: T) -> Result<(), CollectionError> {
+    /// [`CollectionError::Index`] when `index` is beyond the length. The
+    /// error returns `value` to the caller.
+    pub fn insert(&mut self, index: usize, value: T) -> Result<(), (T, CollectionError)> {
         if index > self.len {
-            return Err(CollectionError::Index(index));
+            return Err((value, CollectionError::Index(index)));
         }
         if self.is_full() {
-            return Err(CollectionError::Full);
+            return Err((value, CollectionError::Full));
         }
         let mut at = self.len;
         while at > index {
             let below = at.wrapping_sub(1);
             let moved = self.slots.get_mut(below).and_then(Option::take);
-            let slot = self.slots.get_mut(at).ok_or(CollectionError::Full)?;
+            let Some(slot) = self.slots.get_mut(at) else {
+                return Err((value, CollectionError::Full));
+            };
             *slot = moved;
             at = below;
         }
-        let slot = self.slots.get_mut(index).ok_or(CollectionError::Full)?;
+        let Some(slot) = self.slots.get_mut(index) else {
+            return Err((value, CollectionError::Full));
+        };
         *slot = Some(value);
         self.len = self.len.wrapping_add(1);
         Ok(())

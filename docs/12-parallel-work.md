@@ -175,11 +175,11 @@ pub struct IndexMap<K: Ord, V, const N: usize>;
 ```
 
 Fixed capacity, no allocation, no `unsafe`, and no panic: `push` on a
-full container returns `Err(Full)`, and every accessor returns `Option`.
-`IndexList` is a doubly linked list whose links are `u32` indices into a
-slice the caller owns, which is exactly the shape the run queues of
-phase 5 and the endpoint wait queues of phase 6 need, and which would
-otherwise be written again in every crate that needs it (D-48).
+full container returns the value with `Full`, and every accessor returns
+`Option`. `IndexList` is a doubly linked list whose links are `u32`
+indices into a slice the caller owns. The kernel run and wait queues
+use thread links (D-74), as does the scheduler deadline list (D-131).
+Phase 13 bus enumeration is the next intended `IndexList` caller (D-131).
 
 Two shapes differ from the sketch above, and both are decisions rather
 than accidents.

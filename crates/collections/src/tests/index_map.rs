@@ -84,7 +84,7 @@ fn a_full_map_takes_a_known_key_and_refuses_a_new_one() {
     map.insert(1, 10).expect("room");
     map.insert(2, 20).expect("room");
     assert!(map.is_full());
-    assert_eq!(map.insert(3, 30), Err(CollectionError::Full));
+    assert_eq!(map.insert(3, 30), Err(((3, 30), CollectionError::Full)));
     // A key that is already there needs no room.
     assert_eq!(map.insert(2, 22), Ok(Some(20)));
     assert_eq!(entries(&map), vec![(1, 10), (2, 22)]);
@@ -95,7 +95,7 @@ fn a_map_without_slots_refuses_everything() {
     let mut map: IndexMap<u32, u32, 0> = IndexMap::new();
     assert!(map.is_full());
     assert!(map.is_empty());
-    assert_eq!(map.insert(1, 1), Err(CollectionError::Full));
+    assert_eq!(map.insert(1, 1), Err(((1, 1), CollectionError::Full)));
     assert_eq!(map.get(&1), None);
     assert_eq!(map.remove(&1), None);
 }
@@ -136,6 +136,24 @@ fn a_key_and_a_value_that_are_not_copy_move_in_and_out() {
     assert_eq!(map.len(), 1);
 }
 
+#[test]
+fn a_full_map_returns_an_owned_key_and_value() {
+    let mut map: IndexMap<String, String, 1> = IndexMap::new();
+    map.insert("held".to_owned(), "first".to_owned())
+        .expect("room");
+    assert_eq!(
+        map.insert("new".to_owned(), "second".to_owned()),
+        Err((
+            ("new".to_owned(), "second".to_owned()),
+            CollectionError::Full
+        ))
+    );
+    assert_eq!(
+        map.get(&"held".to_owned()).map(String::as_str),
+        Some("first")
+    );
+}
+
 /// The map against a `BTreeMap` bounded at the same capacity.
 struct MapModel;
 
@@ -168,7 +186,7 @@ impl ModelTest for MapModel {
                 let expected = if known || model.len() < CAPACITY {
                     Ok(model.insert(key, value))
                 } else {
-                    Err(CollectionError::Full)
+                    Err(((key, value), CollectionError::Full))
                 };
                 let result = sut.insert(key, value);
                 if result != expected {

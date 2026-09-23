@@ -6,14 +6,10 @@
 //! The list holds no values. It holds a head, a tail, a length, and an
 //! identifier; the links live in a slice of [`Link`] that the caller keeps
 //! beside its own array of nodes, and a node is named by its index into
-//! that slice. That is what a run queue over a fixed array of threads is,
-//! and what an endpoint wait queue over the same array is, and neither
-//! needs an allocator to be either (D-48).
+//! that slice. Phase 13 bus enumeration is the next intended caller (D-131).
 //!
-//! Several lists may run over one slice, which is the shape of one run
-//! queue per priority. Each list carries an identifier, and a [`Link`]
-//! records which list its node is in, so a node handed to the wrong list
-//! is refused instead of being quietly stolen from the right one.
+//! Several lists may use one slice. Their identifiers must be distinct for
+//! that slice. A [`Link`] records the identifier of its list.
 
 use crate::error::CollectionError;
 
@@ -92,7 +88,16 @@ impl Default for Link {
 }
 
 /// A doubly linked list over a caller's slice of [`Link`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+///
+/// The header owns its list state and cannot be copied.
+///
+/// ```compile_fail
+/// use audhsos_collections::IndexList;
+/// let list = IndexList::new(1).unwrap();
+/// let copy = list;
+/// let _ = list.len();
+/// ```
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct IndexList {
     /// Which list this is, as recorded in the links of its nodes.
     id: u32,
@@ -259,10 +264,13 @@ impl IndexList {
     /// # Errors
     ///
     /// [`CollectionError::Index`] when `node` is outside `links`, and
-    /// [`CollectionError::NotLinked`] when it is in no list or in another
-    /// one.
+    /// [`CollectionError::NotLinked`] when it is in no list, in another
+    /// list, or the list is empty.
     pub fn unlink(&mut self, links: &mut [Link], node: u32) -> Result<(), CollectionError> {
         let link = *Self::at(links, node)?;
+        let Some(next_len) = self.len.checked_sub(1) else {
+            return Err(CollectionError::NotLinked(node));
+        };
         if link.owner != self.id {
             return Err(CollectionError::NotLinked(node));
         }
@@ -277,7 +285,7 @@ impl IndexList {
             Self::set_prev(links, link.next, link.prev)?;
         }
         Self::write(links, node, NONE, NONE, NONE)?;
-        self.len = self.len.wrapping_sub(1);
+        self.len = next_len;
         Ok(())
     }
 

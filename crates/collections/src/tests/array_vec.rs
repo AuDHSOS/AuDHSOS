@@ -40,7 +40,7 @@ fn pushing_to_capacity_succeeds_and_one_more_is_full() {
         assert_eq!(vector.push(value), Ok(()));
     }
     assert!(vector.is_full());
-    assert_eq!(vector.push(3), Err(CollectionError::Full));
+    assert_eq!(vector.push(3), Err((3, CollectionError::Full)));
     assert_eq!(vector.len(), 3);
     assert_eq!(values(&vector), vec![0, 1, 2]);
 }
@@ -50,9 +50,9 @@ fn a_vector_without_slots_is_full_from_the_start() {
     let mut vector: ArrayVec<u32, 0> = ArrayVec::new();
     assert!(vector.is_full());
     assert!(vector.is_empty());
-    assert_eq!(vector.push(1), Err(CollectionError::Full));
+    assert_eq!(vector.push(1), Err((1, CollectionError::Full)));
     assert_eq!(vector.pop(), None);
-    assert_eq!(vector.insert(0, 1), Err(CollectionError::Full));
+    assert_eq!(vector.insert(0, 1), Err((1, CollectionError::Full)));
 }
 
 #[test]
@@ -73,10 +73,10 @@ fn inserting_at_either_end_and_in_the_middle_keeps_the_order() {
     assert_eq!(vector.insert(2, 40), Ok(()));
     assert_eq!(vector.insert(2, 30), Ok(()));
     assert_eq!(values(&vector), vec![10, 20, 30, 40]);
-    assert_eq!(vector.insert(5, 50), Err(CollectionError::Index(5)));
+    assert_eq!(vector.insert(5, 50), Err((50, CollectionError::Index(5))));
     assert_eq!(vector.insert(4, 50), Ok(()));
     assert_eq!(values(&vector), vec![10, 20, 30, 40, 50]);
-    assert_eq!(vector.insert(0, 5), Err(CollectionError::Full));
+    assert_eq!(vector.insert(0, 5), Err((5, CollectionError::Full)));
 }
 
 #[test]
@@ -153,6 +153,26 @@ fn a_value_that_is_not_copy_moves_in_and_out() {
     assert!(vector.is_empty());
 }
 
+#[test]
+fn refused_owned_values_return_to_the_caller() {
+    let mut vector: ArrayVec<String, 1> = ArrayVec::new();
+    vector.push("held".to_owned()).expect("room");
+    let refused = "refused".to_owned();
+    assert_eq!(
+        vector.push(refused),
+        Err(("refused".to_owned(), CollectionError::Full))
+    );
+    assert_eq!(
+        vector.insert(0, "inserted".to_owned()),
+        Err(("inserted".to_owned(), CollectionError::Full))
+    );
+    assert_eq!(
+        vector.insert(2, "outside".to_owned()),
+        Err(("outside".to_owned(), CollectionError::Index(2)))
+    );
+    assert_eq!(vector.pop().as_deref(), Some("held"));
+}
+
 /// The vector against a `Vec` of the same capacity.
 struct VecModel;
 
@@ -187,7 +207,10 @@ impl ModelTest for VecModel {
                     }
                     model.push(value);
                 }
-                Err(CollectionError::Full) => {
+                Err((returned, CollectionError::Full)) => {
+                    if returned != value {
+                        return Err("push returned a different value".to_owned());
+                    }
                     if model.len() != CAPACITY {
                         return Err("full although a slot was free".to_owned());
                     }
@@ -207,12 +230,18 @@ impl ModelTest for VecModel {
                     }
                     model.insert(position, value);
                 }
-                Err(CollectionError::Index(at)) => {
+                Err((returned, CollectionError::Index(at))) => {
+                    if returned != value {
+                        return Err("insert returned a different value".to_owned());
+                    }
                     if at != position || position <= model.len() {
                         return Err("refused a position that is inside".to_owned());
                     }
                 }
-                Err(CollectionError::Full) => {
+                Err((returned, CollectionError::Full)) => {
+                    if returned != value {
+                        return Err("insert returned a different value".to_owned());
+                    }
                     if model.len() != CAPACITY {
                         return Err("full although a slot was free".to_owned());
                     }
