@@ -52,9 +52,12 @@ ASCII word/digit classes and ECMAScript whitespace, alternation, groups,
 captures, greedy/lazy repetition, counted repetition, anchors and word
 boundaries. Positive/negative lookahead of a single literal or character class
 is a zero-width NFA predicate at the current offset, including end-of-input;
-it performs no secondary search. Options: multiline and dot-all. Unicode/code-point mode,
-case-folding, general lookaround, named groups, backreferences, and quantification
-of nullable expressions are explicitly unsupported. The last restriction
+it performs no secondary search. Options: multiline and dot-all. `]`, `}` and a
+`{` that starts no complete `{n}`, `{n,}` or `{n,m}` are literals, following
+ECMA-262 B.1.2 `ExtendedPatternCharacter`. Unicode/code-point mode,
+case-folding, general lookaround, named groups, inline modifiers, backreferences,
+quantified lookahead and quantification of nullable expressions are explicitly
+unsupported. The last restriction
 avoids claiming ECMAScript empty-iteration capture semantics prematurely.
 
 Prioritized epsilon closure is iterative. At each input position, every
@@ -67,7 +70,9 @@ Captures use bounded per-thread vectors, not an unbounded history. With `g`
 capture registers, worst-case work is O(m × n × (g + log r)), where `r` is
 the maximum number of class ranges; memory is O(m × g + r). All are linear
 in text length for a fixed compiled pattern. Six state/register matrices
-are conservatively charged before matching. Allocation failure still needs
+are charged against `capture_cells` at compile time and before matching.
+Each state carries the stamp of its last closure offset, so moving to the
+next offset costs O(1), not O(m). Allocation failure still needs
 an embedding memory quota; logical resource errors do not catch allocator OOM.
 
 `sh tools/xtask.sh regex-check` runs focused tests, strict Clippy and the

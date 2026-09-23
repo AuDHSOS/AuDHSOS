@@ -212,8 +212,7 @@ fn options_sticky_offsets_and_end_of_input() -> Result<(), Error> {
 #[test]
 fn syntax_and_unsupported_constructs_are_explicit() {
     for pattern in [
-        "(", ")", "[", "[z-a]", "*", "a**", "a{1", "a{2,1}", "a{1,x}", "\\", "\\xgg", "\\u00",
-        "\\c1", "^*", "a]",
+        "(", ")", "[", "[z-a]", "*", "a**", "a{2,1}", "\\", "\\xgg", "\\u00", "\\c1", "^*",
     ] {
         assert!(
             matches!(
@@ -515,5 +514,234 @@ fn single_character_lookahead_is_zero_width_and_bounded() -> Result<(), Error> {
         );
         assert_eq!(report.matched, expected);
     }
+    Ok(())
+}
+
+fn compile(pattern: &str, limits: Limits) -> Result<Regex, Error> {
+    Regex::compile(
+        &pattern.encode_utf16().collect::<Vec<_>>(),
+        Options::default(),
+        limits,
+    )
+}
+
+#[test]
+fn seen_stamps_expire_per_offset_without_a_reset() -> Result<(), Error> {
+    // Issue #405: a new offset clears all marks in O(1).
+    let mut seen = crate::matcher::Seen(vec![0; 3]);
+    assert!(seen.mark(2, 0)?);
+    assert!(!seen.mark(2, 0)?);
+    assert!(seen.mark(2, 1)?);
+    assert!(seen.mark(0, 1)? && !seen.mark(0, 1)?);
+    assert!(matches!(seen.mark(3, 1), Err(Error::InvalidProgram)));
+    let regex = compile(
+        "a{10000}b{10000}c{10000}d{10000}e{10000}f{10000}",
+        Limits::default(),
+    )?;
+    assert_eq!(regex.state_count(), 60_003);
+    let report = regex.find(&vec![120; 20_000], 0, false, Limits::default())?;
+    assert!(report.matched.is_none());
+    let regex = compile("(a|ab)(c|bcd)(d*)", Limits::default())?;
+    let input: Vec<u16> = "xabcdabcd".encode_utf16().collect();
+    for (from, sticky, range) in [
+        (0, false, Some(1..5)),
+        (5, true, Some(5..9)),
+        (2, true, None),
+    ] {
+        assert_eq!(
+            regex
+                .find(&input, from, sticky, Limits::default())?
+                .matched
+                .map(|m| m.range),
+            range,
+            "{from}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn braces_and_brackets_follow_annex_b_extended_pattern_characters() -> Result<(), Error> {
+    // Issue #407: `]`, `}` and an incomplete `{` are literals.
+    for (pattern, text, range) in [
+        ("a]", "xa]", Some(1..3)),
+        ("]", "]", Some(0..1)),
+        ("[]]", "]", None),
+        ("a}", "a}", Some(0..2)),
+        ("{", "{", Some(0..1)),
+        ("{a", "{a", Some(0..2)),
+        ("a{1", "a{1", Some(0..3)),
+        ("a{1,x}", "a{1,x}", Some(0..6)),
+        ("a{,5}", "a{,5}", Some(0..5)),
+        ("a{1,", "a{1,", Some(0..4)),
+        ("a*{", "aa{", Some(0..3)),
+        ("a{2}{", "aa{", Some(0..3)),
+        ("a{", "a{", Some(0..2)),
+        ("(?=])]", "]", Some(0..1)),
+        ("(?={){", "{", Some(0..1)),
+        ("a{2,3}", "aaaa", Some(0..3)),
+    ] {
+        assert_eq!(search(pattern, text)?.map(|m| m.range), range, "{pattern}");
+    }
+    for pattern in [
+        "{1}",
+        "a{2,1}",
+        "a{1}{2}",
+        "a*{1}",
+        "a{1,}{2,3}",
+        "|{3}",
+        "(?={1})",
+        "(?=*)",
+        "(?=+a)",
+    ] {
+        assert!(
+            matches!(
+                compile(pattern, Limits::default()),
+                Err(Error::Syntax { .. })
+            ),
+            "{pattern}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn quantified_lookahead_is_unsupported_and_quantified_anchor_is_syntax() {
+    // Issue #408: B.1.2 `QuantifiableAssertion`.
+    for pattern in ["(?=a)*", "(?!a)+", "(?=[ab])?", "(?!a){2}"] {
+        assert!(
+            matches!(
+                compile(pattern, Limits::default()),
+                Err(Error::Unsupported {
+                    feature: "quantified lookahead",
+                    ..
+                })
+            ),
+            "{pattern}"
+        );
+    }
+    for pattern in [
+        "^*",
+        "$+",
+        "\\b?",
+        "\\B{2}",
+        "(?=a)**",
+        "(?=a)?+",
+        "(?!a){1}{2}",
+    ] {
+        assert!(
+            matches!(
+                compile(pattern, Limits::default()),
+                Err(Error::Syntax { .. })
+            ),
+            "{pattern}"
+        );
+    }
+}
+
+#[test]
+fn malformed_group_heads_are_syntax_errors() {
+    // Issue #409: only `<` and valid modifiers are unsupported.
+    for pattern in [
+        "(?",
+        "(?x)",
+        "(?)",
+        "(?i)",
+        "(?i",
+        "(?-:a)",
+        "(?ii:a)",
+        "(?i-i:a)",
+        "(?m-ss:a)",
+        "(?--:a)",
+        "(?i-m",
+        "(?<",
+        "(?<)",
+        "(?<1>a)",
+        "(?<-a)",
+    ] {
+        assert!(
+            matches!(
+                compile(pattern, Limits::default()),
+                Err(Error::Syntax { .. })
+            ),
+            "{pattern}"
+        );
+    }
+    for pattern in [
+        "(?i:a)",
+        "(?-m:a)",
+        "(?ims:a)",
+        "(?is-m:a)",
+        "(?<x>a)",
+        "(?<$>a)",
+        "(?:^)*",
+        "(?:\\b)+",
+        "(?:(?=a))*",
+        "(?<=a)",
+        "(?<!a)",
+    ] {
+        assert!(
+            matches!(
+                compile(pattern, Limits::default()),
+                Err(Error::Unsupported { .. })
+            ),
+            "{pattern}"
+        );
+    }
+}
+
+#[test]
+fn depth_counts_the_top_level_disjunction() -> Result<(), Error> {
+    // Issue #410: `k` nested groups need `depth >= k + 1`.
+    let limits = |depth| Limits {
+        depth,
+        ..Limits::default()
+    };
+    assert!(matches!(
+        compile("(a)", limits(1)),
+        Err(Error::Limit { .. })
+    ));
+    compile("(a)", limits(2))?;
+    compile("a", limits(1))?;
+    let nested = |k: usize| format!("{}a{}", "(?:".repeat(k), ")".repeat(k));
+    compile(&nested(47), Limits::default())?;
+    for depth in [48, 100] {
+        assert!(matches!(
+            compile(&nested(48), limits(depth)),
+            Err(Error::Limit {
+                resource: "pattern nesting"
+            })
+        ));
+    }
+    Ok(())
+}
+
+#[test]
+fn compile_rejects_a_capture_workspace_that_find_would_reject() -> Result<(), Error> {
+    // Issue #411: 5495 states × 130 registers × 6 > 4,194,304.
+    let pattern = format!("{}a{{5300}}", "(a)".repeat(64));
+    assert!(matches!(
+        compile(&pattern, Limits::default()),
+        Err(Error::Limit {
+            resource: "capture workspace"
+        })
+    ));
+    let pattern = format!("{}a{{5000}}", "(a)".repeat(64));
+    let regex = compile(&pattern, Limits::default())?;
+    let input = vec![97; 5064];
+    let found = regex.find(&input, 0, false, Limits::default())?.matched;
+    assert_eq!(found.map(|m| m.range), Some(0..5064));
+    let small = Limits {
+        capture_cells: 47,
+        ..Limits::default()
+    };
+    assert!(matches!(compile("a", small), Err(Error::Limit { .. })));
+    compile(
+        "a",
+        Limits {
+            capture_cells: 48,
+            ..Limits::default()
+        },
+    )?;
     Ok(())
 }

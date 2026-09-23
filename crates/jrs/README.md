@@ -416,8 +416,9 @@ The separately authorized `crates/regex-bt` now provides a bounded backtracking
 core. jrs has not switched to it and has no automatic fallback; runtime integration
 and full `RegExp` syntax remain separate work.
 The current regex subset supports single-literal/class lookahead as a zero-width
-NFA predicate; it rejects general lookaround, named groups, nullable
-quantified expressions, Unicode/code-point flags and ignore-case mode.
+NFA predicate; it rejects general lookaround, named groups, inline modifiers,
+quantified lookahead, nullable quantified expressions, Unicode/code-point flags
+and ignore-case mode. `]`, `}` and an incomplete `{` are literals (B.1.2).
 `RegExp` instances inherit methods/accessors from the intrinsic prototype and
 own lastIndex. The lexer uses contextual expression
 tracking for slash tokens; the complete ECMAScript lexical-goal grammar is

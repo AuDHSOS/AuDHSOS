@@ -20,12 +20,13 @@ budget across all candidate starts, comparisons, capture copies and lookarounds.
 Explicit choice and assertion stacks, input size, capture/register cells and
 compiled states have independent quotas, checked before growth. Limit exhaustion
 is a typed error, never a non-match. Matching never recurses on the Rust stack;
-parser/compiler recursion has the shared hard nesting cap of 48. Allocation OOM
+parser/compiler recursion has the shared hard depth cap of 48, which counts
+the top-level disjunction and admits 47 nested groups. Allocation OOM
 still requires an embedding allocator policy; limits count logical resources.
 
 The current grammar is UTF-16 code-unit mode with multiline/dot-all options.
 Named groups, Unicode/code-point mode, ignore-case folding, Unicode properties,
-legacy octal/identity escapes and quantified assertions remain unsupported, not
+legacy octal/identity escapes and quantified lookahead remain unsupported, not
 approximated. This is a reusable core, not full ECMAScript `RegExp` conformance.
 Source: local `docs/ecma/ecma262.html` §22.2.2 (`RepeatMatcher`, assertions,
 `BackreferenceMatcher`). No external code or library is required.
