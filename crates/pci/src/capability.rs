@@ -101,10 +101,10 @@ const fn aligned(pointer: u8) -> u8 {
 ///
 /// # Errors
 ///
-/// [`PciError::Offset`] for one that leaves it.
+/// [`PciError::CapabilityTruncated`] for one that leaves it.
 pub(crate) const fn fits(offset: u16, len: u16) -> Result<(), PciError> {
     if offset.saturating_add(len) > LIST_LEN {
-        return Err(PciError::Offset(offset));
+        return Err(PciError::CapabilityTruncated { offset, len });
     }
     Ok(())
 }

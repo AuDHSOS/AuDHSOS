@@ -36,8 +36,9 @@ pub const NETWORK_DEVICE: u16 = DEVICE_BASE + 1;
 /// two (virtio 5.2.1).
 pub const BLOCK_DEVICE: u16 = DEVICE_BASE + 2;
 
-/// Number of structures this crate reports of one function.
-pub const MAX_STRUCTURES: usize = 16;
+/// Number of structures this crate reports of one function: one per
+/// capability the walk answers.
+pub const MAX_STRUCTURES: usize = MAX_CAPABILITIES;
 
 /// Number of bytes of a capability that is not the notification one.
 pub const CAPABILITY_LEN: u8 = 16;
@@ -148,8 +149,8 @@ pub struct Structure {
 ///
 /// [`PciError::CapabilityLength`] for a capability shorter than its kind
 /// needs; [`PciError::CapabilityBar`] for one naming a register a function
-/// has not; [`PciError::Offset`] for one that would leave the list; the
-/// errors of [`crate::space::read_word`].
+/// has not; [`PciError::CapabilityTruncated`] for one that would leave the
+/// list; the errors of [`crate::space::read_word`].
 pub fn structures(
     space: &impl ConfigSpace,
     address: Address,

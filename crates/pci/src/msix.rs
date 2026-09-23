@@ -16,6 +16,7 @@
 //! whoever holds the mapping.
 
 use crate::address::Address;
+use crate::bar::MAX_BARS;
 use crate::capability::{ID_MSIX, fits};
 use crate::error::PciError;
 use crate::space::{ConfigSpace, read_u16, read_word, write_u16};
@@ -25,6 +26,12 @@ pub const CAPABILITY_LEN: u16 = 12;
 
 /// Number of bytes of one table entry.
 pub const ENTRY_LEN: usize = 16;
+
+/// Number of vectors one quadword of the pending bit array holds.
+const VECTORS_PER_PENDING: u64 = 64;
+
+/// Number of bytes of one quadword of the pending bit array.
+const PENDING_QUADWORD: u64 = 8;
 
 /// Offset of the message control word inside the capability.
 const CONTROL: u16 = 2;
@@ -95,7 +102,9 @@ pub struct Entry {
 /// # Errors
 ///
 /// [`PciError::NotMsix`] when the capability carries another identifier;
-/// [`PciError::Offset`] when it would leave the list; the errors of
+/// [`PciError::CapabilityTruncated`] when it would leave the list;
+/// [`PciError::CapabilityBar`] when the table or the pending bits name a
+/// register above 5, which the specification reserves; the errors of
 /// [`crate::space::read_word`].
 pub fn read(space: &impl ConfigSpace, address: Address, offset: u16) -> Result<MsiX, PciError> {
     fits(offset, CAPABILITY_LEN)?;
@@ -111,9 +120,26 @@ pub fn read(space: &impl ConfigSpace, address: Address, offset: u16) -> Result<M
         vectors: (control & SIZE_MASK).saturating_add(1),
         enabled: control & ENABLE != 0,
         function_masked: control & FUNCTION_MASK != 0,
-        table: location(table),
-        pending: location(pending),
+        table: location(table)?,
+        pending: location(pending)?,
     })
+}
+
+impl MsiX {
+    /// Number of bytes of the table: one entry per vector.
+    #[must_use]
+    pub fn table_len(&self) -> u64 {
+        u64::from(self.vectors).saturating_mul(u64::try_from(ENTRY_LEN).unwrap_or(u64::MAX))
+    }
+
+    /// Number of bytes of the pending bit array: one bit per vector, in
+    /// whole quadwords.
+    #[must_use]
+    pub fn pending_len(&self) -> u64 {
+        u64::from(self.vectors)
+            .div_ceil(VECTORS_PER_PENDING)
+            .saturating_mul(PENDING_QUADWORD)
+    }
 }
 
 /// Turns the delivery of MSI-X messages of this function on or off.
@@ -206,9 +232,17 @@ fn set_bit(
 }
 
 /// The register and the offset one of the two words names.
-fn location(word: u32) -> Location {
-    Location {
-        bar: u8::try_from(word & BAR_MASK).unwrap_or(0),
-        offset: word & !BAR_MASK,
+///
+/// # Errors
+///
+/// [`PciError::CapabilityBar`] for a register a type-0 header has not.
+fn location(word: u32) -> Result<Location, PciError> {
+    let bar = u8::try_from(word & BAR_MASK).unwrap_or(u8::MAX);
+    if usize::from(bar) >= MAX_BARS {
+        return Err(PciError::CapabilityBar(bar));
     }
+    Ok(Location {
+        bar,
+        offset: word & !BAR_MASK,
+    })
 }

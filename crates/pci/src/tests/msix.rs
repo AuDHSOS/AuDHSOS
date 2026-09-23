@@ -98,7 +98,48 @@ fn a_capability_that_would_leave_the_list_is_refused() {
     let builder = Builder::new(0x1AF4, 0x1041);
     let space = one(&builder);
     let address = space.address(0, 0).unwrap();
-    assert_eq!(read(&space, address, 0xF8), Err(PciError::Offset(0xF8)));
+    assert_eq!(
+        read(&space, address, 0xF8),
+        Err(PciError::CapabilityTruncated {
+            offset: 0xF8,
+            len: 12,
+        })
+    );
+}
+
+#[test]
+fn a_table_or_pending_register_above_five_is_refused() {
+    for (table, pending, refused) in [(6, 1, 6), (1, 7, 7)] {
+        let mut builder = Builder::new(0x1AF4, 0x1041);
+        builder.capabilities(0x40);
+        builder.msix(0x40, 0x00, 4, (table, 0), (pending, 0x800));
+        let space = one(&builder);
+        let address = space.address(0, 0).unwrap();
+        assert_eq!(
+            read(&space, address, 0x40),
+            Err(PciError::CapabilityBar(refused))
+        );
+    }
+}
+
+#[test]
+fn the_table_and_the_pending_bits_cover_every_vector() {
+    for (vectors, table, pending) in [
+        (1, 16, 8),
+        (64, 1024, 8),
+        (65, 1040, 16),
+        (2048, 32768, 256),
+    ] {
+        let mut builder = Builder::new(0x1AF4, 0x1041);
+        builder.capabilities(0x40);
+        builder.msix(0x40, 0x00, vectors, (1, 0), (1, 0x800));
+        let space = one(&builder);
+        let address = space.address(0, 0).unwrap();
+        let capability = read(&space, address, 0x40).unwrap();
+        assert_eq!(capability.vectors, vectors);
+        assert_eq!(capability.table_len(), table, "{vectors} vectors");
+        assert_eq!(capability.pending_len(), pending, "{vectors} vectors");
+    }
 }
 
 #[test]

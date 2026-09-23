@@ -6,7 +6,7 @@
 #![allow(clippy::arithmetic_side_effects, clippy::indexing_slicing)]
 #![allow(clippy::as_conversions, clippy::cast_possible_truncation)]
 
-use crate::capability::{ID_VENDOR, walk};
+use crate::capability::{ID_VENDOR, MAX_CAPABILITIES, walk};
 use crate::doubles::RecordedConfigSpace;
 use crate::error::PciError;
 use crate::header::read as read_header;
@@ -157,7 +157,32 @@ fn a_capability_that_would_leave_the_list_is_refused() {
     builder.capabilities(0xF4);
     builder.capability(0xF4, ID_VENDOR, 0x00, &[16, 1, 4, 0]);
     let space = one(&builder);
-    assert_eq!(found(&space), Err(PciError::Offset(0xF4)));
+    assert_eq!(
+        found(&space),
+        Err(PciError::CapabilityTruncated {
+            offset: 0xF4,
+            len: 16,
+        })
+    );
+}
+
+#[test]
+fn every_structure_is_reported_past_the_sixteenth() {
+    // Capabilities eight bytes apart: the second half of each is the head
+    // of the next.
+    const COUNT: u8 = 20;
+    let mut builder = Builder::new(VIRTIO_NET.0, VIRTIO_NET.1);
+    builder.capabilities(0x40);
+    for index in 0..COUNT {
+        let at = 0x40 + index * 8;
+        let next = if index + 1 == COUNT { 0 } else { at + 8 };
+        builder.capability(at, ID_VENDOR, next, &[16, 9, 4, index, 0, 0]);
+    }
+    let space = one(&builder);
+    let structures = found(&space).unwrap();
+    let ids: Vec<u8> = structures.iter().flatten().map(|found| found.id).collect();
+    assert_eq!(ids, (0..COUNT).collect::<Vec<u8>>());
+    const { assert!(MAX_STRUCTURES >= MAX_CAPABILITIES) };
 }
 
 #[test]
