@@ -40,13 +40,9 @@ use user_sys_x86_64::{self as sys, Gate};
 sys::entry!(main);
 
 /// Runs every wrapper once and ends.
-///
-/// # Safety
-///
-/// The kernel started this thread with the address of its own IPC buffer,
-/// and this is the only gate over it.
 fn main(ipc_buffer: u64) -> ! {
-    // SAFETY: as above.
+    // SAFETY: the kernel supplied this thread's IPC buffer address,
+    // and this is the only gate over it.
     let mut gate = unsafe { Gate::adopt(ipc_buffer) };
     // A handle whose index lies beyond the arena, so no generation could
     // make it name anything. Every call that takes one gets this, and is
