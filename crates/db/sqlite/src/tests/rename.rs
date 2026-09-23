@@ -516,3 +516,155 @@ fn what_the_parser_reads_of_a_dropped_column() {
     assert!(crate::parse::definition(b"ALTER TABLE t DROP c").is_ok());
     assert!(crate::parse::definition(b"ALTER TABLE t DROP COLUMN").is_err());
 }
+
+/// The rows of the temp schema as `type|name|tbl_name|sql` lines.
+fn temped(writer: &Writer) -> alloc::string::String {
+    let image = writer.temp().unwrap_or_default();
+    let database = Database::open(&image).unwrap();
+    let answer = database
+        .query(b"SELECT type,name,tbl_name,sql FROM sqlite_schema")
+        .unwrap();
+    let mut shown = alloc::string::String::new();
+    for row in &answer.rows {
+        for value in row {
+            shown.push_str(&alloc::string::String::from_utf8_lossy(
+                &value.text().unwrap_or_default(),
+            ));
+            shown.push('|');
+        }
+        shown.push('\n');
+    }
+    shown
+}
+
+/// The statements a connection runs in turn, each of which must be
+/// taken.
+fn ran(writer: &mut Writer, statements: &[&[u8]]) {
+    for sql in statements {
+        writer.run(sql).unwrap();
+    }
+}
+
+#[test]
+fn a_view_and_a_trigger_of_the_temp_schema_are_written_again_under_the_new_name() {
+    let mut writer = writer();
+    ran(
+        &mut writer,
+        &[
+            b"CREATE TABLE t1(a,b)",
+            b"CREATE TABLE other(a)",
+            b"CREATE TEMP TABLE x(y)",
+            b"CREATE TEMP VIEW v1 AS SELECT a FROM t1",
+            b"CREATE TEMP VIEW v2 AS SELECT a FROM other",
+            b"CREATE TEMP TRIGGER tr1 AFTER INSERT ON t1 BEGIN INSERT INTO t1(a) VALUES(new.a); END",
+            b"CREATE TEMP TRIGGER tr2 AFTER UPDATE ON main.t1 BEGIN UPDATE t1 SET b=1; \
+               DELETE FROM t1 WHERE a=2; SELECT 1; END",
+            b"ALTER TABLE t1 RENAME TO t2",
+        ],
+    );
+    assert_eq!(
+        temped(&writer),
+        alloc::string::String::from(concat!(
+            "table|x|x|CREATE TABLE x(y)|\n",
+            "view|v1|v1|CREATE VIEW v1 AS SELECT a FROM \"t2\"|\n",
+            "view|v2|v2|CREATE VIEW v2 AS SELECT a FROM other|\n",
+            "trigger|tr1|t2|CREATE TRIGGER tr1 AFTER INSERT ON \"t2\" ",
+            "BEGIN INSERT INTO \"t2\"(a) VALUES(new.a); END|\n",
+            "trigger|tr2|t2|CREATE TRIGGER tr2 AFTER UPDATE ON main.\"t2\" ",
+            "BEGIN UPDATE \"t2\" SET b=1; DELETE FROM \"t2\" WHERE a=2; ",
+            "SELECT 1; END|\n",
+        ))
+    );
+    ran(&mut writer, &[b"ALTER TABLE t2 RENAME COLUMN a TO c"]);
+    assert_eq!(
+        temped(&writer),
+        alloc::string::String::from(concat!(
+            "table|x|x|CREATE TABLE x(y)|\n",
+            "view|v1|v1|CREATE VIEW v1 AS SELECT c FROM \"t2\"|\n",
+            "view|v2|v2|CREATE VIEW v2 AS SELECT a FROM other|\n",
+            "trigger|tr1|t2|CREATE TRIGGER tr1 AFTER INSERT ON \"t2\" ",
+            "BEGIN INSERT INTO \"t2\"(c) VALUES(new.c); END|\n",
+            "trigger|tr2|t2|CREATE TRIGGER tr2 AFTER UPDATE ON main.\"t2\" ",
+            "BEGIN UPDATE \"t2\" SET b=1; DELETE FROM \"t2\" WHERE c=2; ",
+            "SELECT 1; END|\n",
+        ))
+    );
+}
+
+#[test]
+fn a_temp_table_of_the_name_leaves_the_temp_schema_as_it_stands() {
+    let mut writer = writer();
+    ran(
+        &mut writer,
+        &[
+            b"CREATE TABLE t1(a,b)",
+            b"CREATE TEMP TABLE t1(a,b)",
+            b"CREATE TEMP TRIGGER tr1 AFTER INSERT ON t1 BEGIN SELECT new.a; END",
+            b"CREATE TEMP VIEW v1 AS SELECT a FROM t1",
+            b"ALTER TABLE main.t1 RENAME COLUMN a TO c",
+            b"ALTER TABLE main.t1 RENAME TO t2",
+        ],
+    );
+    assert_eq!(
+        temped(&writer),
+        alloc::string::String::from(concat!(
+            "table|t1|t1|CREATE TABLE t1(a,b)|\n",
+            "trigger|tr1|t1|CREATE TRIGGER tr1 AFTER INSERT ON t1 BEGIN SELECT new.a; END|\n",
+            "view|v1|v1|CREATE VIEW v1 AS SELECT a FROM t1|\n",
+        ))
+    );
+}
+
+#[test]
+fn a_rename_of_a_temp_table_writes_the_temp_schema_once() {
+    let mut writer = writer();
+    ran(
+        &mut writer,
+        &[
+            b"CREATE TEMP TABLE t1(a,b)",
+            b"CREATE TEMP VIEW v1 AS SELECT a FROM t1",
+            b"ALTER TABLE t1 RENAME TO t2",
+            b"CREATE TEMP TABLE u(a,b)",
+            b"ALTER TABLE u RENAME COLUMN a TO c",
+        ],
+    );
+    assert_eq!(
+        temped(&writer),
+        alloc::string::String::from(concat!(
+            "table|t2|t2|CREATE TABLE \"t2\"(a,b)|\n",
+            "view|v1|v1|CREATE VIEW v1 AS SELECT a FROM \"t2\"|\n",
+            "table|u|u|CREATE TABLE u(c,b)|\n",
+        ))
+    );
+}
+
+#[test]
+fn every_table_a_statement_names() {
+    let shown = |sql: &[u8]| {
+        let mut out = alloc::string::String::new();
+        for (schema, name) in crate::rename::named_tables(sql) {
+            if let Some(schema) = schema {
+                out.push_str(&alloc::string::String::from_utf8_lossy(schema.text(sql)));
+                out.push('.');
+            }
+            out.push_str(&alloc::string::String::from_utf8_lossy(name.text(sql)));
+            out.push(' ');
+        }
+        out
+    };
+    // A statement the parser refuses names nothing.
+    assert_eq!(shown(b"CREATE TABLE"), "");
+    assert_eq!(
+        shown(b"CREATE VIEW v AS SELECT a FROM aux.t, u"),
+        "aux.t u "
+    );
+    // A statement in brackets is no table, so it names none.
+    assert_eq!(shown(b"CREATE VIEW v AS SELECT a FROM (SELECT 1 AS a)"), "");
+    assert_eq!(
+        shown(
+            b"CREATE TRIGGER tr AFTER INSERT ON main.t BEGIN INSERT INTO one.a VALUES(1); \
+              UPDATE two.b SET c=1; DELETE FROM three.d; SELECT 1 FROM four.e; END"
+        ),
+        "main.t four.e one.a two.b three.d "
+    );
+}

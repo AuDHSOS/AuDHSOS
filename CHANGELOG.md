@@ -7,6 +7,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` writes the views and the triggers of the temp schema again
+  under the new name where a rename of a table or of a column is over
+  another database, and leaves a statement that names a table of the
+  temp schema or of a third database as it stands. D-441 records it.
+  Catalog 6.6.308. `altertab.test` goes from 79 cases passing to 82 and
+  `altercol.test` from 197 to 198.
+
 - `db-sqlite` holds every database of a connection under a locking mode
   of its own, which `PRAGMA [schema.]locking_mode` names and a database
   the connection holds of its own is exclusive whatever the pragma says.

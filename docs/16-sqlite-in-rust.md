@@ -1064,6 +1064,8 @@ Size: L.
      locking_mode` names. Built, which D-439 records.
 159. The depth a trigger and a chain of keys may reach, which the
      connection's limit and the stack bound. Built, which D-440 records.
+160. The views and the triggers of the temp schema, which a rename of a
+     table of another database writes again. Built, which D-441 records.
 
 ### Done when
 

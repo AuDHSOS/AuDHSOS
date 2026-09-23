@@ -7200,3 +7200,15 @@ Document 16 step Q8.
 - A trigger that writes its own table under `PRAGMA recursive_triggers`,
   a connection told a smaller `SQLITE_LIMIT_TRIGGER_DEPTH`, and a chain
   of forty keys each cascading into the next.
+
+### 6.6.308 The temp schema under a rename (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A view and a trigger of the temp schema over a table of `main`, a
+  trigger written with the schema in front of that table, a view over
+  another table, a temp table of the name being renamed, and a rename of
+  a table of the temp schema itself.
+- The tables one statement of the schema names, each with the schema
+  written in front of it, for a trigger, a view, a statement in brackets
+  and a statement the parser refuses.

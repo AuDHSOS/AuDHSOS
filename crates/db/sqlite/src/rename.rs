@@ -97,6 +97,37 @@ pub fn places(sql: &[u8], table: &[u8]) -> Vec<Span> {
     out
 }
 
+/// Every table a statement of the schema names, each with the schema
+/// written in front of it, and none for a statement the parser refuses.
+///
+/// A trigger names the table it stands on, the sources of its body name
+/// the tables those read, and each step of its body names the table it
+/// writes. Reading the tree costs O(n) in its sources and its steps.
+#[must_use]
+pub fn named_tables(sql: &[u8]) -> Vec<(Option<Span>, Span)> {
+    let Ok((arena, definition)) = crate::parse::definition(sql) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    if let Definition::Trigger(made) = definition {
+        out.push((made.table_schema, made.table));
+    }
+    for source in arena.all_sources() {
+        if let crate::ast::SourceKind::Table { schema, name, .. } = source.kind {
+            out.push((schema, name));
+        }
+    }
+    for step in arena.all_steps() {
+        match step {
+            TriggerStep::Insert(statement) => out.push((statement.schema, statement.name)),
+            TriggerStep::Update(statement) => out.push((statement.schema, statement.name)),
+            TriggerStep::Delete(statement) => out.push((statement.schema, statement.name)),
+            TriggerStep::Select(_) => {}
+        }
+    }
+    out
+}
+
 /// Where a `CREATE TABLE` names `table` as the parent of a foreign key,
 /// which is `renameParentFunc` of `research/sqlite/src/alter.c:848`
 /// marking the `REFERENCES` clauses of one statement.

@@ -153,6 +153,90 @@ fn named_row(values: &[Value], wanted: &[u8]) -> bool {
     matches!(values.first(), Some(Value::Text(text)) if text.eq_ignore_ascii_case(wanted))
 }
 
+/// Which rows of a schema a rename writes again.
+#[derive(Clone, Copy)]
+enum Renaming<'a> {
+    /// Every row, which the database that holds the table carries.
+    Every,
+    /// The views and the triggers of the temp schema that stand over the
+    /// table, which is what that schema carries for a table another
+    /// database holds.
+    Standing(Standing<'a>),
+}
+
+impl Renaming<'_> {
+    /// Whether the row whose `type` is `kind` and whose statement is
+    /// `sql` is one this writes again.
+    fn reads(self, kind: &[u8], sql: &[u8]) -> bool {
+        match self {
+            Self::Every => true,
+            Self::Standing(standing) => {
+                (kind.eq_ignore_ascii_case(b"view") || kind.eq_ignore_ascii_case(b"trigger"))
+                    && standing.over(sql)
+            }
+        }
+    }
+}
+
+/// What says whether a statement of the temp schema stands over the
+/// table being renamed.
+#[derive(Clone, Copy)]
+struct Standing<'a> {
+    /// The name of the database whose table is renamed.
+    database: &'a [u8],
+    /// The database that holds the table under the order
+    /// `sqlite3FindTable` reads the schemas in, which is what a name
+    /// written under no schema reads. No name where no database holds
+    /// the table, which no statement then stands over.
+    holder: &'a [u8],
+    /// The table being renamed.
+    table: &'a [u8],
+}
+
+impl Standing<'_> {
+    /// Whether the statement `sql` names the table of the database the
+    /// rename is over.
+    ///
+    /// `renameTableTest` of `research/sqlite/src/alter.c:1040` resolves
+    /// the table a statement of the temp schema names and answers one
+    /// where that table lives in the database being renamed, so a table
+    /// of the temp schema or of another database leaves the statement as
+    /// it stands.
+    ///
+    /// Reading the names costs O(n) in them.
+    fn over(self, sql: &[u8]) -> bool {
+        crate::rename::named_tables(sql)
+            .into_iter()
+            .any(|(schema, name)| self.names(schema, name, sql))
+    }
+
+    /// Whether one name of a statement names that table.
+    fn names(self, schema: Option<Span>, name: Span, sql: &[u8]) -> bool {
+        if !crate::schema::dequote(name.text(sql)).eq_ignore_ascii_case(self.table) {
+            return false;
+        }
+        let held = match schema {
+            Some(span) => crate::schema::dequote(span.text(sql)),
+            None => self.holder.to_vec(),
+        };
+        held.eq_ignore_ascii_case(self.database)
+    }
+}
+
+/// The column one `ALTER TABLE ... RENAME COLUMN` renames.
+#[derive(Clone, Copy)]
+struct Column<'a> {
+    /// The table that holds the column.
+    table: &'a [u8],
+    /// The column as it stands.
+    from: &'a [u8],
+    /// The new name as the statement wrote it, which carries the quotes
+    /// the statement carried.
+    as_written: &'a [u8],
+    /// The new name with the quotes taken off, which a refusal names.
+    to: &'a [u8],
+}
+
 /// One row of `sqlite_schema` written again under the new name of a
 /// table, and whether the row changed at all.
 ///
@@ -160,7 +244,7 @@ fn named_row(values: &[Value], wanted: &[u8]) -> bool {
 /// index SQLite made for a key of it, its `tbl_name` changes where it
 /// named the table, and its text is written again wherever the
 /// statement names the table.
-fn renamed(values: &mut [Value], from: &[u8], to: &[u8]) -> bool {
+fn renamed(values: &mut [Value], from: &[u8], to: &[u8], renaming: Renaming<'_>) -> bool {
     let text = |value: Option<&Value>| match value {
         Some(Value::Text(bytes)) => bytes.clone(),
         _ => Vec::new(),
@@ -169,6 +253,9 @@ fn renamed(values: &mut [Value], from: &[u8], to: &[u8]) -> bool {
     let name = text(values.get(1));
     let over = text(values.get(2));
     let sql = text(values.get(4));
+    if !renaming.reads(&kind, &sql) {
+        return false;
+    }
     let places = crate::rename::places(&sql, from);
     let automatic = crate::rename::automatic(&name, from, to);
     let mut changed = false;
@@ -1562,10 +1649,43 @@ impl Writer {
         if names(&database, &to) {
             return Err(Error::Named(to));
         }
+        drop(database);
+        // The temp schema holds views and triggers over the tables of
+        // every database, so a rename of a table another database holds
+        // writes those too. The temp schema is written first, because
+        // which database holds the table says what a statement of it
+        // stands over and the rename takes the name out of that database.
+        let standing = |writer: &mut Self, standing: Standing<'_>| {
+            writer.renamed_rows(&from, &to, Renaming::Standing(standing))
+        };
+        self.over_temp(&from, standing)?;
+        self.renamed_rows(&from, &to, Renaming::Every)?;
+        self.rename_sequence(&from, &to)?;
+        self.held.header.schema_cookie = self.held.header.schema_cookie.saturating_add(1);
+        Ok(())
+    }
+
+    /// Every row of `sqlite_schema` `renaming` reads, written again
+    /// under the new name of a table.
+    ///
+    /// Reading the rows costs O(n) in them, and each row is written
+    /// again at O(m) in its text.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] names what the image breaks.
+    fn renamed_rows(
+        &mut self,
+        from: &[u8],
+        to: &[u8],
+        renaming: Renaming<'_>,
+    ) -> Result<(), Error> {
+        let bytes = self.image();
+        let database = self.reading(&bytes)?;
         let mut written: Vec<(i64, Vec<Value>)> = Vec::new();
         for (rowid, values) in database.rows_of(SCHEMA_TABLE)? {
             let mut values = values;
-            if renamed(&mut values, &from, &to) {
+            if renamed(&mut values, from, to, renaming) {
                 written.push((rowid, values));
             }
         }
@@ -1573,9 +1693,77 @@ impl Writer {
         for (rowid, values) in written {
             self.schema_row(rowid, &values)?;
         }
-        self.rename_sequence(&from, &to)?;
-        self.held.header.schema_cookie = self.held.header.schema_cookie.saturating_add(1);
         Ok(())
+    }
+
+    /// `run` against the temp schema, and nothing where the connection
+    /// holds none or already writes it.
+    ///
+    /// `sqlite3AlterRenameTable` of `research/sqlite/src/alter.c:255`
+    /// leaves the temp schema alone where the table it renames is one
+    /// of that schema's own, because the first statement wrote it
+    /// already.
+    ///
+    /// The two swaps cost O(1).
+    ///
+    /// # Errors
+    ///
+    /// What `run` answers.
+    fn over_temp(
+        &mut self,
+        table: &[u8],
+        run: impl FnOnce(&mut Self, Standing<'_>) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        let database = self.called.name.clone();
+        if database.eq_ignore_ascii_case(b"temp") {
+            return Ok(());
+        }
+        let Some(at) = self
+            .attached
+            .iter()
+            .position(|held| named_as(held, b"temp"))
+        else {
+            return Ok(());
+        };
+        self.switch(at);
+        let answer = self.standing(table, &database, run);
+        self.switch(at);
+        answer
+    }
+
+    /// `run` told which database a statement of the temp schema that
+    /// names the table under no schema reads.
+    ///
+    /// The connection writes the temp schema where this runs, so the
+    /// order the schemas are read in is the one `sqlite3FindTable` of
+    /// `research/sqlite/src/build.c:271` reads them in: the temp schema,
+    /// then the database the rename is over, then the rest.
+    ///
+    /// Reading the schemas costs O(n) in the pages of every database.
+    ///
+    /// # Errors
+    ///
+    /// What `run` answers, and what one of the images breaks.
+    fn standing(
+        &mut self,
+        table: &[u8],
+        database: &[u8],
+        run: impl FnOnce(&mut Self, Standing<'_>) -> Result<(), Error>,
+    ) -> Result<(), Error> {
+        let bytes = self.images();
+        let holder = self
+            .reading_beside(&bytes)?
+            .writing(false)
+            .holding(table)
+            .unwrap_or_default();
+        run(
+            self,
+            Standing {
+                database,
+                holder: &holder,
+                table,
+            },
+        )
     }
 
     /// `ATTACH [DATABASE] file AS name`: the image the opening function
@@ -1969,6 +2157,38 @@ impl Writer {
         {
             return Err(Error::NoSuchColumn(from));
         }
+        drop(database);
+        let written = Column {
+            table: &name,
+            from: &from,
+            as_written: &as_written,
+            to: &to,
+        };
+        self.column_rows(&written, Renaming::Every)?;
+        // The temp schema holds views and triggers over the tables of
+        // every database, so a rename of a column of a table another
+        // database holds writes those too.
+        let standing = |writer: &mut Self, standing: Standing<'_>| {
+            writer.column_rows(&written, Renaming::Standing(standing))
+        };
+        self.over_temp(&name, standing)?;
+        self.held.header.schema_cookie = self.held.header.schema_cookie.saturating_add(1);
+        Ok(())
+    }
+
+    /// Every row of `sqlite_schema` `renaming` reads, written again
+    /// under the new name of a column.
+    ///
+    /// Reading the rows costs O(n) in them, and each row is written
+    /// again at O(m) in its text.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::AfterRename`] where a statement of the schema no longer
+    /// reads under the new name, and what the image breaks.
+    fn column_rows(&mut self, column: &Column<'_>, renaming: Renaming<'_>) -> Result<(), Error> {
+        let bytes = self.image();
+        let database = self.reading(&bytes)?;
         let mut written: Vec<(i64, Vec<Value>)> = Vec::new();
         for (rowid, values) in database.rows_of(SCHEMA_TABLE)? {
             // A row SQLite made for itself carries no statement, and an
@@ -1978,14 +2198,17 @@ impl Writer {
                 _ => Vec::new(),
             };
             let statement = held(4);
-            let places = crate::rename::column_places(&statement, &name, &from);
+            if !renaming.reads(&held(0), &statement) {
+                continue;
+            }
+            let places = crate::rename::column_places(&statement, column.table, column.from);
             if places.is_empty() {
                 continue;
             }
-            let text = crate::rename::written_as(&statement, &places, &as_written);
+            let text = crate::rename::written_as(&statement, &places, column.as_written);
             // `renameTestSchema` under `after rename`: a statement that
             // no longer reads refuses the whole rename.
-            if let Some(refused) = reads_after(&text, &to, self.collating) {
+            if let Some(refused) = reads_after(&text, column.to, self.collating) {
                 return Err(Error::AfterRename(held(0), held(1), refused));
             }
             let mut values = values.clone();
@@ -1998,7 +2221,6 @@ impl Writer {
         for (rowid, values) in written {
             self.schema_row(rowid, &values)?;
         }
-        self.held.header.schema_cookie = self.held.header.schema_cookie.saturating_add(1);
         Ok(())
     }
 
