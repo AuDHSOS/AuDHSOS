@@ -1278,10 +1278,11 @@ done until every applicable item has a test. Items are added, never removed.
 - PEM further: a text with no end line reports the missing line and not
   the length of a body line, because the rule for the last body line
   applies only to a block that has one; a pad before the last body line
-  is refused; `CRLF` is accepted as a terminator; a label with a leading
-  or trailing space, two spaces, a hyphen, or a character outside the
-  printable range is refused; line terminators after the end line are not
-  data.
+  is refused; `CRLF`, `CR`, and `LF` are accepted as terminators; a label
+  with a leading or trailing space or hyphen, consecutive separators, or
+  a character outside the printable range is refused; a single hyphen
+  between label characters is accepted; line terminators after the end
+  line are not data.
 - PEM at a width that is not RFC 7468: a block wrapped at seventy, the
   width `openssh-key-v1` is written at, round-trips and carries lines of
   exactly seventy characters but the last; the strict reader refuses it
