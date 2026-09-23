@@ -39,7 +39,7 @@ use server_name as _;
 use user_loader as _;
 use virtio_queue as _;
 
-use audhsos_abi::layout::PAGE_SIZE;
+use audhsos_abi::layout::{PAGE_SIZE, WATCHERS_PER_PROCESS};
 use audhsos_abi::{Error, Rights};
 use user_programs::client::{allocate, lookup, register, release, write_line};
 use user_programs::mapping::{Mapping, SCRATCH};
@@ -101,6 +101,12 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
     zeroed_again(&mut gate, memory, own, console);
     too_much(&mut gate, memory, console);
     interleaved(&mut gate, console);
+    let outcome = display_checks(&mut gate, &startup);
+    let line = Line::<128>::of(format_args!(
+        "[checks] display surface lifecycle: {}\n",
+        answer(outcome)
+    ));
+    let _said = write_line(&mut gate, console, line.as_bytes());
     let outcome = input_checks(&mut gate, &startup);
     let line = Line::<128>::of(format_args!(
         "[checks] input lifecycle and isolation: {}\n",
@@ -173,6 +179,61 @@ fn input_checks(gate: &mut Gate, startup: &Startup) -> Result<(), Error> {
     gate.handle_close(signal)?;
     gate.handle_close(process)?;
     Ok(())
+}
+
+/// Regression for issues #140 and #143: the display server refuses a
+/// surface for a handle it cannot watch, and a destroyed surface leaves no
+/// watch on this process. Runs before [`input_checks`], whose watch fails
+/// with `QuotaExceeded` behind stale ones.
+fn display_checks(gate: &mut Gate, startup: &Startup) -> Result<(), Error> {
+    let display = startup.display_server.ok_or(Error::NotFound)?;
+    let own = startup.own_process.ok_or(Error::NotFound)?;
+    let notification = gate.notification_create()?;
+    let not_a_process =
+        gate.handle_duplicate(notification.handle(), Rights::SIGNAL | Rights::TRANSFER)?;
+    let without_info = gate.handle_duplicate(own.handle(), Rights::TRANSFER)?;
+    for unwatchable in [not_a_process, without_info] {
+        if display_surface(gate, display, unwatchable).is_ok() {
+            return Err(Error::InvalidState);
+        }
+    }
+    // More rounds than a process holds watchers: a stale watch per round
+    // makes the kernel refuse a later one.
+    let watched = gate.handle_duplicate(own.handle(), Rights::INFO | Rights::TRANSFER)?;
+    for _ in 0..WATCHERS_PER_PROCESS.saturating_mul(2) {
+        let given = display_surface(gate, display, watched)?;
+        gate.handle_close(given.memory)?;
+        user_proto::display::Request::DestroySurface { id: given.id }.encode(&mut gate.writer())?;
+        gate.ipc_call(display)?;
+        match user_proto::display::Reply::decode(gate.reader())? {
+            user_proto::display::Reply::Destroyed(result) => result?,
+            _other => return Err(Error::InvalidState),
+        }
+    }
+    gate.handle_close(watched)?;
+    gate.handle_close(without_info)?;
+    gate.handle_close(not_a_process)?;
+    gate.handle_close(notification.handle())?;
+    Ok(())
+}
+
+/// Asks for a surface of 4x4 pixels, handing over `process`.
+fn display_surface(
+    gate: &mut Gate,
+    display: EndpointHandle,
+    process: audhsos_abi::Handle,
+) -> Result<user_proto::display::Surface, Error> {
+    let request = user_proto::display::Request::CreateSurface {
+        width: 4,
+        height: 4,
+        process,
+    };
+    request.encode(&mut gate.writer())?;
+    gate.ipc_call(display)?;
+    match user_proto::display::Reply::decode(gate.reader())? {
+        user_proto::display::Reply::Created(outcome) => outcome,
+        _other => Err(Error::InvalidState),
+    }
 }
 
 /// Subscribes and extracts the ring handle.

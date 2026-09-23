@@ -52,7 +52,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use audhsos_abi::layout::PAGE_SIZE;
 use audhsos_abi::{Error, Handle};
 use gfx::{Damage, PixelFormat, Surface};
-use server_display::Display;
+use server_display::{Display, whole_pages};
 use user_programs::client::{allocate, register, write_line};
 use user_programs::mapping::Mapping;
 use user_programs::serve::{Serving, receive};
@@ -74,12 +74,9 @@ const CLIENTS: usize = 4;
 /// Where the framebuffer is mapped.
 const FRAMEBUFFER: u64 = 0x1000_0000;
 
-/// Where the first client surface is mapped.
+/// Where the first client surface is mapped. Each slot's window is
+/// [`Display::window`] bytes: a surface of the whole screen.
 const SURFACES: u64 = 0x2000_0000;
-
-/// How much address space one client surface gets, which is more than the
-/// largest screen this system drives.
-const SURFACE_SLOT: u64 = 0x0100_0000;
 
 /// The badge the watcher thread sends under, which is how the serving
 /// thread tells its message from a client's request.
@@ -146,10 +143,11 @@ struct Held {
     badge: u64,
     /// The memory object of its pixels.
     memory: MemoryHandle,
-    /// The client itself, which this program watches the end of. The slot
-    /// this entry stands in is the bit of the notification that end
-    /// signals.
+    /// The client itself, which this program watches the end of.
     process: ProcessHandle,
+    /// The notification and bit the end of the client signals, the bit
+    /// being the slot index; nothing without a watcher thread.
+    watch: Option<(NotificationHandle, u64)>,
     /// Where the pixels are mapped in this process.
     mapping: Mapping,
     /// Visible columns.
@@ -366,24 +364,36 @@ fn create(
     };
     let made = display.create(badge, width, height)?;
     let slot = free_slot(held).ok_or(Error::QuotaExceeded);
+    let window = display.window();
     let outcome = slot.and_then(|index| {
-        // A mapping covers whole pages, so the window is the pixels rounded
-        // up; the memory server rounds the object up the same way.
+        // A mapping covers whole pages; the memory server rounds the object
+        // up the same way.
         let bytes = whole_pages(made.bytes());
+        if bytes > window {
+            return Err(Error::InvalidArgument);
+        }
+        let address = window_of(index, window);
         let memory = allocate(gate, server, bytes, PAGE_SIZE)?;
-        let mapping = match Mapping::new(gate, process, memory, window_of(index), bytes) {
+        let mapping = match Mapping::new(gate, process, memory, address, bytes) {
             Ok(mapping) => mapping,
             Err(error) => {
+                // A map that failed part way leaves its pages mapped.
+                let _unmapped = Mapping::adopt(address, bytes).unmap(gate, process);
                 let _released = user_programs::client::release(gate, server, memory);
                 return Err(error);
             }
         };
-        // The slot is the bit: whichever client of the four ends, the word
-        // of the notification says which surface goes back.
+        // The slot is the bit: the word of the notification names the slot
+        // whose client ended. A handle the kernel refuses to watch gets no
+        // surface, since its end would release nothing.
         let client = ProcessHandle::from_handle(client);
-        if let Some(notification) = watcher {
-            let bit = u64::try_from(index).unwrap_or(0);
-            let _watched = gate.process_watch(client, notification, bit);
+        let bit = u64::try_from(index).unwrap_or(0);
+        if let Some(notification) = watcher
+            && let Err(error) = gate.process_watch(client, notification, bit)
+        {
+            let _unmapped = mapping.unmap(gate, process);
+            let _released = user_programs::client::release(gate, server, memory);
+            return Err(error);
         }
         put(
             held,
@@ -393,6 +403,7 @@ fn create(
                 badge,
                 memory,
                 process: client,
+                watch: watcher.map(|notification| (notification, bit)),
                 mapping,
                 width,
                 height,
@@ -494,6 +505,20 @@ fn release_gone(
         if gone & bit == 0 {
             continue;
         }
+        // A bit can outlive the client that armed it: only a client whose
+        // unwatch answers `true` has ended, and a live one is watched again.
+        let Some(Some(entry)) = held.get(index) else {
+            continue;
+        };
+        if let Some((notification, armed)) = entry.watch {
+            match gate.process_unwatch(entry.process, notification, armed) {
+                Ok(true) | Err(Error::InvalidHandle) => {}
+                _ => {
+                    let _watched = gate.process_watch(entry.process, notification, armed);
+                    continue;
+                }
+            }
+        }
         let Some(slot) = take(held, index) else {
             continue;
         };
@@ -511,8 +536,12 @@ fn release_gone(
     }
 }
 
-/// Unmaps a surface, gives its memory back, and lets go of the client.
+/// Unwatches the client, unmaps its surface, gives the memory back, and
+/// lets go of the client.
 fn give_back(gate: &mut Gate, startup: &Startup, slot: Held) {
+    if let Some((notification, bit)) = slot.watch {
+        let _unwatched = gate.process_unwatch(slot.process, notification, bit);
+    }
     if let Some(process) = startup.own_process {
         let _unmapped = slot.mapping.unmap(gate, process);
     }
@@ -574,19 +603,10 @@ fn destroy(
     Ok(())
 }
 
-/// `bytes` rounded up to whole pages, which is what a mapping covers.
-const fn whole_pages(bytes: u64) -> u64 {
-    bytes
-        .saturating_add(PAGE_SIZE.saturating_sub(1))
-        .wrapping_div(PAGE_SIZE)
-        .saturating_mul(PAGE_SIZE)
-}
-
-/// The window of the address space slot `index` maps its surface in.
-fn window_of(index: usize) -> u64 {
-    let step = u64::try_from(index)
-        .unwrap_or(0)
-        .saturating_mul(SURFACE_SLOT);
+/// The address slot `index` maps its surface at, windows being `window`
+/// bytes each.
+fn window_of(index: usize, window: u64) -> u64 {
+    let step = u64::try_from(index).unwrap_or(0).saturating_mul(window);
     SURFACES.saturating_add(step)
 }
 

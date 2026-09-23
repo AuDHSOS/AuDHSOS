@@ -208,7 +208,7 @@ const BOOT_PROGRESS: [(&str, &str); 3] = [
 /// archive, the memory server answered, the name server answered, the
 /// console driver took the port, and the application found it and said
 /// something through it.
-const E2E_LINES: [(&str, &str); 25] = [
+const E2E_LINES: [(&str, &str); 26] = [
     (
         "[init] started server-memory",
         "the memory server did not start",
@@ -257,6 +257,10 @@ const E2E_LINES: [(&str, &str); 25] = [
     (
         "[checks] line 7 of 8, and the whole of it",
         "the last line of the second client did not arrive",
+    ),
+    (
+        "[checks] display surface lifecycle: ok",
+        "the display server kept a surface it cannot watch or the watch of a destroyed surface",
     ),
     (
         "[paint] drawn on ",
