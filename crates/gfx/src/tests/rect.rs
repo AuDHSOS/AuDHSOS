@@ -3,7 +3,11 @@
 
 //! Tests of `crate::rect`.
 
+use test_support::generators::vec;
+use test_support::property::check;
+
 use crate::rect::{DAMAGE_CAPACITY, Damage, Rect};
+use crate::strategies::any_rect;
 
 #[test]
 fn a_rectangle_of_zero_width_or_height_is_empty() {
@@ -144,4 +148,76 @@ fn clearing_a_damage_set_forgets_every_rectangle() {
     damage.clear();
     assert!(damage.is_empty());
     assert_eq!(damage.iter().count(), 0);
+}
+
+#[test]
+fn a_merged_rectangle_absorbs_a_later_one_it_now_overlaps() {
+    let mut damage = Damage::new();
+    damage.push(Rect::new(0, 0, 4, 4));
+    damage.push(Rect::new(6, 0, 4, 4));
+    damage.push(Rect::new(3, 0, 4, 4));
+    assert_eq!(damage.iter().collect::<Vec<_>>(), [Rect::new(0, 0, 10, 4)]);
+}
+
+#[test]
+fn a_merged_rectangle_absorbs_one_only_the_union_overlaps() {
+    let mut damage = Damage::new();
+    damage.push(Rect::new(0, 0, 2, 10));
+    damage.push(Rect::new(4, 0, 2, 2));
+    damage.push(Rect::new(1, 9, 4, 1));
+    assert_eq!(damage.iter().collect::<Vec<_>>(), [Rect::new(0, 0, 6, 10)]);
+}
+
+#[test]
+fn a_merged_rectangle_absorbs_an_earlier_one_and_keeps_the_order() {
+    let mut damage = Damage::new();
+    damage.push(Rect::new(0, 0, 2, 2));
+    damage.push(Rect::new(20, 20, 2, 2));
+    damage.push(Rect::new(4, 0, 2, 2));
+    damage.push(Rect::new(1, 1, 4, 1));
+    assert_eq!(
+        damage.iter().collect::<Vec<_>>(),
+        [Rect::new(0, 0, 6, 2), Rect::new(20, 20, 2, 2)]
+    );
+}
+
+#[test]
+fn property_no_two_rectangles_of_a_damage_set_overlap() {
+    check("damage_disjoint", &vec(any_rect(24), 0..=40), |rects| {
+        let mut damage = Damage::new();
+        for rect in rects {
+            damage.push(*rect);
+        }
+        let held: Vec<Rect> = damage.iter().collect();
+        for (index, first) in held.iter().enumerate() {
+            for second in held.iter().skip(index + 1) {
+                if first.overlaps(*second) {
+                    return Err(format!("{first:?} overlaps {second:?}"));
+                }
+            }
+        }
+        let expected = rects.iter().copied().fold(Rect::EMPTY, Rect::union);
+        if damage.bounds() != expected {
+            return Err(format!(
+                "bounds {:?}, expected {expected:?}",
+                damage.bounds()
+            ));
+        }
+        Ok(())
+    });
+}
+
+#[test]
+fn two_damage_sets_that_hold_the_same_rectangles_are_equal() {
+    let mut merged = Damage::new();
+    merged.push(Rect::new(0, 0, 4, 4));
+    merged.push(Rect::new(6, 0, 4, 4));
+    merged.push(Rect::new(3, 0, 4, 4));
+    let mut direct = Damage::new();
+    direct.push(Rect::new(0, 0, 10, 4));
+    assert_eq!(merged, direct);
+    let mut cleared = Damage::new();
+    cleared.push(Rect::new(1, 1, 2, 2));
+    cleared.clear();
+    assert_eq!(cleared, Damage::new());
 }

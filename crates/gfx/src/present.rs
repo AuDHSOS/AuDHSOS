@@ -54,8 +54,8 @@ pub trait PixelSink {
     /// The order of the channels it expects.
     fn format(&self) -> PixelFormat;
 
-    /// Writes the bytes of a run of pixels at `x` in row `y`. Bytes that do
-    /// not fit the row are dropped.
+    /// Writes the bytes of a run of pixels at `x` in row `y`. A run that does
+    /// not fit the row is dropped whole.
     fn write_row(&mut self, x: u32, y: u32, bytes: &[u8]);
 }
 

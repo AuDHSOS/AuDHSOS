@@ -168,12 +168,13 @@ fn a_surface_is_a_sink_and_takes_the_rows_of_another_one() {
 }
 
 #[test]
-fn a_row_that_does_not_fit_the_sink_is_dropped_by_it() {
+fn a_run_that_does_not_fit_the_sink_is_dropped_whole() {
     let mut bytes = buffer(2, 2);
     let mut front = Surface::new(&mut bytes, 2, 2, 2, PixelFormat::Rgbx8888).unwrap();
     let row = Color::WHITE.encode(PixelFormat::Rgbx8888).repeat(4);
     front.write_row(0, 0, &row);
     front.write_row(0, 5, &row);
     assert_eq!(front.pixel(0, 0), Some(Color::BLACK));
+    assert_eq!(front.pixel(1, 0), Some(Color::BLACK));
     assert_eq!(front.pixel(1, 1), Some(Color::BLACK));
 }
