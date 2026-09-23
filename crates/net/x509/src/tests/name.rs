@@ -71,7 +71,7 @@ fn an_empty_name_matches_nothing() {
 #[test]
 fn an_address_matches_only_an_address_entry() {
     let address = [192u8, 0, 2, 1];
-    let ip_tag = Tag::context(7, false);
+    let ip_tag = Tag::context(7, false).unwrap();
 
     assert!(matches_entry(ip_tag, &address, ServerName::Ip(&address)));
     assert!(!matches_entry(
@@ -94,7 +94,7 @@ fn an_address_matches_only_an_address_entry() {
 
     // Nor does any other kind of entry.
     assert!(!matches_entry(
-        Tag::context(1, false),
+        Tag::context(1, false).unwrap(),
         b"someone@example.test",
         ServerName::Dns("example.test")
     ));

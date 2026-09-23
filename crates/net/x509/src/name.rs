@@ -22,7 +22,10 @@ use crate::certificate::Certificate;
 use crate::error::X509Error;
 
 /// The tag of an `iPAddress` inside a subject alternative name.
-const IP_ADDRESS_TAG: Tag = Tag::context(7, false);
+const IP_ADDRESS_TAG: Tag = match Tag::context(7, false) {
+    Some(tag) => tag,
+    None => panic!("seven is a low tag number"),
+};
 
 /// The name a client asked for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
