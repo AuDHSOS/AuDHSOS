@@ -194,19 +194,6 @@ fn write(base: u64, index: usize, value: u64) {
     }
 }
 
-/// Reads word `index` of the page at `base`.
-#[expect(
-    dead_code,
-    reason = "the client half of the pair reads, this one writes"
-)]
-fn read(base: u64, index: usize) -> u64 {
-    let offset = u64::try_from(index).unwrap_or(0).saturating_mul(8);
-    let address = base.saturating_add(offset);
-    let pointer = core::ptr::without_provenance::<u64>(usize::try_from(address).unwrap_or(0));
-    // SAFETY: as `write`.
-    unsafe { pointer.read_volatile() }
-}
-
 /// Ends the thread. Nothing after this runs.
 fn end(ipc_buffer: u64) -> ! {
     loop {

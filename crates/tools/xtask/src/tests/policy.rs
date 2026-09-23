@@ -98,3 +98,53 @@ fn text_demo_is_the_documented_workspace_lint_exception() {
         }
     }
 }
+
+#[test]
+fn user_test_programs_do_not_suppress_dead_code() {
+    for (path, source) in user_test_programs() {
+        assert!(
+            !source.contains("dead_code"),
+            "{} suppresses dead code",
+            path.display()
+        );
+    }
+}
+
+#[test]
+fn user_test_program_safety_sections_document_unsafe_functions() {
+    for (path, source) in user_test_programs() {
+        let mut lines = source.lines();
+        while let Some(line) = lines.next() {
+            if line.trim() != "/// # Safety" {
+                continue;
+            }
+            let item = lines
+                .by_ref()
+                .map(str::trim)
+                .find(|line| {
+                    !line.is_empty() && !line.starts_with("///") && !line.starts_with("#[")
+                })
+                .unwrap_or("");
+            assert!(
+                item.starts_with("unsafe fn ")
+                    || item.starts_with("pub unsafe fn ")
+                    || item.starts_with("pub unsafe extern "),
+                "{} has a Safety section on `{item}`",
+                path.display()
+            );
+        }
+    }
+}
+
+fn user_test_programs() -> Vec<(std::path::PathBuf, String)> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let directory = root.join("crates/user/test-programs/src/bin");
+    fs::read_dir(directory)
+        .unwrap()
+        .map(|entry| {
+            let path = entry.unwrap().path();
+            let source = fs::read_to_string(&path).unwrap();
+            (path, source)
+        })
+        .collect()
+}
