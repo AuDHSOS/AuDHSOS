@@ -442,7 +442,9 @@ const fn map_error(error: kernel_mm::mapper::MapError) -> Error {
         Paging::AlreadyMapped => Error::AlreadyMapped,
         Paging::NotMapped => Error::NotMapped,
         Paging::OutOfKernelMemory => Error::OutOfKernelMemory,
-        Paging::UnreachableFrame | Paging::Entry(_) => Error::InvalidArgument,
+        Paging::UnreachableFrame | Paging::Entry(_) | Paging::FrameOverflow => {
+            Error::InvalidArgument
+        }
     }
 }
 

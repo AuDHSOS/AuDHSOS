@@ -161,14 +161,24 @@ impl BitmapFrameAllocator {
         }
     }
 
-    /// The number of the first free frame at or above `from`.
-    fn first_free(&self, from: u64) -> Option<u64> {
-        let mut number = from;
-        while number < self.count {
-            if !self.is_set(number) {
-                return Some(number);
+    /// The number of the first free frame at or above `from`, in O(n/64)
+    /// by skipping full words.
+    pub(crate) fn first_free(&self, from: u64) -> Option<u64> {
+        let first = usize::try_from(from.wrapping_div(BITS_PER_WORD)).ok()?;
+        // Bits below `from` in its word count as taken.
+        let mut below = (1u64 << from.wrapping_rem(BITS_PER_WORD)).wrapping_sub(1);
+        for (word, value) in self.bits.iter().enumerate().skip(first) {
+            let taken = *value | below;
+            below = 0;
+            if taken == u64::MAX {
+                continue;
             }
-            number = number.saturating_add(1);
+            let number = u64::try_from(word)
+                .ok()?
+                .checked_mul(BITS_PER_WORD)?
+                .checked_add(u64::from(taken.trailing_ones()))?;
+            // Bits above the managed count are set, so a clear bit is managed.
+            return (number < self.count).then_some(number);
         }
         None
     }

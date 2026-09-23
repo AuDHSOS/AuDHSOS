@@ -11,9 +11,9 @@ use test_support::generators::pair;
 use test_support::property::check;
 
 use crate::page_table::{
-    CachePolicy, EntryError, EntryFormat, PageTable, Permissions, X86_ADDRESS_MASK, X86_DIRTY,
-    X86_GLOBAL, X86_HUGE, X86_NO_CACHE, X86_NO_EXECUTE, X86_PRESENT, X86_RESERVED_MASK, X86_USER,
-    X86_WRITABLE, X86_WRITE_THROUGH, X86Entry,
+    CachePolicy, ENTRIES, EntryError, EntryFormat, PageTable, Permissions, X86_ADDRESS_MASK,
+    X86_DIRTY, X86_GLOBAL, X86_HUGE, X86_NO_CACHE, X86_NO_EXECUTE, X86_PRESENT, X86_RESERVED_MASK,
+    X86_USER, X86_WRITABLE, X86_WRITE_THROUGH, X86Entry,
 };
 use crate::strategies::{any_permissions, any_user_page_range};
 
@@ -110,7 +110,7 @@ fn every_permission_and_cache_combination_round_trips() {
                     "the cache policy shows in the cache bits"
                 );
                 assert_eq!(entry.has(X86_WRITE_THROUGH), cache == CachePolicy::Uncached);
-                assert_eq!(entry.validate(), Ok(()));
+                assert_eq!(entry.validate(0), Ok(()));
             }
         }
     }
@@ -153,7 +153,7 @@ fn a_table_entry_is_present_writable_and_reachable_from_user_mode() {
     assert!(entry.has(X86_PRESENT) && entry.has(X86_WRITABLE) && entry.has(X86_USER));
     assert!(!entry.has(X86_NO_EXECUTE));
     assert_eq!(entry.frame(), Some(frame(7)));
-    assert_eq!(entry.validate(), Ok(()));
+    assert_eq!(entry.validate(0), Ok(()));
 }
 
 #[test]
@@ -182,11 +182,11 @@ fn an_entry_that_is_not_present_carries_no_frame_and_needs_no_validation() {
     let empty = X86Entry::EMPTY;
     assert!(!empty.is_present());
     assert_eq!(empty.frame(), None);
-    assert_eq!(empty.validate(), Ok(()));
+    assert_eq!(empty.validate(0), Ok(()));
     assert_eq!(X86Entry::default(), empty);
     let garbage = X86Entry::from_raw(X86_RESERVED_MASK | X86_HUGE);
     assert_eq!(
-        garbage.validate(),
+        garbage.validate(0),
         Ok(()),
         "bits of an absent entry are software-defined"
     );
@@ -198,16 +198,23 @@ fn reserved_bits_and_large_pages_are_reported_instead_of_being_ignored() {
     for bit in 52..=62u32 {
         let raw = X86_PRESENT | (1u64 << bit);
         assert_eq!(
-            X86Entry::from_raw(raw).validate(),
+            X86Entry::from_raw(raw).validate(0),
             Err(EntryError::ReservedBits(raw)),
             "bit {bit} must be reported"
         );
     }
     let huge = X86Entry::from_raw(X86_PRESENT | X86_HUGE);
-    assert_eq!(huge.validate(), Err(EntryError::HugePage));
+    for level in 1..X86Entry::LEVELS {
+        assert_eq!(huge.validate(level), Err(EntryError::HugePage));
+    }
+    assert_eq!(
+        huge.validate(0),
+        Ok(()),
+        "bit 7 of a level-zero entry is PAT (#70)"
+    );
     let no_execute = X86Entry::from_raw(X86_PRESENT | X86_NO_EXECUTE);
     assert_eq!(
-        no_execute.validate(),
+        no_execute.validate(0),
         Ok(()),
         "bit 63 is the no-execute bit, not a reserved bit"
     );
@@ -220,8 +227,6 @@ fn reserved_bits_and_large_pages_are_reported_instead_of_being_ignored() {
 #[test]
 fn the_index_of_a_page_is_the_nine_bit_slice_of_its_page_number() {
     assert_eq!(X86Entry::LEVELS, 4);
-    assert_eq!(X86Entry::INDEX_BITS, 9);
-    assert_eq!(X86Entry::ENTRIES, 512);
     let address = page(0x0000_7FBF_DFEF_F000_u64 & 0x0000_7FFF_FFFF_F000);
     for level in 0..X86Entry::LEVELS {
         let expected = usize::try_from((address.number() >> (9 * level)) & 0x1FF).unwrap();
@@ -286,7 +291,14 @@ fn property_leaf_entries_round_trip_their_permissions() {
             if entry.frame() != Some(target) {
                 return Err("the frame did not round-trip".to_owned());
             }
-            entry.validate().map_err(|error| error.to_string())
+            entry.validate(0).map_err(|error| error.to_string())
         },
     );
+}
+
+#[test]
+fn a_table_holds_the_entry_count_of_the_format() {
+    // Regression for #72: one constant sizes every table.
+    assert_eq!(PageTable::<X86Entry>::new().entries.len(), ENTRIES);
+    assert_eq!(X86Entry::index(0, page(0xFFFF_FFFF_FFFF_F000)), ENTRIES - 1);
 }

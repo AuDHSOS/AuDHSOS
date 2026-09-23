@@ -365,3 +365,38 @@ fn the_empty_frame_source_hands_out_nothing_and_takes_anything_back() {
     assert!(frames.allocate_frame().is_none());
     assert_eq!(format!("{NoFrames:?}"), "NoFrames");
 }
+
+#[test]
+fn property_the_word_scan_finds_the_first_clear_bit_at_or_above_the_start() {
+    // Regression for #62: the word scan agrees with a scan bit by bit.
+    let taken = vec(range(0u64..=199), 0..=160);
+    check("first_free_word_scan", &taken, |numbers| {
+        let mut allocator = bitmap(0, 200);
+        for number in numbers {
+            allocator.set(*number, true);
+        }
+        for from in 0..=210u64 {
+            let expected = (from..200).find(|number| !allocator.is_set(*number));
+            let found = allocator.first_free(from);
+            if found != expected {
+                return Err(format!("from {from}: {found:?} instead of {expected:?}"));
+            }
+        }
+        Ok(())
+    });
+}
+
+#[test]
+fn the_word_scan_skips_full_words_and_stops_at_the_managed_count() {
+    let mut allocator = bitmap(0, 130);
+    for number in 0..129 {
+        allocator.set(number, true);
+    }
+    assert_eq!(allocator.first_free(0), Some(129));
+    assert_eq!(allocator.first_free(129), Some(129));
+    assert_eq!(allocator.first_free(130), None);
+    assert_eq!(allocator.allocate(), Ok(frame(129)));
+    assert_eq!(allocator.allocate(), Err(FrameError::OutOfFrames));
+    assert_eq!(allocator.first_free(0), None);
+    assert_eq!(allocator.first_free(MAX_MANAGED_FRAMES + 64), None);
+}

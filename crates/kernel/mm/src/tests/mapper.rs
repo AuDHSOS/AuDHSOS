@@ -13,14 +13,15 @@ use std::rc::Rc;
 use audhsos_abi::layout::{KERNEL_SPACE_START, MAX_PAGES_PER_CALL, PAGE_SIZE, USER_SPACE_END};
 use kernel_hal_api::doubles::{CountingFrameSource, Flush, MemoryFrameAccess, RecordingTlb};
 use kernel_hal_api::paging::{FrameAccess, FrameSource, TlbControl};
+use kernel_types::phys::MAX_FRAME_NUMBER;
 use kernel_types::{Page, PageRange, PhysFrame, PhysFrameRange, VirtAddr};
 use test_support::generators::{BoxGen, Generator, one_of, pair, range};
 use test_support::model::{ModelTest, run_model_test};
 
 use crate::mapper::{MapError, Mapper, Progress};
 use crate::page_table::{
-    CachePolicy, EntryError, EntryFormat, PageTable, Permissions, X86_GLOBAL, X86_PRESENT,
-    X86_RESERVED_MASK, X86Entry,
+    CachePolicy, EntryError, EntryFormat, PageTable, Permissions, X86_GLOBAL, X86_HUGE,
+    X86_PRESENT, X86_RESERVED_MASK, X86_USER, X86Entry,
 };
 use crate::strategies::any_permissions;
 
@@ -676,6 +677,142 @@ fn an_unreachable_frame_for_a_new_table_is_reported_and_given_back() {
 }
 
 #[test]
+fn a_kernel_half_page_carries_no_user_access() {
+    // Regression for #60: `map` and `protect` clear the user bit of a
+    // kernel-half page; a user-half page keeps what the caller asked for.
+    let mut fixture = Fixture::new();
+    let kernel = page(KERNEL_SPACE_START);
+    let user = page(0x1000);
+    for target in [kernel, user] {
+        fixture
+            .mapper()
+            .map(
+                target,
+                frame(0x40),
+                Permissions::READ_WRITE.for_user(),
+                CachePolicy::WriteBack,
+            )
+            .unwrap();
+    }
+    assert_eq!(
+        fixture.mapper().translate(kernel).map(|pair| pair.1),
+        Some(Permissions::READ_WRITE)
+    );
+    assert_eq!(
+        fixture.entry_at(kernel, 0).map(|entry| entry.has(X86_USER)),
+        Some(false)
+    );
+    assert_eq!(
+        fixture.mapper().translate(user).map(|pair| pair.1),
+        Some(Permissions::READ_WRITE.for_user())
+    );
+    fixture
+        .mapper()
+        .protect(kernel, Permissions::READ_EXECUTE.for_user())
+        .unwrap();
+    assert_eq!(
+        fixture.mapper().translate(kernel).map(|pair| pair.1),
+        Some(Permissions::READ_EXECUTE)
+    );
+    fixture
+        .mapper()
+        .protect(user, Permissions::READ_ONLY)
+        .unwrap();
+    assert_eq!(
+        fixture.mapper().translate(user).map(|pair| pair.1),
+        Some(Permissions::READ_ONLY),
+        "a user-half page may stay out of reach of user mode, as the loader's identity map does"
+    );
+}
+
+#[test]
+fn a_leaf_with_pat_set_is_translated_protected_and_unmapped() {
+    // Regression for #70: bit 7 of a level-zero entry is PAT, not a large
+    // page.
+    let mut fixture = Fixture::new();
+    let target = page(0x1000);
+    fixture
+        .mapper()
+        .map(
+            target,
+            frame(0x40),
+            Permissions::READ_ONLY,
+            CachePolicy::WriteBack,
+        )
+        .unwrap();
+    let leaf_table = fixture.entry_at(target, 1).unwrap().frame().unwrap();
+    let with_pat = X86Entry::from_raw(fixture.entry_at(target, 0).unwrap().as_u64() | X86_HUGE);
+    fixture
+        .access
+        .table_mut(leaf_table)
+        .unwrap()
+        .set_entry(X86Entry::index(0, target), with_pat);
+    assert_eq!(
+        fixture.mapper().translate(target),
+        Some((frame(0x40), Permissions::READ_ONLY))
+    );
+    assert_eq!(
+        fixture.mapper().protect(target, Permissions::READ_WRITE),
+        Ok(())
+    );
+    assert_eq!(fixture.mapper().unmap(target), Ok(frame(0x40)));
+    assert_eq!(fixture.outstanding(), 0);
+}
+
+#[test]
+fn a_large_page_above_level_zero_stops_the_walk() {
+    let mut fixture = Fixture::new();
+    let target = page(0x1000);
+    let large = X86Entry::from_raw(X86_PRESENT | X86_HUGE);
+    fixture
+        .access
+        .table_mut(fixture.root)
+        .unwrap()
+        .set_entry(X86Entry::index(X86Entry::LEVELS - 1, target), large);
+    assert_eq!(
+        fixture.mapper().unmap(target),
+        Err(MapError::Entry(EntryError::HugePage))
+    );
+    assert_eq!(fixture.mapper().translate(target), None);
+}
+
+#[test]
+fn a_range_whose_frames_pass_the_largest_frame_number_maps_nothing() {
+    // Regression for #66: the overflow is its own error and is found
+    // before the first page is mapped.
+    let mut fixture = Fixture::new();
+    let pages = PageRange::new(page(0x1000), 3).unwrap();
+    assert_eq!(
+        fixture.mapper().map_range(
+            pages,
+            frame(MAX_FRAME_NUMBER - 1),
+            Permissions::READ_ONLY,
+            CachePolicy::WriteBack,
+            u64::MAX,
+        ),
+        Err(MapError::FrameOverflow)
+    );
+    assert_eq!(fixture.mapper().translate(page(0x1000)), None);
+    assert_eq!(fixture.allocated(), 0);
+    assert!(fixture.flushes().is_empty());
+    let fits = PageRange::new(page(0x1000), 2).unwrap();
+    assert_eq!(
+        fixture.mapper().map_range(
+            fits,
+            frame(MAX_FRAME_NUMBER - 1),
+            Permissions::READ_ONLY,
+            CachePolicy::WriteBack,
+            u64::MAX,
+        ),
+        Ok(Progress::Done)
+    );
+    assert_eq!(
+        fixture.mapper().translate(page(0x2000)).map(|pair| pair.0),
+        Some(frame(MAX_FRAME_NUMBER))
+    );
+}
+
+#[test]
 fn an_entry_with_reserved_bits_stops_the_walk() {
     let mut fixture = Fixture::new();
     let target = page(0x1000);
@@ -786,6 +923,7 @@ fn errors_render_a_message_and_map_to_the_abi() {
             MapError::Entry(EntryError::HugePage),
             audhsos_abi::Error::InvalidArgument,
         ),
+        (MapError::FrameOverflow, audhsos_abi::Error::InvalidArgument),
     ];
     for (error, expected) in cases {
         assert!(!format!("{error}").is_empty());
