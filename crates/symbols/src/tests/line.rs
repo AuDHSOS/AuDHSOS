@@ -390,6 +390,44 @@ fn a_table_with_more_formats_than_the_fixed_capacity_is_refused() {
 }
 
 #[test]
+fn a_table_whose_format_has_no_pairs_is_refused() {
+    // Issue #412: a format of no pairs and a count of 2^64 - 1 looped
+    // without advancing the cursor.
+    let mut rest = header_prelude(5);
+    rest.push(0); // directory_entry_format_count
+    rest.extend_from_slice(&uleb(u64::MAX)); // directories_count
+    rest.extend_from_slice(&table_v5(&[(1, 0x08)], &[b"file.rs\0".to_vec()]));
+    let bytes = RawUnit {
+        version: 5,
+        wide: false,
+        rest,
+        program: one_row(BASE, 4),
+    }
+    .bytes();
+    assert_eq!(lines(&bytes).row_for(BASE), Err(SymbolError::EmptyFormat));
+
+    // The file table takes the same check.
+    let bytes = v5_unit(
+        (vec![(1, 0x08)], vec![b"/dir\0".to_vec()]),
+        (vec![], vec![vec![]]),
+        false,
+    );
+    assert_eq!(lines(&bytes).row_for(BASE), Err(SymbolError::EmptyFormat));
+}
+
+#[test]
+fn a_table_of_no_pairs_and_no_entries_reads_as_empty() {
+    let bytes = v5_unit(
+        (vec![], vec![]),
+        (vec![(1, 0x08)], vec![b"file.rs\0".to_vec()]),
+        false,
+    );
+    let row = lines(&bytes).row_for(BASE).unwrap().expect("a row");
+    assert_eq!(row.file, Some("file.rs"));
+    assert_eq!(row.directory, None);
+}
+
+#[test]
 fn a_directory_index_no_entry_matches_reports_no_directory() {
     let mut entry = b"file.rs\0".to_vec();
     entry.extend_from_slice(&uleb(7));

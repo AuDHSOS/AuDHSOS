@@ -22,6 +22,8 @@ pub enum SymbolError {
     LineRange,
     /// An entry of the file table uses a form this crate does not read.
     UnknownForm(u64),
+    /// A version 5 table declares entries of a format with no fields.
+    EmptyFormat,
 }
 
 impl fmt::Display for SymbolError {
@@ -35,6 +37,7 @@ impl fmt::Display for SymbolError {
             }
             SymbolError::LineRange => f.write_str("the line program has a line range of zero"),
             SymbolError::UnknownForm(form) => write!(f, "unknown form {form:#x} in a file table"),
+            SymbolError::EmptyFormat => f.write_str("a file table declares entries with no fields"),
         }
     }
 }

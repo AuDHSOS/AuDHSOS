@@ -109,3 +109,17 @@ fn the_table_reports_what_it_holds() {
     assert_eq!((start.start, start.size), (0x1000, 0x40));
     assert!(!format!("{start:?}").is_empty());
 }
+
+#[test]
+fn a_table_whose_entry_size_is_not_24_reports_nothing() {
+    // Issue #420: a wrong entry size read the entries with the wrong stride.
+    for entry_size in [0, 16, 23, 25, 48, u64::MAX] {
+        let mut parts = symbol_table(&[Symbol::function("start", 0x1000, 0x40)]);
+        parts[0].entry_size = entry_size;
+        let bytes = elf(parts);
+        let sections = sections(&bytes).unwrap();
+        let functions = Functions::new(&sections);
+        assert!(functions.is_empty(), "entry size {entry_size}");
+        assert_eq!(functions.at(0x1000), None, "entry size {entry_size}");
+    }
+}

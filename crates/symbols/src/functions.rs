@@ -54,12 +54,15 @@ pub struct Functions<'a> {
 
 impl<'a> Functions<'a> {
     /// The functions of `sections`, or an empty set if the file carries no
-    /// symbol table.
+    /// symbol table or one whose entry size is not [`SYM_LEN`].
     #[must_use]
     pub fn new(sections: &Sections<'a>) -> Self {
         let Some(table) = sections.iter().find(|section| section.kind == SHT_SYMTAB) else {
             return Functions::empty();
         };
+        if usize::try_from(table.entry_size).ok() != Some(SYM_LEN) {
+            return Functions::empty();
+        }
         let Some(entries) = sections.content(table) else {
             return Functions::empty();
         };
@@ -86,7 +89,8 @@ impl<'a> Functions<'a> {
         self.entries.len().wrapping_div(SYM_LEN)
     }
 
-    /// `true` if the file carries no symbol table.
+    /// `true` if the file carries no symbol table or one that
+    /// [`Functions::new`] refused.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.len() == 0

@@ -12,12 +12,20 @@
 //! unchanged, which is why the parse runs twice, once into a sink that
 //! discards and once into the formatter; a backreference must point
 //! backwards and the nesting is bounded, so no input makes the parser
-//! loop or run out of stack.
+//! loop or run out of stack; a budget proportional to the length of the
+//! name pays for every nested parse, digit, and identifier byte written,
+//! so backreferences that reuse one another keep time and output linear.
 
 use core::fmt;
 
 /// How deep a path or a type may nest before the parser gives up.
 const MAX_DEPTH: u32 = 64;
+
+/// How many steps one byte of the name pays for. A step is a nested
+/// parse, a digit read, or an identifier byte written. A name without
+/// backreferences takes a few per byte; the rest is room for
+/// backreferences to repeat earlier parts.
+const STEPS_PER_BYTE: usize = 64;
 
 /// The prefix of a `v0` symbol.
 const V0: &str = "_R";
@@ -148,6 +156,7 @@ struct Parser<'a> {
     bytes: &'a str,
     at: usize,
     depth: u32,
+    steps: usize,
 }
 
 impl<'a> Parser<'a> {
@@ -158,6 +167,7 @@ impl<'a> Parser<'a> {
             bytes,
             at: 0,
             depth: 0,
+            steps: bytes.len().saturating_mul(STEPS_PER_BYTE),
         }
     }
 
@@ -191,7 +201,16 @@ impl<'a> Parser<'a> {
         false
     }
 
-    /// Runs `body` one level deeper, or gives up.
+    /// Spends `steps` of the budget, or gives up once it is spent. The
+    /// charge does not depend on the sink, so the pass into the formatter
+    /// succeeds whenever the pass into [`Discard`] did.
+    fn charge(&mut self, steps: usize) -> Result<(), Failed> {
+        self.steps = self.steps.checked_sub(steps).ok_or(Failed)?;
+        Ok(())
+    }
+
+    /// Runs `body` one level deeper, or gives up once the depth or the
+    /// budget is spent.
     fn nested<T>(
         &mut self,
         body: impl FnOnce(&mut Self) -> Result<T, Failed>,
@@ -199,6 +218,7 @@ impl<'a> Parser<'a> {
         if self.depth >= MAX_DEPTH {
             return Err(Failed);
         }
+        self.charge(1)?;
         self.depth = self.depth.saturating_add(1);
         let outcome = body(self);
         self.depth = self.depth.saturating_sub(1);
@@ -209,6 +229,7 @@ impl<'a> Parser<'a> {
     fn base62(&mut self) -> Result<usize, Failed> {
         let mut value = 0usize;
         loop {
+            self.charge(1)?;
             let byte = self.next()?;
             if byte == b'_' {
                 return Ok(value);
@@ -329,6 +350,7 @@ impl<'a> Parser<'a> {
         match self.next()? {
             b'C' => {
                 let name = self.identifier()?;
+                self.charge(name.len())?;
                 out.put(name)
             }
             b'M' => {
@@ -354,6 +376,7 @@ impl<'a> Parser<'a> {
                 let namespace = self.next()?;
                 self.path(out)?;
                 let name = self.identifier()?;
+                self.charge(name.len())?;
                 out.put("::")?;
                 if name.is_empty() {
                     return out.put(special(namespace));
@@ -537,6 +560,7 @@ impl<'a> Parser<'a> {
             let negative = parser.eat(b'n');
             let mut value: Option<u64> = Some(0);
             while !parser.eat(b'_') {
+                parser.charge(1)?;
                 let byte = parser.next()?;
                 let digit = char::from(byte).to_digit(16).ok_or(Failed)?;
                 value = value
