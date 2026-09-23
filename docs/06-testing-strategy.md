@@ -7108,3 +7108,13 @@ Document 16 step Q8.
 - A transaction that vacuums the file and rolls back, the integrity of
   the file after every step of `incrvacuum3.test`, and the file read
   again from its bytes.
+
+### 6.6.299 The database a trigger stands over (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A schema in front of the table that names the database the trigger
+  stands in, one that names another, a quoted name in the refusal, a
+  trigger of the temp schema over a table of an attached database, the
+  schema the `no such table:` names, and a trigger and an index over a
+  table only an attached database holds.

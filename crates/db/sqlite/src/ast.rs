@@ -919,6 +919,8 @@ pub struct CreateTrigger {
     pub event: TriggerEvent,
     /// The columns an `UPDATE OF` named, or an empty run.
     pub columns: Range,
+    /// The schema in front of the table, where one was named.
+    pub table_schema: Option<Span>,
     /// The table it is on.
     pub table: Span,
     /// The `WHEN`, where one was written.

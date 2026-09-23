@@ -7,6 +7,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` reads a schema in front of the table of a `CREATE
+  TRIGGER`, which names the database the trigger stands in and no other,
+  and holds a trigger and an index to a table the temp schema or the
+  database the statement writes holds. D-432 records it. Catalog 6.6.299.
+  `alter.test` goes from 93 cases passing to 102, `alterlegacy.test` from
+  30 to 37, `attach3.test` from 32 to 33 and `trigger1.test` from 65 to
+  66.
+
 - `db-sqlite` reads the rows of a group in the order the `ORDER BY`
   inside an aggregate's brackets says. D-430 records it. Catalog
   6.6.297. `aggorderby.test` goes from 3 cases passing to 28.

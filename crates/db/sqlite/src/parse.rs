@@ -1540,7 +1540,9 @@ impl<'a> Parser<'a> {
             TriggerEvent::Update
         };
         self.expect_keyword(Keyword::On, Expected::On)?;
-        let table = self.name()?;
+        // `trigger_decl` of `research/sqlite/src/parse.y:1743` reads the
+        // table after `ON` as a `fullname`, which takes a schema.
+        let (table_schema, table) = self.qualified_name()?;
         if self.eat_keyword(Keyword::For) {
             self.expect_keyword(Keyword::Each, Expected::Row)?;
             self.expect_keyword(Keyword::Row, Expected::Row)?;
@@ -1578,6 +1580,7 @@ impl<'a> Parser<'a> {
             time,
             event,
             columns,
+            table_schema,
             table,
             condition,
             body,

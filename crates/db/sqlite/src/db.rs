@@ -154,6 +154,9 @@ pub enum Error {
     Timed(Vec<u8>, Vec<u8>, Vec<u8>),
     /// A `CREATE TRIGGER` over a table SQLite keeps for itself.
     SystemTrigger,
+    /// A `CREATE TRIGGER` whose table stands in another database than the
+    /// trigger, with the name as it was written and that database.
+    TriggerSchema(Vec<u8>, Vec<u8>),
     /// An `ORDER BY` or a `GROUP BY` that counts to a column the answer
     /// does not have, with which term it is, the word for the clause,
     /// and how many columns the answer has.
@@ -965,6 +968,11 @@ impl Error {
                 alloc::string::String::from_utf8_lossy(name)
             ),
             Error::SystemTrigger => "cannot create trigger on system table".to_string(),
+            Error::TriggerSchema(name, schema) => alloc::format!(
+                "trigger {} cannot reference objects in database {}",
+                alloc::string::String::from_utf8_lossy(name),
+                alloc::string::String::from_utf8_lossy(schema)
+            ),
             Error::Foreign => "FOREIGN KEY constraint failed".to_string(),
             Error::ForeignMismatch(child, parent) => alloc::format!(
                 "foreign key mismatch - \"{}\" referencing \"{}\"",

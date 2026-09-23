@@ -865,3 +865,83 @@ fn what_the_temp_schema_of_a_connection_holds() {
     writer.temps(Some(&[])).unwrap();
     assert!(writer.temp().is_none());
 }
+
+/// A `CREATE TRIGGER` writes a schema in front of the table after `ON`,
+/// which names the database the trigger stands in and no other, and which
+/// a trigger of the temp schema is held to no name of.
+#[test]
+fn what_a_schema_in_front_of_the_table_of_a_trigger_names() {
+    let mut writer = opened();
+    writer.run(b"ATTACH ':memory:' AS aux").unwrap();
+    for sql in [
+        b"CREATE TABLE aux.u(b)".as_slice(),
+        b"CREATE TEMP TABLE tt(c)",
+        // The schema the statement names in front of its own name is the
+        // one the table stands in.
+        b"CREATE TRIGGER tg AFTER INSERT ON main.t BEGIN SELECT 1; END",
+        b"CREATE TRIGGER aux.ug AFTER INSERT ON aux.u BEGIN SELECT 1; END",
+        b"CREATE TRIGGER tq AFTER INSERT ON temp.tt BEGIN SELECT 1; END",
+        // A trigger of the temp schema stands over a table of any
+        // database.
+        b"CREATE TEMP TRIGGER ua AFTER INSERT ON aux.u BEGIN SELECT 1; END",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let temp = writer.attached_written(b"temp").expect("the temp schema");
+    let database = crate::db::Database::open(&temp).unwrap();
+    assert!(database.trigger(b"tq").is_some());
+    assert!(database.trigger(b"ua").is_some());
+    let held = writer.written();
+    assert!(
+        crate::db::Database::open(&held)
+            .unwrap()
+            .trigger(b"tg")
+            .is_some()
+    );
+    for (sql, message) in [
+        // A table of another database is no table of the trigger, and
+        // the name is written with the quotes it was written under.
+        (
+            b"CREATE TRIGGER bad AFTER INSERT ON aux.u BEGIN SELECT 1; END".as_slice(),
+            "trigger bad cannot reference objects in database aux",
+        ),
+        (
+            b"CREATE TRIGGER \"q\" AFTER INSERT ON aux.u BEGIN SELECT 1; END",
+            "trigger \"q\" cannot reference objects in database aux",
+        ),
+        (
+            b"CREATE TRIGGER main.q AFTER INSERT ON temp.tt BEGIN SELECT 1; END",
+            "trigger q cannot reference objects in database temp",
+        ),
+        // The schema the statement wrote is the one the refusal names,
+        // and the schema in front of the table is read before the schema
+        // in front of the name.
+        (
+            b"CREATE TRIGGER aux.q AFTER INSERT ON aux.nosuch BEGIN SELECT 1; END",
+            "no such table: aux.nosuch",
+        ),
+        (
+            b"CREATE TRIGGER aux.q AFTER INSERT ON nosuch BEGIN SELECT 1; END",
+            "no such table: aux.nosuch",
+        ),
+        (
+            b"CREATE TEMP TRIGGER q AFTER INSERT ON nosuch.t BEGIN SELECT 1; END",
+            "no such table: nosuch.t",
+        ),
+        // A trigger and an index both stand over a table the temp schema
+        // or the database the statement writes holds, so a table only an
+        // attached database holds is no table of either.
+        (
+            b"CREATE TRIGGER q AFTER INSERT ON u BEGIN SELECT 1; END",
+            "no such table: main.u",
+        ),
+        (b"CREATE INDEX ub ON u(b)", "no such table: main.u"),
+    ] {
+        assert_eq!(
+            refused(&mut writer, sql),
+            message,
+            "{}",
+            alloc::string::String::from_utf8_lossy(sql)
+        );
+    }
+}

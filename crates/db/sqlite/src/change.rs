@@ -3041,7 +3041,37 @@ impl Writer {
             }
             return Ok(held);
         }
+        // `sqlite3BeginTrigger` of `research/sqlite/src/trigger.c:168`
+        // and `sqlite3CreateIndex` of `research/sqlite/src/build.c:4007`
+        // move the statement to schema place one where the table it is
+        // over is a temp table, and to no other place, so a table only an
+        // attached database holds is no table of a trigger or an index.
+        if names.locates == Located::Nothing {
+            return self.temping_at(names.located, sql);
+        }
         self.holding_at(names.located, sql)
+    }
+
+    /// The place of the temp schema where it holds the name a statement
+    /// wrote under no schema, and nothing where another database holds
+    /// it.
+    ///
+    /// Reading the schemas costs O(n) in the pages of every database.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] names what one of the images breaks.
+    fn temping_at(&self, named: Option<Span>, sql: &[u8]) -> Result<Option<usize>, Error> {
+        let Some(at) = self.holding_at(named, sql)? else {
+            return Ok(None);
+        };
+        let temp = self
+            .attached
+            .iter()
+            .skip(at)
+            .take(1)
+            .any(|one| named_as(one, b"temp"));
+        Ok(if temp { Some(at) } else { None })
     }
 
     /// Raises where the database a statement named holds no table of the
@@ -4709,31 +4739,23 @@ impl Writer {
         if crate::token::holds_variable(trigger.written.text(sql)) {
             return Err(Error::TriggerVariable);
         }
-        // `sqlite3TriggerInsertStep` and the two beside it take the
-        // name of a table alone, so a schema in front of one is
-        // refused.
-        for step in arena.steps(trigger.body) {
-            let (schema, indexed) = match *step {
-                crate::ast::TriggerStep::Insert(ref statement) => {
-                    (statement.schema, crate::ast::Indexed::Unspecified)
-                }
-                crate::ast::TriggerStep::Update(ref statement) => {
-                    (statement.schema, statement.indexed)
-                }
-                crate::ast::TriggerStep::Delete(ref statement) => {
-                    (statement.schema, statement.indexed)
-                }
-                crate::ast::TriggerStep::Select(_) => (None, crate::ast::Indexed::Unspecified),
-            };
-            if schema.is_some() {
-                return Err(Error::QualifiedInTrigger);
-            }
-            // `sqlite3TriggerUpdateStep` and `sqlite3TriggerDeleteStep`
-            // of `research/sqlite/src/trigger.c:436` take no index, so a
-            // body that names one is refused, under the clause it wrote.
-            if indexed != crate::ast::Indexed::Unspecified {
-                return Err(Error::IndexedInTrigger(indexed == crate::ast::Indexed::Not));
-            }
+        stepped_plainly(arena, trigger.body)?;
+        // The schema in front of the table, which the trigger stands
+        // under itself.
+        let over_schema = trigger
+            .table_schema
+            .map(|span| crate::schema::dequote(span.text(sql)));
+        let temping = self.called.name.eq_ignore_ascii_case(b"temp");
+        // `fixSelectCb` of `research/sqlite/src/attach.c:495` refuses a
+        // schema in front of the table that names another database than
+        // the one the trigger stands in, which a trigger of the temp
+        // schema is held to no name of.
+        if let Some(ref named) = over_schema
+            && !temping
+            && !named.eq_ignore_ascii_case(&self.called.name)
+        {
+            let written = trigger.name.text(sql).to_vec();
+            return Err(Error::TriggerSchema(written, named.clone()));
         }
         // `sqlite3CreateTrigger`: a table SQLite keeps for itself
         // carries no trigger at all.
@@ -4745,7 +4767,20 @@ impl Writer {
         }
         {
             let bytes = self.images();
-            let database = self.reading_beside(&bytes)?;
+            let every = self.reading_beside(&bytes)?;
+            // `sqlite3FixSrcList` of `research/sqlite/src/attach.c:571`
+            // holds the table to the database the trigger stands in, so
+            // only a trigger of the temp schema reads every database of
+            // the connection for it.
+            let one = match over_schema {
+                Some(ref named) => match image_named(&bytes, named, &self.called.name) {
+                    Some(image) => Some(self.reading(image)?),
+                    None => return Err(Error::NoTable(under_schema(named, &over))),
+                },
+                None if temping => None,
+                None => Some(self.reading(&bytes.held)?),
+            };
+            let database = one.as_ref().unwrap_or(&every);
             // `sqlite3CreateTrigger`: only a view carries an `INSTEAD
             // OF` trigger, and only a table carries the other two.
             let on_view = database.view(&over).is_some();
@@ -4763,15 +4798,20 @@ impl Writer {
             // would stand in, which a trigger of the temporary schema
             // names no schema for.
             if !instead && database.table(&over).is_none() {
-                let named = if trigger.temporary {
-                    over
-                } else {
-                    schema_named_as(&over)
+                let schema = over_schema.or_else(|| {
+                    trigger
+                        .schema
+                        .map(|span| crate::schema::dequote(span.text(sql)))
+                });
+                let named = match schema {
+                    Some(ref named) => under_schema(named, &over),
+                    None if trigger.temporary => over,
+                    None => schema_named_as(&over),
                 };
                 return Err(Error::NoTable(named));
             }
             self.reserved(&name)?;
-            if database.held_trigger(&name).is_some() {
+            if every.held_trigger(&name).is_some() {
                 if trigger.if_not_exists {
                     return Ok(());
                 }
@@ -10359,7 +10399,64 @@ fn windowless(arena: &Arena, index: &crate::ast::CreateIndex, sql: &[u8]) -> Res
 }
 
 fn schema_named_as(name: &[u8]) -> Vec<u8> {
-    let mut out = b"main.".to_vec();
+    under_schema(b"main", name)
+}
+
+/// Raises where one statement of a trigger's body names a schema or an
+/// index.
+///
+/// `sqlite3TriggerInsertStep` and the two beside it take the name of a
+/// table alone, and `sqlite3TriggerUpdateStep` and
+/// `sqlite3TriggerDeleteStep` of `research/sqlite/src/trigger.c:436` take
+/// no index.
+///
+/// Reading the body costs O(n) in its statements.
+///
+/// # Errors
+///
+/// [`Error::QualifiedInTrigger`] for a schema and
+/// [`Error::IndexedInTrigger`] for an index, under the clause it wrote.
+fn stepped_plainly(arena: &Arena, body: crate::ast::Range) -> Result<(), Error> {
+    for step in arena.steps(body) {
+        let (schema, indexed) = match *step {
+            crate::ast::TriggerStep::Insert(ref statement) => {
+                (statement.schema, crate::ast::Indexed::Unspecified)
+            }
+            crate::ast::TriggerStep::Update(ref statement) => (statement.schema, statement.indexed),
+            crate::ast::TriggerStep::Delete(ref statement) => (statement.schema, statement.indexed),
+            crate::ast::TriggerStep::Select(_) => (None, crate::ast::Indexed::Unspecified),
+        };
+        if schema.is_some() {
+            return Err(Error::QualifiedInTrigger);
+        }
+        if indexed != crate::ast::Indexed::Unspecified {
+            return Err(Error::IndexedInTrigger(indexed == crate::ast::Indexed::Not));
+        }
+    }
+    Ok(())
+}
+
+/// The image of the database a schema names, and nothing where the
+/// connection holds none under it.
+///
+/// Reading the names costs O(n) in their number.
+fn image_named<'a>(images: &'a Images, named: &[u8], writing: &[u8]) -> Option<&'a [u8]> {
+    if named.eq_ignore_ascii_case(writing) {
+        return Some(&images.held);
+    }
+    images
+        .beside
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(named))
+        .map(|(_, bytes)| bytes.as_slice())
+}
+
+/// One name under the schema it stands in, which is what
+/// `sqlite3LocateTable` of `research/sqlite/src/build.c:408` writes for a
+/// table a statement named a schema in front of.
+fn under_schema(schema: &[u8], name: &[u8]) -> Vec<u8> {
+    let mut out = schema.to_vec();
+    out.push(b'.');
     out.extend_from_slice(name);
     out
 }

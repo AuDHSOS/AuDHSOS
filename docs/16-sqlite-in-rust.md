@@ -1049,6 +1049,8 @@ Size: L.
      records.
 152. The length a rollback writes the file back to, where the
      transaction gave pages up at its end. Built, which D-431 records.
+153. The schema in front of the table of a `CREATE TRIGGER`, which names
+     the database the trigger stands in. Built, which D-432 records.
 
 ### Done when
 
