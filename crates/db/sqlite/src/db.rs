@@ -2930,6 +2930,10 @@ impl<'a> Database<'a> {
         // it is read refuses on its own.
         let held = match compute(stored, &mut held, self.encoding, Collation::Binary) {
             Ok(()) => held,
+            // A column whose expression refuses the row itself refuses
+            // the statement, and one this row cannot answer keeps the
+            // value it was given.
+            Err(error @ Error::Eval(eval::Error::NotPure(..))) => return Err(error),
             Err(_) => return Ok(()),
         };
         for (slot, value) in values.iter_mut().zip(held) {
@@ -9990,11 +9994,17 @@ fn compute(
                 encoding,
                 collation,
             };
-            // A name this pass cannot answer yet refuses, and the next
-            // pass asks again.
-            if let Ok(mut value) = evaluate_row(&stored.arena, expr, &stored.sql, &row) {
-                crate::value::apply(&mut value, column.affinity);
-                settled.push((at, value));
+            match evaluate_row(&stored.arena, expr, &stored.sql, &row) {
+                Ok(mut value) => {
+                    crate::value::apply(&mut value, column.affinity);
+                    settled.push((at, value));
+                }
+                // A date function that read the clock refuses the row,
+                // which no pass answers differently.
+                Err(error @ eval::Error::NotPure(..)) => return Err(error.into()),
+                // A name this pass cannot answer yet refuses, and the
+                // next pass asks again.
+                Err(_) => {}
             }
         }
         if settled.is_empty() {
@@ -10028,6 +10038,10 @@ struct Computed<'a> {
 }
 
 impl eval::Row for Computed<'_> {
+    fn purely(&self) -> Option<crate::date::Purely> {
+        Some(crate::date::Purely::Generated)
+    }
+
     fn collation(&self) -> Collation {
         self.collation
     }

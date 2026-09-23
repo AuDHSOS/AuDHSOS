@@ -7135,3 +7135,12 @@ Document 16 step Q8.
 - An expression over a column of a type that converted the text it was
   written, the `WHERE` of a partial index over the same column, and a
   unique index whose places hold nulls in more than one row.
+
+### 6.6.302 The clock a value of the schema may not read (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A row carrying `now` written against a `CHECK` constraint, against an
+  index and against a generated column, a `localtime` and a `utc`
+  modifier in an index, a `CREATE INDEX` over a row carrying `now`, and a
+  modifier that reads neither the clock nor the zone.

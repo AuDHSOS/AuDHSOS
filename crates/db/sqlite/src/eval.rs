@@ -49,6 +49,10 @@ pub enum Error {
     /// `random` or `randomblob` where the caller gave the connection no
     /// source of bytes to answer them from.
     NoRandom,
+    /// A date function that read the clock or the zone for a value of the
+    /// schema, with the name it was called under and the place it stands
+    /// in.
+    NotPure(Vec<u8>, crate::date::Purely),
     /// A `RAISE` the statement reached, which says what the statement
     /// that reached it does, and the message it wrote as text.
     Raised(crate::ast::Raise, Vec<u8>),
@@ -152,6 +156,11 @@ impl Error {
             Error::NoWindow(name) => {
                 alloc::format!("misuse of window function {}()", shown(name))
             }
+            Error::NotPure(name, place) => alloc::format!(
+                "non-deterministic use of {}() in {}",
+                shown(name),
+                shown(place.words())
+            ),
             Error::MisusedAggregate(name) => {
                 alloc::format!("misuse of aggregate function {}()", shown(name))
             }
@@ -348,12 +357,20 @@ pub trait Row {
         None
     }
 
-    /// What the connection tells the date functions: the clock and the
-    /// zone together.
+    /// Which part of the schema this row is read for, where the value it
+    /// answers must be the same every time it is read, and nothing where
+    /// the row stands in a statement of its own.
+    fn purely(&self) -> Option<crate::date::Purely> {
+        None
+    }
+
+    /// What the connection tells the date functions: the clock, the zone
+    /// and the place the call stands in together.
     fn told(&self) -> crate::date::Told {
         crate::date::Told {
             now: self.clock(),
             zone: self.zone(),
+            purely: self.purely(),
         }
     }
 
@@ -896,11 +913,11 @@ pub(crate) fn literal_value(
             if clock.now.is_none() {
                 return Err(Error::Unsupported);
             }
-            Ok(match which {
+            match which {
                 crate::ast::CurrentTime::Time => crate::date::time(&[], clock),
                 crate::ast::CurrentTime::Date => crate::date::date(&[], clock),
                 crate::ast::CurrentTime::Timestamp => crate::date::datetime(&[], clock),
-            })
+            }
         }
     }
 }

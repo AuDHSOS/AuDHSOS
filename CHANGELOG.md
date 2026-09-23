@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` refuses a date function that reads the clock or the zone
+  for a value of the schema, which is an expression of an index, a
+  `CHECK` constraint or a generated column. D-436 records it. Catalog
+  6.6.302. `date2.test` goes from 10 cases passing to 28.
+
 - `db-sqlite` answers the subtype of the argument a call answers as it
   stands, so `coalesce`, `ifnull`, `iif`, `nullif`, `min`, `max`,
   `likely` and a sign before a value each carry the JSON of that

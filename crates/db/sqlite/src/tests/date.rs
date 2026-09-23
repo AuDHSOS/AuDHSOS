@@ -763,3 +763,74 @@ fn what_localtime_and_utc_answer_under_a_zone() {
     );
     assert_eq!(quoted("datetime('2000-10-29 12:00:00','utc')"), "NULL");
 }
+
+/// A date function that reads the clock or the zone is refused where the
+/// value it answers belongs to the schema, which is an index, a `CHECK`
+/// constraint or a generated column.
+#[test]
+fn a_date_function_reading_the_clock_for_the_schema_is_refused() {
+    let mut writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
+    writer.clocking(1_500_000_000);
+    for sql in [
+        b"CREATE TABLE t1(x, y, CHECK( date(x) BETWEEN '2017-07-01' AND '2017-07-31' ))".as_slice(),
+        b"INSERT INTO t1(x,y) VALUES('2017-07-20','one')",
+        b"CREATE TABLE t2(x,y)",
+        b"INSERT INTO t2(x,y) VALUES(1, '2017-07-20'), (2, 'xyzzy')",
+        b"CREATE INDEX t2y ON t2(date(y))",
+        b"CREATE TABLE t3(x, y AS (unixepoch(x)))",
+        b"CREATE TABLE t4(b)",
+        b"INSERT INTO t4(b) VALUES('2017-07-20'),('now')",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    for (sql, message) in [
+        // The row the statement writes carries `now`, which the `CHECK`
+        // of the table reads.
+        (
+            b"INSERT INTO t1(x,y) VALUES('now','two')".as_slice(),
+            "non-deterministic use of date() in a CHECK constraint",
+        ),
+        (
+            b"INSERT INTO t2(x,y) VALUES(3, 'now')",
+            "non-deterministic use of date() in an index",
+        ),
+        (
+            b"INSERT INTO t3(x) VALUES('now')",
+            "non-deterministic use of unixepoch() in a generated column",
+        ),
+        // The zone is read as the clock is: a `localtime` or a `utc`
+        // modifier answers what the zone says now.
+        (
+            b"CREATE INDEX t2z ON t2(datetime(y,'localtime'))",
+            "non-deterministic use of datetime() in an index",
+        ),
+        (
+            b"CREATE INDEX t2u ON t2(datetime(y,'utc'))",
+            "non-deterministic use of datetime() in an index",
+        ),
+        // A `CREATE INDEX` reads every row, so one row carrying `now`
+        // refuses the statement.
+        (
+            b"CREATE INDEX t4b ON t4(julianday(b))",
+            "non-deterministic use of julianday() in an index",
+        ),
+    ] {
+        assert_eq!(
+            writer.run(sql).unwrap_err().message(),
+            message,
+            "{}",
+            String::from_utf8_lossy(sql)
+        );
+    }
+    // A modifier that reads neither the clock nor the zone is taken.
+    writer
+        .run(b"CREATE INDEX t2d ON t2(datetime(y,'+1 day'))")
+        .unwrap();
+    // The rows the statements wrote are the ones the refusals left.
+    let bytes = writer.written();
+    let database = Database::open(&bytes).unwrap();
+    assert_eq!(
+        database.query(b"SELECT x FROM t2 ORDER BY x").unwrap().rows,
+        [alloc::vec![Value::Int(1)], alloc::vec![Value::Int(2)]]
+    );
+}

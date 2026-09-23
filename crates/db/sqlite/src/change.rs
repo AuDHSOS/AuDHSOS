@@ -1663,6 +1663,7 @@ impl Writer {
             collating: self.collating,
             outer,
             reading,
+            purely: None,
         }
     }
 
@@ -2089,6 +2090,7 @@ impl Writer {
             collating: self.collating,
             outer: None,
             reading: None,
+            purely: None,
         };
         let mut answered = Vec::new();
         for column in arena.results(returning) {
@@ -6657,6 +6659,7 @@ impl Writer {
                             arena,
                             sql,
                         }),
+                        purely: None,
                     };
                     let keep = match statement.filter {
                         None => true,
@@ -6739,6 +6742,7 @@ impl Writer {
                         arena,
                         sql,
                     }),
+                    purely: None,
                 };
                 let keep = match statement.filter {
                     None => true,
@@ -6808,6 +6812,7 @@ impl Writer {
             collating: self.collating,
             outer,
             reading: Some(reading),
+            purely: None,
         };
         Ok(crate::eval::evaluate_row(reading.arena, filter, reading.sql, &held)?.truth(false))
     }
@@ -7396,6 +7401,7 @@ impl Writer {
                         .map(|one| -> &dyn crate::eval::Row { one })
                         .or(outer),
                     reading: Some(reading),
+                    purely: None,
                 };
                 let keep = match statement.filter {
                     None => true,
@@ -8475,9 +8481,16 @@ struct Held<'a> {
     /// What a statement written inside an expression is answered with,
     /// where the caller holds the database open.
     reading: Option<Reading<'a>>,
+    /// Which part of the schema this row is read for, where the value it
+    /// answers must be the same every time it is read.
+    purely: Option<crate::date::Purely>,
 }
 
 impl crate::eval::Row for Held<'_> {
+    fn purely(&self) -> Option<crate::date::Purely> {
+        self.purely
+    }
+
     fn defined(&self, name: &[u8], count: usize) -> Option<crate::func::Defined> {
         crate::func::defined(self.defined, name, count)
     }
@@ -9222,6 +9235,7 @@ impl Writer {
                         arena,
                         sql,
                     }),
+                    purely: None,
                 };
                 let keep = match statement.filter {
                     None => true,
@@ -9791,6 +9805,7 @@ impl Writer {
             collating: self.collating,
             outer: None,
             reading: None,
+            purely: Some(crate::date::Purely::Check),
         };
         // `PRAGMA ignore_check_constraints` leaves every `CHECK` of
         // the table unread.
@@ -10081,6 +10096,10 @@ struct Indexing<'a> {
 impl crate::eval::Row for Indexing<'_> {
     fn encoding(&self) -> Encoding {
         self.encoding
+    }
+
+    fn purely(&self) -> Option<crate::date::Purely> {
+        Some(crate::date::Purely::Index)
     }
 
     fn column(

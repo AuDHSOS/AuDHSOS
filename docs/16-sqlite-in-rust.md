@@ -1055,6 +1055,8 @@ Size: L.
      it stands. Built, which D-433 records.
 155. The values an entry of an index holds, which are the ones the row
      holds. Built, which D-434 and D-435 record.
+156. The clock and the zone, which a value of the schema may not be
+     answered from. Built, which D-436 records.
 
 ### Done when
 

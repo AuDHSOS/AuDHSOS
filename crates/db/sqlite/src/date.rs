@@ -20,6 +20,7 @@
 
 use alloc::vec::Vec;
 
+use crate::eval::Error;
 use crate::value::{Value, integer_as_real, real_as_integer};
 
 /// Milliseconds in a day.
@@ -48,6 +49,35 @@ pub struct Told {
     /// The zone `localtime` and `utc` read, and nothing where the
     /// connection was told none.
     pub zone: Option<Zone>,
+    /// Which part of the schema the call is read for, where the value it
+    /// answers must be the same every time it is read, and nothing where
+    /// the call stands in a statement of its own.
+    pub purely: Option<Purely>,
+}
+
+/// Which part of the schema a call is read for, where the value it
+/// answers must be the same every time it is read, which `OP_PureFunc`
+/// of `research/sqlite/src/vdbe.c` marks the call in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Purely {
+    /// An expression of an index or the `WHERE` of a partial index.
+    Index,
+    /// A `CHECK` constraint.
+    Check,
+    /// A generated column.
+    Generated,
+}
+
+impl Purely {
+    /// The words a refusal names the place with.
+    #[must_use]
+    pub const fn words(self) -> &'static [u8] {
+        match self {
+            Purely::Index => b"an index",
+            Purely::Check => b"a CHECK constraint",
+            Purely::Generated => b"a generated column",
+        }
+    }
 }
 
 /// One date and time, as `DateTime` of `src/date.c` holds it.
@@ -57,6 +87,9 @@ pub struct Told {
     reason = "the flags of `DateTime`, which say which of its fields hold the moment"
 )]
 pub struct Moment {
+    /// Whether the clock or the zone was read, which is what a value of
+    /// the schema may not be answered from.
+    impure: bool,
     /// The julian day number times 86 400 000.
     jd: i64,
     /// The year, the month and the day.
@@ -454,6 +487,7 @@ fn read_number(moment: &mut Moment, number: f64) {
 /// A connection told no clock answers nothing, so a statement that
 /// names `now` answers nothing as well. Reading it costs O(1).
 fn read_now(moment: &mut Moment, now: Option<i64>) -> Option<()> {
+    moment.impure = true;
     moment.jd = now?;
     moment.has_jd = true;
     moment.utc = true;
@@ -559,6 +593,7 @@ fn modified(moment: &mut Moment, text: &[u8], at: usize, zone: Option<Zone>) -> 
             Some(())
         }
         b'l' if same(text, b"localtime") => {
+            moment.impure = true;
             if !moment.is_local {
                 to_local(moment, zone?)?;
             }
@@ -567,6 +602,7 @@ fn modified(moment: &mut Moment, text: &[u8], at: usize, zone: Option<Zone>) -> 
             Some(())
         }
         b'u' if same(text, b"utc") => {
+            moment.impure = true;
             if moment.is_utc {
                 return Some(());
             }
@@ -925,15 +961,31 @@ fn time_moved(moment: &mut Moment, text: &[u8], sign: u8) -> Option<()> {
 
 /// The moment the arguments say: the first of them read as a moment,
 /// and the ones after it as modifiers, which is `isDate`.
-fn moment_of(args: &[Value], told: Told) -> Option<Moment> {
+///
+/// # Errors
+///
+/// [`Error::NotPure`] where the call read the clock or the zone for a
+/// value of the schema, which `sqlite3NotPureFunc` of
+/// `research/sqlite/src/vdbeaux.c:5627` refuses.
+fn moment_of(args: &[Value], told: Told, name: &[u8]) -> Result<Option<Moment>, Error> {
     let mut moment = Moment::default();
+    let read = read_arguments(args, &mut moment, told);
+    if let Some(place) = told.purely.filter(|_| moment.impure) {
+        return Err(Error::NotPure(name.to_vec(), place));
+    }
+    Ok(read.map(|()| moment))
+}
+
+/// The arguments read into a moment, which answers nothing where they say
+/// no moment.
+fn read_arguments(args: &[Value], moment: &mut Moment, told: Told) -> Option<()> {
     match args.first() {
         // `isDate` reads the clock where the call names no moment, so
         // `datetime()` is `datetime('now')`.
-        None => read_now(&mut moment, told.now)?,
-        Some(Value::Int(number)) => read_number(&mut moment, integer_as_real(*number)),
-        Some(Value::Real(number)) => read_number(&mut moment, *number),
-        Some(Value::Text(text) | Value::Blob(text)) => read_moment(text, &mut moment, told)?,
+        None => read_now(moment, told.now)?,
+        Some(Value::Int(number)) => read_number(moment, integer_as_real(*number)),
+        Some(Value::Real(number)) => read_number(moment, *number),
+        Some(Value::Text(text) | Value::Blob(text)) => read_moment(text, moment, told)?,
         Some(Value::Null) => return None,
     }
     for (at, held) in args.iter().enumerate().skip(1) {
@@ -942,7 +994,7 @@ fn moment_of(args: &[Value], told: Told) -> Option<Moment> {
             Value::Null => return None,
             other => other.text()?,
         };
-        modified(&mut moment, &text, at, told.zone)?;
+        modified(moment, &text, at, told.zone)?;
     }
     moment.compute_jd();
     if moment.error || !whole_day(moment.jd) {
@@ -953,7 +1005,7 @@ fn moment_of(args: &[Value], told: Told) -> Option<Moment> {
     if args.len() == 1 && moment.has_ymd && moment.day > 28 {
         moment.has_ymd = false;
     }
-    Some(moment)
+    Some(())
 }
 
 /// A number written with `width` digits, the ones in front of it being
@@ -1046,59 +1098,81 @@ const fn unix_seconds(moment: &Moment) -> i64 {
 }
 
 /// `date(TIME, MOD, ...)`.
-#[must_use]
-pub fn date(args: &[Value], told: Told) -> Value {
-    let Some(mut moment) = moment_of(args, told) else {
-        return Value::Null;
+///
+/// # Errors
+///
+/// [`Error::NotPure`] where the call read the clock or the zone for a
+/// value of the schema.
+pub fn date(args: &[Value], told: Told) -> Result<Value, Error> {
+    let Some(mut moment) = moment_of(args, told, b"date")? else {
+        return Ok(Value::Null);
     };
     moment.compute_ymd();
-    Value::Text(written_date(&moment))
+    Ok(Value::Text(written_date(&moment)))
 }
 
 /// `time(TIME, MOD, ...)`.
-#[must_use]
-pub fn time(args: &[Value], told: Told) -> Value {
-    let Some(mut moment) = moment_of(args, told) else {
-        return Value::Null;
+///
+/// # Errors
+///
+/// [`Error::NotPure`] where the call read the clock or the zone for a
+/// value of the schema.
+pub fn time(args: &[Value], told: Told) -> Result<Value, Error> {
+    let Some(mut moment) = moment_of(args, told, b"time")? else {
+        return Ok(Value::Null);
     };
     moment.compute_hms();
-    Value::Text(written_time(&moment))
+    Ok(Value::Text(written_time(&moment)))
 }
 
 /// `datetime(TIME, MOD, ...)`.
-#[must_use]
-pub fn datetime(args: &[Value], told: Told) -> Value {
-    let Some(mut moment) = moment_of(args, told) else {
-        return Value::Null;
+///
+/// # Errors
+///
+/// [`Error::NotPure`] where the call read the clock or the zone for a
+/// value of the schema.
+pub fn datetime(args: &[Value], told: Told) -> Result<Value, Error> {
+    let Some(mut moment) = moment_of(args, told, b"datetime")? else {
+        return Ok(Value::Null);
     };
     moment.compute_both();
     let mut out = written_date(&moment);
     out.push(b' ');
     out.extend_from_slice(&written_time(&moment));
-    Value::Text(out)
+    Ok(Value::Text(out))
 }
 
 /// `julianday(TIME, MOD, ...)`.
-#[must_use]
-pub fn julianday(args: &[Value], told: Told) -> Value {
-    let Some(mut moment) = moment_of(args, told) else {
-        return Value::Null;
+///
+/// # Errors
+///
+/// [`Error::NotPure`] where the call read the clock or the zone for a
+/// value of the schema.
+pub fn julianday(args: &[Value], told: Told) -> Result<Value, Error> {
+    let Some(mut moment) = moment_of(args, told, b"julianday")? else {
+        return Ok(Value::Null);
     };
     moment.compute_jd();
-    Value::Real(integer_as_real(moment.jd) / 86_400_000.0)
+    Ok(Value::Real(integer_as_real(moment.jd) / 86_400_000.0))
 }
 
 /// `unixepoch(TIME, MOD, ...)`.
-#[must_use]
-pub fn unixepoch(args: &[Value], told: Told) -> Value {
-    let Some(mut moment) = moment_of(args, told) else {
-        return Value::Null;
+///
+/// # Errors
+///
+/// [`Error::NotPure`] where the call read the clock or the zone for a
+/// value of the schema.
+pub fn unixepoch(args: &[Value], told: Told) -> Result<Value, Error> {
+    let Some(mut moment) = moment_of(args, told, b"unixepoch")? else {
+        return Ok(Value::Null);
     };
     moment.compute_jd();
     if moment.subsec {
-        return Value::Real(integer_as_real(moment.jd.saturating_sub(EPOCH)) / 1000.0);
+        return Ok(Value::Real(
+            integer_as_real(moment.jd.saturating_sub(EPOCH)) / 1000.0,
+        ));
     }
-    Value::Int(unix_seconds(&moment))
+    Ok(Value::Int(unix_seconds(&moment)))
 }
 
 /// How many days the moment stands after the first of January, which
@@ -1148,13 +1222,18 @@ fn thursday(moment: &Moment) -> Moment {
 }
 
 /// `strftime(FORMAT, TIME, MOD, ...)`.
-#[must_use]
-pub fn strftime(args: &[Value], told: Told) -> Value {
+///
+/// # Errors
+///
+/// [`Error::NotPure`] where the call read the clock or the zone for a
+/// value of the schema.
+pub fn strftime(args: &[Value], told: Told) -> Result<Value, Error> {
+    let held = moment_of(args.get(1..).unwrap_or_default(), told, b"strftime")?;
     let Some(format) = args.first().and_then(Value::text) else {
-        return Value::Null;
+        return Ok(Value::Null);
     };
-    let Some(mut moment) = moment_of(args.get(1..).unwrap_or_default(), told) else {
-        return Value::Null;
+    let Some(mut moment) = held else {
+        return Ok(Value::Null);
     };
     moment.compute_jd();
     moment.compute_both();
@@ -1169,15 +1248,15 @@ pub fn strftime(args: &[Value], told: Told) -> Value {
         // A format that ends with a `%` is one `strftime` answers
         // nothing for, which the `default` of its switch does.
         let Some(what) = format.get(at).copied() else {
-            return Value::Null;
+            return Ok(Value::Null);
         };
         at = at.saturating_add(1);
         let Some(written) = converted(&moment, what) else {
-            return Value::Null;
+            return Ok(Value::Null);
         };
         out.extend_from_slice(&written);
     }
-    Value::Text(out)
+    Ok(Value::Text(out))
 }
 
 /// What one conversion of a format writes, or nothing where the
@@ -1286,13 +1365,17 @@ const NOUGHT: i64 = 148_699_540_800_000;
 /// day of the month it lands on, less one, is the count of days.
 ///
 /// Walking the months costs O(n) in them.
-#[must_use]
-pub fn timediff(args: &[Value], told: Told) -> Value {
+///
+/// # Errors
+///
+/// [`Error::NotPure`] where the call read the clock or the zone for a
+/// value of the schema.
+pub fn timediff(args: &[Value], told: Told) -> Result<Value, Error> {
     let (Some(mut one), Some(mut other)) = (
-        moment_of(args.get(..1).unwrap_or_default(), told),
-        moment_of(args.get(1..2).unwrap_or_default(), told),
+        moment_of(args.get(..1).unwrap_or_default(), told, b"timediff")?,
+        moment_of(args.get(1..2).unwrap_or_default(), told, b"timediff")?,
     ) else {
-        return Value::Null;
+        return Ok(Value::Null);
     };
     one.compute_both();
     other.compute_both();
@@ -1323,7 +1406,7 @@ pub fn timediff(args: &[Value], told: Told) -> Value {
     out.extend_from_slice(&padded(held.minute, 2));
     out.push(b':');
     out.extend_from_slice(&written_seconds(held.second));
-    Value::Text(out)
+    Ok(Value::Text(out))
 }
 
 /// The second moment walked to the first a year and then a month at a

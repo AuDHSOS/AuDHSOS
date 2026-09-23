@@ -1042,13 +1042,13 @@ pub fn call(
     let mut taken = None;
     let answered = (
         match function {
-            Function::Date => crate::date::date(args, clock),
-            Function::Time => crate::date::time(args, clock),
-            Function::Datetime => crate::date::datetime(args, clock),
-            Function::Julianday => crate::date::julianday(args, clock),
-            Function::Unixepoch => crate::date::unixepoch(args, clock),
-            Function::Strftime => crate::date::strftime(args, clock),
-            Function::Timediff => crate::date::timediff(args, clock),
+            Function::Date => crate::date::date(args, clock)?,
+            Function::Time => crate::date::time(args, clock)?,
+            Function::Datetime => crate::date::datetime(args, clock)?,
+            Function::Julianday => crate::date::julianday(args, clock)?,
+            Function::Unixepoch => crate::date::unixepoch(args, clock)?,
+            Function::Strftime => crate::date::strftime(args, clock)?,
+            Function::Timediff => crate::date::timediff(args, clock)?,
             Function::Typeof => Value::Text(type_name(&first).to_vec()),
             Function::Length => match &first {
                 Value::Null => Value::Null,
