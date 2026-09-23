@@ -7308,3 +7308,12 @@ Document 16 step Q8.
   hold the journal with, the file written after each of them, the rows the
   commit leaves, and a rollback that writes the pages back under each of
   the three journal modes that keep a journal.
+
+### 6.6.318 What the pragma that turns logging on writes (`db-sqlite`)
+
+Document 16 step Q8.
+
+- `PRAGMA journal_mode=wal` over a file of one table: the journal, the two
+  syncs that hold it, page one written into the file, the sync that holds
+  it, and the log's header after all of it. The same pragma over a file
+  that already names version two writes the log's header alone.

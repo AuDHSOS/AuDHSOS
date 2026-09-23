@@ -1091,6 +1091,9 @@ Size: L.
      which the cache spills where it is too small for the transaction.
      Built for the rollback journal, which D-451 records; a transaction in
      write-ahead logging mode still writes every frame at its commit.
+170. The transaction that turns logging on, which writes page one
+     through a rollback journal before the log is there. Built, which
+     D-452 records.
 
 ### Done when
 

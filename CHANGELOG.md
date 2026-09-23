@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` writes page one through a rollback journal where `PRAGMA
+  journal_mode=wal` turns logging on, which holds the file on the disk
+  before the log's header reaches it. D-452 records it. Catalog 6.6.318.
+  `walcrash.test` goes from 2871 cases passing to 2906 and fails none of
+  the 99 it failed.
+
 - `db-sqlite` writes pages into the file before a transaction commits
   where the cache is too small for it: the journal holds their records
   under a synced count first, and a rollback writes the pages back.

@@ -546,3 +546,25 @@ fn what_a_transaction_over_a_cache_too_small_for_it_writes() {
         assert!(did.contains(held), "{did}");
     }
 }
+
+#[test]
+fn what_the_pragma_that_turns_logging_on_writes() {
+    let mut writer = crate::change::Writer::new(1024, 0, crate::header::Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a)").unwrap();
+    let _ = writer.did();
+    assert_eq!(
+        writer.run(b"PRAGMA journal_mode=wal").unwrap(),
+        [[crate::value::Value::Text(b"wal".to_vec())]]
+    );
+    // The journal holds the record of page one under a count that is
+    // written and held, page one reaches the file, the file is held on
+    // the disk, the journal goes, and the log's header is written after
+    // all of it.
+    assert_eq!(shown_did(&writer.did()), "jjJjJmtMrlL");
+    // A file that already names version two carries no such
+    // transaction, because the two version bytes stand where the pragma
+    // wants them.
+    let mut again = crate::change::Writer::opened(&writer.written()).unwrap();
+    again.run(b"PRAGMA journal_mode=wal").unwrap();
+    assert_eq!(shown_did(&again.did()), "lL");
+}

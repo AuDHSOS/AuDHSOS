@@ -1312,14 +1312,38 @@ impl Writer {
     ///
     /// The two salts come from SQLite's random source.
     pub fn logging(&mut self, salt: (u32, u32)) {
-        // The pragma is itself a change, so the file it leaves counts
-        // one more and names both versions two. A file that vacuums
-        // itself counted the pragma that said so, so the two pragmas
-        // count two between them.
-        self.held.header.write_version = 2;
-        self.held.header.read_version = 2;
-        self.held.header.change_counter = self.held.header.change_counter.saturating_add(1);
-        self.held.header.version_valid_for = self.held.header.change_counter;
+        // `sqlite3BtreeSetVersion` of `research/sqlite/src/btree.c:11510`
+        // writes page one in a transaction that keeps a rollback
+        // journal, whatever mode the connection stands in, which
+        // `OP_JournalMode` of `research/sqlite/src/vdbe.c:8125` opens
+        // before `sqlite3PagerOpenWal` makes the log. A file that
+        // already names version two carries no such transaction,
+        // because the two version bytes stand where the pragma wants
+        // them.
+        if self.held.header.write_version != 2 {
+            // The pragma is refused inside a transaction, so the pages
+            // the statement before it wrote are in the file already and
+            // this transaction begins on them.
+            self.held.pages.begin();
+            let was = self.held.header;
+            // The pragma is itself a change, so the file it leaves
+            // counts one more and names both versions two. A file that
+            // vacuums itself counted the pragma that said so, so the
+            // two pragmas count two between them.
+            self.held.header.write_version = 2;
+            self.held.header.read_version = 2;
+            self.held.header.change_counter = self.held.header.change_counter.saturating_add(1);
+            self.held.header.version_valid_for = self.held.header.change_counter;
+            self.held.pages.open(1);
+            let written = self
+                .held
+                .pages
+                .journal(&was, self.held.nonce, self.held.sector);
+            let did = journalled(&written, &self.held);
+            self.held.journal = crate::journal::committed(&written, self.held.mode);
+            self.held.did.extend(did);
+            self.held.pages.begin();
+        }
         self.held.origin = Some(self.held.pages.written(&self.held.header));
         let log = Log::new(self.held.header.page_size, salt, 0, false);
         // The log is on the disk once the pragma answers, which is
