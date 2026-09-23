@@ -194,13 +194,14 @@ impl<'a> Engine<'a, '_> {
             first.class = if all_marks { 3 } else { 2 };
             first.components = component;
             self.replace(buffer, i, first)?;
-            for at in positions
+            // Ascending removal keeps the gap moving forward.
+            for (removed, at) in positions
                 .get(1..count)
                 .ok_or(FontError::LimitExceeded)?
                 .iter()
-                .rev()
+                .enumerate()
             {
-                buffer.remove(*at)?;
+                buffer.remove(sub(*at, removed)?)?;
             }
             return Ok(Some(add(i, 1)?));
         }

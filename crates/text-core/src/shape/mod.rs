@@ -69,10 +69,19 @@ impl Glyph {
 }
 
 /// Mutable glyph prefix with checked expansion into caller capacity.
+///
+/// The `data.len() - len` free slots form a gap before logical glyph `gap`.
+/// `insert` and `remove` move the gap to their index, so a lookup pass copies
+/// O(n + work) glyphs. `Engine::run` closes the gap (`gap == len`) before it
+/// returns; `glyphs` and `set_advances` require a closed gap.
 pub struct Buffer<'a> {
     data: &'a mut [Glyph],
     len: usize,
+    gap: usize,
     inserted: usize,
+    /// Glyphs copied by gap moves.
+    #[cfg(test)]
+    pub(crate) moved: usize,
 }
 impl<'a> Buffer<'a> {
     /// Adopt an initialized prefix.
@@ -85,7 +94,10 @@ impl<'a> Buffer<'a> {
         Ok(Self {
             data,
             len,
+            gap: len,
             inserted: 0,
+            #[cfg(test)]
+            moved: 0,
         })
     }
     /// Return the initialized glyphs.
@@ -140,32 +152,62 @@ impl<'a> Buffer<'a> {
         }
         Ok(())
     }
+    fn slot(&self, i: usize) -> Result<usize, FontError> {
+        if i >= self.len {
+            return Err(FontError::InvalidTable);
+        }
+        if i < self.gap {
+            Ok(i)
+        } else {
+            add(i, sub(self.data.len(), self.len)?)
+        }
+    }
     fn get(&self, i: usize) -> Result<Glyph, FontError> {
-        self.glyphs().get(i).copied().ok_or(FontError::InvalidTable)
+        let at = self.slot(i)?;
+        self.data.get(at).copied().ok_or(FontError::InvalidTable)
     }
     fn put(&mut self, i: usize, glyph: Glyph) -> Result<(), FontError> {
-        *self
-            .glyphs_mut()
-            .get_mut(i)
-            .ok_or(FontError::InvalidTable)? = glyph;
+        let at = self.slot(i)?;
+        *self.data.get_mut(at).ok_or(FontError::InvalidTable)? = glyph;
         Ok(())
+    }
+    /// Move the gap before logical glyph `i`; copies `|gap - i|` glyphs.
+    fn move_gap(&mut self, i: usize) -> Result<(), FontError> {
+        if i > self.len {
+            return Err(FontError::InvalidTable);
+        }
+        let width = sub(self.data.len(), self.len)?;
+        if i < self.gap {
+            self.data.copy_within(i..self.gap, add(i, width)?);
+        } else {
+            self.data
+                .copy_within(add(self.gap, width)?..add(i, width)?, self.gap);
+        }
+        #[cfg(test)]
+        {
+            self.moved = add(self.moved, self.gap.abs_diff(i))?;
+        }
+        self.gap = i;
+        Ok(())
+    }
+    /// Make the glyphs contiguous again.
+    fn close(&mut self) -> Result<(), FontError> {
+        self.move_gap(self.len)
     }
     fn insert(&mut self, i: usize, glyph: Glyph) -> Result<(), FontError> {
         if self.len == self.data.len() {
             return Err(FontError::BufferTooSmall);
         }
-        if i > self.len {
-            return Err(FontError::InvalidTable);
-        }
-        self.data.copy_within(i..self.len, add(i, 1)?);
+        self.move_gap(i)?;
         *self.data.get_mut(i).ok_or(FontError::BufferTooSmall)? = glyph;
+        self.gap = add(i, 1)?;
         self.len = add(self.len, 1)?;
         self.inserted = add(self.inserted, 1)?;
         Ok(())
     }
     fn remove(&mut self, i: usize) -> Result<(), FontError> {
         self.get(i)?;
-        self.data.copy_within(add(i, 1)?..self.len, i);
+        self.move_gap(i)?;
         self.len = sub(self.len, 1)?;
         Ok(())
     }
@@ -371,6 +413,11 @@ impl<'a, 'c> Engine<'a, 'c> {
         }
     }
     fn run(&mut self, index: usize, buffer: &mut Buffer<'_>) -> Result<(), FontError> {
+        let result = self.pass(index, buffer);
+        let closed = buffer.close();
+        result.and(closed)
+    }
+    fn pass(&mut self, index: usize, buffer: &mut Buffer<'_>) -> Result<(), FontError> {
         for (order, g) in buffer.glyphs_mut().iter_mut().enumerate() {
             g.context = 0;
             g.source_order = order;
