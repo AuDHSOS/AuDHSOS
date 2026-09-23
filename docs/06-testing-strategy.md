@@ -7290,3 +7290,12 @@ Document 16 step Q8.
 - `walcrash-5.*` of `walcrash.test` read against the writer: a machine
   that loses power on the thirteenth sync of the log, which the syncs of
   the commits and of the checkpoint between them count to.
+
+### 6.6.316 What writes the schema's own table (`db-sqlite`)
+
+Document 16 step Q8.
+
+- An `INSERT`, an `UPDATE` and a `DELETE` over the schema's own table
+  under each of its two names and over the temp schema's own table, and
+  an `UPDATE` of it under `PRAGMA writable_schema` read back out of the
+  file.

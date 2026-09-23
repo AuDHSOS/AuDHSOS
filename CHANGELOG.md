@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` writes the schema's own table under `PRAGMA
+  writable_schema`, and refuses a statement that writes it under no such
+  pragma with `table sqlite_master may not be modified`. D-450 records
+  it. Catalog 6.6.316. `default.test` goes from 8 cases passing to 12 and
+  `corruptL.test` from 25 to 28.
+
 - `db-sqlite` resolves every view of the schema before a rename writes
   one of them, and refuses the rename `error in view <name>: no such
   table: <table>` where a source of a view reads a table no database of

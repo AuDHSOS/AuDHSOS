@@ -1014,27 +1014,12 @@ fn the_schema_is_a_table_that_is_read_and_not_written() {
             .rows,
         [[Value::Text(b"CREATE INDEX i ON t(a)".to_vec())]]
     );
-    // It is not one of the tables the file holds, and no statement
-    // writes it.
+    // It is not one of the tables the file holds.
     assert!(
         !database
             .tables()
             .any(|table| table.name == b"sqlite_master")
     );
-    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
-    writer.run(b"CREATE TABLE t(a)").unwrap();
-    for sql in [
-        b"INSERT INTO sqlite_master VALUES('x','y','z',1,'w')".as_slice(),
-        b"UPDATE sqlite_schema SET name='q'",
-        b"DELETE FROM sqlite_master",
-    ] {
-        assert_eq!(
-            writer.run(sql).err(),
-            Some(crate::db::Error::Unsupported),
-            "{}",
-            alloc::string::String::from_utf8_lossy(sql)
-        );
-    }
     // A name SQLite keeps for itself is one no `DROP TABLE` takes away,
     // which `tableMayNotBeDropped` refuses before it reads whether the
     // schema holds the name.
@@ -1271,4 +1256,45 @@ fn a_column_of_a_compound_converts_what_every_core_of_it_leaves_it_converting() 
         .unwrap()
         .rows;
     assert_eq!(rows, [[Value::Text(b"abc".to_vec())]]);
+}
+
+#[test]
+fn what_writes_the_schema_s_own_table() {
+    use crate::change::Writer;
+    use crate::header::Encoding;
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a)").unwrap();
+    // `sqlite3SchemaMayNotBeModified` names the table `sqlite_master`
+    // whichever of its two names the statement wrote, and the temp
+    // schema's `sqlite_temp_master`.
+    for (sql, named) in [
+        (
+            b"INSERT INTO sqlite_master VALUES('x','y','z',1,'w')".as_slice(),
+            "sqlite_master",
+        ),
+        (b"UPDATE sqlite_schema SET name='q'", "sqlite_master"),
+        (b"DELETE FROM sqlite_master", "sqlite_master"),
+        (
+            b"UPDATE sqlite_temp_schema SET name='q'",
+            "sqlite_temp_master",
+        ),
+    ] {
+        assert_eq!(
+            writer.run(sql).unwrap_err().message(),
+            alloc::format!("table {named} may not be modified"),
+            "{}",
+            alloc::string::String::from_utf8_lossy(sql)
+        );
+    }
+    // `PRAGMA writable_schema` writes it like any other table.
+    writer.run(b"PRAGMA writable_schema=ON").unwrap();
+    writer
+        .run(b"UPDATE sqlite_schema SET name='q' WHERE name='t'")
+        .unwrap();
+    let written = writer.written();
+    let held = Database::open(&written).unwrap();
+    assert_eq!(
+        held.query(b"SELECT name FROM sqlite_master").unwrap().rows,
+        [[Value::Text(b"q".to_vec())]]
+    );
 }

@@ -445,6 +445,9 @@ pub enum Error {
     /// term that reads itself under an operator other than `UNION`, a
     /// table-valued function.
     Unsupported,
+    /// A statement that writes the schema's own table, with the name the
+    /// message carries it under.
+    NotModifiable(Vec<u8>),
     /// An `OVER` that names a window no `WINDOW` clause defines, with
     /// that name.
     NoWindowNamed(Vec<u8>),
@@ -744,6 +747,9 @@ impl Error {
     fn datatypes(&self) -> Option<alloc::string::String> {
         let shown = |bytes: &[u8]| alloc::string::String::from_utf8_lossy(bytes).into_owned();
         Some(match self {
+            Error::NotModifiable(name) => {
+                alloc::format!("table {} may not be modified", shown(name))
+            }
             Error::Schema(schema::Error::UnsetDefault(name)) => {
                 alloc::format!("default value of column [{}] is not constant", shown(name))
             }

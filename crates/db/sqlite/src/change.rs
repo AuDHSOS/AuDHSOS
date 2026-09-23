@@ -138,16 +138,6 @@ const SEQUENCE: &[u8] = b"sqlite_sequence";
 /// out of.
 const SCHEMA_TABLE: &[u8] = b"sqlite_schema";
 
-/// Refuses a statement that writes the schema's own table, which is
-/// `sqlite3SchemaMayNotBeModified`: the table is read and not written,
-/// whatever the statement says.
-const fn written_to(name: &[u8]) -> Result<(), Error> {
-    if crate::db::schema_named(name) {
-        return Err(Error::Unsupported);
-    }
-    Ok(())
-}
-
 /// Whether a row of `sqlite_sequence` names the table `wanted`.
 fn named_row(values: &[Value], wanted: &[u8]) -> bool {
     matches!(values.first(), Some(Value::Text(text)) if text.eq_ignore_ascii_case(wanted))
@@ -6310,6 +6300,25 @@ impl Writer {
         ))
     }
 
+    /// Refuses a statement that writes the schema's own table, which is
+    /// `sqlite3SchemaMayNotBeModified` of `research/sqlite/src/build.c`
+    /// reading `SQLITE_WriteSchema`: the table is read and not written
+    /// unless `PRAGMA writable_schema` is on.
+    fn writes_schema(&self, name: &[u8]) -> Result<(), Error> {
+        if !crate::db::schema_named(name) || self.kept_truth(b"writable_schema") {
+            return Ok(());
+        }
+        // `sqlite3SchemaMayNotBeModified` names the table `sqlite_master`
+        // and the temp schema's `sqlite_temp_master`, whichever name the
+        // statement wrote.
+        let held = if name.len() > b"sqlite_master".len() {
+            b"sqlite_temp_master".to_vec()
+        } else {
+            b"sqlite_master".to_vec()
+        };
+        Err(Error::NotModifiable(held))
+    }
+
     /// How much of a statement a rename of a table writes again, which
     /// `PRAGMA legacy_alter_table` holds to the name the statement
     /// carries the table under.
@@ -6882,7 +6891,7 @@ impl Writer {
         outer: Option<&dyn crate::eval::Row>,
         name: &[u8],
     ) -> Result<Inserting, Error> {
-        written_to(name)?;
+        self.writes_schema(name)?;
         let named: Vec<Vec<u8>> = arena
             .names(statement.columns)
             .iter()
@@ -7829,7 +7838,7 @@ impl Writer {
         outer: Option<&dyn crate::eval::Row>,
         name: &[u8],
     ) -> Result<Rewriting, Error> {
-        written_to(name)?;
+        self.writes_schema(name)?;
         let sets = self.writing(arena, statement, sql);
         let bytes = self.images();
         let database = self.reading_beside(&bytes)?.counting(self.counted);
@@ -9681,7 +9690,7 @@ impl Writer {
         outer: Option<&dyn crate::eval::Row>,
     ) -> Result<i64, Error> {
         let name = crate::schema::dequote(statement.name.text(sql));
-        written_to(&name)?;
+        self.writes_schema(&name)?;
         self.located(&name)?;
         self.holds_index(&name, statement.indexed, sql)?;
         if self.is_view(&name)? {
@@ -9800,7 +9809,7 @@ impl Writer {
         outer: Option<&dyn crate::eval::Row>,
         name: &[u8],
     ) -> Result<Updating, Error> {
-        written_to(name)?;
+        self.writes_schema(name)?;
         let sets = self.writing(arena, statement, sql);
         let bytes = self.images();
         let database = self.reading_beside(&bytes)?.counting(self.counted);

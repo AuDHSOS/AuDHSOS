@@ -1085,6 +1085,8 @@ Size: L.
      D-448 record.
 167. The sync a checkpoint holds the log with before it writes a frame
      back into the file. Built, which D-449 records.
+168. The schema's own table written by a statement under `PRAGMA
+     writable_schema`. Built, which D-450 records.
 
 ### Done when
 
