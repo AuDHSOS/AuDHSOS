@@ -2948,6 +2948,10 @@ impl Writer {
         }
         self.held.log = Some(log);
         self.held.restarting = !restarting;
+        // `walCheckpoint` of `research/sqlite/src/wal.c:2276` holds the
+        // log on the disk before it writes a frame back into the file, so
+        // the file never holds a page the log has lost.
+        self.held.did.push(Does::Sync(Onto::Log));
         let image = self.writes_back();
         if restarting {
             let bytes = self.held.log.as_ref().map(Log::bytes).unwrap_or_default();

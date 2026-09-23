@@ -7282,3 +7282,11 @@ Document 16 step Q8.
   in it, a row written into it, the log beside its file, that log after a
   truncating checkpoint, and the journal beside the file of one under a
   mode that keeps the journal.
+
+### 6.6.315 The sync a checkpoint holds the log with (`db-sqlite`)
+
+Document 16 step Q8.
+
+- `walcrash-5.*` of `walcrash.test` read against the writer: a machine
+  that loses power on the thirteenth sync of the log, which the syncs of
+  the commits and of the checkpoint between them count to.

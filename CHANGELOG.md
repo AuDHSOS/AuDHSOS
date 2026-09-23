@@ -280,6 +280,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   `wal.test` goes from 370 cases passing to 372 and `walmode.test` from
   60 to 62.
 
+- `db-sqlite` holds the log on the disk before a checkpoint writes a
+  frame back into the file, so the file never holds a page the log has
+  lost. D-449 records it. Catalog 6.6.315. `walcrash.test` goes from 2574
+  cases passing to 2871.
+
 - `db-sqlite` reads a database an `ATTACH` added through the pages the
   connection holds, so a table made in one in write-ahead logging mode is
   a table every statement after it finds. D-447 records it. Catalog

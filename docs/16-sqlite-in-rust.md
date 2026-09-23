@@ -1083,6 +1083,8 @@ Size: L.
 166. The pages a statement reads a database an `ATTACH` added through,
      and the log a truncating checkpoint leaves. Built, which D-447 and
      D-448 record.
+167. The sync a checkpoint holds the log with before it writes a frame
+     back into the file. Built, which D-449 records.
 
 ### Done when
 
