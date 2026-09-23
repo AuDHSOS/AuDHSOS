@@ -67,28 +67,34 @@ impl<K: Ord, V, const N: usize> IndexMap<K, V, N> {
     /// # Errors
     ///
     /// [`CollectionError::Full`] when the key is new and the map is at its
-    /// capacity.
-    pub fn insert(&mut self, key: K, value: V) -> Result<Option<V>, CollectionError> {
+    /// capacity. The error returns the key and value to the caller.
+    pub fn insert(&mut self, key: K, value: V) -> Result<Option<V>, ((K, V), CollectionError)> {
         match self.search(&key) {
             Ok(at) => {
-                let slot = self.slots.get_mut(at).ok_or(CollectionError::Full)?;
+                let Some(slot) = self.slots.get_mut(at) else {
+                    return Err(((key, value), CollectionError::Full));
+                };
                 let previous = slot.take().map(|(_, old)| old);
                 *slot = Some((key, value));
                 Ok(previous)
             }
             Err(at) => {
                 if self.is_full() {
-                    return Err(CollectionError::Full);
+                    return Err(((key, value), CollectionError::Full));
                 }
                 let mut position = self.len;
                 while position > at {
                     let below = position.wrapping_sub(1);
                     let moved = self.slots.get_mut(below).and_then(Option::take);
-                    let slot = self.slots.get_mut(position).ok_or(CollectionError::Full)?;
+                    let Some(slot) = self.slots.get_mut(position) else {
+                        return Err(((key, value), CollectionError::Full));
+                    };
                     *slot = moved;
                     position = below;
                 }
-                let slot = self.slots.get_mut(at).ok_or(CollectionError::Full)?;
+                let Some(slot) = self.slots.get_mut(at) else {
+                    return Err(((key, value), CollectionError::Full));
+                };
                 *slot = Some((key, value));
                 self.len = self.len.wrapping_add(1);
                 Ok(None)

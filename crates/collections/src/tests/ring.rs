@@ -59,7 +59,7 @@ fn a_full_buffer_refuses_the_write_rather_than_overwriting() {
     ring.push(1).expect("room");
     ring.push(2).expect("room");
     assert!(ring.is_full());
-    assert_eq!(ring.push(3), Err(CollectionError::Full));
+    assert_eq!(ring.push(3), Err((3, CollectionError::Full)));
     assert_eq!(values(&ring), vec![1, 2]);
     assert_eq!(ring.len(), 2);
 }
@@ -81,7 +81,7 @@ fn the_free_space_is_the_number_of_writes_that_then_succeed() {
         );
     }
     assert_eq!(ring.free(), 0);
-    assert_eq!(ring.push(9), Err(CollectionError::Full));
+    assert_eq!(ring.push(9), Err((9, CollectionError::Full)));
 }
 
 #[test]
@@ -90,7 +90,7 @@ fn a_buffer_without_slots_is_full_from_the_start() {
     assert!(ring.is_full());
     assert!(ring.is_empty());
     assert_eq!(ring.free(), 0);
-    assert_eq!(ring.push(1), Err(CollectionError::Full));
+    assert_eq!(ring.push(1), Err((1, CollectionError::Full)));
     assert_eq!(ring.pop(), None);
     assert_eq!(ring.get(0), None);
 }
@@ -130,6 +130,17 @@ fn a_value_that_is_not_copy_moves_in_and_out() {
     assert!(ring.is_empty());
 }
 
+#[test]
+fn a_full_buffer_returns_an_owned_value() {
+    let mut ring: RingBuffer<String, 1> = RingBuffer::new();
+    ring.push("held".to_owned()).expect("room");
+    assert_eq!(
+        ring.push("refused".to_owned()),
+        Err(("refused".to_owned(), CollectionError::Full))
+    );
+    assert_eq!(ring.pop().as_deref(), Some("held"));
+}
+
 /// The buffer against a `VecDeque` bounded at the same capacity.
 struct RingModel;
 
@@ -164,7 +175,10 @@ impl ModelTest for RingModel {
                     }
                     model.push_back(value);
                 }
-                Err(CollectionError::Full) => {
+                Err((returned, CollectionError::Full)) => {
+                    if returned != value {
+                        return Err("push returned a different value".to_owned());
+                    }
                     if model.len() != CAPACITY {
                         return Err("full although a slot was free".to_owned());
                     }

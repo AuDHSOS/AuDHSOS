@@ -127,6 +127,21 @@ fn unlinking_a_node_that_is_not_in_the_list_is_rejected() {
 }
 
 #[test]
+fn a_duplicate_identifier_cannot_unlink_from_an_empty_header() {
+    let mut first = IndexList::new(1).expect("a usable identifier");
+    let mut duplicate = IndexList::new(1).expect("a usable identifier");
+    let mut links = [Link::new(); 2];
+    first.push_back(&mut links, 0).expect("a free node");
+    assert_eq!(
+        duplicate.unlink(&mut links, 0),
+        Err(CollectionError::NotLinked(0))
+    );
+    assert_eq!(duplicate.len(), 0);
+    assert_eq!(first.head(), Some(0));
+    assert_eq!(first.pop_front(&mut links), Some(0));
+}
+
+#[test]
 fn a_node_outside_the_slice_is_an_index_error() {
     let (mut list, mut links) = list_of(1, 2);
     assert_eq!(
