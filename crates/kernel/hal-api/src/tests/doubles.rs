@@ -356,6 +356,26 @@ fn a_frame_in_use_as_a_table_has_no_bytes_and_the_reverse() {
     assert_eq!(access.frame_bytes(frame(9)), Some(&[0; FRAME_BYTES]));
 }
 
+#[test]
+fn frame_access_counts_and_removes_both_views() {
+    use crate::paging::FrameBytes;
+
+    let mut access: MemoryFrameAccess<u64> = MemoryFrameAccess::new();
+    access.insert(frame(4), 7);
+    access.add_bytes(frame(5));
+    assert!(access.contains(frame(4)));
+    assert!(access.contains(frame(5)));
+    assert_eq!(access.len(), 2);
+    assert!(!access.is_empty());
+
+    assert_eq!(access.remove(frame(5)), None);
+    assert!(!access.contains(frame(5)));
+    assert!(access.frame_bytes(frame(5)).is_none());
+    assert_eq!(access.len(), 1);
+    assert_eq!(access.remove(frame(4)), Some(7));
+    assert!(access.is_empty());
+}
+
 /// A release of a frame that is not live is recorded apart and leaves the
 /// count of live frames alone.
 ///
