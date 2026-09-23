@@ -239,9 +239,8 @@ Modules:
   each field, so that the adapter has nothing left to get wrong.
 - `header.rs`: the type-0 header — vendor and device id, command and
   status, revision, class, subclass and programming interface, header
-  type, the six base address registers, the subsystem ids, and the
-  capabilities pointer. A header whose vendor id is `0xFFFF` is an absent
-  function and not an error.
+  type, the subsystem ids, and the capabilities pointer. A header whose
+  vendor id is `0xFFFF` is an absent function and not an error.
 - `enumerate.rs`: the walk over buses, devices and functions, bounded by
   the bus range the MCFG named; a multi-function device is recognized by
   bit 7 of the header type, and a function that is not present ends the
@@ -253,8 +252,9 @@ Modules:
   I/O; bits 2 and 1 say whether a memory register is 32 or 64 bits wide,
   and a 64-bit register takes the next register as its upper half, which
   is why a bar index is checked against what the previous index consumed.
-  Size probing writes all ones, reads back, masks the type bits, inverts
-  and adds one — and because that write makes the device decode nothing
+  Size probing writes all ones, reads back, masks the type bits, and
+  takes the lowest set bit as the size; a probe with no address bit
+  decodes nothing. Because that write makes the device decode nothing
   meaningful in the meantime, the memory decode bit of the command
   register is cleared first and restored after, which the crate does in
   one function so that a caller cannot forget the second half.

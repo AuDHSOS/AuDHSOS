@@ -61,6 +61,13 @@ pub enum PciError {
         /// The length the capability announced.
         length: u8,
     },
+    /// A capability that runs past the end of the capability list.
+    CapabilityTruncated {
+        /// Where the capability starts.
+        offset: u16,
+        /// How many bytes it needs.
+        len: u16,
+    },
     /// A capability that names a base address register a function has not.
     CapabilityBar(u8),
     /// A capability the caller read as MSI-X that carries another
@@ -122,6 +129,10 @@ impl fmt::Display for PciError {
             PciError::CapabilityLength { id, length } => write!(
                 f,
                 "the capability {id:#x} announces {length} bytes, which is less than it needs"
+            ),
+            PciError::CapabilityTruncated { offset, len } => write!(
+                f,
+                "a capability of {len} bytes at {offset:#x} runs past the capability list"
             ),
             PciError::CapabilityBar(index) => write!(
                 f,

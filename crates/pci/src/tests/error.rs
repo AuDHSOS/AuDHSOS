@@ -6,7 +6,7 @@
 use crate::error::PciError;
 
 /// Every variant, so that the report of one is never empty.
-const EVERY: [PciError; 16] = [
+const EVERY: [PciError; 17] = [
     PciError::Device(32),
     PciError::Function(8),
     PciError::BusRange {
@@ -31,6 +31,10 @@ const EVERY: [PciError; 16] = [
     PciError::CapabilityPointer(0x3C),
     PciError::CapabilityLoop,
     PciError::CapabilityLength { id: 9, length: 16 },
+    PciError::CapabilityTruncated {
+        offset: 0xF8,
+        len: 12,
+    },
     PciError::CapabilityBar(6),
     PciError::NotMsix(9),
 ];

@@ -1671,6 +1671,13 @@ fn prepare(
     let bars = probe(space, address).map_err(pci_error).step("probe")?;
     let (index, mut places, multiplier) = layout(&structures).step("layout")?;
     let register = bar(&bars, index).step("register")?;
+    if !places
+        .iter()
+        .all(|place| register.holds(u64::from(place.offset), u64::from(place.len)))
+    {
+        return Err(Error::Unsupported).step("structure bounds");
+    }
+    msix_bounds(&bars, &table).step("msix bounds")?;
     // The object covers whole frames, so a register that does not start at
     // one leaves bytes below it inside the window. The driver counts from
     // the window, which is what it is given; the shift is added once here
@@ -1772,6 +1779,20 @@ fn bar(bars: &[Option<Bar>; pci::bar::MAX_BARS], index: u8) -> Result<Bar, Error
         BarSpace::Memory { .. } => Ok(found),
         BarSpace::Io => Err(Error::Unsupported),
     }
+}
+
+/// Refuses an MSI-X table or pending bit array that leaves its register.
+fn msix_bounds(bars: &[Option<Bar>; pci::bar::MAX_BARS], table: &msix::MsiX) -> Result<(), Error> {
+    let places = [
+        (table.table, table.table_len()),
+        (table.pending, table.pending_len()),
+    ];
+    for (location, len) in places {
+        if !bar(bars, location.bar)?.holds(u64::from(location.offset), len) {
+            return Err(Error::Unsupported);
+        }
+    }
+    Ok(())
 }
 
 /// A device memory object over the whole of `register`, aligned outward to

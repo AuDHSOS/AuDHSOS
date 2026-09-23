@@ -107,6 +107,69 @@ fn a_memory_register_of_a_reserved_type_decodes_nothing() {
 }
 
 #[test]
+fn a_probe_without_an_address_bit_decodes_nothing() {
+    let mut builder = Builder::new(0x8086, 0x1234);
+    builder.bar(0, 0x0000_0008, 0x0000_0008);
+    builder.bar(1, 0x0000_0001, 0x0000_0001);
+    builder.bar(2, 0x0000_000C, 0x0000_000C);
+    builder.bar(4, 0x0000_0000, 0xFFFF_F000);
+    let mut space = one(&builder);
+    let at = address(&space);
+    let bars = probe(&mut space, at).unwrap();
+    assert_eq!(bars[..4], [None; 4]);
+    assert_eq!(
+        bars[4].map(|bar| bar.len),
+        Some(0x1000),
+        "the 64-bit register at 2 consumed 3 and nothing more"
+    );
+}
+
+#[test]
+fn the_size_is_the_lowest_address_bit_of_the_probe() {
+    let mut builder = Builder::new(0x8086, 0x1234);
+    builder.bar(0, 0x0000_6001, 0x0000_FFE1);
+    builder.bar(1, 0x8000_0000, 0xFFFF_E800);
+    builder.bar(2, 0x0000_000C, 0xFFFF_C00C);
+    builder.bar(4, 0x0000_000C, 0x0000_000C);
+    builder.bar(5, 0x0000_0010, 0xFFFF_FFF0);
+    let mut space = one(&builder);
+    let at = address(&space);
+    let bars = probe(&mut space, at).unwrap();
+    let lens = bars.map(|bar| bar.map(|bar| bar.len));
+    assert_eq!(
+        lens,
+        [
+            Some(0x20),
+            Some(0x800),
+            Some(0x4000),
+            None,
+            Some(0x10_0000_0000),
+            None
+        ]
+    );
+    for bar in bars.iter().flatten() {
+        assert!(bar.len.is_power_of_two(), "{bar:?}");
+    }
+}
+
+#[test]
+fn a_range_holds_what_ends_inside_it() {
+    let bar = Bar {
+        index: 0,
+        space: Space::Io,
+        base: 0,
+        len: 0x1000,
+    };
+    assert!(bar.holds(0, 0x1000));
+    assert!(bar.holds(0xFF0, 0x10));
+    assert!(bar.holds(0x1000, 0));
+    assert!(!bar.holds(0xFF0, 0x11));
+    assert!(!bar.holds(0x1000, 1));
+    assert!(!bar.holds(0xFFFF_F000, 0x1000));
+    assert!(!bar.holds(u64::MAX, 2), "an end past u64::MAX");
+}
+
+#[test]
 fn probing_restores_the_command_register_and_every_register_it_wrote() {
     let mut builder = Builder::new(0x8086, 0x1234);
     builder.bar(0, 0x8004_0000, 0xFFFF_F000);

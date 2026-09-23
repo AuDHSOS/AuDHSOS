@@ -7,8 +7,8 @@
 //! The layout and the probe are the *PCI Express Base Specification* 6.0,
 //! section 7.5.1.2.1: bit 0 separates I/O from memory, bits 2:1 of a memory
 //! register say whether it is 32 or 64 bits wide, bit 3 says whether it is
-//! prefetchable, and the size follows from writing all ones and reading
-//! back what stayed clear.
+//! prefetchable, and the size is the lowest address bit that stays set
+//! after all ones are written.
 //!
 //! Invariants: the probe reads only a type-0 header, because the six
 //! registers are its own — a type-1 header carries two of them and the bus
@@ -18,7 +18,8 @@
 //! restores every register it wrote, and restores the command register on
 //! every path out, the ones that found nothing and the ones that failed
 //! included; a 64-bit register consumes the register above it, and that one
-//! is never decoded again.
+//! is never decoded again; a `len` is a power of two, and a register whose
+//! probe keeps no address bit decodes nothing.
 
 use crate::address::Address;
 use crate::error::PciError;
@@ -106,6 +107,15 @@ impl Bar {
                 ..
             } => 2,
             Space::Memory { .. } | Space::Io => 1,
+        }
+    }
+
+    /// `true` when `len` bytes at `offset` lie inside the range.
+    #[must_use]
+    pub const fn holds(&self, offset: u64, len: u64) -> bool {
+        match offset.checked_add(len) {
+            Some(end) => end <= self.len,
+            None => false,
         }
     }
 }
@@ -220,8 +230,7 @@ fn decode_all(
     let mut bars = [None; MAX_BARS];
     let mut index = 0u8;
     while usize::from(index) < MAX_BARS {
-        let bar = decode(space, address, index)?;
-        let step = bar.map_or(1, |bar| bar.registers());
+        let (bar, step) = decode(space, address, index)?;
         if let Some(slot) = bars.get_mut(usize::from(index)) {
             *slot = bar;
         }
@@ -230,56 +239,60 @@ fn decode_all(
     Ok(bars)
 }
 
-/// The register at `index`, or `None` when it decodes nothing.
+/// The register at `index`, or `None` when it decodes nothing, and the
+/// number of registers it takes.
 fn decode(
     space: &mut impl ConfigSpace,
     address: Address,
     index: u8,
-) -> Result<Option<Bar>, PciError> {
+) -> Result<(Option<Bar>, u8), PciError> {
     let (original, probed) = size_of(space, address, offset_of(index)?)?;
     if probed == 0 {
-        return Ok(None);
+        return Ok((None, 1));
     }
     if original & IO_SPACE != 0 {
-        return Ok(Some(Bar {
+        let bar = length(u64::from(probed & !IO_FLAGS)).map(|len| Bar {
             index,
             space: Space::Io,
             base: u64::from(original & !IO_FLAGS),
-            len: length(probed & !IO_FLAGS),
-        }));
+            len,
+        });
+        return Ok((bar, 1));
     }
     let prefetchable = original & PREFETCHABLE != 0;
     match original & MEMORY_TYPE {
-        TYPE_32 => Ok(Some(Bar {
-            index,
-            space: Space::Memory {
-                width: Width::Bits32,
-                prefetchable,
-            },
-            base: u64::from(original & !MEMORY_FLAGS),
-            len: length(probed & !MEMORY_FLAGS),
-        })),
+        TYPE_32 => {
+            let bar = length(u64::from(probed & !MEMORY_FLAGS)).map(|len| Bar {
+                index,
+                space: Space::Memory {
+                    width: Width::Bits32,
+                    prefetchable,
+                },
+                base: u64::from(original & !MEMORY_FLAGS),
+                len,
+            });
+            Ok((bar, 1))
+        }
         TYPE_64 => {
             let upper = index.saturating_add(1);
             if usize::from(upper) >= MAX_BARS {
                 return Err(PciError::BarTruncated(index));
             }
             let (high_original, high_probed) = size_of(space, address, offset_of(upper)?)?;
-            Ok(Some(Bar {
+            let bar = length(join(high_probed, probed & !MEMORY_FLAGS)).map(|len| Bar {
                 index,
                 space: Space::Memory {
                     width: Width::Bits64,
                     prefetchable,
                 },
                 base: join(high_original, original & !MEMORY_FLAGS),
-                len: wide_length(join(high_probed, probed & !MEMORY_FLAGS)),
-            }))
+                len,
+            });
+            Ok((bar, 2))
         }
-        // Bits 2:1 of `01` named the registers below one mebibyte of the
-        // machines the first PCI specification described, and every
-        // revision since reserves the encoding. A register that carries it
-        // decodes nothing this system can map.
-        _ => Ok(None),
+        // Bits 2:1 of `01` named memory below one mebibyte in the first PCI
+        // specification; every revision since reserves them.
+        _ => Ok((None, 1)),
     }
 }
 
@@ -305,14 +318,13 @@ fn offset_of(index: u8) -> Result<u16, PciError> {
     Ok(BAR0.saturating_add(u16::from(index).saturating_mul(4)))
 }
 
-/// The length a 32-bit probe with its flag bits cleared names.
-fn length(mask: u32) -> u64 {
-    u64::from(!mask).saturating_add(1)
-}
-
-/// The length a 64-bit probe with its flag bits cleared names.
-const fn wide_length(mask: u64) -> u64 {
-    (!mask).saturating_add(1)
+/// The size a probe with its flag bits cleared names: its lowest set bit,
+/// or `None` for a probe without an address bit.
+const fn length(mask: u64) -> Option<u64> {
+    match mask.isolate_lowest_one() {
+        0 => None,
+        lowest => Some(lowest),
+    }
 }
 
 /// One 64-bit value out of the upper and the lower register.
