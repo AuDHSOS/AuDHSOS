@@ -3,11 +3,11 @@
 
 //! Tests of `crate::open`.
 
-use fs_fat::Dir;
+use fs_fat::{Dir, Name};
 use user_proto::file::ROOT;
 
 use crate::open::{Clients, MAX_CLIENTS, MAX_OPEN, Opened, Which};
-use crate::tests::support::volume;
+use crate::tests::support::{now, volume};
 
 /// Something a client can hold open, which is the cheapest of the two.
 fn directory(cluster: u32) -> Opened {
@@ -103,4 +103,48 @@ fn what_a_directory_handle_stands_for_is_a_directory_and_a_file_handle_is_not() 
     let handle = clients.insert(1, directory(9)).unwrap();
     let opened = clients.get(1, handle).unwrap();
     assert_eq!(opened.as_dir(), Some(Dir::at(9)));
+}
+
+#[test]
+fn open_file_identity_includes_volume_parent_and_name() {
+    let mut fs = volume();
+    let root = fs.root();
+    let first = Name::new("A.TXT").unwrap();
+    let second = Name::new("B.TXT").unwrap();
+    let file_a = fs.create(root, &first, now()).unwrap();
+    let file_b = fs.create(root, &second, now()).unwrap();
+    let mut clients = Clients::new();
+    assert!(
+        clients
+            .insert_file(1, Which::Written, file_a, root, first)
+            .is_some()
+    );
+    assert!(
+        clients
+            .insert_file(2, Which::Written, file_b, root, second)
+            .is_some()
+    );
+    assert!(clients.has_open_file(Which::Written, root, first));
+    assert!(!clients.has_open_file(Which::Written, root, Name::new("C.TXT").unwrap()));
+    assert!(!clients.has_open_file(
+        Which::Written,
+        Dir::at(root.cluster().wrapping_add(1)),
+        first
+    ));
+    assert!(!clients.has_open_file(Which::Booted, root, first));
+}
+
+#[test]
+fn closing_a_root_walk_keeps_other_handles_and_releases_an_idle_table() {
+    let fs = volume();
+    let mut clients = Clients::new();
+    let root = fs.root();
+    let handle = clients.insert(1, directory(3)).unwrap();
+    assert!(clients.root_walk(1, 0, || fs.entries(root)).is_some());
+    assert!(clients.clear_root(1, 0));
+    assert_eq!(clients.len(), 1);
+    assert!(!clients.clear_root(1, 0));
+    assert!(clients.remove(1, handle));
+    assert!(clients.is_empty());
+    assert!(!clients.clear_root(1, 0));
 }

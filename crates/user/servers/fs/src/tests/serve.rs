@@ -12,7 +12,7 @@ use fs_fat::doubles::RamDisk;
 use fs_fat::{ATTR_DIRECTORY, FileSystem};
 use user_proto::file::{Data, MAX_DATA, Name, ROOT, Reply, Request, START};
 
-use crate::open::Clients;
+use crate::open::{Clients, MAX_CLIENTS};
 use crate::serve::{NOBODY, Volumes, answer, moment};
 use crate::tests::support::{now, volume};
 
@@ -291,6 +291,212 @@ fn a_removed_name_is_gone_and_removing_it_twice_is_refused() {
 }
 
 #[test]
+fn remove_refuses_a_file_held_by_another_client() {
+    let mut fs = volume();
+    let mut clients = Clients::new();
+    let file = make(&mut fs, &mut clients, b"A.TXT");
+    assert_eq!(
+        ask(
+            &mut fs,
+            &mut clients,
+            &Request::Write {
+                file,
+                offset: 0,
+                data: Data::new(b"original").unwrap(),
+            }
+        ),
+        Reply::Written(Ok(8))
+    );
+    assert_eq!(
+        as_client(
+            &mut fs,
+            &mut clients,
+            CLIENT + 1,
+            &Request::Remove {
+                parent: ROOT,
+                name: name(b"A.TXT"),
+            }
+        ),
+        Reply::Removed(Err(Error::Busy))
+    );
+    assert_eq!(
+        ask(
+            &mut fs,
+            &mut clients,
+            &Request::Read {
+                file,
+                offset: 0,
+                len: 8
+            }
+        ),
+        Reply::Read(Ok(Data::new(b"original").unwrap()))
+    );
+    assert_eq!(
+        ask(&mut fs, &mut clients, &Request::Close { file }),
+        Reply::Closed(Ok(()))
+    );
+    assert_eq!(
+        as_client(
+            &mut fs,
+            &mut clients,
+            CLIENT + 1,
+            &Request::Remove {
+                parent: ROOT,
+                name: name(b"A.TXT"),
+            }
+        ),
+        Reply::Removed(Ok(()))
+    );
+}
+
+#[test]
+fn handles_of_one_file_share_its_size_across_clients() {
+    let mut fs = volume();
+    let mut clients = Clients::new();
+    let first = make(&mut fs, &mut clients, b"SHARED.TXT");
+    let second = match as_client(
+        &mut fs,
+        &mut clients,
+        CLIENT + 1,
+        &Request::Open {
+            parent: ROOT,
+            name: name(b"SHARED.TXT"),
+        },
+    ) {
+        Reply::Opened(Ok(opened)) => opened.file,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(
+        ask(
+            &mut fs,
+            &mut clients,
+            &Request::Write {
+                file: first,
+                offset: 0,
+                data: Data::new(b"abcdefghij").unwrap(),
+            }
+        ),
+        Reply::Written(Ok(10))
+    );
+    assert_eq!(
+        as_client(
+            &mut fs,
+            &mut clients,
+            CLIENT + 1,
+            &Request::Write {
+                file: second,
+                offset: 0,
+                data: Data::new(b"XY").unwrap(),
+            }
+        ),
+        Reply::Written(Ok(2))
+    );
+    assert_eq!(
+        ask(
+            &mut fs,
+            &mut clients,
+            &Request::Read {
+                file: first,
+                offset: 0,
+                len: 10
+            }
+        ),
+        Reply::Read(Ok(Data::new(b"XYcdefghij").unwrap()))
+    );
+    assert_eq!(
+        fs.find(fs.root(), &fs_fat::Name::new("SHARED.TXT").unwrap())
+            .unwrap()
+            .unwrap()
+            .size,
+        10
+    );
+    assert_eq!(
+        ask(&mut fs, &mut clients, &Request::Close { file: first }),
+        Reply::Closed(Ok(()))
+    );
+    assert_eq!(
+        as_client(
+            &mut fs,
+            &mut clients,
+            CLIENT + 1,
+            &Request::Write {
+                file: second,
+                offset: 10,
+                data: Data::new(b"Z").unwrap(),
+            }
+        ),
+        Reply::Written(Ok(1))
+    );
+    assert_eq!(
+        as_client(
+            &mut fs,
+            &mut clients,
+            CLIENT + 1,
+            &Request::Read {
+                file: second,
+                offset: 0,
+                len: 11,
+            }
+        ),
+        Reply::Read(Ok(Data::new(b"XYcdefghijZ").unwrap()))
+    );
+}
+
+#[test]
+fn completed_root_walks_release_client_tables() {
+    let mut fs = volume();
+    let mut clients = Clients::new();
+    for badge in 1..=MAX_CLIENTS + 1 {
+        let badge = u64::try_from(badge).unwrap();
+        assert_eq!(
+            as_client(
+                &mut fs,
+                &mut clients,
+                badge,
+                &Request::ReadDir {
+                    dir: ROOT,
+                    cursor: START
+                }
+            ),
+            Reply::Entry(Ok(None))
+        );
+        assert!(clients.is_empty());
+    }
+}
+
+#[test]
+fn closing_an_unfinished_root_walk_releases_its_table() {
+    let mut fs = volume();
+    let mut clients = Clients::new();
+    let file = make(&mut fs, &mut clients, b"A.TXT");
+    assert_eq!(
+        ask(&mut fs, &mut clients, &Request::Close { file }),
+        Reply::Closed(Ok(()))
+    );
+    assert!(matches!(
+        ask(
+            &mut fs,
+            &mut clients,
+            &Request::ReadDir {
+                dir: ROOT,
+                cursor: START
+            }
+        ),
+        Reply::Entry(Ok(Some(_)))
+    ));
+    assert_eq!(clients.len(), 1);
+    assert_eq!(
+        ask(&mut fs, &mut clients, &Request::Close { file: ROOT }),
+        Reply::Closed(Ok(()))
+    );
+    assert!(clients.is_empty());
+    assert_eq!(
+        ask(&mut fs, &mut clients, &Request::Close { file: ROOT }),
+        Reply::Closed(Err(Error::InvalidHandle))
+    );
+}
+
+#[test]
 fn a_handle_of_another_client_names_nothing_here() {
     let mut fs = volume();
     let mut clients = Clients::new();
@@ -503,6 +709,10 @@ fn a_cursor_ahead_of_the_walk_skips_forward_to_it() {
         entry, None,
         "a directory of its own two entries has no third"
     );
+    assert_eq!(
+        ask(&mut fs, &mut clients, &Request::ReadDir { dir, cursor: 3 }),
+        Reply::Entry(Ok(None))
+    );
 }
 
 #[test]
@@ -600,9 +810,11 @@ fn a_name_that_is_no_text_is_refused() {
 fn a_client_that_holds_everything_open_is_told_so() {
     let mut fs = volume();
     let mut clients = Clients::new();
+    let mut first = None;
     for index in 0..crate::MAX_OPEN {
         let text = [b'F', b'A'.saturating_add(u8::try_from(index).unwrap())];
-        let _file = make(&mut fs, &mut clients, &text);
+        let file = make(&mut fs, &mut clients, &text);
+        first.get_or_insert(file);
     }
     let text = *b"GA";
     assert_eq!(
@@ -627,6 +839,72 @@ fn a_client_that_holds_everything_open_is_told_so() {
             }
         ),
         Reply::Opened(Err(Error::OutOfHandles))
+    );
+    assert!(
+        fs.find(fs.root(), &fs_fat::Name::new("GA").unwrap())
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        ask(
+            &mut fs,
+            &mut clients,
+            &Request::Close {
+                file: first.unwrap()
+            }
+        ),
+        Reply::Closed(Ok(()))
+    );
+    assert!(matches!(
+        ask(
+            &mut fs,
+            &mut clients,
+            &Request::Create {
+                parent: ROOT,
+                name: name(b"GA"),
+                directory: false,
+            }
+        ),
+        Reply::Created(Ok(_))
+    ));
+}
+
+#[test]
+fn a_new_client_with_no_table_cannot_create_an_entry() {
+    let mut fs = volume();
+    let mut clients = Clients::new();
+    for badge in 1..=MAX_CLIENTS {
+        let badge = u64::try_from(badge).unwrap();
+        let reply = as_client(
+            &mut fs,
+            &mut clients,
+            badge,
+            &Request::Create {
+                parent: ROOT,
+                name: name(format!("F{badge}").as_bytes()),
+                directory: false,
+            },
+        );
+        assert!(matches!(reply, Reply::Created(Ok(_))), "{reply:?}");
+    }
+    let extra = u64::try_from(MAX_CLIENTS + 1).unwrap();
+    assert_eq!(
+        as_client(
+            &mut fs,
+            &mut clients,
+            extra,
+            &Request::Create {
+                parent: ROOT,
+                name: name(b"EXTRA"),
+                directory: false,
+            }
+        ),
+        Reply::Created(Err(Error::OutOfHandles))
+    );
+    assert!(
+        fs.find(fs.root(), &fs_fat::Name::new("EXTRA").unwrap())
+            .unwrap()
+            .is_none()
     );
 }
 

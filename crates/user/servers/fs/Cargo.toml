@@ -18,6 +18,7 @@ fs-gpt.workspace = true
 user-proto.workspace = true
 
 [dev-dependencies]
+fs-fat = { workspace = true, features = ["test-doubles"] }
 test-support.workspace = true
 
 [lints]

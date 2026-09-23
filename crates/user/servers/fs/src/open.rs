@@ -22,7 +22,7 @@
 //! `docs/15-the-disk-on-the-machine.md` says what that costs and what it
 //! would take to lift.
 
-use fs_fat::{Dir, Entries, File, Name};
+use fs_fat::{Dir, Entries, File, Location, Name};
 use user_proto::file::FIRST_FILE;
 
 /// How many clients the server keeps a table for.
@@ -53,8 +53,8 @@ pub enum Opened {
     File {
         /// Which volume it is on.
         volume: Which,
-        /// The file as `fs-fat` tracks it, cursor and all.
-        file: File,
+        /// The shared file state.
+        shared: usize,
         /// The directory it lies in.
         parent: Dir,
         /// Its name in that directory.
@@ -129,6 +129,16 @@ impl Client {
 #[derive(Clone, Copy, Debug)]
 pub struct Clients {
     tables: [Option<Client>; MAX_CLIENTS],
+    files: [Option<SharedFile>; MAX_FILES],
+}
+
+const MAX_FILES: usize = MAX_CLIENTS * MAX_OPEN;
+
+#[derive(Clone, Copy, Debug)]
+struct SharedFile {
+    volume: Which,
+    location: Location,
+    file: File,
 }
 
 impl Default for Clients {
@@ -143,6 +153,21 @@ impl Clients {
     pub const fn new() -> Self {
         Clients {
             tables: [None; MAX_CLIENTS],
+            files: [None; MAX_FILES],
+        }
+    }
+
+    /// Whether `badge` can hold one more handle.
+    #[must_use]
+    pub fn has_room(&self, badge: u64) -> bool {
+        match self
+            .tables
+            .iter()
+            .flatten()
+            .find(|client| client.badge == badge)
+        {
+            Some(client) => client.slots.iter().any(Option::is_none),
+            None => self.tables.iter().any(Option::is_none),
         }
     }
 
@@ -179,11 +204,75 @@ impl Clients {
     /// Answers `None` when the client holds [`MAX_OPEN`] already, or when
     /// the server keeps [`MAX_CLIENTS`] tables and this is a new client.
     pub fn insert(&mut self, badge: u64, opened: Opened) -> Option<u32> {
+        if !self.has_room(badge) {
+            return None;
+        }
         let client = self.table(badge)?;
         let index = client.slots.iter().position(Option::is_none)?;
         let slot = client.slots.get_mut(index)?;
         *slot = Some(opened);
         handle_of(index)
+    }
+
+    /// Adds a handle to the shared state of a file on one volume.
+    pub fn insert_file(
+        &mut self,
+        badge: u64,
+        volume: Which,
+        file: File,
+        parent: Dir,
+        name: Name,
+    ) -> Option<u32> {
+        if !self.has_room(badge) {
+            return None;
+        }
+        let location = file.location();
+        let existing = self.files.iter().position(|slot| {
+            slot.is_some_and(|held| held.volume == volume && held.location == location)
+        });
+        let shared = existing.or_else(|| self.files.iter().position(Option::is_none))?;
+        if existing.is_none() {
+            *self.files.get_mut(shared)? = Some(SharedFile {
+                volume,
+                location,
+                file,
+            });
+        }
+        let handle = self.insert(
+            badge,
+            Opened::File {
+                volume,
+                shared,
+                parent,
+                name,
+            },
+        );
+        if handle.is_none()
+            && existing.is_none()
+            && let Some(slot) = self.files.get_mut(shared)
+        {
+            *slot = None;
+        }
+        handle
+    }
+
+    /// The mutable file state named by a shared slot.
+    pub fn file_mut(&mut self, shared: usize) -> Option<&mut File> {
+        self.files
+            .get_mut(shared)?
+            .as_mut()
+            .map(|held| &mut held.file)
+    }
+
+    /// Whether any client has this named file open.
+    #[must_use]
+    pub fn has_open_file(&self, volume: Which, parent: Dir, name: Name) -> bool {
+        self.tables.iter().flatten().any(|client| {
+            client.slots.iter().flatten().any(|opened| {
+                matches!(opened, Opened::File { volume: held_volume, parent: held_parent, name: held_name, .. }
+                    if *held_volume == volume && *held_parent == parent && *held_name == name)
+            })
+        })
     }
 
     /// Where `badge` stands in its walk over the root directory of volume
@@ -221,11 +310,38 @@ impl Clients {
         let Some(client) = self.existing(badge) else {
             return false;
         };
-        let taken = client.slots.get_mut(index).and_then(Option::take).is_some();
+        let taken = client.slots.get_mut(index).and_then(Option::take);
+        let idle = client.is_idle();
+        if let Some(Opened::File { shared, .. }) = taken {
+            self.release_file(shared);
+        }
+        if taken.is_some() && idle {
+            self.forget(badge);
+        }
+        taken.is_some()
+    }
+
+    /// Ends a walk over a root and drops an idle client table.
+    pub fn clear_root(&mut self, badge: u64, root: usize) -> bool {
+        let Some(client) = self.existing(badge) else {
+            return false;
+        };
+        let taken = client.roots.get_mut(root).and_then(Option::take).is_some();
         if taken && client.is_idle() {
             self.forget(badge);
         }
         taken
+    }
+
+    fn release_file(&mut self, shared: usize) {
+        let held = self.tables.iter().flatten().any(|client| {
+            client.slots.iter().flatten().any(
+                |opened| matches!(opened, Opened::File { shared: index, .. } if *index == shared),
+            )
+        });
+        if !held && let Some(slot) = self.files.get_mut(shared) {
+            *slot = None;
+        }
     }
 
     /// Drops the table of `badge`, whatever stands in it. The server calls
@@ -234,6 +350,11 @@ impl Clients {
         for slot in &mut self.tables {
             if slot.is_some_and(|client| client.badge == badge) {
                 *slot = None;
+            }
+        }
+        for shared in 0..MAX_FILES {
+            if self.files.get(shared).is_some_and(Option::is_some) {
+                self.release_file(shared);
             }
         }
     }
