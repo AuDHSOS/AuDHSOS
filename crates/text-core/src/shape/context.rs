@@ -175,9 +175,9 @@ impl<'a> Engine<'a, '_> {
             inserted: buffer.inserted,
         };
         self.actions(buffer, table, at, actions, mask, span)?;
-        for (j, g) in buffer.glyphs().iter().enumerate().skip(i) {
+        for j in i..buffer.len {
             self.tick()?;
-            if g.source_order > last_order {
+            if buffer.get(j)?.source_order > last_order {
                 return Ok(Some(j));
             }
         }
@@ -198,15 +198,9 @@ impl<'a> Engine<'a, '_> {
             let mut sequence = table.u(record)?;
             let mut target = None;
             let end = span.end(buffer)?;
-            for (j, glyph) in buffer
-                .glyphs()
-                .iter()
-                .enumerate()
-                .take(end)
-                .skip(span.start)
-            {
+            for j in span.start..end {
                 self.tick()?;
-                if glyph.context & mask != 0 {
+                if buffer.get(j)?.context & mask != 0 {
                     if sequence == 0 {
                         target = Some(j);
                         break;
@@ -221,9 +215,11 @@ impl<'a> Engine<'a, '_> {
             )?;
         }
         let end = span.end(buffer)?;
-        for glyph in buffer.glyphs_mut().iter_mut().take(end).skip(span.start) {
+        for j in span.start..end {
             self.tick()?;
+            let mut glyph = buffer.get(j)?;
             glyph.context &= !mask;
+            buffer.put(j, glyph)?;
         }
         Ok(())
     }

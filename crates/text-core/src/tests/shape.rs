@@ -1033,3 +1033,120 @@ fn repeated_feature_references_spend_the_work_budget() {
         Err(FontError::LimitExceeded)
     );
 }
+
+/// Apply lookup 0 to `ids` in `capacity` slots; return the glyphs and gap moves.
+fn gap_moves(
+    data: &[u8],
+    ids: &[u16],
+    capacity: usize,
+) -> (Result<(), FontError>, Vec<Glyph>, usize) {
+    let mut glyphs = vec![Glyph::default(); capacity];
+    for (i, id) in ids.iter().enumerate() {
+        glyphs[i] = Glyph::new(*id, i, i + 1);
+    }
+    let mut buffer = Buffer::new(&mut glyphs, ids.len()).unwrap();
+    let result = LayoutTable::parse(data, true).unwrap().apply_lookup(
+        0,
+        Gdef::default(),
+        &[],
+        false,
+        &mut buffer,
+    );
+    (result, buffer.glyphs().to_vec(), buffer.moved)
+}
+fn sequence(glyphs: &[u16]) -> Bin {
+    let mut t = Bin::words(&[1, 0, 1, 0]);
+    t.child(2, coverage(&[1]));
+    let mut s = Bin::words(&[u16::try_from(glyphs.len()).unwrap()]);
+    s.0.extend(glyphs.iter().flat_map(|v| v.to_be_bytes()));
+    t.child(6, s);
+    t
+}
+
+#[test]
+fn ligatures_move_linear_glyphs_per_pass() {
+    let mut lig = Bin::words(&[1, 0, 1, 0]);
+    lig.child(2, coverage(&[1]));
+    let mut set = Bin::words(&[1, 0]);
+    set.child(2, Bin::words(&[42, 2, 2]));
+    lig.child(6, set);
+    let b = layout(vec![lookup(4, 0, lig)]);
+    let n = 16_384;
+    let input: Vec<u16> = (0..n).map(|i| if i % 2 == 0 { 1 } else { 2 }).collect();
+    let (result, glyphs, moved) = gap_moves(&b.0, &input, n);
+    result.unwrap();
+    assert_eq!(glyphs.len(), n / 2);
+    for (k, g) in glyphs.iter().enumerate() {
+        assert_eq!((g.id, g.start, g.end), (42, 2 * k, 2 * k + 2));
+    }
+    assert!(moved <= 2 * n, "moved {moved}");
+}
+
+#[test]
+fn multiple_substitution_moves_linear_glyphs_per_pass() {
+    let n = 8_192;
+    let b = layout(vec![lookup(2, 0, sequence(&[3, 4]))]);
+    let (result, glyphs, moved) = gap_moves(&b.0, &vec![1; n], 2 * n);
+    result.unwrap();
+    assert_eq!(ids(&glyphs), [3, 4].repeat(n));
+    assert!(glyphs.iter().enumerate().all(|(i, g)| g.start == i / 2));
+    assert!(moved <= 4 * n, "moved {moved}");
+    let b = layout(vec![lookup(2, 0, sequence(&[]))]);
+    let input: Vec<u16> = (0..n).map(|i| if i % 2 == 0 { 1 } else { 2 }).collect();
+    let (result, glyphs, moved) = gap_moves(&b.0, &input, n);
+    result.unwrap();
+    assert_eq!(ids(&glyphs), vec![2; n / 2]);
+    assert!(moved <= 2 * n, "moved {moved}");
+}
+
+#[test]
+fn failed_pass_leaves_contiguous_glyphs() {
+    let mut t = Bin::words(&[1, 0, 1, 0]);
+    t.child(2, coverage(&[1, 9]));
+    t.child(6, Bin::words(&[2, 3, 4]));
+    let b = layout(vec![lookup(2, 0, t)]);
+    let (result, glyphs, _) = gap_moves(&b.0, &[1, 5, 9], 8);
+    assert_eq!(result, Err(FontError::InvalidTable));
+    assert_eq!(ids(&glyphs), [3, 4, 5, 9]);
+}
+
+#[test]
+fn long_ligatures_skip_marks_and_move_linear_glyphs() {
+    let mut lig = Bin::words(&[1, 0, 1, 0]);
+    lig.child(2, coverage(&[1]));
+    let mut set = Bin::words(&[1, 0]);
+    set.child(2, Bin::words(&[42, 4, 2, 3, 4]));
+    lig.child(6, set);
+    let b = layout(vec![lookup(4, 8, lig)]);
+    let result = execute(&b.0, true, &[1, 7, 2, 7, 3, 7, 4, 5]).unwrap();
+    assert_eq!(ids(&result), [42, 7, 7, 7, 5]);
+    let components: Vec<_> = result.iter().map(|g| g.component).collect();
+    assert_eq!(components[1..4], [0, 1, 2]);
+    let n = 4_000;
+    let input: Vec<u16> = (0..n).map(|i| [1, 2, 3, 4][i % 4]).collect();
+    let (result, glyphs, moved) = gap_moves(&b.0, &input, n);
+    result.unwrap();
+    assert_eq!(ids(&glyphs), vec![42; n / 4]);
+    assert!(moved <= 2 * n, "moved {moved}");
+}
+
+#[test]
+fn context_actions_out_of_order_move_linear_glyphs() {
+    let mut context = Bin::words(&[3, 2, 2, 0, 0, 1, 2, 0, 1]);
+    context.child(6, coverage(&[1]));
+    context.child(8, coverage(&[2]));
+    let mut second = Bin::words(&[1, 0, 1, 0]);
+    second.child(2, coverage(&[2]));
+    second.child(6, Bin::words(&[2, 5, 6]));
+    let b = layout(vec![
+        lookup(5, 0, context),
+        lookup(2, 0, sequence(&[3, 4])),
+        lookup(2, 0, second),
+    ]);
+    let n = 8_192;
+    let input: Vec<u16> = (0..n).map(|i| if i % 2 == 0 { 1 } else { 2 }).collect();
+    let (result, glyphs, moved) = gap_moves(&b.0, &input, 2 * n);
+    result.unwrap();
+    assert_eq!(ids(&glyphs), [3, 4, 5, 6].repeat(n / 2));
+    assert!(moved <= 4 * n, "moved {moved}");
+}
