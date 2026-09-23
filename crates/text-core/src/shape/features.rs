@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Manuel Baesler and contributors
 
-use super::{Buffer, Engine, Feature, Gdef, LayoutTable, table::Table};
+use super::{Budget, Buffer, Engine, Feature, Gdef, LayoutTable, table::Table};
 use crate::{
     Fixed, FontError,
     read::{add, mul},
@@ -104,6 +104,8 @@ impl<'a> LayoutTable<'a> {
         list.child(add(6, mul(index, 6)?)?)
     }
     /// Apply required features, then explicit stages in order; absent stages do nothing.
+    /// Operations count against `Budget::PER_APPLICATION` plus `Budget::PER_GLYPH`
+    /// per glyph, and against `budget`.
     /// # Errors
     /// Returns invalid references, bounded-work errors, or insufficient glyph capacity.
     #[expect(
@@ -119,6 +121,7 @@ impl<'a> LayoutTable<'a> {
         coords: &[Fixed],
         rtl: bool,
         buffer: &mut Buffer<'_>,
+        budget: &mut Budget,
     ) -> Result<(), FontError> {
         let Some(lang) = self.language(script, language)? else {
             return Ok(());
@@ -126,13 +129,22 @@ impl<'a> LayoutTable<'a> {
         if lang.u(0)? != 0 {
             return Err(FontError::InvalidTable);
         }
+        let mut engine = Engine::new(self, gdef, coords, rtl, buffer, budget)?;
+        self.stages(lang, features, &mut engine, buffer)
+    }
+    fn stages(
+        self,
+        lang: Table<'a>,
+        features: &[Feature],
+        engine: &mut Engine<'a, '_>,
+        buffer: &mut Buffer<'_>,
+    ) -> Result<(), FontError> {
         let count = lang.u(4)?;
         lang.array(6, count, 2)?;
         let required = lang.u(2)?;
-        let alternate = self.variations(coords)?;
-        let mut engine = Engine::new(self, gdef, coords, rtl);
+        let alternate = self.variations(engine.coords)?;
         if required != 0xffff {
-            let table = self.feature(required, alternate, &mut engine)?;
+            let table = self.feature(required, alternate, engine)?;
             engine.stage(table, buffer)?;
         }
         for feature in features {
@@ -141,7 +153,7 @@ impl<'a> LayoutTable<'a> {
             }
             engine.feature = *feature;
             let list = self.table.child(6)?;
-            let mut selected = [false; 4096];
+            let mut selected = Selection::new();
             for i in 0..count {
                 engine.tick()?;
                 let index = lang.u(add(6, mul(i, 2)?)?)?;
@@ -149,46 +161,58 @@ impl<'a> LayoutTable<'a> {
                     return Err(FontError::InvalidTable);
                 }
                 if index != required && list.tag(add(2, mul(index, 6)?)?)? == feature.tag {
-                    let table = self.feature(index, alternate, &mut engine)?;
-                    select(table, &mut selected, self.count, &mut engine)?;
+                    let table = self.feature(index, alternate, engine)?;
+                    selected.add(table, self.count, engine)?;
                 }
             }
-            for (index, enabled) in selected.iter().copied().take(self.count).enumerate() {
-                if enabled {
-                    engine.run(index, buffer)?;
-                }
-            }
+            selected.run(engine, buffer)?;
         }
         Ok(())
     }
 }
-fn select(
-    feature: Table<'_>,
-    selected: &mut [bool],
-    count: usize,
-    engine: &mut Engine<'_, '_>,
-) -> Result<(), FontError> {
-    let n = feature.u(2)?;
-    feature.array(4, n, 2)?;
-    for i in 0..n {
-        engine.tick()?;
-        let index = feature.u(add(4, mul(i, 2)?)?)?;
-        if index >= count {
-            return Err(FontError::InvalidTable);
-        }
-        *selected.get_mut(index).ok_or(FontError::LimitExceeded)? = true;
+
+/// Lookup indices selected for one stage, one bit per index below 4096.
+struct Selection([u64; 64]);
+impl Selection {
+    const fn new() -> Self {
+        Self([0; 64])
     }
-    Ok(())
+    fn add(
+        &mut self,
+        feature: Table<'_>,
+        count: usize,
+        engine: &mut Engine<'_, '_>,
+    ) -> Result<(), FontError> {
+        let n = feature.u(2)?;
+        feature.array(4, n, 2)?;
+        for i in 0..n {
+            engine.tick()?;
+            let index = feature.u(add(4, mul(i, 2)?)?)?;
+            if index >= count {
+                return Err(FontError::InvalidTable);
+            }
+            *self.0.get_mut(index / 64).ok_or(FontError::LimitExceeded)? |= 1 << (index % 64);
+        }
+        Ok(())
+    }
+    /// Run the selected lookups in lookup-list order.
+    fn run(&self, engine: &mut Engine<'_, '_>, buffer: &mut Buffer<'_>) -> Result<(), FontError> {
+        for (word, bits) in self.0.iter().enumerate() {
+            let mut bits = *bits;
+            while bits != 0 {
+                let bit =
+                    usize::try_from(bits.trailing_zeros()).map_err(|_| FontError::Overflow)?;
+                engine.run(add(mul(word, 64)?, bit)?, buffer)?;
+                bits &= bits.wrapping_sub(1);
+            }
+        }
+        Ok(())
+    }
 }
 impl Engine<'_, '_> {
     fn stage(&mut self, feature: Table<'_>, buffer: &mut Buffer<'_>) -> Result<(), FontError> {
-        let mut selected = [false; 4096];
-        select(feature, &mut selected, self.layout.count, self)?;
-        for (i, yes) in selected.iter().copied().take(self.layout.count).enumerate() {
-            if yes {
-                self.run(i, buffer)?;
-            }
-        }
-        Ok(())
+        let mut selected = Selection::new();
+        selected.add(feature, self.layout.count, self)?;
+        selected.run(self, buffer)
     }
 }

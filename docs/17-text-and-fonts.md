@@ -656,10 +656,15 @@ T10 exposes borrowed layout tables and a caller-owned glyph buffer. Glyphs
 retain UTF-8 cluster ranges, joining forms, ligature components, and design-unit
 Q32.32 positions. GSUB runs before instance advances are installed; GPOS runs
 afterward. Each feature stage executes selected lookups in lookup-list order.
-Context calls permit 16 active lookups, 64 matched input glyphs, and one million
-lookup/match/feature-selection operations per application; capacity exhaustion
-returns an error. Context actions index the sequence modified by preceding
-actions (`docs/microsoft/gsub.html:1`, Lookup type 5). Insertions inherit active
+Context calls permit 16 active lookups and 64 matched input glyphs. One
+application spends at most one million operations plus 64 per input glyph;
+operations are glyph visits of a lookup pass, subtables, matches, nested
+lookups and feature selection. The applications of one layout call share a
+`shape::Budget` of 64 million operations. A context rule marks, scans and
+clears only the glyphs from its first match to its last match plus the glyphs
+its actions inserted. Capacity exhaustion returns an error. Context actions
+index the sequence modified by preceding actions
+(`docs/microsoft/gsub.html:1`, Lookup type 5). Insertions inherit active
 context membership; deletions remove membership. GDEF classes override inferred
 classes after substitutions and before advances.
 Normalization preserves grapheme source ranges, decomposes canonically,

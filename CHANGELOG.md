@@ -954,6 +954,17 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `text-core` shaping work (issues #485, #488, #490, #497): the
+  `LayoutTable::apply` calls of one `layout` or `measure` call share one
+  `shape::Budget` of 64 million operations; a hostile font multiplied the
+  per-application limit by the number of candidate lines. One application
+  may spend one million operations plus 64 per input glyph, and a lookup
+  pass spends one operation per glyph instead of two, so a 65,536-glyph line
+  runs 16 or more lookups. A context rule marks, scans and clears only the
+  glyphs from its first match to its last match plus the glyphs its actions
+  inserted, not the whole buffer. Lookup selection uses a 512-byte bitset in
+  place of a 4 KiB `bool` array per feature stage.
+
 - `user-sys-x86_64` (issues #99, #101, #102, #104, #106, #107, #109, #111,
   #112): an `Mmio` access at a misaligned address answers `None`; the bound
   is `user_rt::mmio::checked_offset`, tested on the host. `Mmio::window` is
