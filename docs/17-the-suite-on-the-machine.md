@@ -513,6 +513,10 @@ Size: S.
 56. The harness holds the log and the rollback journal beside the file of
     each database an `ATTACH` added, so a case that reads the size of one
     finds it, which D-447 records.
+57. The writer the harness keeps for a path gives up every database an
+    `ATTACH` added once the last connection over that path closes, which
+    `sqlite3Close` does, so a file that opens the path again attaches the
+    same names.
 
 ### Produces
 

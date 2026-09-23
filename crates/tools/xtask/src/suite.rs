@@ -1691,6 +1691,20 @@ impl Session {
                 .any(|(held, over)| held != name && over == &path)
             && let Some(writer) = self.held.get_mut(&path)
         {
+            // A connection holds the databases it attached, which
+            // `sqlite3Close` of `research/sqlite/src/main.c` gives up, so
+            // the writer the session keeps for the path holds none once
+            // the last connection over it closes. The temp schema is
+            // given up below.
+            for named in writer.attached_names() {
+                if named.eq_ignore_ascii_case(b"temp") {
+                    continue;
+                }
+                let mut sql = b"DETACH '".to_vec();
+                sql.extend_from_slice(&named);
+                sql.push(b'\'');
+                let _ = writer.run(&sql);
+            }
             writer.closing();
         }
         if let Some(path) = self.connections.get(name).cloned()

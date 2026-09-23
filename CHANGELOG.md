@@ -274,6 +274,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- The SQLite suite harness gives up every database an `ATTACH` added once
+  the last connection over that path closes, so a file that opens the
+  path again attaches the same names. Document 17 item 57.
+  `wal.test` goes from 370 cases passing to 372 and `walmode.test` from
+  60 to 62.
+
 - `db-sqlite` reads a database an `ATTACH` added through the pages the
   connection holds, so a table made in one in write-ahead logging mode is
   a table every statement after it finds. D-447 records it. Catalog
