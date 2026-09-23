@@ -954,6 +954,23 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `driver-uart16550`: `read_byte` reads the line status once and returns
+  `UartError::Line` with bits 1 to 4 when any is set. A parity error, a
+  framing error or a break discards the byte at the top of the FIFO; an
+  overrun keeps that byte, which SLLS597E page 37 states is valid. A break
+  reached a console client as a typed 0. `read_bytes` drains at most
+  `FIFO_DEPTH` bytes per call and returns `Received` with the discarded and
+  overrun counts; the interrupt thread of `server-console` and
+  `Console::take_from_controller` drain with it per interrupt. The interrupt
+  thread took one byte per interrupt, with two FIFO slots free at trigger
+  level 14. `Console::line_errors` counts the errors. The serving thread's
+  transmit poll clears the error bits in the register, so `server-console`
+  keeps the bits it reads in an atomic for the interrupt thread. `interrupt_pending` becomes `interrupt_source`, which
+  decodes identification bits 3 to 0 into `InterruptSource`, because the
+  read resets a pending THRE. `enable_receive_interrupt` is removed;
+  `enable_interrupts(true, false)` writes the same value. Catalog 6.6.17
+  names the two doubles the tests use. Issues #324, #328, #332, #334, #341.
+
 - `kernel-sched`: `Scheduler::pick_next` applied one event, `Event::Preempt`,
   to the outgoing thread for both a slice that ran out and a loss of the
   processor to a higher priority, sent it to the tail of its queue, and handed

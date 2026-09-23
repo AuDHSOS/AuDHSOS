@@ -556,10 +556,15 @@ done until every applicable item has a test. Items are added, never removed.
   polls.
 - Read with no data returns `WouldBlock`; read with data returns the byte
   and clears nothing else.
-- Interrupt enable and identification register handling for receive and
-  transmit interrupts.
-- The same tests run against the kernel adapter double and the userland
-  system call double.
+- Read with line status bits 1 to 4 set returns `Line` with those bits; a
+  parity error, framing error or break discards the byte, an overrun keeps
+  it for the next read.
+- Drain takes every waiting byte, at most `FIFO_DEPTH` per call and at most
+  the destination length, discards bytes with errors and counts overruns.
+- Interrupt enable register handling for receive and transmit interrupts;
+  the identification register decodes to every source of SLLS597E table 5.
+- The tests run against `RecordingRegisters` and the test-local
+  `BulkRegisters`.
 
 ### 6.6.18 Global cell (`audhsos-sync`)
 

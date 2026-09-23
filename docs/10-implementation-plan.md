@@ -725,17 +725,20 @@ Layer 1, `no_std`, `forbid(unsafe_code)`, no deps.
 ```rust
 #[derive(Clone, Copy)] pub enum Register { Data = 0, InterruptEnable = 1, FifoControl = 2, LineControl = 3, ModemControl = 4, LineStatus = 5, ModemStatus = 6, Scratch = 7 }
 pub trait Registers { fn read(&mut self, register: Register) -> u8; fn write(&mut self, register: Register, value: u8); }
-pub struct Uart16550<R: Registers> { registers: R }
-pub enum UartError { Timeout, WouldBlock }
+pub struct Uart16550<R: Registers> { registers: R, depth: u8 }
+pub enum UartError { Timeout, WouldBlock, Line(u8) }
 impl<R: Registers> Uart16550<R> {
     pub fn init(registers: R) -> Self;   // IER=0; LCR=0x80; Data=0x01 (divisor low), IER=0x00 (divisor high): 115200 baud; LCR=0x03; FCR=0xC7; MCR=0x0B
     pub fn write_byte(&mut self, byte: u8) -> Result<(), UartError>;  // poll LineStatus bit 5 at most POLL_LIMIT times
-    pub fn write_bytes(&mut self, bytes: &[u8]) -> Result<(), UartError>;
-    pub fn read_byte(&mut self) -> Result<u8, UartError>;             // LineStatus bit 0 else WouldBlock
-    pub fn enable_receive_interrupt(&mut self);                       // IER = 0x01
-    pub fn interrupt_pending(&mut self) -> bool;                      // InterruptId bit 0 clear
+    pub fn write_bytes(&mut self, bytes: &[u8]) -> Result<usize, UartError>;
+    pub fn read_byte(&mut self) -> Result<u8, UartError>;             // LineStatus bits 1-4 else bit 0 else WouldBlock
+    pub fn read_bytes(&mut self, into: &mut [u8]) -> Received;        // at most FIFO_DEPTH reads while bit 0 is set
+    pub fn interrupt_source(&mut self) -> InterruptSource;            // InterruptId bits 3-0, SLLS597E table 5
 }
+pub struct Received { pub count: usize, pub discarded: u8, pub overruns: u8, pub errors: u8 }
+pub enum InterruptSource { NotPending, LineStatus, ReceivedData, CharacterTimeout, TransmitterEmpty, ModemStatus, Reserved(u8) }
 pub const POLL_LIMIT: u32 = 100_000;
+pub const FIFO_DEPTH: u8 = 16;
 ```
 
 `Uart16550::new` takes the register block over without touching it, for a

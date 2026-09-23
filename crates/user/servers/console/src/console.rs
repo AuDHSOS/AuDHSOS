@@ -19,7 +19,7 @@
 //! controller, which is every byte or the ones before the first refusal.
 
 use audhsos_collections::RingBuffer;
-use driver_uart16550::{Registers, Uart16550, UartError};
+use driver_uart16550::{FIFO_DEPTH, Received, Registers, Uart16550, UartError};
 
 /// How many bytes the driver keeps for a client that has not asked yet.
 ///
@@ -27,12 +27,37 @@ use driver_uart16550::{Registers, Uart16550, UartError};
 /// this far behind has stopped reading rather than fallen behind.
 pub const RECEIVE_CAPACITY: usize = 256;
 
+/// The destination length of one drain: one receive FIFO.
+#[expect(
+    clippy::as_conversions,
+    reason = "widening a byte into a length, in a const"
+)]
+pub const DRAIN: usize = FIFO_DEPTH as usize;
+
+/// The words of one drain message: the line error count, then one word per
+/// byte.
+pub const DRAIN_WORDS: usize = DRAIN + 1;
+
+/// Encodes one drain as the words of a drain message and answers with how
+/// many words it wrote.
+pub fn encode_drain(received: &Received, bytes: &[u8], into: &mut [u64; DRAIN_WORDS]) -> usize {
+    let [errors, slots @ ..] = into;
+    *errors = u64::from(received.line_errors());
+    let mut written = 1usize;
+    for (slot, byte) in slots.iter_mut().zip(bytes.iter().take(received.count)) {
+        *slot = u64::from(*byte);
+        written = written.wrapping_add(1);
+    }
+    written
+}
+
 /// The console driver over one controller.
 #[derive(Debug)]
 pub struct Console<R: Registers> {
     uart: Uart16550<R>,
     received: RingBuffer<u8, RECEIVE_CAPACITY>,
     dropped: u64,
+    line_errors: u64,
 }
 
 impl<R: Registers> Console<R> {
@@ -40,11 +65,12 @@ impl<R: Registers> Console<R> {
     /// interrupt on, which is what makes the interrupt thread wake.
     pub fn new(registers: R) -> Self {
         let mut uart = Uart16550::init(registers);
-        uart.enable_receive_interrupt();
+        uart.enable_interrupts(true, false);
         Console {
             uart,
             received: RingBuffer::new(),
             dropped: 0,
+            line_errors: 0,
         }
     }
 
@@ -58,6 +84,19 @@ impl<R: Registers> Console<R> {
     #[must_use]
     pub const fn dropped(&self) -> u64 {
         self.dropped
+    }
+
+    /// How many line errors the controller reported: one per byte
+    /// discarded for a parity error, a framing error or a break, and one
+    /// per overrun.
+    #[must_use]
+    pub const fn line_errors(&self) -> u64 {
+        self.line_errors
+    }
+
+    /// Adds `count` to [`Console::line_errors`].
+    const fn count_line_errors(&mut self, count: u64) {
+        self.line_errors = self.line_errors.wrapping_add(count);
     }
 
     /// Puts `bytes` on the line and answers with how many went out.
@@ -74,14 +113,32 @@ impl<R: Registers> Console<R> {
         self.uart.write_bytes(bytes)
     }
 
-    /// Takes the byte the controller has, for the thread the interrupt
+    /// Drains the controller into the ring, for the thread the interrupt
     /// woke, and acknowledges nothing: the interrupt object is the
     /// binary's business.
     ///
-    /// Answers `None` when the interrupt was not a byte arriving, which
-    /// happens: the controller raises one interrupt for several reasons.
-    pub fn take_from_controller(&mut self) -> Option<u8> {
-        self.uart.read_byte().ok()
+    /// Answers with what the drain took; a count of zero happens, because
+    /// the controller raises one interrupt for several reasons.
+    pub fn take_from_controller(&mut self) -> Received {
+        let mut into = [0u8; DRAIN];
+        let received = self.uart.read_bytes(&mut into);
+        let mut words = [0u64; DRAIN_WORDS];
+        let count = encode_drain(&received, &into, &mut words);
+        self.take_drain(words.get(..count).unwrap_or(&[]));
+        received
+    }
+
+    /// Takes one drain message of [`encode_drain`]: counts the line errors
+    /// of word 0 and puts the low byte of every later word into the ring.
+    pub fn take_drain(&mut self, words: &[u64]) {
+        let Some((errors, bytes)) = words.split_first() else {
+            return;
+        };
+        self.count_line_errors(*errors);
+        for word in bytes {
+            let [low, ..] = word.to_le_bytes();
+            let _fitted = self.receive(low);
+        }
     }
 
     /// Puts a byte that arrived into the ring.

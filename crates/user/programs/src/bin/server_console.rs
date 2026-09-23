@@ -7,12 +7,14 @@
 //! It runs two threads, because a thread of this kernel waits on exactly
 //! one thing: `Wait` names an endpoint or a notification, never both. One
 //! thread waits on the endpoint and owns the controller and the ring; the
-//! other waits on the interrupt, takes the byte the controller has, and
-//! sends it to the first over the same endpoint under a badge of its own.
+//! other waits on the interrupt, drains the receive FIFO, and sends the
+//! bytes to the first over the same endpoint under a badge of its own.
 //!
-//! Nothing is held by both, so nothing needs a lock. What the second thread
-//! touches of the controller is the receive path and what the first touches
-//! is the transmit path, and a 16550 keeps those in different registers.
+//! Nothing is held by both, so nothing needs a lock. The second thread
+//! touches the receive path and the first the transmit path. Both read the
+//! line status register, and a read clears error bits 1 to 4 (SLLS597E page
+//! 37), so the first thread hands the bits it reads to the second through
+//! an atomic in `SHARED`.
 //!
 //! A read that finds the ring empty is not answered: the reply object is
 //! kept and the answer goes out when the next byte arrives. A client that
@@ -47,8 +49,9 @@ use virtio_queue as _;
 
 use audhsos_abi::Error;
 use audhsos_abi::layout::PAGE_SIZE;
-use driver_uart16550::{Register, Registers};
-use server_console::Console;
+use driver_uart16550::uart::LINE_STATUS_ERRORS;
+use driver_uart16550::{Register, Registers, Uart16550};
+use server_console::{Console, DRAIN, DRAIN_WORDS, encode_drain};
 use user_programs::client::allocate;
 use user_programs::mapping::Mapping;
 use user_programs::serve::{Serving, receive};
@@ -66,7 +69,7 @@ sys::program!(main);
 /// serving thread tells them from a client's request.
 const INTERRUPT_BADGE: u64 = 0xC0_1DE;
 
-/// The label the interrupt thread sends a byte under.
+/// The label the interrupt thread sends a drain message under.
 const BYTE_LABEL: u64 = 1;
 
 /// The bit of the notification the interrupt sets.
@@ -126,7 +129,11 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
         }
     }
 
-    let mut console = Console::new(PortRegisters { gate, ports });
+    let mut console = Console::new(PortRegisters {
+        gate,
+        ports,
+        receiver: false,
+    });
     if let Err(error) = start_second_thread(&mut console, &startup, endpoint, interrupt) {
         complain(&mut console, b"no interrupt thread", error);
     }
@@ -285,27 +292,28 @@ fn read_reply(console: &mut Console<PortRegisters>, max: u64) -> Reply {
     Reply::Read(Chunk::new(into.get(..taken).unwrap_or(&[])).map_err(|_| Error::BufferTooSmall))
 }
 
-/// Puts the bytes the interrupt thread sent into the ring.
+/// Puts the drain message the interrupt thread sent into the console.
 fn take_arrived(console: &mut Console<PortRegisters>) {
-    let mut arrived = [0u8; audhsos_abi::layout::MAX_MESSAGE_WORDS];
+    let mut words = [0u64; DRAIN_WORDS];
     let count = {
         let reader = held(console).reader();
         let Ok(message) = reader.message() else {
             return;
         };
+        if message.label != BYTE_LABEL {
+            return;
+        }
         let mut taken = 0usize;
-        for (slot, index) in arrived.iter_mut().zip(0..message.word_count) {
+        for (slot, index) in words.iter_mut().zip(0..message.word_count) {
             let Some(word) = reader.word(index) else {
                 break;
             };
-            *slot = u8::try_from(word & 0xFF).unwrap_or(0);
+            *slot = word;
             taken = taken.wrapping_add(1);
         }
         taken
     };
-    for byte in arrived.get(..count).unwrap_or(&[]) {
-        let _fitted = console.receive(*byte);
-    }
+    console.take_drain(words.get(..count).unwrap_or(&[]));
 }
 
 /// Makes the second thread and starts it: its own stack, its own notification
@@ -361,7 +369,8 @@ fn entry_address() -> u64 {
     pointer as usize as u64
 }
 
-/// The interrupt thread: wait, take the byte, send it, acknowledge.
+/// The interrupt thread: wait, drain the FIFO, send the bytes,
+/// acknowledge.
 ///
 /// # Safety
 ///
@@ -374,34 +383,44 @@ unsafe extern "sysv64" fn second(ipc_buffer: u64) -> ! {
     let Some((endpoint, notification, interrupt)) = SHARED.get() else {
         gate.thread_exit()
     };
-    let mut ports = PortRegisters {
+    // `new` touches no register; `init` belongs to the serving thread.
+    let mut uart = Uart16550::new(PortRegisters {
         gate,
         ports: SHARED.ports(),
-    };
+        receiver: true,
+    });
+    let mut into = [0u8; DRAIN];
+    let mut words = [0u64; DRAIN_WORDS];
     loop {
-        if ports.gate.notification_wait(notification).is_err() {
-            ports.gate.thread_exit()
+        if uart
+            .registers()
+            .gate
+            .notification_wait(notification)
+            .is_err()
+        {
+            uart.registers().gate.thread_exit()
         }
         // SLLS597E pp. 34–35: keep a FIFO timeout from raising an edge
         // while the I/O APIC masks the line across the IPC send.
-        ports.write(Register::InterruptEnable, 0);
-        // The controller says whether a byte is there; a 16550 raises one
-        // interrupt for several reasons.
-        if ports.read(Register::LineStatus) & 1 != 0 {
-            let byte = ports.read(Register::Data);
+        uart.disable_interrupts();
+        // One drain takes at most one FIFO; a 16550 raises one interrupt
+        // for several reasons, so the drain can take nothing.
+        let received = uart.read_bytes(&mut into);
+        if received.count != 0 || received.line_errors() != 0 {
+            let count = encode_drain(&received, &into, &mut words);
+            let gate = &mut uart.registers().gate;
             let mut writer = user_rt::message::Writer::new();
             {
-                let mut buffer = ports.gate.writer();
-                let _written = writer.word(&mut buffer, u64::from(byte));
+                let mut buffer = gate.writer();
+                for word in words.get(..count).unwrap_or(&[]) {
+                    let _written = writer.word(&mut buffer, *word);
+                }
                 let _finished = writer.finish(&mut buffer, BYTE_LABEL);
             }
-            let _sent = ports.gate.ipc_send(endpoint);
+            let _sent = gate.ipc_send(endpoint);
         }
-        let _acknowledged = ports.gate.interrupt_ack(interrupt);
-        ports.write(
-            Register::InterruptEnable,
-            driver_uart16550::uart::INTERRUPT_RECEIVE,
-        );
+        let _acknowledged = uart.registers().gate.interrupt_ack(interrupt);
+        uart.enable_interrupts(true, false);
     }
 }
 
@@ -409,14 +428,31 @@ unsafe extern "sysv64" fn second(ipc_buffer: u64) -> ! {
 struct PortRegisters {
     gate: Gate,
     ports: IoPortHandle,
+    /// `true` for the interrupt thread, which takes the line status error
+    /// bits the serving thread read.
+    receiver: bool,
 }
 
 impl Registers for PortRegisters {
+    /// A line status read keeps error bits 1 to 4 for the interrupt thread:
+    /// the serving thread's transmit poll clears them in the register. A
+    /// drain that runs between the serving thread's port read and its keep
+    /// attaches the bits to the next byte.
     fn read(&mut self, register: Register) -> u8 {
         let port = COM1.wrapping_add(u64::try_from(register.index()).unwrap_or(0));
-        self.gate
+        let value = self
+            .gate
             .ioport_read(self.ports, port, 1)
-            .map_or(0, |value| u8::try_from(value & 0xFF).unwrap_or(0))
+            .map_or(0, |value| u8::try_from(value & 0xFF).unwrap_or(0));
+        if register != Register::LineStatus {
+            return value;
+        }
+        if self.receiver {
+            value | SHARED.take_line_errors()
+        } else {
+            SHARED.keep_line_errors(value & LINE_STATUS_ERRORS);
+            value
+        }
     }
 
     fn write(&mut self, register: Register, value: u8) {
@@ -453,6 +489,7 @@ struct Shared {
     notification: core::sync::atomic::AtomicU64,
     interrupt: core::sync::atomic::AtomicU64,
     ports: core::sync::atomic::AtomicU64,
+    line_errors: core::sync::atomic::AtomicU8,
 }
 
 impl Shared {
@@ -463,6 +500,7 @@ impl Shared {
             notification: AtomicU64::new(0),
             interrupt: AtomicU64::new(0),
             ports: AtomicU64::new(0),
+            line_errors: core::sync::atomic::AtomicU8::new(0),
         }
     }
 
@@ -491,6 +529,20 @@ impl Shared {
         use user_rt::Typed;
         IoPortHandle::from_raw(self.ports.load(Ordering::SeqCst))
             .unwrap_or(IoPortHandle::from_handle(audhsos_abi::Handle::MAX))
+    }
+
+    /// Keeps line status error bits the serving thread read.
+    fn keep_line_errors(&self, bits: u8) {
+        use core::sync::atomic::Ordering;
+        if bits != 0 {
+            let _kept = self.line_errors.fetch_or(bits, Ordering::SeqCst);
+        }
+    }
+
+    /// Takes the kept line status error bits.
+    fn take_line_errors(&self) -> u8 {
+        use core::sync::atomic::Ordering;
+        self.line_errors.swap(0, Ordering::SeqCst)
     }
 
     fn get(&self) -> Option<(EndpointHandle, NotificationHandle, InterruptHandle)> {

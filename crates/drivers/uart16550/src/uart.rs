@@ -24,6 +24,28 @@ pub const LINE_STATUS_TRANSMIT_EMPTY: u8 = 1 << 5;
 /// Line status bit: a received byte is waiting.
 pub const LINE_STATUS_DATA_READY: u8 = 1 << 0;
 
+/// Line status bit: a byte arrived at a full FIFO and was lost. The byte
+/// at the top of the FIFO is valid (SLLS597E page 37).
+pub const LINE_STATUS_OVERRUN: u8 = 1 << 1;
+
+/// Line status bit: the byte at the top of the FIFO has a parity error.
+pub const LINE_STATUS_PARITY: u8 = 1 << 2;
+
+/// Line status bit: the byte at the top of the FIFO has no valid stop bit.
+pub const LINE_STATUS_FRAMING: u8 = 1 << 3;
+
+/// Line status bit: the byte at the top of the FIFO is the one 0 byte a
+/// break loads (SLLS597E page 37).
+pub const LINE_STATUS_BREAK: u8 = 1 << 4;
+
+/// Line status bits that mark the byte at the top of the FIFO as no data.
+pub const LINE_STATUS_BYTE_ERRORS: u8 =
+    LINE_STATUS_PARITY | LINE_STATUS_FRAMING | LINE_STATUS_BREAK;
+
+/// Line status bits 1 to 4, which one read of the register clears
+/// (SLLS597E page 37).
+pub const LINE_STATUS_ERRORS: u8 = LINE_STATUS_OVERRUN | LINE_STATUS_BYTE_ERRORS;
+
 /// Interrupt enable bit: a received byte raises an interrupt.
 pub const INTERRUPT_RECEIVE: u8 = 1 << 0;
 
@@ -32,6 +54,10 @@ pub const INTERRUPT_TRANSMIT: u8 = 1 << 1;
 
 /// Interrupt identification bit: no interrupt is pending when it is set.
 pub const INTERRUPT_NONE: u8 = 1 << 0;
+
+/// Interrupt identification bits 3 to 1: the source of a pending
+/// interrupt (SLLS597E page 35, table 5).
+pub const INTERRUPT_SOURCE: u8 = 0x0E;
 
 /// Line control bit: the divisor latch is visible instead of the data and
 /// interrupt enable registers.
@@ -153,6 +179,9 @@ pub enum UartError {
     Timeout,
     /// No byte was waiting.
     WouldBlock,
+    /// The line status reported an error; the value holds the bits of
+    /// [`LINE_STATUS_ERRORS`] that were set.
+    Line(u8),
 }
 
 impl fmt::Display for UartError {
@@ -160,6 +189,69 @@ impl fmt::Display for UartError {
         match self {
             UartError::Timeout => f.write_str("the transmitter did not become ready"),
             UartError::WouldBlock => f.write_str("no byte is waiting"),
+            UartError::Line(bits) => write!(f, "line status error {bits:#04x}"),
+        }
+    }
+}
+
+/// What one drain of the receive FIFO took.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct Received {
+    /// Bytes written to the front of the destination.
+    pub count: usize,
+    /// Bytes discarded for a parity error, a framing error or a break.
+    pub discarded: u8,
+    /// Overruns reported; each one lost at least one byte.
+    pub overruns: u8,
+    /// Every bit of [`LINE_STATUS_ERRORS`] seen during the drain.
+    pub errors: u8,
+}
+
+impl Received {
+    /// Line errors: one per discarded byte and one per overrun.
+    #[must_use]
+    pub fn line_errors(&self) -> u16 {
+        u16::from(self.discarded).saturating_add(u16::from(self.overruns))
+    }
+}
+
+/// The source of a pending interrupt, decoded from interrupt
+/// identification bits 3 to 0 (SLLS597E page 35, table 5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum InterruptSource {
+    /// Bit 0 is set: no interrupt is pending.
+    NotPending,
+    /// Overrun, parity error, framing error or break; the line status
+    /// read resets it.
+    LineStatus,
+    /// Received data reached the trigger level; the data read resets it.
+    ReceivedData,
+    /// The FIFO holds data and four character times passed without a byte
+    /// received or read; the data read resets it.
+    CharacterTimeout,
+    /// The transmitter holding register is empty; the identification
+    /// read that returned this value reset it.
+    TransmitterEmpty,
+    /// A modem status input changed; the modem status read resets it.
+    ModemStatus,
+    /// A code table 5 does not list; the value holds bits 3 to 0.
+    Reserved(u8),
+}
+
+impl InterruptSource {
+    /// Decodes one read of the interrupt identification register.
+    #[must_use]
+    pub const fn decode(identification: u8) -> Self {
+        if identification & INTERRUPT_NONE != 0 {
+            return InterruptSource::NotPending;
+        }
+        match identification & INTERRUPT_SOURCE {
+            0x06 => InterruptSource::LineStatus,
+            0x04 => InterruptSource::ReceivedData,
+            0x0C => InterruptSource::CharacterTimeout,
+            0x02 => InterruptSource::TransmitterEmpty,
+            0x00 => InterruptSource::ModemStatus,
+            bits => InterruptSource::Reserved(bits),
         }
     }
 }
@@ -293,26 +385,62 @@ impl<R: Registers> Uart16550<R> {
         Err(UartError::Timeout)
     }
 
-    /// Takes the waiting byte.
+    /// Takes the waiting byte, reading the line status once.
     ///
     /// # Errors
     ///
-    /// [`UartError::WouldBlock`] if no byte is waiting.
+    /// - [`UartError::Line`] if any of line status bits 1 to 4 is set. A
+    ///   parity error, a framing error or a break discards the byte at the
+    ///   top of the FIFO; an overrun leaves that byte, which is valid, for
+    ///   the next call.
+    /// - [`UartError::WouldBlock`] if no byte is waiting.
     pub fn read_byte(&mut self) -> Result<u8, UartError> {
-        if self.registers.read(Register::LineStatus) & LINE_STATUS_DATA_READY == 0 {
+        let status = self.registers.read(Register::LineStatus);
+        let errors = status & LINE_STATUS_ERRORS;
+        if status & LINE_STATUS_DATA_READY != 0 && status & LINE_STATUS_BYTE_ERRORS != 0 {
+            let _discarded = self.registers.read(Register::Data);
+        }
+        if errors != 0 {
+            return Err(UartError::Line(errors));
+        }
+        if status & LINE_STATUS_DATA_READY == 0 {
             return Err(UartError::WouldBlock);
         }
         Ok(self.registers.read(Register::Data))
     }
 
-    /// Raises an interrupt when a byte arrives.
-    pub fn enable_receive_interrupt(&mut self) {
-        self.registers
-            .write(Register::InterruptEnable, INTERRUPT_RECEIVE);
+    /// Drains the receive FIFO into `into`, reading the data register while
+    /// line status bit 0 is set, at most [`FIFO_DEPTH`] times per call.
+    ///
+    /// A byte with a parity error, a framing error or a break is read and
+    /// discarded; an overrun is counted and the byte at the top is kept.
+    pub fn read_bytes(&mut self, into: &mut [u8]) -> Received {
+        let mut received = Received::default();
+        for _ in 0..FIFO_DEPTH {
+            let Some(slot) = into.get_mut(received.count) else {
+                break;
+            };
+            let status = self.registers.read(Register::LineStatus);
+            received.errors |= status & LINE_STATUS_ERRORS;
+            if status & LINE_STATUS_OVERRUN != 0 {
+                received.overruns = received.overruns.saturating_add(1);
+            }
+            if status & LINE_STATUS_DATA_READY == 0 {
+                break;
+            }
+            let byte = self.registers.read(Register::Data);
+            if status & LINE_STATUS_BYTE_ERRORS != 0 {
+                received.discarded = received.discarded.saturating_add(1);
+                continue;
+            }
+            *slot = byte;
+            received.count = received.count.saturating_add(1);
+        }
+        received
     }
 
-    /// Raises an interrupt when a byte arrives and when the holding
-    /// register becomes empty.
+    /// Raises an interrupt when a byte arrives, when the holding register
+    /// becomes empty, or both.
     pub fn enable_interrupts(&mut self, receive: bool, transmit: bool) {
         let mut value = 0;
         if receive {
@@ -329,9 +457,11 @@ impl<R: Registers> Uart16550<R> {
         self.registers.write(Register::InterruptEnable, 0);
     }
 
-    /// `true` if the controller signals an interrupt.
-    pub fn interrupt_pending(&mut self) -> bool {
-        self.registers.read(Register::FifoControl) & INTERRUPT_NONE == 0
+    /// Reads the interrupt identification register once and decodes the
+    /// source. The read resets a pending THRE interrupt (SLLS597E page 34),
+    /// so [`InterruptSource::TransmitterEmpty`] is the only record of it.
+    pub fn interrupt_source(&mut self) -> InterruptSource {
+        InterruptSource::decode(self.registers.read(Register::FifoControl))
     }
 }
 
