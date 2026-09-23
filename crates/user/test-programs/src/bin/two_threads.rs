@@ -82,8 +82,7 @@ fn take_ticket(shared: u64) -> u64 {
 }
 
 #[panic_handler]
-const fn panic(_info: &core::panic::PanicInfo) -> ! {
-    // Nothing of this program panics; the handler is what the language
-    // asks for, and a thread that reached it has nothing left to do.
-    loop {}
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    // D-193: the thread stops in `Faulted`.
+    sys::stop()
 }

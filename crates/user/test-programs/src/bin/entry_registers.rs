@@ -26,11 +26,12 @@ pub const MARK: u64 = 0x5EED_0002;
 pub const SAVED: usize = 14;
 
 /// Saves the registers the thread started with and calls [`report`] with
-/// the buffer address and the address of the saved words.
+/// the buffer address, the address of the saved words, and the stack
+/// pointer at entry.
 ///
-/// The user stack top is aligned to sixteen bytes and the saves are
-/// fourteen words, so the `call` leaves the alignment the ABI asks of a
-/// callee.
+/// The kernel starts the thread with `rsp + 8` a multiple of 16 (D-193).
+/// The saves are fourteen words and `sub rsp, 8` one more, so the `call`
+/// leaves the alignment the ABI asks of a callee.
 ///
 /// # Safety
 ///
@@ -56,18 +57,20 @@ pub unsafe extern "sysv64" fn _start(ipc_buffer: u64) -> ! {
         "push rbx",
         "push rax",
         "mov rsi, rsp",
+        "lea rdx, [rsp + 112]",
+        "sub rsp, 8",
         "call {report}",
         "ud2",
         report = sym report,
     )
 }
 
-/// Writes the bitwise or of the saved registers and the mark into the
-/// buffer, then ends the thread.
+/// Writes the bitwise or of the saved registers, the mark, and the entry
+/// stack pointer modulo 16 into the buffer, then ends the thread.
 ///
 /// The or is one word instead of fourteen, because a test asks one
 /// question of it: did the kernel leave anything in a register.
-extern "sysv64" fn report(ipc_buffer: u64, saved: *const u64) -> ! {
+extern "sysv64" fn report(ipc_buffer: u64, saved: *const u64, entry_rsp: u64) -> ! {
     // SAFETY: `_start` pushed `SAVED` words and passed their address, and
     // nothing wrote below them since.
     let words = unsafe { core::slice::from_raw_parts(saved, SAVED) };
@@ -81,6 +84,7 @@ extern "sysv64" fn report(ipc_buffer: u64, saved: *const u64) -> ! {
         let mut buffer = unsafe { sys::buffer(ipc_buffer) };
         buffer.set_word(0, combined);
         buffer.set_word(1, MARK);
+        buffer.set_word(2, entry_rsp % 16);
     }
     loop {
         // SAFETY: as above. Nothing after the call runs, but a program of
@@ -92,8 +96,7 @@ extern "sysv64" fn report(ipc_buffer: u64, saved: *const u64) -> ! {
 }
 
 #[panic_handler]
-const fn panic(_info: &core::panic::PanicInfo) -> ! {
-    // Nothing of this program panics; the handler is what the language
-    // asks for, and a thread that reached it has nothing left to do.
-    loop {}
+fn panic(_info: &core::panic::PanicInfo) -> ! {
+    // D-193: the thread stops in `Faulted`.
+    sys::stop()
 }

@@ -118,3 +118,31 @@ fn a_user_thread_starts_with_no_kernel_register() {
     say!("the thread started with every register but its buffer address at zero");
     let _ = spawned.process;
 }
+
+/// A new thread starts with `rsp + 8` a multiple of 16, as psABI 3.2.2
+/// requires at a function entry (`docs/x86-psabi/x86-64-psABI-1.0.pdf`,
+/// page 23).
+///
+/// Regression test for issue #109: the kernel started a thread with `rsp`
+/// itself a multiple of 16.
+#[test_case]
+fn a_user_thread_starts_with_the_stack_pointer_of_a_function_entry() {
+    support::bring_up();
+    let spawned = support::spawn(ENTRY_REGISTERS);
+    support::run_threads(None);
+
+    let mark = support::buffer_word(spawned.buffer, 1);
+    if mark != REGISTERS_MARK {
+        testing::fail(format_args!(
+            "the thread left {mark:#x} in its buffer, not {REGISTERS_MARK:#x}"
+        ));
+    }
+    let remainder = support::buffer_word(spawned.buffer, 2);
+    if remainder != 8 {
+        testing::fail(format_args!(
+            "the thread started with rsp at {remainder} modulo 16, not 8"
+        ));
+    }
+    say!("the thread started with rsp at 8 modulo 16");
+    let _ = spawned.process;
+}

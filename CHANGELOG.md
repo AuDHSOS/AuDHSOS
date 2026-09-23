@@ -954,6 +954,18 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `user-sys-x86_64` (issues #99, #101, #102, #104, #106, #107, #109, #111,
+  #112): an `Mmio` access at a misaligned address answers `None`; the bound
+  is `user_rt::mmio::checked_offset`, tested on the host. `Mmio::window` is
+  removed. The IPC buffer pointer takes exposed provenance. `write_line`
+  without an endpoint refuses a line longer than the message area with
+  `BufferTooSmall`. The panic handler of `program!` and of every program of
+  `user-test-programs` executes `ud2`, so the thread stops in `Faulted`.
+  The kernel starts a user thread with its stack top aligned down to 16 and
+  `rsp + 8` a multiple of 16 (psABI 3.2.2, D-193). The safety policy row, the README
+  and document 10 name the MMIO accessor and drop the count of forty-two
+  wrappers.
+
 - `kernel-sched`: `Scheduler::pick_next` applied one event, `Event::Preempt`,
   to the outgoing thread for both a slice that ran out and a loss of the
   processor to a higher priority, sent it to the tail of its queue, and handed

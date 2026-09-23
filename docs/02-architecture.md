@@ -634,8 +634,8 @@ one runs on is a logic crate of its own, host-tested without a machine
 
 | Crate | Content | `unsafe` |
 |-------|---------|----------|
-| `user-sys-x86_64` | `_start`, the `int 0x80` wrapper, the gate over the thread's IPC buffer | allowlisted |
-| `user-rt` | typed handle newtypes with `Drop`, system call wrappers over the IPC buffer, message builder and parser, safe offset-based heap allocator, panic handler that reports over a log endpoint and exits, logging macros | no |
+| `user-sys-x86_64` | `_start`, the `int 0x80` wrapper, the gate over the thread's IPC buffer, the `ud2` of the panic handler, the volatile access to a device window | allowlisted |
+| `user-rt` | typed handle newtypes, message builder and parser, safe offset-based heap allocator, the bound of a volatile access to a device window | no |
 | `user-proto` | message encodings for the name and console protocols, versioned labels | no |
 | `user-loader` | tar (ustar) reader; process creation from an ELF using `audhsos-elf` | no |
 | `server-name` | registry: `register(name, endpoint)`, `lookup(name)`, with badge-based ownership | no |

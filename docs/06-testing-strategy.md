@@ -2347,11 +2347,14 @@ what the kernel dispatches on, so the check is what the kernel saw.
   outside the buffer, and never loops.
 - Fuzz target `mcfg`: arbitrary bytes as a table; the parse answers or
   refuses and reads nothing outside the buffer.
+- The bound of the volatile accessor (`user-rt`, host):
+  `mmio::checked_offset` answers an access that lies whole inside the
+  window at an address that is a multiple of its width, and `None` for
+  one past the end, at a misaligned offset, or at a misaligned base.
 - The volatile accessor (`user-sys-x86_64`, QEMU): every read and write
-  answers inside the region it was made with and `None` outside it, and a
-  sub-window narrows a region and reaches no further. It is proved by the
-  bus walk of `app-lspci`, which reaches the configuration space of a real
-  machine through nothing else.
+  answers inside the region it was made with and `None` outside it. It is
+  proved by the enumeration of `app-lspci`, which reaches the
+  configuration space of a real machine through nothing else.
 - End to end (QEMU): the run of the reference machine carries
   `[info] ecam=`, the window `app-lspci` was given, the virtio-net function
   with the device identifier `0x1041`, the four structures it published in

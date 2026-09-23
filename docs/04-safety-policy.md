@@ -35,7 +35,7 @@ device register are operations the Rust language can only express as
 | `audhsos-kernel` | the entry the loader jumps to, the panic handler, the reads of physical memory through the window during the memory bring-up, the interrupt bring-up and the instructions that turn interrupts on, the switch into a user thread and the pointer to its saved context, the buffer of a faulting or woken thread through the window, and the same in the test images the crate carries (D-55) | none |
 | `boot-uefi-x86_64` | firmware calls through function pointers, memory map buffer from a raw pointer, page-table memory through the identity mapping, `CR3` write, kernel entry | `CR3` write, port write for the exit device, one naked function |
 | `audhsos-sync` | `Global<T>` and `Preset<T>`: two `Sync` cells with a runtime borrow flag for kernel and userland global state, the first initialized once at run time, the second `const`-initialized so that a large value reaches the `.bss` without travelling over a stack (D-66) | none |
-| `user-sys-x86_64` | the system call trap instruction, `_start`, the IPC buffer of the thread as a reference | one `asm!` statement: `int 0x80` |
+| `user-sys-x86_64` | the system call trap instruction, `_start`, the IPC buffer of the thread as a reference, the volatile reads and writes of a mapped device window and the two constructors of that window (D-113), the `ud2` of the panic handler (D-193) | two `asm!` statements: `int 0x80`, `ud2` |
 | `user-test-programs` | what each program does on purpose: a privileged instruction, a read of a kernel address, a write where nothing is mapped, the volatile reads and writes of the page a program shares with the test, and the calls of `user-sys-x86_64` | one `asm!` statement: `hlt`, in the program whose point it is |
 | `user-programs` | the binaries of the userland: the volatile reads and writes of the buffers a program shares with the kernel and with its children, and the calls of `user-sys-x86_64` (D-97) | none |
 | `user-net-programs` | the same, for the two programs of the network: the register window of the device, the region it reads and writes, the memory the stack writes into, the socket pages both sides reach atomically, and the entry point of each of the server's two threads with the gate it adopts (D-144) | none |
@@ -82,8 +82,9 @@ The xtask policy table holds the machine-readable form.
 | `boot-uefi-x86_64` | kernel entry (naked function) | disable interrupts, write `CR3`, load stack pointer, jump |
 | `boot-uefi-x86_64` | exit device on loader failure | `out` |
 | `user-sys-x86_64` | system call trap | `int 0x80` |
+| `user-sys-x86_64` | stop of a panicking thread (`stop`, D-193) | `ud2` |
 | `user-test-programs` | the privileged instruction a user thread may not run (`hlt_in_user`) | `hlt` |
-| `user-test-programs` | the entry point that reports the registers a thread started with (`entry_registers`, naked function) | `push` of every general register but the one that carries the buffer address, then `call` |
+| `user-test-programs` | the entry point that reports the registers a thread started with (`entry_registers`, naked function) | `push` of every general register but the one that carries the buffer address, `sub` of the stack pointer, then `call` |
 
 Interrupt and exception entry use the `x86-interrupt` ABI, which the
 compiler implements. System call entry is an interrupt vector and uses the

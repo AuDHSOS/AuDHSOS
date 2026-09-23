@@ -5,7 +5,7 @@
 //! 6.6.16.
 
 use crate::context::{
-    CS_WORD, FRAME_WORDS, INITIAL_RFLAGS, RDI_WORD, RFLAGS_WORD, RIP_WORD, RSP_WORD,
+    CS_WORD, FRAME_WORDS, INITIAL_RFLAGS, RDI_WORD, RETURN_SLOT, RFLAGS_WORD, RIP_WORD, RSP_WORD,
     SAVED_REGISTERS, SS_WORD, TRAMPOLINE_WORD, frame_at, prepare_user,
 };
 use crate::gdt::{USER_CODE_SELECTOR, USER_DATA_SELECTOR};
@@ -48,7 +48,7 @@ fn the_words_are_the_ones_the_switch_and_the_interrupt_return_read() {
     assert_eq!(frame[RIP_WORD], ENTRY);
     assert_eq!(frame[CS_WORD], u64::from(USER_CODE_SELECTOR.as_u16()));
     assert_eq!(frame[RFLAGS_WORD], INITIAL_RFLAGS);
-    assert_eq!(frame[RSP_WORD], USER_STACK);
+    assert_eq!(frame[RSP_WORD], USER_STACK - RETURN_SLOT);
     assert_eq!(frame[SS_WORD], u64::from(USER_DATA_SELECTOR.as_u16()));
 }
 
@@ -81,7 +81,7 @@ fn the_frame_reads_back_as_it_was_written() {
     let base = prepare_user(&mut stack, TRAMPOLINE, ENTRY, USER_STACK, BUFFER).unwrap();
     let frame = frame_at(&stack, base).unwrap();
     assert_eq!(frame.entry, ENTRY);
-    assert_eq!(frame.user_stack, USER_STACK);
+    assert_eq!(frame.user_stack, USER_STACK - RETURN_SLOT);
     assert_eq!(frame.trampoline, TRAMPOLINE);
     assert_eq!(frame.ipc_buffer, BUFFER);
 }
@@ -127,5 +127,23 @@ fn a_second_thread_on_the_same_stack_overwrites_the_first_frame() {
     assert_eq!(first, second);
     let frame = frame_at(&stack, second).unwrap();
     assert_eq!(frame.entry, 0x41_0000);
-    assert_eq!(frame.user_stack, 0x51_0000);
+    assert_eq!(frame.user_stack, 0x51_0000 - RETURN_SLOT);
+}
+
+/// Regression test for issue #109: a thread started with `rsp` a multiple
+/// of 16, where psABI 3.2.2 requires `rsp + 8` to be one at a function
+/// entry (`docs/x86-psabi/x86-64-psABI-1.0.pdf`, page 23).
+#[test]
+fn a_thread_starts_with_the_stack_pointer_of_a_function_entry() {
+    for top in [USER_STACK, 0x7FFF_FFFF_F000, 0x10, 0x7F_FFF8, 0x7F_FFF1] {
+        let mut stack = [0_u64; FRAME_WORDS];
+        let base = prepare_user(&mut stack, TRAMPOLINE, ENTRY, top, BUFFER).unwrap();
+        let rsp = frame_at(&stack, base).unwrap().user_stack;
+        assert_eq!((rsp + 8) % 16, 0, "rsp {rsp:#x} of stack top {top:#x}");
+        assert!(rsp < top, "the return slot lies below the top");
+        assert!(
+            top - rsp <= 8 + 15,
+            "rsp {rsp:#x} lies too far below {top:#x}"
+        );
+    }
 }

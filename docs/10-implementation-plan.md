@@ -2240,16 +2240,17 @@ that all of it runs on the host under test (D-89).
 `_start` receives the address of the thread's IPC buffer in the first
 argument register, which is where the kernel put it, and hands it to the
 program's `main` together with the startup message it read from the
-buffer. `Gate { buffer: u64 }` holds that address and carries the
-forty-two system call wrappers, written out one by one; each writes the
+buffer. `Gate { buffer: u64 }` holds that address and carries one
+system call wrapper per entry of `Syscall::ALL`, written out one by one; each writes the
 call number and its arguments into the buffer, executes `int 0x80`, and
 turns the status word into a `Result`. A constant assertion holds the list of
 them to the table: `COVERED` names every call the gate is meant to cover,
 `Syscall::ALL` names every call there is, and a build fails when the two
 differ in length or in order (D-92). What a list of values cannot see —
 whether a method exists for each entry and passes the entry it belongs
-to — the test image `wrappers` sees by running them (D-98). The panic handler formats a `user_rt::Line` and
-sends it to the log endpoint.
+to — the test image `wrappers` sees by running them (D-98). The panic
+handler executes `ud2`, so the kernel stops the thread in `Faulted` and
+reports the fault to the fault handler of the process (D-193).
 
 ### 10.7.3 `user-proto` (`crates/user/proto`)
 

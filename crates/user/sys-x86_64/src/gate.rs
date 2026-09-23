@@ -244,18 +244,19 @@ impl Gate {
     /// The buffer, to read a message out of.
     #[must_use]
     pub const fn reader(&self) -> Buffer<'_> {
-        let pointer = core::ptr::without_provenance::<[u8; SIZE]>(self.page());
+        let pointer = core::ptr::with_exposed_provenance::<[u8; SIZE]>(self.page());
         // SAFETY: the kernel mapped one page there, read and write, for
         // this thread alone, and `adopt` promised the address is that page
         // and that this gate is the only one over it. The borrow of `self`
-        // keeps the reference from outliving the gate.
+        // keeps the reference from outliving the gate. The page lies outside
+        // the abstract machine, so the pointer takes exposed provenance.
         Buffer::new(unsafe { &*pointer })
     }
 
     /// The buffer, to build a message in.
     #[must_use]
     pub const fn writer(&mut self) -> BufferMut<'_> {
-        let pointer = core::ptr::without_provenance_mut::<[u8; SIZE]>(self.page());
+        let pointer = core::ptr::with_exposed_provenance_mut::<[u8; SIZE]>(self.page());
         // SAFETY: as `reader`, and the exclusive borrow of `self` is what
         // makes this the only reference to the page while it lives.
         BufferMut::new(unsafe { &mut *pointer })

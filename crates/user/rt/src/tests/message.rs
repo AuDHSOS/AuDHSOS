@@ -4,10 +4,10 @@
 //! Tests of `crate::message`.
 
 use audhsos_abi::ipc_buffer::{Buffer, BufferMut, SIZE, WORD, WORD_COUNT};
-use audhsos_abi::layout::{MAX_MESSAGE_HANDLES, MAX_MESSAGE_WORDS};
+use audhsos_abi::layout::{MAX_MESSAGE_BYTES, MAX_MESSAGE_HANDLES, MAX_MESSAGE_WORDS};
 use audhsos_abi::{Error, Handle, MessageError};
 
-use crate::message::{CodecError, MAX_BYTES, Reader, Writer};
+use crate::message::{CodecError, MAX_BYTES, Reader, Writer, plain_counts};
 
 /// A buffer of zeros to work on.
 fn buffer() -> [u8; SIZE] {
@@ -312,4 +312,26 @@ fn every_error_renders_a_message_and_an_error_code() {
     }
     assert_eq!(Error::from(CodecError::Full), Error::BufferTooSmall);
     assert_eq!(Error::from(CodecError::Truncated), Error::InvalidArgument);
+}
+
+#[test]
+fn plain_counts_carry_the_words_and_the_bytes_of_the_last_word() {
+    assert_eq!(plain_counts(0), Some((0, WORD)));
+    assert_eq!(plain_counts(1), Some((1, 1)));
+    assert_eq!(plain_counts(8), Some((1, WORD)));
+    assert_eq!(plain_counts(9), Some((2, 1)));
+    assert_eq!(
+        plain_counts(MAX_MESSAGE_BYTES),
+        Some((MAX_MESSAGE_WORDS, WORD))
+    );
+}
+
+/// Regression test for issue #102: a line of 3841 bytes was cut to 3840
+/// and the label said one byte of the last word, so the kernel printed
+/// 3833 bytes.
+#[test]
+fn plain_counts_refuse_a_line_longer_than_the_area() {
+    assert_eq!(plain_counts(MAX_MESSAGE_BYTES + 1), None);
+    assert_eq!(plain_counts(3841), None);
+    assert_eq!(plain_counts(usize::MAX), None);
 }

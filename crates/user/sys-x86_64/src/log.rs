@@ -16,15 +16,14 @@
 //! the kernel writes what the message area holds — so the bytes go in
 //! plain, and the label says how many of the last word belong to the line.
 //!
-//! Invariant: a line that cannot go out is dropped and nothing is reported
-//! about the dropping. A diagnostic that fails is not worth a second
-//! diagnostic, and there is nowhere to send it.
+//! Invariant: each channel refuses a line longer than its limit whole: the
+//! endpoint channel above `user_rt::MAX_BYTES`, `debug_log` above
+//! `MAX_MESSAGE_BYTES`. A refused line reaches the console as zero bytes.
 
 use audhsos_abi::Error;
 use audhsos_abi::ipc_buffer::WORD;
-use audhsos_abi::layout::MAX_MESSAGE_WORDS;
 use user_rt::EndpointHandle;
-use user_rt::message::Writer;
+use user_rt::message::{Writer, plain_counts};
 
 use crate::gate::Gate;
 
@@ -36,8 +35,9 @@ pub const LOG_LABEL: u64 = u64::from_be_bytes(*b"LOGLINE\0");
 ///
 /// # Errors
 ///
-/// Whatever the send or the call answered, and the codec error of a line
-/// that does not fit the message area.
+/// Whatever the send or the call answered, the codec error of a line that
+/// does not fit the message area, and [`Error::BufferTooSmall`] for such a
+/// line without an endpoint.
 pub fn write_line(
     gate: &mut Gate,
     endpoint: Option<EndpointHandle>,
@@ -59,15 +59,14 @@ pub fn write_line(
 
 /// Writes `line` through `debug_log`, which reads the message area as
 /// bytes and takes the count of the last word out of the label.
+///
+/// A line longer than `MAX_MESSAGE_BYTES` answers
+/// [`Error::BufferTooSmall`] in place of a silent cut (issue #102).
 fn log_to_kernel(gate: &mut Gate, line: &[u8]) -> Result<(), Error> {
-    let words = line.len().div_ceil(WORD).min(MAX_MESSAGE_WORDS);
-    let trailing = match line.len().wrapping_rem(WORD) {
-        0 => WORD,
-        rest => rest,
-    };
+    let (words, trailing) = plain_counts(line.len()).ok_or(Error::BufferTooSmall)?;
     {
         let mut buffer = gate.writer();
-        for (index, chunk) in line.chunks(WORD).take(words).enumerate() {
+        for (index, chunk) in line.chunks(WORD).enumerate() {
             let mut word = [0u8; WORD];
             if let Some(slot) = word.get_mut(..chunk.len()) {
                 slot.copy_from_slice(chunk);

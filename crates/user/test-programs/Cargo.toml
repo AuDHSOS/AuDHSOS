@@ -23,6 +23,12 @@ test = false
 bench = false
 
 [[bin]]
+name = "panic_in_user"
+path = "src/bin/panic_in_user.rs"
+test = false
+bench = false
+
+[[bin]]
 name = "read_kernel_memory"
 path = "src/bin/read_kernel_memory.rs"
 test = false
