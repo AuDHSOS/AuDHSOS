@@ -6,7 +6,7 @@
 use test_support::generators::{Generator, bytes, range};
 use test_support::property::check;
 
-use crate::addr::{Ipv4Addr, Ipv4Cidr};
+use crate::addr::{IpVersion, Ipv4Addr, Ipv4Cidr};
 use crate::error::WireError;
 
 #[test]
@@ -83,7 +83,13 @@ fn a_prefix_of_zero_of_thirty_two_and_of_thirty_three() {
     assert!(host.contains(address));
     assert!(!host.contains(Ipv4Addr::new(10, 1, 2, 4)));
 
-    assert_eq!(Ipv4Cidr::new(address, 33), Err(WireError::PrefixLength(33)));
+    assert_eq!(
+        Ipv4Cidr::new(address, 33),
+        Err(WireError::PrefixLength {
+            version: IpVersion::V4,
+            length: 33,
+        })
+    );
     assert_eq!(Ipv4Cidr::MAX_PREFIX_LEN, 32);
 }
 
@@ -119,11 +125,28 @@ fn a_network_text_that_is_not_one_is_refused() {
     assert_eq!(Ipv4Cidr::parse("192.168.1/24"), Err(WireError::Address));
     assert_eq!(
         Ipv4Cidr::parse("192.168.1.0/33"),
-        Err(WireError::PrefixLength(33))
+        Err(WireError::PrefixLength {
+            version: IpVersion::V4,
+            length: 33,
+        })
     );
     assert_eq!(
         Ipv4Cidr::parse("192.168.1.0/0"),
         Ipv4Cidr::new(Ipv4Addr::new(192, 168, 1, 0), 0)
+    );
+}
+
+#[test]
+fn invalid_ipv4_prefix_text_is_an_address_error() {
+    for text in ["10.0.0.0/x", "10.0.0.0/256", "10.0.0.0/01"] {
+        assert_eq!(Ipv4Cidr::parse(text), Err(WireError::Address), "{text}");
+    }
+    assert_eq!(
+        Ipv4Cidr::parse("10.0.0.0/33"),
+        Err(WireError::PrefixLength {
+            version: IpVersion::V4,
+            length: 33,
+        })
     );
 }
 

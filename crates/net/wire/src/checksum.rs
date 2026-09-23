@@ -66,8 +66,20 @@ impl Checksum {
         }
     }
 
-    /// Adds one sixteen-bit word with the end-around carry.
+    /// Adds one sixteen-bit word in network byte order. A pending byte
+    /// pairs with the high byte of `word`.
     pub const fn add_word(&mut self, word: u16) {
+        if let Some(high) = self.pending {
+            let [first, second] = word.to_be_bytes();
+            self.pending = Some(second);
+            self.add_complete_word(u16::from_be_bytes([high, first]));
+        } else {
+            self.add_complete_word(word);
+        }
+    }
+
+    /// Adds a complete word with the end-around carry.
+    const fn add_complete_word(&mut self, word: u16) {
         let (total, carry) = self.sum.overflowing_add(word);
         // Both operands are at most `0xFFFF`, so a sum that carried is at
         // most `0xFFFE` and the carry that goes back in cannot overflow.

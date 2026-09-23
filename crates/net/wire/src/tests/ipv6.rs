@@ -7,7 +7,7 @@
 use test_support::generators::bytes;
 use test_support::property::check;
 
-use crate::addr::{Ipv6Addr, Ipv6Cidr};
+use crate::addr::{IpVersion, Ipv6Addr, Ipv6Cidr};
 use crate::error::WireError;
 
 #[test]
@@ -161,7 +161,10 @@ fn a_prefix_of_zero_of_a_hundred_and_twenty_eight_and_of_one_more() {
 
     assert_eq!(
         Ipv6Cidr::new(address, 129),
-        Err(WireError::PrefixLength(129))
+        Err(WireError::PrefixLength {
+            version: IpVersion::V6,
+            length: 129,
+        })
     );
     assert_eq!(Ipv6Cidr::MAX_PREFIX_LEN, 128);
 }
@@ -197,7 +200,16 @@ fn a_network_text_that_is_not_one_is_refused() {
     assert_eq!(Ipv6Cidr::parse("2001:0db8::1/64"), Err(WireError::Address));
     assert_eq!(
         Ipv6Cidr::parse("2001:db8::1/129"),
-        Err(WireError::PrefixLength(129))
+        Err(WireError::PrefixLength {
+            version: IpVersion::V6,
+            length: 129,
+        })
+    );
+    assert_eq!(
+        Ipv6Cidr::parse("2001:db8::1/129")
+            .expect_err("129 exceeds the IPv6 prefix limit")
+            .to_string(),
+        "an IPv6 prefix is at most 128 bits, not 129"
     );
 }
 

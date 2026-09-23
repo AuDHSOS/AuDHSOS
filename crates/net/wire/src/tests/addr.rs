@@ -154,6 +154,9 @@ fn a_route_of_one_family_never_matches_a_destination_of_the_other() {
     assert_eq!(IpCidr::parse("2001:db8::/32"), Ok(six));
     assert_eq!(
         IpCidr::parse("10.0.0.0/33"),
-        Err(WireError::PrefixLength(33))
+        Err(WireError::PrefixLength {
+            version: IpVersion::V4,
+            length: 33,
+        })
     );
 }

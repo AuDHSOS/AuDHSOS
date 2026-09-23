@@ -97,6 +97,47 @@ fn an_empty_call_after_an_odd_one_keeps_the_byte_pending() {
 }
 
 #[test]
+fn a_word_after_an_odd_byte_uses_the_pending_byte() {
+    let mut sum = Checksum::new();
+    sum.add_bytes(&[1]);
+    sum.add_word(0x0203);
+    sum.add_bytes(&[4]);
+    assert_eq!(sum.finish(), checksum(&[1, 2, 3, 4]));
+
+    let mut odd = Checksum::new();
+    odd.add_bytes(&[1]);
+    odd.add_word(0x0203);
+    assert_eq!(odd.finish(), checksum(&[1, 2, 3]));
+}
+
+#[test]
+fn pseudo_headers_after_an_odd_byte_preserve_byte_order() {
+    let source_v4 = Ipv4Addr::new(10, 0, 0, 1);
+    let destination_v4 = Ipv4Addr::new(10, 0, 0, 2);
+    let mut v4 = Checksum::new();
+    v4.add_bytes(&[1]);
+    v4.add_pseudo_header_v4(source_v4, destination_v4, Protocol::UDP, 10);
+    let mut expected_v4 = vec![1];
+    expected_v4.extend_from_slice(&source_v4.octets());
+    expected_v4.extend_from_slice(&destination_v4.octets());
+    expected_v4.extend_from_slice(&[0, Protocol::UDP.get()]);
+    expected_v4.extend_from_slice(&10u16.to_be_bytes());
+    assert_eq!(v4.finish(), checksum(&expected_v4));
+
+    let source_v6 = Ipv6Addr::LOCALHOST;
+    let destination_v6 = Ipv6Addr::ALL_NODES;
+    let mut v6 = Checksum::new();
+    v6.add_bytes(&[1]);
+    v6.add_pseudo_header_v6(source_v6, destination_v6, Protocol::UDP, 10);
+    let mut expected_v6 = vec![1];
+    expected_v6.extend_from_slice(&source_v6.octets());
+    expected_v6.extend_from_slice(&destination_v6.octets());
+    expected_v6.extend_from_slice(&10u32.to_be_bytes());
+    expected_v6.extend_from_slice(&[0, 0, 0, Protocol::UDP.get()]);
+    assert_eq!(v6.finish(), checksum(&expected_v6));
+}
+
+#[test]
 fn a_block_that_carries_its_own_checksum_sums_to_zero() {
     // An IPv4 header this project writes: version 4, header length 5, total
     // length 40, identification 0x1c46, don't fragment, TTL 64, TCP, from
