@@ -169,6 +169,16 @@ fn a_merged_rectangle_absorbs_one_only_the_union_overlaps() {
 }
 
 #[test]
+fn a_merged_rectangle_rechecks_the_set_after_each_union() {
+    let mut damage = Damage::new();
+    damage.push(Rect::new(0, 0, 2, 10));
+    damage.push(Rect::new(4, 0, 4, 2));
+    damage.push(Rect::new(7, 3, 2, 2));
+    damage.push(Rect::new(1, 9, 4, 1));
+    assert_eq!(damage.iter().collect::<Vec<_>>(), [Rect::new(0, 0, 9, 10)]);
+}
+
+#[test]
 fn a_merged_rectangle_absorbs_an_earlier_one_and_keeps_the_order() {
     let mut damage = Damage::new();
     damage.push(Rect::new(0, 0, 2, 2));
