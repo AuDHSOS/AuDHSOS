@@ -333,7 +333,7 @@ the first release.
 | `InterruptController` | map a line to a vector, mask, unmask, end-of-interrupt, spurious handling | local APIC and I/O APIC register blocks |
 | `Timer` | start a periodic tick with a frequency, read the tick counter | local APIC timer calibrated with the PIT |
 | `FrameAccess<T>` | a physical frame as a `&mut PageTable` of entry type `T` | the physical window |
-| `FrameBytes` | a physical frame as bytes, and a range of frames as a slice | the same window |
+| `FrameBytes` | a physical frame as bytes | the same window |
 | `TlbControl` | flush one page, flush all | `invlpg`, `CR3` reload |
 | `AddressSpaceControl` | make an address space the one the processor translates through, and name the active one | `CR3` |
 | `FrameSource` | supply and take back frames for page tables | the kernel frame allocator |
