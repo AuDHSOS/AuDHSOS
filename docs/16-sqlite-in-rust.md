@@ -1087,6 +1087,10 @@ Size: L.
      back into the file. Built, which D-449 records.
 168. The schema's own table written by a statement under `PRAGMA
      writable_schema`. Built, which D-450 records.
+169. The pages a transaction writes into the file before it commits,
+     which the cache spills where it is too small for the transaction.
+     Built for the rollback journal, which D-451 records; a transaction in
+     write-ahead logging mode still writes every frame at its commit.
 
 ### Done when
 

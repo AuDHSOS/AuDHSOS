@@ -7,6 +7,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` writes pages into the file before a transaction commits
+  where the cache is too small for it: the journal holds their records
+  under a synced count first, and a rollback writes the pages back.
+  D-451 records it. Catalog 6.6.317. `crash.test` goes from 169 cases
+  passing to 236 and `crash2.test` from 47 to 83, each every case of its
+  file; `writecrash.test` goes from 502 to 766 and `savepoint4.test` from
+  190 to 348.
+
 - `db-sqlite` writes the schema's own table under `PRAGMA
   writable_schema`, and refuses a statement that writes it under no such
   pragma with `table sqlite_master may not be modified`. D-450 records

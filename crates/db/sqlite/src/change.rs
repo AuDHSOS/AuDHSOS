@@ -4171,6 +4171,7 @@ impl Writer {
     fn rolled_back(&mut self) {
         for held in Self::files_mut(&mut self.held, &mut self.attached) {
             let was = held.began.take().unwrap_or(held.header);
+            put_back(held);
             held.pages.rollback();
             held.header = was;
         }
@@ -4191,6 +4192,52 @@ impl Writer {
     fn commit(&mut self, was: &Header) -> Result<(), Error> {
         commit_file(&mut self.held, was)
     }
+}
+
+/// The pages a spill of this transaction wrote into the file written
+/// back as they stood before it, which is `pager_playback` of
+/// `research/sqlite/src/pager.c` playing the journal back.
+///
+/// A transaction that spilled no page wrote no byte of the file, so a
+/// rollback of one leaves the file alone. Writing the pages back costs
+/// O(n) in them.
+fn put_back(held: &mut HeldFile) {
+    let page_size = crate::bytes::size(u64::from(held.header.page_size));
+    let written: Vec<(u32, Vec<u8>)> = held
+        .pages
+        .spilled()
+        .into_iter()
+        .filter_map(|number| {
+            let bytes = held.pages.before(number)?;
+            Some((number, bytes.to_vec()))
+        })
+        .collect();
+    if written.is_empty() {
+        return;
+    }
+    for (number, bytes) in written {
+        held.did.push(Does::Write {
+            onto: Onto::Main,
+            at: u64::from(number.saturating_sub(1))
+                .saturating_mul(u64::try_from(page_size).unwrap_or(u64::MAX)),
+            bytes,
+        });
+    }
+    held.did.push(Does::Sync(Onto::Main));
+    // `pager_end_transaction` leaves the journal as the mode says, which
+    // is what a commit leaves of it as well.
+    held.did.push(match held.mode {
+        Mode::Truncate => Does::Truncate {
+            onto: Onto::Journal,
+            at: 0,
+        },
+        Mode::Persist => Does::Write {
+            onto: Onto::Journal,
+            at: 0,
+            bytes: alloc::vec![0u8; crate::journal::ZEROED],
+        },
+        Mode::Delete | Mode::Memory | Mode::Off => Does::Remove(Onto::Journal),
+    });
 }
 
 /// Whether the name is one a `DROP TABLE` may not take away, which
@@ -4391,6 +4438,47 @@ fn journalled(written: &[u8], held: &HeldFile) -> Vec<Does> {
         bytes: header,
     }];
     let mut at = sector;
+    // A spill wrote the records of the pages it gave up, held the
+    // journal on the disk under the count of them, and wrote those pages
+    // into the file, which `pagerStress` and `syncJournal` do where the
+    // cache is full.
+    let frames = held.pages.frames(&held.header);
+    let mut written_pages = 0_usize;
+    for batch in held.pages.spilling() {
+        for _ in 0..batch.len() {
+            did.push(Does::Write {
+                onto: Onto::Journal,
+                at: u64::try_from(at).unwrap_or(u64::MAX),
+                bytes: written
+                    .get(at..at.saturating_add(record))
+                    .unwrap_or_default()
+                    .to_vec(),
+            });
+            at = at.saturating_add(record);
+            written_pages = written_pages.saturating_add(1);
+        }
+        did.push(Does::Write {
+            onto: Onto::Journal,
+            at: 8,
+            bytes: u32::try_from(written_pages)
+                .unwrap_or(u32::MAX)
+                .to_be_bytes()
+                .to_vec(),
+        });
+        did.push(Does::Sync(Onto::Journal));
+        for number in batch {
+            did.push(Does::Write {
+                onto: Onto::Main,
+                at: u64::from(number.saturating_sub(1))
+                    .saturating_mul(u64::try_from(page_size).unwrap_or(u64::MAX)),
+                bytes: frames
+                    .iter()
+                    .find(|(held, _)| *held == number)
+                    .map(|(_, page)| page.clone())
+                    .unwrap_or_default(),
+            });
+        }
+    }
     while let Some(bytes) = written.get(at..at.saturating_add(record)) {
         did.push(Does::Write {
             onto: Onto::Journal,
@@ -4406,7 +4494,7 @@ fn journalled(written: &[u8], held: &HeldFile) -> Vec<Does> {
         bytes: counted,
     });
     did.push(Does::Sync(Onto::Journal));
-    for (number, page) in held.pages.frames(&held.header) {
+    for (number, page) in frames {
         did.push(Does::Write {
             onto: Onto::Main,
             at: u64::from(number.saturating_sub(1))
@@ -5510,6 +5598,16 @@ impl Writer {
         }
         let found = self.attached.iter().position(|held| named_as(held, &named));
         found.map(Some).ok_or(named)
+    }
+
+    /// How many pages the cache of the file holds before it writes one
+    /// out, which `sqlite3PcacheSetCachesize` holds it to.
+    ///
+    /// A connection told none writes every page of a transaction at its
+    /// commit, which is what a cache large enough for the transaction
+    /// does.
+    pub const fn caching(&mut self, pages: usize) {
+        self.held.pages.caching(pages);
     }
 
     /// The function `ATTACH` answers a file name with.

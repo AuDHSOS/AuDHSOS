@@ -462,3 +462,87 @@ fn the_pages_a_connection_wrote_are_what_it_reads_back() {
     writer.run(b"ROLLBACK").unwrap();
     assert_eq!(rows(&writer.inside()), [alloc::vec![Value::Int(1)]]);
 }
+
+/// The list of what one transaction did, as the kinds of its entries.
+fn shown_did(did: &[crate::change::Does]) -> alloc::string::String {
+    let mut out = alloc::string::String::new();
+    for held in did {
+        out.push_str(match held {
+            crate::change::Does::Write {
+                onto: crate::change::Onto::Journal,
+                ..
+            } => "j",
+            crate::change::Does::Write {
+                onto: crate::change::Onto::Main,
+                ..
+            } => "m",
+            crate::change::Does::Write {
+                onto: crate::change::Onto::Log,
+                ..
+            } => "l",
+            crate::change::Does::Sync(crate::change::Onto::Journal) => "J",
+            crate::change::Does::Sync(crate::change::Onto::Main) => "M",
+            crate::change::Does::Sync(crate::change::Onto::Log) => "L",
+            crate::change::Does::Truncate { .. } => "t",
+            crate::change::Does::Remove(_) => "r",
+        });
+    }
+    out
+}
+
+#[test]
+fn what_a_transaction_over_a_cache_too_small_for_it_writes() {
+    let mut writer = crate::change::Writer::new(1024, 0, crate::header::Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a)").unwrap();
+    for _ in 0..40 {
+        writer
+            .run(b"INSERT INTO t VALUES(randomblob(900))")
+            .unwrap();
+    }
+    let _ = writer.did();
+    // A cache of two pages writes a page out for every two the
+    // transaction opens, and holds the journal on the disk before it.
+    writer.caching(2);
+    writer.run(b"BEGIN").unwrap();
+    writer.run(b"UPDATE t SET a=randomblob(900)").unwrap();
+    writer.run(b"COMMIT").unwrap();
+    let did = shown_did(&writer.did());
+    let syncs = did.matches('J').count();
+    assert!(syncs > 2, "one sync per spill and two at the commit: {did}");
+    assert!(
+        did.contains("jJm"),
+        "a spill writes the file after it: {did}"
+    );
+    // The rows the transaction wrote stand, and the file holds no page of
+    // the transaction after a rollback.
+    let rows = crate::db::Database::open(&writer.written())
+        .unwrap()
+        .query(b"SELECT count(*) FROM t")
+        .unwrap();
+    assert_eq!(rows.rows, [[crate::value::Value::Int(40)]]);
+    let before = writer.written();
+    writer.run(b"BEGIN").unwrap();
+    writer.run(b"UPDATE t SET a=randomblob(900)").unwrap();
+    let _ = writer.did();
+    writer.run(b"ROLLBACK").unwrap();
+    let did = shown_did(&writer.did());
+    assert!(
+        did.contains("mM"),
+        "a rollback writes the pages back: {did}"
+    );
+    assert_eq!(writer.written(), before);
+    // The journal mode says what the rollback leaves of the journal, as
+    // it says what a commit leaves of it.
+    for (mode, held) in [
+        (crate::journal::Mode::Truncate, "mMt"),
+        (crate::journal::Mode::Persist, "mMj"),
+    ] {
+        writer.journalling(mode, 1, 512);
+        writer.run(b"BEGIN").unwrap();
+        writer.run(b"UPDATE t SET a=randomblob(900)").unwrap();
+        let _ = writer.did();
+        writer.run(b"ROLLBACK").unwrap();
+        let did = shown_did(&writer.did());
+        assert!(did.contains(held), "{did}");
+    }
+}

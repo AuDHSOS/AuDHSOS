@@ -86,6 +86,15 @@ pub struct Pages {
     /// sets and which a connection told nothing leaves at the most a
     /// page number counts to.
     most: u32,
+    /// How many pages the cache holds before it writes one out, which
+    /// `sqlite3PcacheSetCachesize` holds the cache to. No count where the
+    /// caller named none, and the transaction then writes every page at
+    /// its commit.
+    caching: Option<usize>,
+    /// How many pages of the journal each spill of this transaction had
+    /// written when it ran, in the order the spills ran, which says which
+    /// records one spill wrote.
+    spills: Vec<usize>,
 }
 
 /// One page as the statement found it: what it held, what the commit
@@ -181,6 +190,8 @@ impl Pages {
             freed: alloc::vec![false],
             origin: 1,
             journalled: Vec::new(),
+            caching: None,
+            spills: Vec::new(),
             list: (0, 0),
             freelist_count: 0,
             vacuum: false,
@@ -239,6 +250,8 @@ impl Pages {
             freed: alloc::vec![false; count],
             origin,
             journalled: Vec::new(),
+            caching: None,
+            spills: Vec::new(),
             list: (header.freelist, header.freelist_pages),
             freelist_count: header.freelist_pages,
             // Section 1.6: a file keeps pointer maps where the header
@@ -878,6 +891,7 @@ impl Pages {
         self.started.fill(None);
         self.freed.fill(false);
         self.journalled.clear();
+        self.spills.clear();
         self.origin = self.count();
         self.list = (self.freelist, self.freelist_count);
     }
@@ -905,6 +919,7 @@ impl Pages {
         self.skipped.fill(None);
         self.freed.fill(false);
         self.journalled.clear();
+        self.spills.clear();
     }
 
     /// Begins one statement of a transaction, which is the statement
@@ -968,7 +983,70 @@ impl Pages {
         // to the pages it held.
         if first && number <= self.origin {
             self.journalled.push(number);
+            self.fills();
         }
+    }
+
+    /// Records a spill where the pages the cache holds since the last one
+    /// reach the count the cache is held to, which is `pagerStress` of
+    /// `research/sqlite/src/pager.c` writing a page out because the cache
+    /// is full.
+    ///
+    /// `syncJournal` holds the journal on the disk before such a page
+    /// reaches the file, so one spill stands for the records written
+    /// since the spill before it and for the one sync that holds them.
+    fn fills(&mut self) {
+        let Some(caching) = self.caching else {
+            return;
+        };
+        let held = self.spills.last().copied().unwrap_or(0);
+        if self.journalled.len().saturating_sub(held) >= caching {
+            self.spills.push(self.journalled.len());
+        }
+    }
+
+    /// How many pages the cache holds before it writes one out.
+    pub const fn caching(&mut self, pages: usize) {
+        self.caching = Some(pages);
+    }
+
+    /// The pages every spill of this transaction wrote into the file, in
+    /// the order their numbers run, which a rollback writes back out of
+    /// the journal.
+    #[must_use]
+    pub fn spilled(&self) -> Vec<u32> {
+        let most = self.spills.last().copied().unwrap_or(0);
+        let mut out: Vec<u32> = self.journalled.iter().copied().take(most).collect();
+        out.sort_unstable();
+        out
+    }
+
+    /// The pages each spill of this transaction wrote into the file, one
+    /// run per spill, in the order the spills ran.
+    ///
+    /// Reading them costs O(n) in the pages the transaction journalled.
+    #[must_use]
+    pub fn spilling(&self) -> Vec<Vec<u32>> {
+        let mut out = Vec::new();
+        let mut held = 0_usize;
+        for most in &self.spills {
+            out.push(
+                self.journalled
+                    .get(held..*most)
+                    .unwrap_or_default()
+                    .to_vec(),
+            );
+            held = *most;
+        }
+        out
+    }
+
+    /// What one page held when the transaction began, and nothing where
+    /// the transaction has not opened it.
+    #[must_use]
+    pub fn before(&self, number: u32) -> Option<&[u8]> {
+        let at = size(u64::from(number)).saturating_sub(1);
+        self.before.get(at)?.as_deref()
     }
 
     /// The page at `at` as the statement found it, kept where the

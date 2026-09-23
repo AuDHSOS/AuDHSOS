@@ -524,6 +524,9 @@ Size: S.
 59. The command `sqlite` names a connection as `sqlite3` does, which
     `Sqlite3_Init` of `research/sqlite/src/tclsqlite.c:4447` keeps for the
     files written for the library of version two.
+60. The writer of a `crashsql` child holds its cache to ten pages, which
+    `crashsql` sets through `btree_set_cache_size`, so the transaction
+    spills as the child's does.
 
 ### Produces
 

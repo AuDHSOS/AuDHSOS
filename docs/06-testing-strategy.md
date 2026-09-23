@@ -7299,3 +7299,12 @@ Document 16 step Q8.
   under each of its two names and over the temp schema's own table, and
   an `UPDATE` of it under `PRAGMA writable_schema` read back out of the
   file.
+
+### 6.6.317 A transaction over a cache too small for it (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A transaction of forty pages under a cache of two: the syncs the spills
+  hold the journal with, the file written after each of them, the rows the
+  commit leaves, and a rollback that writes the pages back under each of
+  the three journal modes that keep a journal.

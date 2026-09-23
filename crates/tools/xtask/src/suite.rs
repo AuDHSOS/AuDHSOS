@@ -1758,6 +1758,10 @@ impl Session {
         let mut writer = files.opened()?;
         writer.defines(DEFINED);
         writer.groups(GROUPED);
+        // `crashsql` of `research/sqlite/test/tester.tcl` holds the cache
+        // of the child to ten pages, so the transaction writes pages into
+        // the file before it commits.
+        writer.caching(10);
         ticked(&mut writer, self.clock);
         let mut did: Vec<Does> = Vec::new();
         for statement in statements(sql) {
