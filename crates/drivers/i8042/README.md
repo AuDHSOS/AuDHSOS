@@ -14,3 +14,6 @@ came from is the `AUX` bit of the status register, read together with the
 byte, so one thread drains the buffer and hands each byte to the decoder
 the bit names. The feature `test-doubles` adds the scripted implementation
 of `Ports` the tests use.
+
+The port adapter pauses for one millisecond after each unsuccessful poll.
+`MAX_POLLS` pauses give a device about one second to answer.

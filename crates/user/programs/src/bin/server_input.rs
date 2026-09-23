@@ -49,7 +49,9 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use audhsos_abi::layout::{MAX_MESSAGE_WORDS, PAGE_SIZE};
 use audhsos_abi::{Error, Handle};
-use driver_i8042::controller::{COMMAND_PORT, Controller, DATA_PORT, Devices, Ports};
+use driver_i8042::controller::{
+    COMMAND_PORT, Controller, DATA_PORT, Devices, POLL_PAUSE_US, Ports,
+};
 use server_input::request::ReceivedHandles;
 use server_input::service::{Line, Lines, service, unpack};
 use server_input::state::{Clients, Input};
@@ -672,6 +674,20 @@ impl Ports for PortRegisters {
 
     fn read_status(&mut self) -> u8 {
         self.read(u64::from(COMMAND_PORT))
+    }
+
+    fn pause(&mut self) {
+        let Ok(start) = self.gate.clock_now() else {
+            self.gate.thread_exit()
+        };
+        let deadline = start.saturating_add(POLL_PAUSE_US);
+        loop {
+            match self.gate.clock_now() {
+                Ok(now) if now >= deadline => break,
+                Ok(_) => core::hint::spin_loop(),
+                Err(_) => self.gate.thread_exit(),
+            }
+        }
     }
 
     fn write_data(&mut self, value: u8) {

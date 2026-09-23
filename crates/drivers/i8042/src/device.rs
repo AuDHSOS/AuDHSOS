@@ -63,7 +63,7 @@ pub const MAX_RESENDS: u32 = 3;
 /// which is what a machine without a keyboard looks like.
 pub fn start_keyboard<P: Ports>(controller: &mut Controller<P>) -> Result<(), Error> {
     keyboard_command(controller, RESET)?;
-    expect(controller, RESET_PASSED)?;
+    expect(controller, RESET_PASSED, false)?;
     keyboard_command(controller, SET_SCANCODE_SET)?;
     keyboard_command(controller, SCANCODE_SET_2)?;
     keyboard_command(controller, ENABLE_REPORTING)
@@ -77,16 +77,16 @@ pub fn start_keyboard<P: Ports>(controller: &mut Controller<P>) -> Result<(), Er
 /// As [`start_keyboard`].
 pub fn start_mouse<P: Ports>(controller: &mut Controller<P>) -> Result<u8, Error> {
     mouse_command(controller, RESET)?;
-    expect(controller, RESET_PASSED)?;
+    expect(controller, RESET_PASSED, true)?;
     // The identifier a reset answers with, which is zero for every mouse:
     // the wheel is asked for below and not here.
-    controller.read()?;
+    controller.read_from(true)?;
     for rate in WHEEL_KNOCK {
         mouse_command(controller, SET_SAMPLE_RATE)?;
         mouse_command(controller, rate)?;
     }
     mouse_command(controller, GET_ID)?;
-    let id = controller.read()?;
+    let id = controller.read_from(true)?;
     mouse_command(controller, ENABLE_REPORTING)?;
     Ok(id)
 }
@@ -100,7 +100,7 @@ pub fn keyboard_command<P: Ports>(controller: &mut Controller<P>, byte: u8) -> R
     let mut tries = 0u32;
     loop {
         controller.write(byte)?;
-        match controller.read()? {
+        match controller.read_from(false)? {
             ACK => return Ok(()),
             RESEND if tries < MAX_RESENDS => tries = tries.saturating_add(1),
             other => return Err(Error::NotAcknowledged(other)),
@@ -117,7 +117,7 @@ pub fn mouse_command<P: Ports>(controller: &mut Controller<P>, byte: u8) -> Resu
     let mut tries = 0u32;
     loop {
         controller.write_aux(byte)?;
-        match controller.read()? {
+        match controller.read_from(true)? {
             ACK => return Ok(()),
             RESEND if tries < MAX_RESENDS => tries = tries.saturating_add(1),
             other => return Err(Error::NotAcknowledged(other)),
@@ -126,8 +126,8 @@ pub fn mouse_command<P: Ports>(controller: &mut Controller<P>, byte: u8) -> Resu
 }
 
 /// Reads one byte and insists it is `wanted`.
-fn expect<P: Ports>(controller: &mut Controller<P>, wanted: u8) -> Result<(), Error> {
-    let answer = controller.read()?;
+fn expect<P: Ports>(controller: &mut Controller<P>, wanted: u8, aux: bool) -> Result<(), Error> {
+    let answer = controller.read_from(aux)?;
     if answer == wanted {
         return Ok(());
     }

@@ -151,6 +151,10 @@ impl Ports for ScriptedDevice {
         self.ports.read_status()
     }
 
+    fn pause(&mut self) {
+        self.ports.pause();
+    }
+
     fn write_data(&mut self, value: u8) {
         self.ports.write_data(value);
     }

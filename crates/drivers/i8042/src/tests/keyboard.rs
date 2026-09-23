@@ -95,6 +95,26 @@ fn every_key_of_the_table_is_found_by_the_bytes_that_spell_it() {
 }
 
 #[test]
+fn lookup_tables_cover_every_scancode_in_each_prefix() {
+    for scan in u8::MIN..=u8::MAX {
+        let plain = KeyCode::ALL
+            .iter()
+            .copied()
+            .find(|key| key.encoding() == Encoding::Plain(scan));
+        let extended = KeyCode::ALL
+            .iter()
+            .copied()
+            .find(|key| key.encoding() == Encoding::Extended(scan));
+        assert_eq!(KeyCode::from_set2(scan), plain, "plain {scan:#04x}");
+        assert_eq!(
+            KeyCode::from_set2_extended(scan),
+            extended,
+            "extended {scan:#04x}"
+        );
+    }
+}
+
+#[test]
 fn a_word_typed_and_let_go_of_comes_out_in_the_order_it_was_typed() {
     let typed = [0x1C, 0xF0, 0x1C, 0x1B, 0xF0, 0x1B, 0x23, 0xF0, 0x23];
     assert_eq!(
