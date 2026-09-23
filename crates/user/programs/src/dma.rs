@@ -201,8 +201,17 @@ impl QueueMemory for Dma<'_> {
         region_mut(self.bytes, AVAILABLE_AT, USED_AT)
     }
 
-    fn used_ring(&self) -> &[u8] {
-        region(self.bytes, USED_AT, SLOTS_AT)
+    fn read_used(&self, at: usize, out: &mut [u8]) -> Result<(), virtio_queue::error::QueueError> {
+        let used = region(self.bytes, USED_AT, SLOTS_AT);
+        let bytes = used.get(at..at.saturating_add(out.len())).ok_or(
+            virtio_queue::error::QueueError::Region {
+                area: virtio_queue::error::Area::UsedRing,
+                needed: at.saturating_add(out.len()),
+                given: used.len(),
+            },
+        )?;
+        out.copy_from_slice(bytes);
+        Ok(())
     }
 
     /// The ordering virtio 2.7.13.3.1 and 2.7.13.4.1 require.

@@ -23,7 +23,7 @@
 #![no_main]
 #![forbid(unsafe_code)]
 
-// The package holds three programs and each uses a different part of what
+// The package holds four programs and each uses a different part of what
 // it depends on; these are the crates this one does not.
 use audhsos_time as _;
 use audhsos_x509 as _;

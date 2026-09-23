@@ -11,7 +11,7 @@ and gains the TLS handshake in Phase 15.
 They are a package of their own and not four more binaries of
 `user-programs` for one reason: a binary of this workspace names every
 dependency of its package, so a package is the unit that decides what a
-program carries. The network stack and the driver under these two are
+program carries. The network stack and the driver under this package are
 megabytes of an image every program of the volume is read out of one
 message at a time, and a program that draws a rectangle has no use for
 them (D-97's rule, at the one place it splits).

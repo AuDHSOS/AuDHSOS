@@ -30,7 +30,7 @@ fn an_area_of_no_buffers_says_so() {
     assert!(empty.is_empty());
     assert_eq!(empty.count(), 0);
     assert_eq!(empty.address(0), None);
-    assert_eq!(empty.bytes(0), None);
+    assert_eq!(empty.copy(0, 0, &mut [0]), None);
     let held = RamFrames::new(2, 64, 0x1000);
     assert!(!held.is_empty());
     assert_eq!(held.address(1), Some(0x1040));

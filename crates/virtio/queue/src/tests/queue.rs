@@ -461,10 +461,7 @@ fn the_no_notify_flag_stops_notifications_and_clearing_it_resumes_them() {
 
     memory.set_no_notify(true);
     assert!(!queue.should_notify(&device, &memory).expect("read"));
-    assert_eq!(
-        crate::memory::read_u16(memory.used_ring(), Area::UsedRing, 0),
-        Ok(USED_F_NO_NOTIFY)
-    );
+    assert_eq!(memory.read_used_u16(0), Ok(USED_F_NO_NOTIFY));
 
     memory.set_no_notify(false);
     assert!(queue.should_notify(&device, &memory).expect("read"));

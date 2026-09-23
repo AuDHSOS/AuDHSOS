@@ -75,12 +75,10 @@ fuzz_support::fuzz_target!(|bytes: &[u8]| {
             let header = 12usize;
             let len = usize::try_from(reported).unwrap_or(0) - header;
             assert_eq!(frame.len(), len, "the frame is not what was reported");
-            let bytes = area.bytes(0).expect("the buffer is there");
-            assert_eq!(
-                frame,
-                bytes.get(header..header + len).expect("inside the buffer"),
-                "the frame is not the bytes of the buffer"
-            );
+            let mut copied = [0u8; 64];
+            let expected = copied.get_mut(..len).expect("inside the buffer");
+            area.copy(0, header, expected).expect("the buffer is there");
+            assert_eq!(frame, expected, "the frame is not the bytes of the buffer");
         }
         Ok(None) => panic!("the used element was not seen"),
         // A refusal of the driver's own puts the buffer back; a refusal of

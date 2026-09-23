@@ -20,7 +20,7 @@
 #![no_main]
 #![forbid(unsafe_code)]
 
-// The package holds three programs and each uses a different part of what
+// The package holds four programs and each uses a different part of what
 // it depends on; these are the crates this one does not.
 use audhsos_encoding as _;
 use audhsos_ssh as _;

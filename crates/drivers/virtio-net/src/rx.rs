@@ -180,12 +180,12 @@ fn take(
             capacity: into.len(),
         });
     }
-    let bytes = frames.bytes(index).ok_or(NetError::Buffer(index))?;
-    let frame = bytes
-        .get(HEADER_LEN..HEADER_LEN.saturating_add(len))
+    frames
+        .copy(
+            index,
+            HEADER_LEN,
+            into.get_mut(..len).ok_or(NetError::Buffer(index))?,
+        )
         .ok_or(NetError::Buffer(index))?;
-    into.get_mut(..len)
-        .ok_or(NetError::Buffer(index))?
-        .copy_from_slice(frame);
     Ok(len)
 }

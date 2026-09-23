@@ -76,8 +76,8 @@ pub const fn used_ring_bytes(size: u16) -> usize {
 /// The driver writes the descriptor table and the available ring; the
 /// device writes the used ring, which is why it has no mutable accessor.
 /// The regions are ordinary memory the device reaches by bus master
-/// access, not a register window: an implementation hands over the bytes
-/// and this crate reads and writes the structures in them.
+/// access, not a register window: an implementation supplies slices for
+/// driver-written regions and copies device-written values on request.
 pub trait QueueMemory {
     /// The descriptor table, at least [`descriptor_table_bytes`] long.
     fn descriptor_table(&self) -> &[u8];
@@ -89,8 +89,36 @@ pub trait QueueMemory {
     /// [`available_ring_bytes`] long.
     fn available_ring_mut(&mut self) -> &mut [u8];
 
-    /// The used ring, at least [`used_ring_bytes`] long.
-    fn used_ring(&self) -> &[u8];
+    /// Copies bytes of the device-written used ring into `out`.
+    ///
+    /// Shared-memory adapters must use volatile reads.
+    ///
+    /// # Errors
+    ///
+    /// [`QueueError::Region`] when the requested bytes exceed the ring.
+    fn read_used(&self, at: usize, out: &mut [u8]) -> Result<(), QueueError>;
+
+    /// Reads one aligned little-endian word from the used ring.
+    ///
+    /// # Errors
+    ///
+    /// [`QueueError::Region`] when the word exceeds the ring.
+    fn read_used_u16(&self, at: usize) -> Result<u16, QueueError> {
+        let mut bytes = [0; 2];
+        self.read_used(at, &mut bytes)?;
+        Ok(u16::from_le_bytes(bytes))
+    }
+
+    /// Reads one aligned little-endian double word from the used ring.
+    ///
+    /// # Errors
+    ///
+    /// [`QueueError::Region`] when the double word exceeds the ring.
+    fn read_used_u32(&self, at: usize) -> Result<u32, QueueError> {
+        let mut bytes = [0; 4];
+        self.read_used(at, &mut bytes)?;
+        Ok(u32::from_le_bytes(bytes))
+    }
 
     /// Orders the accesses before this call against the accesses after
     /// it, as seen by the device.

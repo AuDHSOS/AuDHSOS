@@ -368,7 +368,12 @@ impl RamFrames {
     /// into it.
     #[must_use]
     pub fn buffer(&self, index: u16) -> &[u8] {
-        self.bytes(index).unwrap_or(&[])
+        self.at(index)
+            .and_then(|at| {
+                self.bytes
+                    .get(at..at.saturating_add(usize::try_from(self.stride).ok()?))
+            })
+            .unwrap_or(&[])
     }
 }
 
@@ -386,10 +391,17 @@ impl Frames for RamFrames {
         self.base.checked_add(u64::try_from(at).ok()?)
     }
 
-    fn bytes(&self, index: u16) -> Option<&[u8]> {
+    fn copy(&self, index: u16, offset: usize, out: &mut [u8]) -> Option<()> {
         let at = self.at(index)?;
-        let end = at.checked_add(usize::try_from(self.stride).ok()?)?;
-        self.bytes.get(at..end)
+        let end = offset.checked_add(out.len())?;
+        if end > usize::try_from(self.stride).ok()? {
+            return None;
+        }
+        out.copy_from_slice(
+            self.bytes
+                .get(at.checked_add(offset)?..at.checked_add(end)?)?,
+        );
+        Some(())
     }
 
     fn bytes_mut(&mut self, index: u16) -> Option<&mut [u8]> {

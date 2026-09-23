@@ -29,7 +29,7 @@
 #![allow(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
-// The package holds three programs and each uses a different part of what
+// The package holds four programs and each uses a different part of what
 // it depends on; these are the crates this one does not.
 use audhsos_encoding as _;
 use audhsos_ssh as _;
@@ -52,6 +52,7 @@ use server_net::server::{Rings, Server};
 use server_net::sockets::MAX_SOCKETS;
 use user_net_programs::net_dma::{NetDma, QUEUE_SIZE, REGION_BYTES as DMA_BYTES};
 use user_net_programs::net_registers::{NET_DMA, NET_WINDOW, Window};
+use user_net_programs::reseed::ReseedCounter;
 use user_programs::client::{allocate, register, write_line};
 use user_programs::mapping::Mapping;
 use user_programs::serve::{Serving, receive};
@@ -154,16 +155,25 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
         Err(error) => stop(&mut gate, voice, error),
     };
     let physical = windows.physical;
-    // SAFETY: every mapping stands for the rest of this program — none is
-    // unmapped and `main` does not return — each is memory of this process
-    // alone, and the values built here are the only ones that reach those
-    // bytes.
+    // SAFETY: the mappings remain live; only this process accesses the
+    // registers through Window.
     let mut registers = Window::new(unsafe { windows.registers.bytes() }, given.places);
-    // SAFETY: as above.
-    let Some(mut dma) = NetDma::new(unsafe { windows.region.bytes() }, physical) else {
+    // SAFETY: the mapping remains live. The device writes the used rings
+    // and receive area, which NetDma keeps as raw pointers and reads
+    // through volatile loads. Only this process writes the descriptor
+    // tables, available rings and transmit area.
+    let Some(mut dma) = (unsafe {
+        NetDma::new(
+            core::ptr::without_provenance_mut(
+                usize::try_from(windows.region.address()).unwrap_or(0),
+            ),
+            usize::try_from(windows.region.len()).unwrap_or(0),
+            physical,
+        )
+    }) else {
         stop(&mut gate, voice, Error::Unaligned)
     };
-    // SAFETY: as above.
+    // SAFETY: the mapping remains live and only this process accesses it.
     let buffers = unsafe { windows.buffers.bytes() };
     let mut pages = [None; MAX_SOCKETS];
     for (slot, mapping) in pages.iter_mut().zip(windows.rings.iter()) {
@@ -339,6 +349,7 @@ fn serve(
 ) -> Result<(), Error> {
     let mut serving = Serving::default();
     let mut reported = false;
+    let mut messages = ReseedCounter::default();
     // One round before the first message: the address configuration
     // client has a discover to send, and nothing has asked this server
     // for anything yet.
@@ -361,6 +372,9 @@ fn serve(
         carried.give_up(&[], |handle| {
             let _closed = gate.handle_close(handle);
         });
+        if messages.due() {
+            *generator = seed(gate)?;
+        }
         // The buffer that carries a reply is the buffer a line to the
         // console goes through, so the line is written after the request
         // is read and before the reply is put in: one is reported a round
@@ -633,13 +647,8 @@ fn bring_up(
 
 /// The entropy source of this program, which never delivers.
 ///
-/// The seed is drawn once at startup through `random_bytes`, which is what
-/// 13.4 asks of a process, and the generator produces everything else. A
-/// reseed is due after a mebibyte of drawn bytes; a handshake, a lease and
-/// an ephemeral port together are a few hundred, so this server never
-/// reaches one. The source answers nothing because the system call behind
-/// it needs the gate of the thread, which a source held inside the
-/// generator does not have.
+/// The server replaces the generator from `random_bytes` every 65,536
+/// messages. This source cannot call the gate held by the serving thread.
 struct Seed;
 
 impl crypto_rng::Entropy for Seed {

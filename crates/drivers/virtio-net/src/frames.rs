@@ -5,10 +5,9 @@
 //! which this crate reaches them.
 //!
 //! The buffers are ordinary memory the device reaches by bus master
-//! access, as the rings are, and the crate reaches them the way it reaches
-//! the rings: an implementation hands over the bytes and the address the
-//! device knows them by, and this crate writes the header and the frame
-//! into them.
+//! access, as the rings are. An implementation supplies the device address,
+//! copies received bytes into driver memory, and supplies mutable bytes for
+//! transmit buffers.
 //!
 //! One buffer holds one whole frame behind the header, which is what
 //! refusing `VIRTIO_NET_F_MRG_RXBUF` buys.
@@ -32,8 +31,9 @@ pub trait Frames {
     /// The address the device reads or writes buffer `index` at.
     fn address(&self, index: u16) -> Option<u64>;
 
-    /// The bytes of buffer `index`.
-    fn bytes(&self, index: u16) -> Option<&[u8]>;
+    /// Copies `out` from buffer `index`, beginning at `at`.
+    /// Shared-memory adapters must use volatile reads.
+    fn copy(&self, index: u16, at: usize, out: &mut [u8]) -> Option<()>;
 
     /// The same, for writing.
     fn bytes_mut(&mut self, index: u16) -> Option<&mut [u8]>;
