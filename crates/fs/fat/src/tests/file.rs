@@ -34,6 +34,28 @@ fn what_is_written_is_what_is_read_back() {
 }
 
 #[test]
+fn an_entry_already_found_opens_without_a_second_name_lookup() {
+    let mut fs = volume();
+    let root = fs.root();
+    let name = Name::new("FOUND.BIN").expect("name");
+    let made = fs.create(root, &name, moment()).expect("create");
+    let entry = fs.find(root, &name).expect("find").expect("entry");
+    fs.remove(root, &name).expect("remove");
+    assert_eq!(fs.open(root, &name), Err(Error::NotFound));
+    assert_eq!(fs.open_entry(&entry), Ok(made));
+}
+
+#[test]
+fn a_directory_entry_cannot_open_as_a_file() {
+    let mut fs = volume();
+    let root = fs.root();
+    let name = Name::new("SUB").expect("name");
+    fs.create_dir(root, &name, moment()).expect("create");
+    let entry = fs.find(root, &name).expect("find").expect("entry");
+    assert_eq!(fs.open_entry(&entry), Err(Error::Kind));
+}
+
+#[test]
 fn a_read_at_an_offset_and_across_a_cluster_boundary_reads_the_right_bytes() {
     let mut fs = volume();
     let root = fs.root();

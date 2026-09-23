@@ -85,6 +85,12 @@ pub struct File {
 }
 
 impl File {
+    /// The directory slot that describes the file.
+    #[must_use]
+    pub const fn location(&self) -> Location {
+        self.location
+    }
+
     /// The size in bytes.
     #[must_use]
     pub const fn size(&self) -> u32 {
@@ -439,6 +445,15 @@ impl<D: BlockDevice> FileSystem<D> {
     /// [`Error::Kind`] where it is a directory.
     pub fn open(&self, dir: Dir, name: &Name) -> Result<File, Error> {
         let entry = self.find(dir, name)?.ok_or(Error::NotFound)?;
+        self.open_entry(&entry)
+    }
+
+    /// Opens a file from an entry already found in this volume.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Kind`] where the entry is a directory.
+    pub const fn open_entry(&self, entry: &Entry) -> Result<File, Error> {
         if entry.is_directory() {
             return Err(Error::Kind);
         }

@@ -192,7 +192,7 @@ AuDHSOS/
 | `server-console` | u2 | all | no | yes | `audhsos-collections`, `driver-uart16550` |
 | `server-display` | u2 | all | no | yes | `audhsos-abi`, `audhsos-collections`, `gfx`, `user-proto` |
 | `server-input` | u2 | all | no | yes | `audhsos-abi`, `audhsos-collections`, `driver-i8042`, `user-proto`; feature `test-doubles` |
-| `server-fs` | u2 | all | no | yes | `audhsos-abi`, `audhsos-time`, `fs-fat`, `fs-gpt`, `user-proto`; `test-support` as a dev-dependency |
+| `server-fs` | u2 | all | no | yes | `audhsos-abi`, `audhsos-time`, `fs-fat`, `fs-gpt`, `user-proto`; `fs-fat` with `test-doubles` and `test-support` as dev-dependencies |
 | `server-net` | u2 | all | no | yes | `audhsos-abi`, `audhsos-time`, `crypto-rng`, `net-dns`, `net-stack`, `net-tcp`, `net-wire`, `user-proto`; `net-dhcp`, `net-eth`, `net-ip`, `net-udp` and `crypto-rng` with `test-doubles` as dev-dependencies, for the station the tests answer with. The device is the binary's: this crate takes frames in and hands frames out |
 | `user-programs` | u3 | `x86_64-unknown-none` | allowlisted | e2e in QEMU | every server logic crate but `server-net`, `app-canvas`, `audhsos-abi`, `audhsos-collections`, `audhsos-time`, `driver-i8042`, `driver-uart16550`, `driver-virtio-blk`, `fs-fat`, `gfx`, `pci`, `virtio-queue`, `user-rt`, `user-proto`, `user-loader`, `user-sys-x86_64` |
 | `user-net-programs` | u3 | `x86_64-unknown-none` | allowlisted | e2e in QEMU | `audhsos-abi`, `audhsos-encoding`, `audhsos-ssh`, `audhsos-time`, `crypto-rng`, `driver-virtio-net`, `net-http`, `net-stack`, `net-wire`, `server-net`, `user-programs`, `user-proto`, `user-rt`, `user-sys-x86_64`, `virtio-queue` |

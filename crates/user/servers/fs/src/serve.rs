@@ -211,12 +211,15 @@ fn open<D: BlockDevice>(
             handed: START,
         }
     } else {
-        Opened::File {
-            volume,
-            file: fs.open(dir, &wanted).map_err(refusal)?,
-            parent: dir,
-            name: wanted,
-        }
+        let file = fs.open_entry(&entry).map_err(refusal)?;
+        let handle = clients
+            .insert_file(badge, volume, file, dir, wanted)
+            .ok_or(Error::OutOfHandles)?;
+        return Ok(ProtoOpened {
+            file: handle,
+            size: entry.size,
+            directory: false,
+        });
     };
     let file = clients.insert(badge, opened).ok_or(Error::OutOfHandles)?;
     Ok(ProtoOpened {
@@ -239,6 +242,9 @@ fn create<D: BlockDevice>(
     let (volume, dir) = self::directory(volumes, clients, badge, parent)?;
     let fs = volumes.get_mut(volume).ok_or(Error::AccessDenied)?;
     let wanted = name_of(name)?;
+    if !clients.has_room(badge) {
+        return Err(Error::OutOfHandles);
+    }
     let opened = if directory {
         let made = fs.create_dir(dir, &wanted, now).map_err(refusal)?;
         Opened::Dir {
@@ -248,12 +254,10 @@ fn create<D: BlockDevice>(
             handed: START,
         }
     } else {
-        Opened::File {
-            volume,
-            file: fs.create(dir, &wanted, now).map_err(refusal)?,
-            parent: dir,
-            name: wanted,
-        }
+        let file = fs.create(dir, &wanted, now).map_err(refusal)?;
+        return clients
+            .insert_file(badge, volume, file, dir, wanted)
+            .ok_or(Error::OutOfHandles);
     };
     clients.insert(badge, opened).ok_or(Error::OutOfHandles)
 }
@@ -270,9 +274,11 @@ fn read<D: BlockDevice>(
     let which = volume_of(clients, badge, handle)?;
     let fs = volumes.get(which).ok_or(Error::NotFound)?;
     let wanted = usize::try_from(len).unwrap_or(MAX_DATA).min(MAX_DATA);
-    let Opened::File { file, .. } = clients.get(badge, handle).ok_or(Error::InvalidHandle)? else {
-        return Err(Error::WrongObjectType);
+    let shared = match clients.get(badge, handle).ok_or(Error::InvalidHandle)? {
+        Opened::File { shared, .. } => *shared,
+        Opened::Dir { .. } => return Err(Error::WrongObjectType),
     };
+    let file = clients.file_mut(shared).ok_or(Error::InvalidHandle)?;
     let mut into = [0u8; MAX_DATA];
     let taken = fs
         .read(file, offset, into.get_mut(..wanted).unwrap_or(&mut []))
@@ -291,9 +297,11 @@ fn write<D: BlockDevice>(
 ) -> Result<u32, Error> {
     let which = volume_of(clients, badge, handle)?;
     let fs = volumes.get_mut(which).ok_or(Error::AccessDenied)?;
-    let Opened::File { file, .. } = clients.get(badge, handle).ok_or(Error::InvalidHandle)? else {
-        return Err(Error::WrongObjectType);
+    let shared = match clients.get(badge, handle).ok_or(Error::InvalidHandle)? {
+        Opened::File { shared, .. } => *shared,
+        Opened::Dir { .. } => return Err(Error::WrongObjectType),
     };
+    let file = clients.file_mut(shared).ok_or(Error::InvalidHandle)?;
     let taken = fs.write(file, offset, data.as_bytes()).map_err(refusal)?;
     u32::try_from(taken).map_err(|_| Error::InvalidArgument)
 }
@@ -329,6 +337,20 @@ fn read_dir<D: BlockDevice>(
             Opened::File { .. } => return Err(Error::WrongObjectType),
         },
     };
+    let result = next_dir_entry(fs, dir, walk, handed, cursor);
+    if matches!(handle, ROOT | BOOT) && matches!(result, Ok(None)) {
+        let _cleared = clients.clear_root(badge, usize::from(handle == BOOT));
+    }
+    result
+}
+
+fn next_dir_entry<D: BlockDevice>(
+    fs: &FileSystem<D>,
+    dir: Dir,
+    walk: &mut fs_fat::Entries,
+    handed: &mut u64,
+    cursor: u64,
+) -> Result<Option<DirEntry>, Error> {
     if *handed != cursor {
         *walk = fs.entries(dir);
         *handed = START;
@@ -406,12 +428,22 @@ fn remove<D: BlockDevice>(
     let (volume, dir) = directory(volumes, clients, badge, parent)?;
     let fs = volumes.get_mut(volume).ok_or(Error::AccessDenied)?;
     let wanted = name_of(name)?;
+    if clients.has_open_file(volume, dir, wanted) {
+        return Err(Error::Busy);
+    }
     fs.remove(dir, &wanted).map_err(refusal)?;
     Ok(())
 }
 
 /// `close`: give a file handle back.
 fn close(clients: &mut Clients, badge: u64, handle: u32) -> Result<(), Error> {
+    if matches!(handle, ROOT | BOOT) {
+        return if clients.clear_root(badge, usize::from(handle == BOOT)) {
+            Ok(())
+        } else {
+            Err(Error::InvalidHandle)
+        };
+    }
     if clients.remove(badge, handle) {
         return Ok(());
     }

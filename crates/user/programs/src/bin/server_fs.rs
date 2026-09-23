@@ -114,7 +114,7 @@ fn main(gate: Gate, startup: Startup) -> ! {
         let _registered = register(&mut open, names, NAME, endpoint);
     }
     let (Some(process), Some(memory)) = (startup.own_process, startup.memory_server) else {
-        stop(&shared, voice, Error::AccessDenied)
+        stop(&shared, voice, Error::NotFound)
     };
 
     let mut devices: ArrayVec<Given, MAX_BLOCK_DEVICES> = ArrayVec::new();
