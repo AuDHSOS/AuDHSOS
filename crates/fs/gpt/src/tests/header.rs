@@ -16,7 +16,7 @@ use crate::entry::ENTRY_LEN;
 use crate::error::Error;
 use crate::header::{
     ARRAY_SECTORS, ENTRY_COUNT, FIRST_USABLE, HEADER_LBA, HEADER_LEN, HEADER_REVISION,
-    HEADER_SIGNATURE, Header, MIN_SECTORS, last_usable,
+    HEADER_SIGNATURE, Header, MAX_ENTRY_COUNT, MIN_SECTORS, last_usable,
 };
 
 use super::support::{DISK_GUID, SECTORS};
@@ -157,6 +157,39 @@ fn a_usable_range_that_is_empty_is_refused() {
         parse(&sector),
         Err(Error::Usable(FIRST_USABLE, FIRST_USABLE - 1))
     );
+}
+
+#[test]
+fn a_usable_range_that_reaches_the_last_block_is_refused() {
+    for last in [BLOCKS - 1, BLOCKS, u64::MAX] {
+        assert_eq!(
+            parse(&patched(48, &last.to_le_bytes())),
+            Err(Error::Usable(FIRST_USABLE, last)),
+            "{last}"
+        );
+    }
+    assert!(parse(&patched(48, &(BLOCKS - 2).to_le_bytes())).is_ok());
+    assert!(Header::parse(&header().write(), HEADER_LBA, 0).is_err());
+}
+
+#[test]
+fn an_entry_count_above_the_maximum_is_refused() {
+    // The usable range starts behind an array of one entry above the
+    // maximum, so only the count decides.
+    let first = 3 + u64::from(MAX_ENTRY_COUNT) * ENTRY_LEN as u64 / SECTOR as u64;
+    let with_count = |count: u32| {
+        let mut sector = header().write();
+        sector[40..48].copy_from_slice(&first.to_le_bytes());
+        sector[80..84].copy_from_slice(&count.to_le_bytes());
+        patched_from(sector)
+    };
+    let header = parse(&with_count(MAX_ENTRY_COUNT)).expect("the maximum");
+    assert_eq!(header.array_blocks(), first - 3);
+    assert_eq!(
+        parse(&with_count(MAX_ENTRY_COUNT + 1)),
+        Err(Error::ArrayRange)
+    );
+    assert_eq!(parse(&with_count(u32::MAX)), Err(Error::ArrayRange));
 }
 
 #[test]

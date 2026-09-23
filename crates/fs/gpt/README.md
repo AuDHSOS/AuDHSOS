@@ -15,8 +15,9 @@ names the table it came from.
 
 `read` answers the header of the table that is there. It checks the
 protective record, then the primary header in block 1, and where that is
-torn it reads the backup in the last block, which is the recovery the
-specification asks for. From the header, `find` answers the first
+torn it reads the backup in the last block (UEFI 2.11, section 5.3.2).
+`read` restores no copy, so it skips the check of the backup behind a
+valid primary. From the header, `find` answers the first
 partition of a type — `ESP_TYPE_GUID` being the one this system boots
 from — and `next_entry` walks all of them behind a `Cursor` that keeps
 the block it is inside, so the walk costs O(A) block reads in the blocks
@@ -32,7 +33,9 @@ array nobody wrote cannot.
 ## What it refuses
 
 A header whose signature, revision, size, or checksum is not what the
-format says, and one that does not lie in the block it names as its own.
+format says, one that does not lie in the block it names as its own,
+one whose usable range reaches the last block, and one that names more
+than `MAX_ENTRY_COUNT` entries.
 An entry array whose checksum does not cover its bytes. A device whose
 first block is a legacy partition table, because a table found behind
 one is what an older tool left standing. An entry that lies outside the

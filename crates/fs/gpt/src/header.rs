@@ -28,6 +28,11 @@ pub const HEADER_LEN: usize = 92;
 /// 16384 bytes of array, which is what these make.
 pub const ENTRY_COUNT: u32 = 128;
 
+/// Most entries a header this crate reads may name. The format names no
+/// maximum; this bound caps the array checksum of [`crate::table::read`]
+/// at 1024 block reads for 128-byte entries, 4096 for 512-byte ones.
+pub const MAX_ENTRY_COUNT: u32 = 4096;
+
 /// Blocks the array this crate writes occupies.
 pub const ARRAY_SECTORS: u64 = 32;
 
@@ -80,7 +85,9 @@ impl Header {
     /// from the header alone is made here: the signature, the revision,
     /// the size, the header's own checksum, and that the header lies
     /// where it says it does. The array checksum needs the array and is
-    /// [`crate::table::read`]'s.
+    /// [`crate::table::read`]'s. Beyond those, the usable range ends below
+    /// the last block, which holds the backup header (UEFI 2.11, section
+    /// 5.3.1), and the array holds at most [`MAX_ENTRY_COUNT`] entries.
     ///
     /// # Errors
     ///
@@ -123,7 +130,9 @@ impl Header {
             entry_len,
             array_crc: read_u32(sector, 88),
         };
-        if header.last_usable < header.first_usable {
+        if header.last_usable < header.first_usable
+            || header.last_usable >= sectors.saturating_sub(1)
+        {
             return Err(Error::Usable(header.first_usable, header.last_usable));
         }
         header.check_array_range(sectors)?;
@@ -178,14 +187,17 @@ impl Header {
             .unwrap_or(0)
     }
 
-    /// That the array lies on a device of `sectors` blocks and clear of
-    /// the range it describes as usable. What the array holds is
-    /// [`crate::table`]'s to check.
+    /// That the array holds at most [`MAX_ENTRY_COUNT`] entries, lies on a
+    /// device of `sectors` blocks, and is clear of the range it describes
+    /// as usable. What the array holds is [`crate::table`]'s to check.
     ///
     /// # Errors
     ///
     /// [`Error::ArrayRange`].
     fn check_array_range(&self, sectors: u64) -> Result<(), Error> {
+        if self.entry_count > MAX_ENTRY_COUNT {
+            return Err(Error::ArrayRange);
+        }
         let blocks = self.array_blocks();
         let end = self
             .entry_lba

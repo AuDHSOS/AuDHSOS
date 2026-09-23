@@ -24,12 +24,16 @@ const ARRAY_LBA: u64 = 2;
 /// Reads the table of `device`: the primary one, or the backup where the
 /// primary is torn.
 ///
-/// Every check UEFI 2.11, section 5.3.2 asks for is made: the protective
-/// record, the signature, the header checksum, that the header lies where
-/// it says, and the checksum of the entry array. A primary that fails any
-/// of them sends the read to the last block, which is where the backup
-/// lies; the error of the primary is what comes back when the backup
-/// fails too, because that is the table that was meant to be read.
+/// Checks of UEFI 2.11, section 5.3.2 made here: the protective record,
+/// the signature, the header checksum, that the header lies where it
+/// says, and the checksum of the entry array. A primary that fails any of
+/// them sends the read to the last block, which is where the backup lies;
+/// the error of the primary is what comes back when the backup fails too,
+/// because that is the table that was meant to be read.
+///
+/// The check of the alternate header behind a valid primary is not made:
+/// this crate restores no table, so a torn backup changes no answer, and
+/// the check costs one block read plus O(A) more on every call.
 ///
 /// Reading costs O(A) block reads, where A is the blocks of the entry
 /// array, because the checksum covers all of them.

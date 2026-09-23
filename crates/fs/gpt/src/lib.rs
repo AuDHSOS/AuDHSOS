@@ -23,7 +23,7 @@ pub use entry::{ENTRY_LEN, ESP_TYPE_GUID, Entry, GUID_LEN, NAME_UNITS, UNUSED_TY
 pub use error::Error;
 pub use header::{
     ARRAY_SECTORS, ENTRY_COUNT, FIRST_USABLE, HEADER_LBA, HEADER_LEN, HEADER_REVISION,
-    HEADER_SIGNATURE, Header, MIN_SECTORS, last_usable,
+    HEADER_SIGNATURE, Header, MAX_ENTRY_COUNT, MIN_SECTORS, last_usable,
 };
 pub use mbr::{PROTECTIVE_TYPE, is_protective, protective};
 pub use table::{Cursor, find, next_entry, read, write};
