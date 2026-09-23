@@ -251,7 +251,8 @@ impl Madt {
 /// # Errors
 ///
 /// The errors of [`SdtHeader::parse`]; [`AcpiError::Signature`] for a table
-/// that is not an `APIC` table; [`AcpiError::EntryLengthZero`],
+/// that is not an `APIC` table; [`AcpiError::Length`] when the table ends
+/// before the flags; [`AcpiError::EntryLengthZero`],
 /// [`AcpiError::EntryTruncated`], or [`AcpiError::EntryLength`] for an
 /// entry the walk cannot use; [`AcpiError::TooManyIoApics`] or
 /// [`AcpiError::TooManyOverrides`] for a machine larger than this kernel
@@ -260,6 +261,9 @@ impl Madt {
 pub fn parse(bytes: &[u8]) -> Result<Madt, AcpiError> {
     let header = SdtHeader::parse(bytes)?.require(MADT_SIGNATURE)?;
     let length = usize::try_from(header.length).unwrap_or(usize::MAX);
+    if length < MADT_HEADER_LEN {
+        return Err(AcpiError::Length(header.length));
+    }
     let lapic = u32_at(bytes, SDT_HEADER_LEN).ok_or(AcpiError::TooShort(bytes.len()))?;
     let flags =
         u32_at(bytes, SDT_HEADER_LEN.saturating_add(4)).ok_or(AcpiError::TooShort(bytes.len()))?;

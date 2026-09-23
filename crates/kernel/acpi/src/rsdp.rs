@@ -5,8 +5,8 @@
 //! and the loader passes on.
 //!
 //! The layout is the *ACPI Specification* 6.6, section 5.2.5.3: the
-//! signature, a checksum over the first twenty bytes, the revision that
-//! decides whether an XSDT is present, and a second checksum over the
+//! signature, a checksum over the first twenty bytes, the revision and
+//! XSDT address that decide whether an XSDT is present, and a checksum over the
 //! length the structure announces.
 //!
 //! Invariants: a [`Rsdp`] this module hands out has the signature, the
@@ -48,7 +48,8 @@ pub struct Rsdp {
     /// four bytes wide.
     pub rsdt: PhysAddr,
     /// The address of the extended root system description table, whose
-    /// entries are eight bytes wide. Only a revision two pointer names one.
+    /// entries are eight bytes wide. A revision two pointer names one when
+    /// its XSDT address is nonzero.
     pub xsdt: Option<PhysAddr>,
 }
 
@@ -127,9 +128,8 @@ pub fn parse_rsdp(bytes: &[u8; RSDP_LEN]) -> Result<Rsdp, AcpiError> {
         REVISION_V1 => None,
         REVISION_V2 => {
             check_extended(bytes, u32::from_le_bytes([len0, len1, len2, len3]))?;
-            Some(address(u64::from_le_bytes([
-                xsdt0, xsdt1, xsdt2, xsdt3, xsdt4, xsdt5, xsdt6, xsdt7,
-            ]))?)
+            let raw = u64::from_le_bytes([xsdt0, xsdt1, xsdt2, xsdt3, xsdt4, xsdt5, xsdt6, xsdt7]);
+            if raw == 0 { None } else { Some(address(raw)?) }
         }
         other => return Err(AcpiError::Revision(other)),
     };
