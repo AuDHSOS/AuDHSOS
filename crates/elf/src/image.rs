@@ -79,8 +79,11 @@ impl Segment {
     /// `true` if `address` lies in the segment.
     #[must_use]
     pub const fn contains(self, address: u64) -> bool {
-        match self.end() {
-            Some(end) => address >= self.vaddr && address < end,
+        if self.mem_size == 0 {
+            return false;
+        }
+        match self.vaddr.checked_add(self.mem_size.saturating_sub(1)) {
+            Some(last) => address >= self.vaddr && address <= last,
             None => false,
         }
     }
@@ -88,14 +91,13 @@ impl Segment {
     /// `true` if the segments share at least one byte of memory.
     #[must_use]
     pub const fn overlaps(self, other: Segment) -> bool {
-        match (self.end(), other.end()) {
-            (Some(end), Some(other_end)) => {
-                self.mem_size != 0
-                    && other.mem_size != 0
-                    && self.vaddr < other_end
-                    && other.vaddr < end
-            }
-            _ => false,
+        if self.mem_size == 0 || other.mem_size == 0 {
+            return false;
+        }
+        if self.vaddr <= other.vaddr {
+            other.vaddr.saturating_sub(self.vaddr) < self.mem_size
+        } else {
+            self.vaddr.saturating_sub(other.vaddr) < other.mem_size
         }
     }
 }
@@ -150,8 +152,8 @@ impl<'a> Image<'a> {
         self.count
     }
 
-    /// The file content of `segment`. A segment that does not belong to
-    /// this image yields an empty slice.
+    /// The bytes at `segment`'s file range, or an empty slice if the range
+    /// leaves the file. Segment membership is not checked.
     #[must_use]
     pub fn segment_bytes(&self, segment: Segment) -> &'a [u8] {
         let start = usize::try_from(segment.file_offset).unwrap_or(usize::MAX);
@@ -166,9 +168,13 @@ impl<'a> Image<'a> {
     #[must_use]
     pub fn highest_address(&self) -> Option<u64> {
         self.segments()
-            .filter_map(Segment::end)
+            .filter(|segment| segment.mem_size != 0)
+            .map(|segment| {
+                segment
+                    .vaddr
+                    .saturating_add(segment.mem_size.saturating_sub(1))
+            })
             .max()
-            .map(|end| end.saturating_sub(1))
     }
 }
 
@@ -414,17 +420,15 @@ fn check_overlaps(
     segments: &[Option<Segment>; MAX_SEGMENTS],
     count: usize,
 ) -> Result<(), ElfError> {
-    let mut index = 1;
-    while index < count {
-        let previous = index.saturating_sub(1);
-        if let (Some(left), Some(right)) = (
-            segments.get(previous).copied().flatten(),
-            segments.get(index).copied().flatten(),
-        ) && left.overlaps(right)
-        {
+    let mut last_nonempty: Option<Segment> = None;
+    for segment in segments.iter().take(count).flatten().copied() {
+        if segment.mem_size == 0 {
+            continue;
+        }
+        if last_nonempty.is_some_and(|left| left.overlaps(segment)) {
             return Err(ElfError::SegmentsOverlap);
         }
-        index = index.saturating_add(1);
+        last_nonempty = Some(segment);
     }
     Ok(())
 }

@@ -322,6 +322,54 @@ fn segments_that_share_memory_are_rejected() {
 }
 
 #[test]
+fn an_empty_segment_does_not_hide_overlapping_segments() {
+    let builder = ElfBuilder::new().with_headers(vec![
+        ProgramHeader::code(0x1000, DEFAULT_VADDR, 0x2000),
+        ProgramHeader::data(0x3000, DEFAULT_VADDR + 0x1000, 0, 0),
+        ProgramHeader::data(0x4000, DEFAULT_VADDR + 0x1000, 0x1000, 0x1000),
+    ]);
+    assert_eq!(parse_kernel(&builder), Err(ElfError::SegmentsOverlap));
+
+    let touching = ElfBuilder::new().with_headers(vec![
+        ProgramHeader::code(0x1000, DEFAULT_VADDR, 0x1000),
+        ProgramHeader::data(0x2800, DEFAULT_VADDR + 0x800, 0, 0),
+        ProgramHeader::data(0x3000, DEFAULT_VADDR + 0x1000, 0x1000, 0x1000),
+    ]);
+    assert_eq!(parse_kernel(&touching), Ok(3));
+}
+
+#[test]
+fn segments_overlapping_at_the_last_address_are_rejected() {
+    let top_page = u64::MAX - 0xFFF;
+    let builder = ElfBuilder {
+        entry: top_page,
+        ..ElfBuilder::new()
+    }
+    .with_headers(vec![
+        ProgramHeader::code(0x1000, top_page, 0xFFF),
+        ProgramHeader {
+            align: 0,
+            ..ProgramHeader::data(0x2000, u64::MAX - 0x7FF, 0x800, 0x800)
+        },
+    ]);
+    assert_eq!(parse_kernel(&builder), Err(ElfError::SegmentsOverlap));
+}
+
+#[test]
+fn a_segment_reaching_the_last_address_contains_its_entry() {
+    let top_page = u64::MAX - 0xFFF;
+    let builder = ElfBuilder {
+        entry: u64::MAX,
+        ..ElfBuilder::new()
+    }
+    .with_headers(vec![ProgramHeader::code(0x1000, top_page, 0x1000)]);
+    let bytes = builder.build();
+    let image = parse(&bytes, KERNEL).unwrap();
+    assert_eq!(image.highest_address(), Some(u64::MAX));
+    assert!(image.segments().next().unwrap().contains(u64::MAX));
+}
+
+#[test]
 fn segments_come_back_sorted_by_virtual_address() {
     let builder = ElfBuilder::new().with_headers(vec![
         ProgramHeader::data(0x3000, DEFAULT_VADDR + 0x2000, 0x1000, 0x1000),
@@ -432,7 +480,7 @@ fn the_constraints_accept_only_what_lies_inside_them() {
 }
 
 #[test]
-fn segment_bytes_of_a_foreign_segment_are_empty() {
+fn segment_bytes_uses_the_file_range_of_a_foreign_segment() {
     let bytes = ElfBuilder::new().build();
     let image = parse(&bytes, KERNEL).unwrap();
     let foreign = Segment {
@@ -445,6 +493,12 @@ fn segment_bytes_of_a_foreign_segment_are_empty() {
         execute: false,
     };
     assert!(image.segment_bytes(foreign).is_empty());
+    let inside = Segment {
+        file_offset: 0,
+        file_size: 4,
+        ..foreign
+    };
+    assert_eq!(image.segment_bytes(inside), &[0x7F, b'E', b'L', b'F']);
     let beyond = Segment {
         file_offset: 0,
         file_size: u64::MAX,
