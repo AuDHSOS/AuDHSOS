@@ -7192,3 +7192,11 @@ Document 16 step Q8.
   schema, one that names none, a word that names neither mode, the temp
   schema, a database attached after the default was named, and one
   attached under `:memory:`.
+
+### 6.6.307 The depth a trigger may reach (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A trigger that writes its own table under `PRAGMA recursive_triggers`,
+  a connection told a smaller `SQLITE_LIMIT_TRIGGER_DEPTH`, and a chain
+  of forty keys each cascading into the next.

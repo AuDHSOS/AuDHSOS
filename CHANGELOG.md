@@ -240,6 +240,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` refuses a trigger, and a chain of foreign keys, that
+  reaches deeper than the connection carries with `too many levels of
+  trigger recursion` rather than as a statement it does not support.
+  D-440 records it. Catalog 6.6.307. `triggerC.test` goes from 95 cases
+  passing to 105.
+
 - `db-sqlite` answers `PRAGMA incremental_vacuum` with one row of no
   column per page it gives up, and the suite harness runs the script of
   `DB eval SQL SCRIPT` once per row of a statement that carries no

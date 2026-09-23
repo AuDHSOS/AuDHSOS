@@ -154,6 +154,9 @@ pub enum Error {
     Timed(Vec<u8>, Vec<u8>, Vec<u8>),
     /// A `CREATE TRIGGER` over a table SQLite keeps for itself.
     SystemTrigger,
+    /// A trigger, or a chain of foreign keys, that reached deeper than
+    /// the connection carries.
+    TriggerDepth,
     /// A `CREATE TRIGGER` whose table stands in another database than the
     /// trigger, with the name as it was written and that database.
     TriggerSchema(Vec<u8>, Vec<u8>),
@@ -968,6 +971,7 @@ impl Error {
                 alloc::string::String::from_utf8_lossy(name)
             ),
             Error::SystemTrigger => "cannot create trigger on system table".to_string(),
+            Error::TriggerDepth => "too many levels of trigger recursion".to_string(),
             Error::TriggerSchema(name, schema) => alloc::format!(
                 "trigger {} cannot reference objects in database {}",
                 alloc::string::String::from_utf8_lossy(name),

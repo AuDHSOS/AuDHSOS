@@ -1062,6 +1062,8 @@ Size: L.
      functions and the hyperbolic ones. Built, which D-437 records.
 158. The locking mode of each database of a connection, which `PRAGMA
      locking_mode` names. Built, which D-439 records.
+159. The depth a trigger and a chain of keys may reach, which the
+     connection's limit and the stack bound. Built, which D-440 records.
 
 ### Done when
 

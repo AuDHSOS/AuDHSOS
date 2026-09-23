@@ -820,7 +820,7 @@ fn a_chain_of_cascades_deeper_than_a_trigger_may_reach_is_refused() {
     }
     let borrowed: alloc::vec::Vec<&str> = statements.iter().map(String::as_str).collect();
     let (mut writer, _) = ran(&borrowed).unwrap();
-    assert_eq!(writer.run(b"UPDATE t0 SET a = 2"), Err(Error::Unsupported));
+    assert_eq!(writer.run(b"UPDATE t0 SET a = 2"), Err(Error::TriggerDepth));
 }
 
 /// `fkey2-13.1`: the row a `REPLACE` writes over is held to the keys of

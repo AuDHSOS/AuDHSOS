@@ -4955,9 +4955,9 @@ impl Writer {
     /// # Errors
     ///
     /// [`Error::Eval`] for a `RAISE` other than `IGNORE` and for a
-    /// `WHEN` that could not be answered, [`Error::Unsupported`] where
-    /// the triggers reach deeper than `TRIGGER_DEPTH`, and whatever a
-    /// statement of a body refuses.
+    /// `WHEN` that could not be answered, [`Error::TriggerDepth`] where
+    /// the triggers reach deeper than the connection carries, and
+    /// whatever a statement of a body refuses.
     fn fire(
         &mut self,
         triggers: &[crate::db::Trigger],
@@ -4971,8 +4971,8 @@ impl Writer {
             if self.repeats(&trigger.name) {
                 continue;
             }
-            if self.running.len() >= TRIGGER_DEPTH {
-                return Err(Error::Unsupported);
+            if self.running.len() >= self.deepest() {
+                return Err(Error::TriggerDepth);
             }
             if let Some(condition) = trigger.written.condition
                 && !crate::eval::evaluate_row(&trigger.arena, condition, &trigger.sql, row)?
@@ -5678,11 +5678,11 @@ impl Writer {
     ///
     /// # Errors
     ///
-    /// [`Error::Unsupported`] where the chain of keys reaches deeper
+    /// [`Error::TriggerDepth`] where the chain of keys reaches deeper
     /// than a trigger's body may.
     fn deepened(&mut self) -> Result<usize, Error> {
-        if self.running.len() >= TRIGGER_DEPTH {
-            return Err(Error::Unsupported);
+        if self.running.len() >= self.deepest() {
+            return Err(Error::TriggerDepth);
         }
         let held = self.running.len();
         self.running.push(b"\0foreign key".to_vec());
@@ -5883,6 +5883,14 @@ impl Writer {
             .map(|(_, values)| values)
             .ok_or(Error::NoTable(Vec::new()))?;
         Ok((root, kept, table.clone(), values))
+    }
+
+    /// How deep a trigger may reach, which is the smaller of what
+    /// `SQLITE_LIMIT_TRIGGER_DEPTH` allows and what the stack of this
+    /// crate carries.
+    fn deepest(&self) -> usize {
+        let told = usize::try_from(self.limits.of(crate::db::Limit::TriggerDepth)).unwrap_or(0);
+        told.min(TRIGGER_DEPTH)
     }
 
     /// Whether a trigger of this name is running already and may not

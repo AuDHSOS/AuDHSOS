@@ -3695,7 +3695,24 @@ fn what_a_trigger_reaches_and_how_deep_it_runs() {
     ] {
         writer.run(sql).unwrap();
     }
-    assert!(writer.run(b"INSERT INTO t VALUES(1)").is_err());
+    assert_eq!(
+        writer
+            .run(b"INSERT INTO t VALUES(1)")
+            .unwrap_err()
+            .message(),
+        "too many levels of trigger recursion"
+    );
+    // A connection told a smaller depth is held to it.
+    let mut limits = crate::db::Limits::new();
+    limits.set(crate::db::Limit::TriggerDepth, 1);
+    writer.limited(limits);
+    assert_eq!(
+        writer
+            .run(b"INSERT INTO t VALUES(1)")
+            .unwrap_err()
+            .message(),
+        "too many levels of trigger recursion"
+    );
     // A trigger on another table does not run.
     let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
     for sql in [
