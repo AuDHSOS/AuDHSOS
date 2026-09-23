@@ -60,6 +60,10 @@ new entry in the decision register.
 | R10 | A change touching an adapter crate needs a review with the checklist in 4.9. | pull request template |
 | R11 | An `asm!` block that runs `cli` or `sti` does not declare `nomem`. `nomem` lets the compiler cache a global in a register across the block and move a load or a store to the other side of it, so a store an interrupt guard was meant to cover reaches memory where a handler sees it. | `cargo xtask lint` reads the Rust files of every adapter crate, which are the only crates that may carry assembly (R3) |
 
+R7's lint enforcement excludes the throwaway `text-demo` crate, which does not
+inherit workspace lints; [section 5.4](05-code-organization.md#54-workspace-configuration)
+records the exception.
+
 ## 4.5 Inline assembly inventory
 
 Every site is a one-line `asm!` wrapper unless marked as a naked function.

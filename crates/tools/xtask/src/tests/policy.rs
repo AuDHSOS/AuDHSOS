@@ -5,6 +5,8 @@
 
 use crate::policy::{CRATES, DEV_DEPENDENCIES, Kind, MIRI_TARGETS, find};
 use std::collections::HashSet;
+use std::fs;
+use std::path::Path;
 
 #[test]
 fn names_and_paths_are_unique() {
@@ -51,4 +53,48 @@ fn only_adapters_have_budgets() {
         }
     }
     assert!(find("missing").is_none());
+}
+
+#[test]
+fn text_demo_is_the_documented_workspace_lint_exception() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let guide = fs::read_to_string(root.join("docs/05-code-organization.md")).unwrap();
+    let layout = guide.split("## 5.1 Repository layout").nth(1).unwrap();
+    let catalog = guide
+        .split("## 5.2 Crate catalog")
+        .nth(1)
+        .unwrap()
+        .split("## 5.3")
+        .next()
+        .unwrap();
+    let configuration = guide
+        .split("## 5.4 Workspace configuration")
+        .nth(1)
+        .unwrap()
+        .split("## 5.5")
+        .next()
+        .unwrap();
+
+    assert!(layout.contains("├── text-demo/"));
+    assert!(
+        catalog
+            .lines()
+            .any(|line| line.starts_with("| `text-demo` |"))
+    );
+    assert!(configuration.contains("except `text-demo` declares `[lints] workspace = true`"));
+    let safety = fs::read_to_string(root.join("docs/04-safety-policy.md")).unwrap();
+    assert!(safety.contains("R7's lint enforcement excludes the throwaway `text-demo` crate"));
+
+    for krate in CRATES {
+        let manifest = fs::read_to_string(root.join(krate.path).join("Cargo.toml")).unwrap();
+        if krate.name == "text-demo" {
+            assert!(!manifest.lines().any(|line| line.trim() == "[lints]"));
+        } else {
+            assert!(
+                manifest.contains("[lints]\nworkspace = true"),
+                "{} must inherit workspace lints",
+                krate.name
+            );
+        }
+    }
 }
