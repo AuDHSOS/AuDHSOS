@@ -402,10 +402,9 @@ that break that shape and are named there and nowhere else. Section 3.5
 also states that the routers come in order of preference, which is why the
 first of them is the one used and the rest are read past.
 
-What is deliberately not read is the option overload of section 9.3, which
-lets a server put options in the `sname` and `file` fields when the option
-field runs out. The six options a lease needs come to under forty bytes,
-and the option field holds three hundred.
+The option overload of section 9.3 is read: `Message::all_options` reads
+the option field, then `file`, then `sname`, where option 52 names them
+(RFC 2131, section 4.1).
 
 ## Why RFC 6724
 

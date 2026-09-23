@@ -69,6 +69,11 @@ fn every_error_reads_as_a_sentence() {
             DhcpError::TooLong(256),
             "a body of 256 bytes is longer than an option carries",
         ),
+        (DhcpError::Overload(4), "4 is not an option overload value"),
+        (
+            DhcpError::Field(129),
+            "129 bytes are longer than the sname or file field",
+        ),
     ];
     for (error, text) in cases {
         assert_eq!(error.to_string(), text);

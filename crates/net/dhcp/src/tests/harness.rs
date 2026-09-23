@@ -53,6 +53,10 @@ pub(crate) struct Reply {
     pub(crate) hardware: MacAddr,
     /// The options behind the message type.
     pub(crate) options: Vec<Opt>,
+    /// The options of the `file` field.
+    pub(crate) file: Vec<Opt>,
+    /// The options of the `sname` field.
+    pub(crate) sname: Vec<Opt>,
 }
 
 impl Reply {
@@ -68,6 +72,8 @@ impl Reply {
                 opt(OptionCode::SUBNET_MASK, &MASK.octets()),
                 lease_time(3600),
             ],
+            file: Vec::new(),
+            sname: Vec::new(),
         }
     }
 
@@ -88,6 +94,8 @@ impl Reply {
                 ),
                 lease_time(3600),
             ],
+            file: Vec::new(),
+            sname: Vec::new(),
         }
     }
 
@@ -99,6 +107,8 @@ impl Reply {
             yours: Ipv4Addr::UNSPECIFIED,
             hardware: MAC,
             options: vec![opt(OptionCode::SERVER_IDENTIFIER, &SERVER.octets())],
+            file: Vec::new(),
+            sname: Vec::new(),
         }
     }
 
@@ -114,16 +124,53 @@ impl Reply {
         self
     }
 
-    /// The bytes of it.
-    pub(crate) fn bytes(&self) -> Vec<u8> {
-        let mut block = [0u8; 128];
-        let mut options = Writer::new(&mut block);
-        write_option(&mut options, OptionCode::MESSAGE_TYPE, &[self.kind.get()]).expect("room");
-        for option in &self.options {
-            write_option(&mut options, option.code, &option.body).expect("room");
+    /// The same reply with the option `code` moved to `file`.
+    pub(crate) fn in_file(mut self, code: OptionCode) -> Reply {
+        let moved = self.take(code);
+        self.file.extend(moved);
+        self
+    }
+
+    /// The same reply with the option `code` moved to `sname`.
+    pub(crate) fn in_sname(mut self, code: OptionCode) -> Reply {
+        let moved = self.take(code);
+        self.sname.extend(moved);
+        self
+    }
+
+    /// Removes the options `code` from the option field; for option 53,
+    /// returns a copy that `bytes` then leaves out of the option field.
+    fn take(&mut self, code: OptionCode) -> Vec<Opt> {
+        if code == OptionCode::MESSAGE_TYPE {
+            return vec![opt(code, &[self.kind.get()])];
         }
-        options.write_u8(OptionCode::END.get()).expect("room");
-        let len = options.position();
+        let (moved, kept) = self
+            .options
+            .drain(..)
+            .partition(|option| option.code == code);
+        self.options = kept;
+        moved
+    }
+
+    /// The bytes of it, with option 52 where `file` or `sname` holds
+    /// options.
+    pub(crate) fn bytes(&self) -> Vec<u8> {
+        let moved = self
+            .file
+            .iter()
+            .chain(&self.sname)
+            .any(|option| option.code == OptionCode::MESSAGE_TYPE);
+        let overload = u8::from(!self.file.is_empty()) | (u8::from(!self.sname.is_empty()) << 1);
+        let mut head = Vec::new();
+        if !moved {
+            head.push(opt(OptionCode::MESSAGE_TYPE, &[self.kind.get()]));
+        }
+        if overload != 0 {
+            head.push(opt(OptionCode::OVERLOAD, &[overload]));
+        }
+        let options = block_of(head.iter().chain(&self.options));
+        let file = block_of(&self.file);
+        let sname = block_of(&self.sname);
         let message = Message {
             op: Op::REPLY,
             xid: self.xid,
@@ -134,11 +181,24 @@ impl Reply {
             next_server: Ipv4Addr::UNSPECIFIED,
             relay: Ipv4Addr::UNSPECIFIED,
             hardware: self.hardware,
-            options: block.get(..len).expect("what was written"),
+            sname: if self.sname.is_empty() { &[] } else { &sname },
+            file: if self.file.is_empty() { &[] } else { &file },
+            options: &options,
         };
         let mut buffer = [0u8; MIN_MESSAGE_LEN];
         let mut writer = Writer::new(&mut buffer);
         message.write(&mut writer).expect("room");
         writer.finish().to_vec()
     }
+}
+
+/// `options` as one block, end marker and all.
+fn block_of<'a>(options: impl IntoIterator<Item = &'a Opt>) -> Vec<u8> {
+    let mut block = [0u8; 128];
+    let mut writer = Writer::new(&mut block);
+    for option in options {
+        write_option(&mut writer, option.code, &option.body).expect("room");
+    }
+    writer.write_u8(OptionCode::END.get()).expect("room");
+    writer.finish().to_vec()
 }

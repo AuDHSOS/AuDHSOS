@@ -13,15 +13,15 @@
 //! one of RFC 2132: without it the bytes behind it are the vendor field of
 //! plain BOOTP and not options at all.
 //!
-//! `sname` and `file` are skipped. RFC 2132, section 9.3 lets a server
-//! overload them with options when the option field runs out, and this
-//! client does not read them: the options it needs are the six of a lease,
-//! which fit the option field of every message with room to spare.
+//! `sname` and `file` carry options where option 52 of the option field
+//! names them (RFC 2132, section 9.3). [`Message::all_options`] reads the
+//! option field, then `file`, then `sname`, the order of RFC 2131,
+//! section 4.1.
 
 use net_wire::{Ipv4Addr, MacAddr, Reader, Writer};
 
 use crate::error::DhcpError;
-use crate::option::Options;
+use crate::option::{OptionCode, Options};
 
 /// The fixed part, from `op` to the end of `file`.
 pub const FIXED_LEN: usize = 236;
@@ -54,8 +54,17 @@ const HARDWARE_LEN: u8 = 6;
 /// Ethernet address.
 const CHADDR_PAD: usize = 10;
 
-/// How many bytes `sname` and `file` take together.
-const NAMES_LEN: usize = 192;
+/// The length of the `sname` field.
+pub const SNAME_LEN: usize = 64;
+
+/// The length of the `file` field.
+pub const FILE_LEN: usize = 128;
+
+/// The bit of option 52 that names `file` (RFC 2132, section 9.3).
+const OVERLOAD_FILE: u8 = 1;
+
+/// The bit of option 52 that names `sname`.
+const OVERLOAD_SNAME: u8 = 2;
 
 /// Which direction a message goes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -131,6 +140,10 @@ pub struct Message<'a> {
     pub relay: Ipv4Addr,
     /// The client's hardware address.
     pub hardware: MacAddr,
+    /// The `sname` field, which holds options where option 52 names it.
+    pub sname: &'a [u8],
+    /// The `file` field, which holds options where option 52 names it.
+    pub file: &'a [u8],
     /// The option block, from behind the magic cookie to the end.
     pub options: &'a [u8],
 }
@@ -149,6 +162,8 @@ impl<'a> Message<'a> {
             next_server: Ipv4Addr::UNSPECIFIED,
             relay: Ipv4Addr::UNSPECIFIED,
             hardware,
+            sname: &[],
+            file: &[],
             options: &[],
         }
     }
@@ -182,11 +197,10 @@ impl<'a> Message<'a> {
         let next_server = reader.read_ipv4()?;
         let relay = reader.read_ipv4()?;
         let hardware = reader.read_mac()?;
-        // The rest of `chaddr` is padding for a link with longer
-        // addresses, and `sname` and `file` are not read (RFC 2132,
-        // section 9.3).
+        // The rest of `chaddr` is padding for a link with longer addresses.
         let _ = reader.read_bytes(CHADDR_PAD)?;
-        let _ = reader.read_bytes(NAMES_LEN)?;
+        let sname = reader.read_bytes(SNAME_LEN)?;
+        let file = reader.read_bytes(FILE_LEN)?;
         let cookie = reader.read_array::<4>()?;
         if cookie != MAGIC_COOKIE {
             return Err(DhcpError::Cookie(cookie));
@@ -201,6 +215,8 @@ impl<'a> Message<'a> {
             next_server,
             relay,
             hardware,
+            sname,
+            file,
             options: reader.rest(),
         })
     }
@@ -212,7 +228,8 @@ impl<'a> Message<'a> {
     ///
     /// # Errors
     ///
-    /// [`DhcpError::Wire`] when the buffer has no room.
+    /// [`DhcpError::Field`] when `sname` or `file` is longer than its
+    /// field, and [`DhcpError::Wire`] when the buffer has no room.
     pub fn write(&self, writer: &mut Writer<'_>) -> Result<(), DhcpError> {
         let at = writer.position();
         writer.write_u8(self.op.0)?;
@@ -228,7 +245,8 @@ impl<'a> Message<'a> {
         writer.write_ipv4(self.relay)?;
         writer.write_mac(self.hardware)?;
         writer.write_zeros(CHADDR_PAD)?;
-        writer.write_zeros(NAMES_LEN)?;
+        write_field(writer, self.sname, SNAME_LEN)?;
+        write_field(writer, self.file, FILE_LEN)?;
         writer.write_bytes(&MAGIC_COOKIE)?;
         writer.write_bytes(self.options)?;
         let written = writer.position().saturating_sub(at);
@@ -236,10 +254,52 @@ impl<'a> Message<'a> {
         Ok(())
     }
 
-    /// The options.
+    /// The options of the option field alone.
     #[must_use]
     pub const fn options(&self) -> Options<'a> {
         Options::new(self.options)
+    }
+
+    /// The options of the option field, then of `file`, then of `sname`,
+    /// each of the last two only where option 52 names it (RFC 2131,
+    /// section 4.1). An error in the option field, or an option 52 that is
+    /// not one byte of 1, 2 or 3, is the only item.
+    pub fn all_options(
+        &self,
+    ) -> impl Iterator<Item = Result<(OptionCode, &'a [u8]), DhcpError>> + use<'a> {
+        let (overload, error) = match self.overload() {
+            Ok(overload) => (overload, None),
+            Err(error) => (0, Some(Err(error))),
+        };
+        let field = error.is_none().then(|| self.options());
+        let file = (overload & OVERLOAD_FILE != 0).then(|| Options::new(self.file));
+        let sname = (overload & OVERLOAD_SNAME != 0).then(|| Options::new(self.sname));
+        error
+            .into_iter()
+            .chain(field.into_iter().flatten())
+            .chain(file.into_iter().flatten())
+            .chain(sname.into_iter().flatten())
+    }
+
+    /// The value of option 52 in the option field, or 0 without one.
+    fn overload(&self) -> Result<u8, DhcpError> {
+        let mut found = 0;
+        for option in self.options() {
+            let (code, body) = option?;
+            if code == OptionCode::OVERLOAD {
+                let &[value] = body else {
+                    return Err(DhcpError::OptionLength {
+                        code,
+                        len: body.len(),
+                    });
+                };
+                if !(1..=3).contains(&value) {
+                    return Err(DhcpError::Overload(value));
+                }
+                found = value;
+            }
+        }
+        Ok(found)
     }
 
     /// Which of the eight messages this is.
@@ -248,12 +308,12 @@ impl<'a> Message<'a> {
     ///
     /// [`DhcpError::MissingMessageType`] when the option is not there,
     /// [`DhcpError::OptionLength`] when it is not one byte, and whatever
-    /// the option walk found wrong on the way.
+    /// [`Message::all_options`] found wrong on the way.
     pub fn message_type(&self) -> Result<MessageType, DhcpError> {
         let mut found = None;
-        for option in self.options() {
+        for option in self.all_options() {
             let (code, body) = option?;
-            if code == crate::option::OptionCode::MESSAGE_TYPE {
+            if code == OptionCode::MESSAGE_TYPE {
                 let &[value] = body else {
                     return Err(DhcpError::OptionLength {
                         code,
@@ -265,4 +325,14 @@ impl<'a> Message<'a> {
         }
         found.ok_or(DhcpError::MissingMessageType)
     }
+}
+
+/// Writes `bytes` and pads them with zeros to `len`.
+fn write_field(writer: &mut Writer<'_>, bytes: &[u8], len: usize) -> Result<(), DhcpError> {
+    let Some(pad) = len.checked_sub(bytes.len()) else {
+        return Err(DhcpError::Field(bytes.len()));
+    };
+    writer.write_bytes(bytes)?;
+    writer.write_zeros(pad)?;
+    Ok(())
 }

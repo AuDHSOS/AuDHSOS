@@ -36,6 +36,8 @@ impl OptionCode {
     pub const REQUESTED_ADDRESS: OptionCode = OptionCode(50);
     /// How long the lease lasts, in seconds (section 9.2).
     pub const LEASE_TIME: OptionCode = OptionCode(51);
+    /// Which of `sname` and `file` carry options (section 9.3).
+    pub const OVERLOAD: OptionCode = OptionCode(52);
     /// Which of the eight messages this is (section 9.6).
     pub const MESSAGE_TYPE: OptionCode = OptionCode(53);
     /// Which server the message is from or for (section 9.7).

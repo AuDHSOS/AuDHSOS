@@ -697,3 +697,160 @@ fn a_buffer_with_no_room_costs_no_attempt() {
                 .saturating_add(Config::DEFAULT.jitter)
     );
 }
+
+#[test]
+fn a_lease_whose_options_continue_in_file_and_sname_is_taken() {
+    let mut rng = rng();
+    let start = Instant::from_micros(0);
+    let mut client = started(Config::DEFAULT, start);
+    let discover = send(&mut client, &mut rng, start).expect("a discover");
+    let offer = Reply::offer(discover.xid).in_sname(OptionCode::MESSAGE_TYPE);
+    deliver(&mut client, &offer, start);
+    assert_eq!(client.state(), State::Requesting);
+    send(&mut client, &mut rng, start).expect("a request");
+    let ack = Reply::ack(discover.xid)
+        .in_file(OptionCode::MESSAGE_TYPE)
+        .in_file(OptionCode::SUBNET_MASK)
+        .in_file(OptionCode::LEASE_TIME)
+        .in_sname(OptionCode::SERVER_IDENTIFIER);
+    deliver(&mut client, &ack, start);
+    assert_eq!(client.state(), State::Bound);
+    let lease = client.lease().expect("a lease");
+    assert_eq!(lease.address(), OFFERED);
+    assert_eq!(lease.network.netmask(), MASK);
+    assert_eq!(lease.server, Ipv4Addr::new(192, 168, 1, 1));
+    assert_eq!(lease.expires, Instant::from_micros(3_600_000_000));
+}
+
+#[test]
+fn every_request_of_the_requesting_state_repeats_the_secs_of_the_discover() {
+    let mut rng = rng();
+    let start = Instant::from_micros(0);
+    let mut client = started(Config::DEFAULT, start);
+    send(&mut client, &mut rng, start).expect("a discover");
+    let again = client.poll_at().expect("a schedule");
+    let discover = send(&mut client, &mut rng, again).expect("a discover");
+    assert!(discover.secs > 0);
+    let offered = again.saturating_add(Duration::from_secs(5));
+    deliver(&mut client, &Reply::offer(discover.xid), offered);
+    let request = send(&mut client, &mut rng, offered).expect("a request");
+    assert_eq!(request.kind, MessageType::REQUEST);
+    assert_eq!(request.secs, discover.secs);
+    let later = client.poll_at().expect("a schedule");
+    let retry = send(&mut client, &mut rng, later).expect("a request");
+    assert_eq!(retry.kind, MessageType::REQUEST);
+    assert_eq!(retry.secs, discover.secs);
+}
+
+#[test]
+fn an_acknowledgment_from_a_server_the_request_did_not_name_is_ignored() {
+    let other = Ipv4Addr::new(192, 168, 1, 2);
+    let mut rng = rng();
+    let start = Instant::from_micros(0);
+    let mut client = started(Config::DEFAULT, start);
+    let discover = send(&mut client, &mut rng, start).expect("a discover");
+    deliver(&mut client, &Reply::offer(discover.xid), start);
+    send(&mut client, &mut rng, start).expect("a request");
+
+    // Another server's acknowledgment of its own address.
+    let mut foreign = Reply::ack(discover.xid)
+        .without(OptionCode::SERVER_IDENTIFIER)
+        .with(opt(OptionCode::SERVER_IDENTIFIER, &other.octets()));
+    foreign.yours = Ipv4Addr::new(192, 168, 1, 99);
+    deliver(&mut client, &foreign, start);
+    assert_eq!(client.state(), State::Requesting);
+
+    // Another server's acknowledgment of the offered address.
+    let foreign = Reply::ack(discover.xid)
+        .without(OptionCode::SERVER_IDENTIFIER)
+        .with(opt(OptionCode::SERVER_IDENTIFIER, &other.octets()));
+    deliver(&mut client, &foreign, start);
+    assert_eq!(client.state(), State::Requesting);
+
+    // The named server's acknowledgment of another address.
+    let mut moved = Reply::ack(discover.xid);
+    moved.yours = Ipv4Addr::new(192, 168, 1, 99);
+    deliver(&mut client, &moved, start);
+    assert_eq!(client.state(), State::Requesting);
+    assert!(client.lease().is_none());
+
+    deliver(&mut client, &Reply::ack(discover.xid), start);
+    assert_eq!(client.state(), State::Bound);
+    assert_eq!(client.address(), Some(OFFERED));
+}
+
+#[test]
+fn a_rebinding_acknowledgment_from_another_server_is_taken() {
+    let other = Ipv4Addr::new(192, 168, 1, 2);
+    let (mut client, _, mut rng) = bound(Config::DEFAULT);
+    let rebind = client.lease().expect("a lease").rebind;
+    let renew = client.lease().expect("a lease").renew;
+    send(&mut client, &mut rng, renew).expect("a renewal");
+    let request = send(&mut client, &mut rng, rebind).expect("a rebinding");
+    assert_eq!(client.state(), State::Rebinding);
+    let ack = Reply::ack(request.xid)
+        .without(OptionCode::SERVER_IDENTIFIER)
+        .with(opt(OptionCode::SERVER_IDENTIFIER, &other.octets()));
+    deliver(&mut client, &ack, rebind);
+    assert_eq!(client.state(), State::Bound);
+    assert_eq!(client.lease().expect("a lease").server, other);
+}
+
+#[test]
+fn a_refusal_from_a_server_the_request_did_not_name_is_ignored() {
+    let mut rng = rng();
+    let start = Instant::from_micros(0);
+    let mut client = started(Config::DEFAULT, start);
+    let discover = send(&mut client, &mut rng, start).expect("a discover");
+    deliver(&mut client, &Reply::offer(discover.xid), start);
+    send(&mut client, &mut rng, start).expect("a request");
+
+    let foreign = Reply::nak(discover.xid)
+        .without(OptionCode::SERVER_IDENTIFIER)
+        .with(opt(
+            OptionCode::SERVER_IDENTIFIER,
+            &Ipv4Addr::new(192, 168, 1, 2).octets(),
+        ));
+    deliver(&mut client, &foreign, start);
+    assert_eq!(client.state(), State::Requesting);
+
+    let unnamed = Reply::nak(discover.xid).without(OptionCode::SERVER_IDENTIFIER);
+    deliver(&mut client, &unnamed, start);
+    assert_eq!(client.state(), State::Requesting);
+
+    deliver(&mut client, &Reply::nak(discover.xid), start);
+    assert_eq!(client.state(), State::Selecting);
+}
+
+#[test]
+fn repeated_router_and_name_server_options_are_concatenated() {
+    let mut rng = rng();
+    let start = Instant::from_micros(0);
+    let mut client = started(Config::DEFAULT, start);
+    let discover = send(&mut client, &mut rng, start).expect("a discover");
+    deliver(&mut client, &Reply::offer(discover.xid), start);
+    send(&mut client, &mut rng, start).expect("a request");
+    // The router is split inside its address; the name servers run from
+    // the option field into `file`.
+    let mut ack = Reply::ack(discover.xid)
+        .without(OptionCode::ROUTER)
+        .without(OptionCode::DOMAIN_NAME_SERVER)
+        .with(opt(OptionCode::ROUTER, &[10, 0]))
+        .with(opt(OptionCode::ROUTER, &[0, 1, 10, 0, 0, 2]))
+        .with(opt(OptionCode::DOMAIN_NAME_SERVER, &[1, 1, 1, 1, 8, 8]))
+        .with(opt(OptionCode::DOMAIN_NAME_SERVER, &[8, 8]))
+        .in_file(OptionCode::MESSAGE_TYPE);
+    ack.file
+        .push(opt(OptionCode::DOMAIN_NAME_SERVER, &[9, 9, 9, 9]));
+    deliver(&mut client, &ack, start);
+    let lease = client.lease().expect("a lease");
+    assert_eq!(lease.router, Some(Ipv4Addr::new(10, 0, 0, 1)));
+    assert_eq!(
+        lease.servers.iter().copied().collect::<Vec<_>>(),
+        vec![
+            Ipv4Addr::new(1, 1, 1, 1),
+            Ipv4Addr::new(8, 8, 8, 8),
+            Ipv4Addr::new(9, 9, 9, 9)
+        ]
+    );
+}

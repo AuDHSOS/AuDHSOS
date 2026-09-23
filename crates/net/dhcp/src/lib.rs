@@ -15,8 +15,8 @@ pub use client::{
 };
 pub use error::DhcpError;
 pub use message::{
-    FIXED_LEN, HARDWARE_ETHERNET, MAGIC_COOKIE, MAX_MESSAGE_LEN, MIN_MESSAGE_LEN, Message,
-    MessageType, Op,
+    FILE_LEN, FIXED_LEN, HARDWARE_ETHERNET, MAGIC_COOKIE, MAX_MESSAGE_LEN, MIN_MESSAGE_LEN,
+    Message, MessageType, Op, SNAME_LEN,
 };
 pub use option::{OptionCode, Options, write_option};
 
