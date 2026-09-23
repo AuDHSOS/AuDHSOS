@@ -289,3 +289,94 @@ fn a_name_and_a_collation_lose_their_quotes() {
     let doubled = build("CREATE TABLE t(\"a\"\"b\")").unwrap();
     assert_eq!(doubled.columns[0].name, b"a\"b");
 }
+
+/// What one statement of the schema answers a connection over one table
+/// of two columns: nothing where it is taken, and the message where it
+/// is refused.
+fn named(sql: &[u8]) -> String {
+    let mut writer = crate::change::Writer::new(512, 0, crate::header::Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE u(a,b)").unwrap();
+    match writer.run(sql) {
+        Ok(_) => String::new(),
+        Err(error) => error.message(),
+    }
+}
+
+#[test]
+fn what_a_value_of_the_schema_may_name() {
+    for (sql, message) in [
+        // A `CHECK` reads the columns of its own table, under the name of
+        // that table or under none, and the key of a table that has one.
+        (b"CREATE TABLE w(a, CHECK(w.a>0))".as_slice(), ""),
+        (b"CREATE TABLE w(a, CHECK(rowid>0))", ""),
+        (b"CREATE TABLE w(a CHECK(b>0), b)", ""),
+        (b"CREATE TABLE w(a, CHECK(t.a>0))", "no such column: t.a"),
+        (b"CREATE TABLE w(a, CHECK(zz>0))", "no such column: zz"),
+        // A name in double quotes that is no column is a text, which
+        // the library takes and the shell refuses, because the shell
+        // turns `SQLITE_DBCONFIG_DQS_DDL` off and the library leaves it
+        // on.
+        (b"CREATE TABLE w(a, CHECK(\"zz\">0))", ""),
+        (
+            b"CREATE TABLE w(a, CHECK(\"zz\".a>0))",
+            "no such column: zz.a",
+        ),
+        // A table written `WITHOUT ROWID` has no key of that name.
+        (
+            b"CREATE TABLE w(a PRIMARY KEY, CHECK(rowid>0)) WITHOUT ROWID",
+            "no such column: rowid",
+        ),
+        // A generated column reads the columns and not the key.
+        (b"CREATE TABLE w(a, b AS (a+1))", ""),
+        (
+            b"CREATE TABLE w(a, b AS (rowid+1))",
+            "no such column: rowid",
+        ),
+        (b"CREATE TABLE w(a, b AS (zz+1))", "no such column: zz"),
+        // An index term reads the columns; the `WHERE` of a partial
+        // index reads the key as well.
+        (b"CREATE INDEX i ON u(lower(a))", ""),
+        (b"CREATE INDEX i ON u(lower(zz))", "no such column: zz"),
+        (b"CREATE INDEX i ON u(lower(t.a))", "no such column: t.a"),
+        (b"CREATE INDEX i ON u(a) WHERE rowid>0", ""),
+        (b"CREATE INDEX i ON u(a) WHERE u.b>0", ""),
+        (b"CREATE INDEX i ON u(a) WHERE zz>0", "no such column: zz"),
+        (b"CREATE INDEX i ON u(a) WHERE t.b>0", "no such column: t.b"),
+        // `sqlite3StringToId` reads a term written as a text as the name
+        // of a column, which the tree holds as a literal and no name
+        // stands resolved for.
+        (b"CREATE INDEX i ON u('a')", ""),
+        (b"CREATE INDEX i ON u('zz')", "no such column: zz"),
+        // What a column falls back to is a constant: a literal and a
+        // call stand, a name, a variable and a statement do not.
+        (b"CREATE TABLE w(a, b DEFAULT (1+1))", ""),
+        (b"CREATE TABLE w(a, b DEFAULT (random()))", ""),
+        // `true` and `false` are the two boolean values where no column
+        // carries the name, so a value of the schema names neither.
+        (b"CREATE TABLE w(a, b DEFAULT (false))", ""),
+        (b"CREATE TABLE w(a, CHECK(true))", ""),
+        (b"CREATE INDEX i ON u(a) WHERE true", ""),
+        (
+            b"CREATE TABLE w(a, b DEFAULT (a))",
+            "default value of column [b] is not constant",
+        ),
+        (
+            b"CREATE TABLE w(a, b DEFAULT (?))",
+            "default value of column [b] is not constant",
+        ),
+        (
+            b"CREATE TABLE w(a, b DEFAULT ((SELECT 1)))",
+            "default value of column [b] is not constant",
+        ),
+        (
+            b"CREATE TABLE w(a, b DEFAULT (EXISTS(SELECT 1)))",
+            "default value of column [b] is not constant",
+        ),
+        (
+            b"CREATE TABLE w(a, b DEFAULT (\"zz\"))",
+            "default value of column [b] is not constant",
+        ),
+    ] {
+        assert_eq!(named(sql), message, "{:?}", core::str::from_utf8(sql));
+    }
+}

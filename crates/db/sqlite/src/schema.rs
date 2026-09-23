@@ -34,6 +34,8 @@ pub enum Error {
     FromSelect,
     /// Two columns of one name, named.
     DuplicateColumn(Vec<u8>),
+    /// A `DEFAULT` that is no constant, with the column it is of.
+    UnsetDefault(Vec<u8>),
     /// A collation no engine has.
     NoCollation(alloc::vec::Vec<u8>),
     /// A `likelihood` whose second argument is not a real between
@@ -455,6 +457,7 @@ pub fn index(
         // A term may be written with a collation of its own, which is
         // the one its entries are held in.
         let (named, written) = collated(arena, term.expr, sql, collating);
+        resolves(arena, term.expr, table, sql, Reading::Columns)?;
         let (of, collation) = if let Some(named) = named {
             let name = dequote(named.text(sql));
             let at = table
@@ -478,6 +481,9 @@ pub fn index(
             order: term.order,
             collation: written.unwrap_or(collation),
         });
+    }
+    if let Some(filter) = definition.filter {
+        resolves(arena, filter, table, sql, Reading::Row)?;
     }
     Ok(Index {
         name: dequote(definition.name.text(sql)),
@@ -1079,6 +1085,25 @@ pub fn table(
             }
         }
     }
+    for column in &table.columns {
+        if let Some(value) = column.falls_back {
+            constant(arena, value, &column.name, sql)?;
+        }
+    }
+    // A `CHECK` and a generated column read the columns of this table
+    // alone, and every column is known only once the whole statement is
+    // read, because a column written later stands as well.
+    for check in &table.checks {
+        resolves(arena, check.value, &table, sql, Reading::Row)?;
+    }
+    let computed: Vec<ExprId> = table
+        .columns
+        .iter()
+        .filter_map(|column| column.computed)
+        .collect();
+    for value in computed {
+        resolves(arena, value, &table, sql, Reading::Columns)?;
+    }
     Ok(table)
 }
 
@@ -1111,6 +1136,125 @@ fn key_name(arena: &Arena, id: ExprId) -> Option<Span> {
         Node::Literal(Literal::Text(span)) => Some(span),
         _ => None,
     }
+}
+
+/// Whether the tree holds a name as a column that is one of the two
+/// boolean values, which `sqlite3ExprIdToTrueFalse` of
+/// `research/sqlite/src/expr.c` reads `true` and `false` as where no
+/// column of the table carries the name.
+fn booled(named: Option<Span>, column: Span, sql: &[u8]) -> bool {
+    let text = column.text(sql);
+    named.is_none() && (text.eq_ignore_ascii_case(b"true") || text.eq_ignore_ascii_case(b"false"))
+}
+
+/// Raises where what a column falls back to is no constant, which is
+/// `sqlite3AddDefaultValue` of `research/sqlite/src/build.c` holding it
+/// to `sqlite3ExprIsConstantOrFunction`: a literal and a call stand, a
+/// name, a variable and a statement do not.
+///
+/// Walking the tree costs O(n) in its nodes.
+///
+/// # Errors
+///
+/// [`Error::UnsetDefault`] names the column.
+fn constant(arena: &Arena, id: ExprId, column: &[u8], sql: &[u8]) -> Result<(), Error> {
+    let node = arena.node(id).unwrap_or(Node::Literal(Literal::Null));
+    let named = match node {
+        Node::Column {
+            table,
+            column: name,
+            ..
+        } => !booled(table, name, sql),
+        Node::Variable(_) | Node::Subquery(_) | Node::Exists(_) => true,
+        _ => false,
+    };
+    if named {
+        return Err(Error::UnsetDefault(column.to_vec()));
+    }
+    let mut under = Vec::new();
+    arena.under(node, |id| under.push(id));
+    for id in under {
+        constant(arena, id, column, sql)?;
+    }
+    Ok(())
+}
+
+/// Whether `name` is one of the three names the key of a table answers
+/// to, which `sqlite3RowidAlias` of `research/sqlite/src/build.c` reads.
+pub(crate) fn rowid_named(name: &[u8]) -> bool {
+    [b"rowid".as_slice(), b"oid", b"_rowid_"]
+        .iter()
+        .any(|word| name.eq_ignore_ascii_case(word))
+}
+
+/// What a value of the schema may name.
+#[derive(Clone, Copy)]
+pub(crate) enum Reading {
+    /// A `CHECK` and the `WHERE` of a partial index, which read the key
+    /// of a table that has one as well, because `NC_IsCheck` and
+    /// `NC_PartIdx` of `research/sqlite/src/resolve.c` leave
+    /// `NC_NoRowid` off.
+    Row,
+    /// A generated column and an index term, which read the columns
+    /// alone.
+    Columns,
+}
+
+/// Raises where an expression of the table names a column the table does
+/// not hold, which is `sqlite3ResolveSelfReference` of
+/// `research/sqlite/src/resolve.c:1877` resolving a `CHECK`, a generated
+/// column, an index term and the `WHERE` of a partial index against that
+/// one table and nothing else.
+///
+/// Walking the tree costs O(n) in its nodes and O(m) in the columns at
+/// each name.
+///
+/// # Errors
+///
+/// [`Error::NoSuchColumn`] names the column as the statement wrote it,
+/// with the table in front of it where the statement wrote one.
+pub(crate) fn resolves(
+    arena: &Arena,
+    id: ExprId,
+    table: &Table,
+    sql: &[u8],
+    reading: Reading,
+) -> Result<(), Error> {
+    // A place the tree does not hold names nothing, which a literal that
+    // carries no name stands for.
+    let node = arena.node(id).unwrap_or(Node::Literal(Literal::Null));
+    if let Node::Column {
+        table: named,
+        column,
+        ..
+    } = node
+    {
+        let held = named.map(|span| dequote(span.text(sql)));
+        let name = dequote(column.text(sql));
+        let keyed = matches!(reading, Reading::Row) && !table.without_rowid && rowid_named(&name);
+        let mine = held.is_none_or(|held| held.eq_ignore_ascii_case(&table.name));
+        // `areDoubleQuotedStringsEnabled` of
+        // `research/sqlite/src/resolve.c:161` answers one for a schema,
+        // so a name in double quotes that is no column of the table is a
+        // text and not a refusal.
+        let quoted = booled(named, column, sql)
+            || named.is_none() && column.text(sql).first() == Some(&b'"');
+        if !(keyed || quoted || mine && index_of(table, column, sql).is_some()) {
+            let mut shown = Vec::new();
+            if let Some(span) = named {
+                shown.extend_from_slice(&dequote(span.text(sql)));
+                shown.push(b'.');
+            }
+            shown.extend_from_slice(&name);
+            return Err(Error::NoSuchColumn(shown));
+        }
+    }
+    let mut under = Vec::new();
+    arena.under(node, |id| under.push(id));
+    for id in under {
+        resolves(arena, id, table, sql, reading)?;
+    }
+    Ok(())
 }
 
 /// Where a name stands among the columns.

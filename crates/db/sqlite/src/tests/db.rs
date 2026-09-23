@@ -256,18 +256,21 @@ fn a_computed_column_that_cannot_be_computed_is_refused() {
     use crate::db::Error;
     // The table reads the schema page as its own rows, so that a row
     // exists to compute a column of. Its last column names itself.
-    for text in [
-        "CREATE TABLE a(p,q,r,s,t,u AS (u+1))",
-        "CREATE TABLE a(p,q,r,s,t,u AS (nosuch))",
-    ] {
-        let file = schema_file(&[record([Ok("table"), Ok("a"), Ok("a"), Err(1), Ok(text)])]);
-        let database = Database::open(&file).unwrap();
-        assert_eq!(
-            database.query(b"SELECT * FROM a").unwrap_err(),
-            Error::Computed,
-            "{text}"
-        );
-    }
+    let text = "CREATE TABLE a(p,q,r,s,t,u AS (u+1))";
+    let file = schema_file(&[record([Ok("table"), Ok("a"), Ok("a"), Err(1), Ok(text)])]);
+    let database = Database::open(&file).unwrap();
+    assert_eq!(
+        database.query(b"SELECT * FROM a").unwrap_err(),
+        Error::Computed
+    );
+    // A column that names what the table does not hold is refused where
+    // the reader reads the statement, so no row is reached.
+    let text = "CREATE TABLE a(p,q,r,s,t,u AS (nosuch))";
+    let file = schema_file(&[record([Ok("table"), Ok("a"), Ok("a"), Err(1), Ok(text)])]);
+    assert_eq!(
+        Database::open(&file).unwrap_err(),
+        Error::Schema(crate::schema::Error::NoSuchColumn(b"nosuch".to_vec()))
+    );
 }
 
 #[test]

@@ -1069,6 +1069,9 @@ Size: L.
 161. The triggers a rename resolves before it writes one of them, which
      refuse the rename where a step writes a table no database holds.
      Built, which D-442 records.
+162. The columns a value of the schema may name, which are the ones of
+     its own table, and the constant a column falls back to. Built,
+     which D-443 records.
 
 ### Done when
 

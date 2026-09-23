@@ -7226,3 +7226,17 @@ Document 16 step Q8.
 - The table each step of a trigger writes, for the three steps that
   write one, a step that writes none, and a statement the parser
   refuses.
+
+### 6.6.310 What a value of the schema may name (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A `CHECK`, a generated column, an index term and the `WHERE` of a
+  partial index, each against: a column of the table, a column written
+  under the table's name, a column written under another table, a name
+  the table does not hold, a name written later in the statement, the key
+  of the table, the key of a table written `WITHOUT ROWID`, a name in
+  double quotes, and an index term written as a text.
+- What a column falls back to: a literal, a call, a name, a variable, a
+  statement in brackets, an `EXISTS`, a name in double quotes, and
+  `false`.

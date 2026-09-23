@@ -384,6 +384,19 @@ pub(crate) fn without_column(statement: &[u8], column: &[u8]) -> Result<Vec<u8>,
     Ok(out)
 }
 
+/// The refusal a statement of the schema that still names a column a
+/// drop took out answers.
+fn after_drop(kind: &[u8], name: &[u8], shown: &[u8]) -> Error {
+    Error::AfterDrop(
+        kind.to_vec(),
+        name.to_vec(),
+        alloc::format!(
+            "no such column: {}",
+            alloc::string::String::from_utf8_lossy(shown)
+        ),
+    )
+}
+
 /// Where a statement names the column `column`, as the statement wrote
 /// it, which is what says the statement no longer reads once the column
 /// is gone. A name written with a table in front of it carries that
@@ -2341,6 +2354,13 @@ impl Writer {
             .written_as(&name)
             .ok_or(Error::NoTable(Vec::new()))?;
         let text = without_column(statement, &column)?;
+        // The reader refuses a table whose `CHECK` still names the
+        // column, so this text is read against the column before the row
+        // is written. A `CHECK` the column carried goes out with the
+        // column, so only one the table carries is left to name it.
+        if let Some(shown) = names_column(&text, &column) {
+            return Err(after_drop(b"table", &name, &shown));
+        }
         let affinities: Vec<Affinity> = table
             .columns
             .iter()
@@ -2464,11 +2484,7 @@ impl Writer {
                 continue;
             }
             if let Some(shown) = names_column(&statement, column) {
-                let refused = alloc::format!(
-                    "no such column: {}",
-                    alloc::string::String::from_utf8_lossy(&shown)
-                );
-                return Err(Error::AfterDrop(kind, held, refused));
+                return Err(after_drop(&kind, &held, &shown));
             }
         }
         Ok(())
@@ -8982,7 +8998,7 @@ impl Held<'_> {
                 let value = self.values.get(at)?.clone();
                 Some((value, held.affinity, held.collation))
             }
-            None if is_rowid(column) => self
+            None if crate::schema::rowid_named(column) => self
                 .rowid
                 .map(|key| (Value::Int(key), Affinity::Integer, Collation::Binary)),
             None => None,
@@ -9153,7 +9169,7 @@ impl crate::eval::Row for Fired<'_> {
                 let value = values.get(at)?.clone();
                 Some((value, held.affinity, held.collation))
             }
-            None if is_rowid(column) => {
+            None if crate::schema::rowid_named(column) => {
                 Some((Value::Int(rowid), Affinity::Integer, Collation::Binary))
             }
             None => None,
@@ -9362,7 +9378,7 @@ impl crate::eval::Row for Excluded<'_> {
                     column_of.collation,
                 ))
             }
-            None if is_rowid(column) => {
+            None if crate::schema::rowid_named(column) => {
                 Some((Value::Int(rowid), Affinity::Integer, Collation::Binary))
             }
             None => None,
@@ -9461,7 +9477,7 @@ fn places(table: &Table, named: &[Vec<u8>]) -> Result<Vec<Option<usize>>, Error>
             match at {
                 Some(at) if computed_column(table, at) => Err(Error::IntoGenerated(name.clone())),
                 Some(at) => Ok(Some(at)),
-                None if is_rowid(name) => Ok(None),
+                None if crate::schema::rowid_named(name) => Ok(None),
                 // `sqlite3Insert` names the table and the column it does
                 // not hold.
                 None => Err(Error::NoNamedColumn(table.name.clone(), name.clone())),
@@ -9496,7 +9512,7 @@ fn set_places(table: &Table, columns: &[Vec<u8>]) -> Result<Vec<Option<usize>>, 
                 .position(|held| held.name.eq_ignore_ascii_case(column));
             match at {
                 Some(at) => Ok(Some(at)),
-                None if is_rowid(column) => Ok(None),
+                None if crate::schema::rowid_named(column) => Ok(None),
                 None => Err(Error::Eval(crate::eval::Error::NoColumn(column.clone()))),
             }
         })
@@ -9564,14 +9580,6 @@ const fn refused_as(declared: &[u8], value: &Value) -> Option<&'static [u8]> {
         }),
         _ => None,
     }
-}
-
-/// Whether `name` is one of the three names the key of a table answers
-/// to.
-fn is_rowid(name: &[u8]) -> bool {
-    [b"rowid".as_slice(), b"oid", b"_rowid_"]
-        .iter()
-        .any(|word| name.eq_ignore_ascii_case(word))
 }
 
 impl Writer {
@@ -9729,7 +9737,7 @@ impl Writer {
                     Some(at) => Ok(Some(at)),
                     // `rowid` names the column the key is another name
                     // for, where the table has one.
-                    None if is_rowid(&column) => Ok(table.rowid_alias),
+                    None if crate::schema::rowid_named(&column) => Ok(table.rowid_alias),
                     None => Err(Error::Eval(crate::eval::Error::NoColumn(column.clone()))),
                 }
             })
@@ -10504,9 +10512,10 @@ impl crate::eval::Row for Indexing<'_> {
         if schema.is_some_and(|name| !name.eq_ignore_ascii_case(b"main")) {
             return None;
         }
-        if table.is_some_and(|name| !name.eq_ignore_ascii_case(&self.table.name)) {
-            return None;
-        }
+        // `crate::schema::resolves` holds a name written under a table
+        // to this table, so a name that reaches here carries this table
+        // or none.
+        let _ = table;
         let at = self
             .table
             .columns

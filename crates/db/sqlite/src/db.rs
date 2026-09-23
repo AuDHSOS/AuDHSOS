@@ -744,6 +744,9 @@ impl Error {
     fn datatypes(&self) -> Option<alloc::string::String> {
         let shown = |bytes: &[u8]| alloc::string::String::from_utf8_lossy(bytes).into_owned();
         Some(match self {
+            Error::Schema(schema::Error::UnsetDefault(name)) => {
+                alloc::format!("default value of column [{}] is not constant", shown(name))
+            }
             Error::Schema(schema::Error::MissingType(table, column)) => {
                 alloc::format!("missing datatype for {}.{}", shown(table), shown(column))
             }
@@ -8909,7 +8912,7 @@ fn origin_of(arena: &Arena, expr: ExprId, sql: &[u8], sides: &[Side<'_>]) -> Ori
                 .get(at)
                 .map_or_else(Origin::default, |column| column.origin.clone());
         }
-        if side.shape.keyed && rowid_named(&name) {
+        if side.shape.keyed && crate::schema::rowid_named(&name) {
             return keyed_origin(side);
         }
     }
@@ -8954,7 +8957,7 @@ fn declared_of(arena: &Arena, expr: ExprId, sql: &[u8], sides: &[Side<'_>]) -> V
                 .get(at)
                 .map_or_else(Vec::new, |column| column.declared.clone());
         }
-        if side.shape.keyed && rowid_named(&name) {
+        if side.shape.keyed && crate::schema::rowid_named(&name) {
             return b"INTEGER".to_vec();
         }
     }
@@ -9698,21 +9701,13 @@ fn answered_name(name: &[u8], sides: &[Side<'_>]) -> Vec<u8> {
     // the rowid's three names was written; every other name no side
     // holds answers under the name that was written, which is what
     // `sqlite3ColumnsFromExprList` does for a `TK_ID`.
-    if !rowid_named(name) {
+    if !crate::schema::rowid_named(name) {
         return name.to_vec();
     }
     sides
         .iter()
         .find_map(|side| side.shape.key.clone())
         .unwrap_or_else(|| b"rowid".to_vec())
-}
-
-/// Whether `name` is one of the three names the key of a table answers
-/// to.
-fn rowid_named(name: &[u8]) -> bool {
-    [b"rowid".as_slice(), b"oid", b"_rowid_"]
-        .iter()
-        .any(|word| name.eq_ignore_ascii_case(word))
 }
 
 /// The whole number an expression is, where it is one.

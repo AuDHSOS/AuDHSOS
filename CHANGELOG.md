@@ -7,6 +7,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` holds a `CHECK`, a generated column, an index term and the
+  `WHERE` of a partial index to the columns of their own table, and what
+  a column falls back to to a constant, so a name the table does not
+  hold is refused where the statement is read. D-443 records it. Catalog
+  6.6.310. `default.test` goes from 5 cases passing to 8 and
+  `alterdropcol2.test` from 15 to 17.
+
 - `db-sqlite` resolves every trigger of the schema before a rename
   writes one of them, and refuses the rename `error in trigger <name>:
   no such table: <table>` where a step of a trigger writes a table no
