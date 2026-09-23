@@ -182,8 +182,16 @@ impl QueueMemory for RamQueue {
         &mut self.available
     }
 
-    fn used_ring(&self) -> &[u8] {
-        &self.used
+    fn read_used(&self, at: usize, out: &mut [u8]) -> Result<(), crate::error::QueueError> {
+        let bytes = self.used.get(at..at.saturating_add(out.len())).ok_or(
+            crate::error::QueueError::Region {
+                area: crate::error::Area::UsedRing,
+                needed: at.saturating_add(out.len()),
+                given: self.used.len(),
+            },
+        )?;
+        out.copy_from_slice(bytes);
+        Ok(())
     }
 
     fn barrier(&self) {

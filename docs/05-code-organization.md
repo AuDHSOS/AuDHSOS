@@ -95,7 +95,7 @@ AuDHSOS/
 │   │   │                      app-checks, app-paint, app-input,
 │   │   │                      app-canvas, app-faulter, app-lspci,
 │   │   │                      app-files
-│   │   ├── net-programs/      user-net-programs: server-net, app-net and app-ssh,
+│   │   ├── net-programs/      user-net-programs: server-net, app-net, app-ssh and app-tls,
 │   │   │                      and what only they need — the region the device
 │   │   │                      reads and writes, and its registers. A package of
 │   │   │                      its own so that no other program carries the

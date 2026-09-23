@@ -19,8 +19,7 @@ use crate::descriptor::{Buffer, DESC_F_NEXT, DESC_F_WRITE, Descriptor};
 use crate::device::Device;
 use crate::error::{Area, QueueError};
 use crate::memory::{
-    QueueMemory, RING_HEADER_BYTES, USED_ELEMENT_BYTES, descriptor_table_bytes, read_u16, read_u32,
-    write_u16,
+    QueueMemory, RING_HEADER_BYTES, USED_ELEMENT_BYTES, descriptor_table_bytes, write_u16,
 };
 
 /// Available ring flag: the driver wants no interrupt when the device
@@ -299,7 +298,7 @@ impl<const WORDS: usize> Queue<WORDS> {
             return Err(QueueError::NotLive);
         }
         memory.barrier();
-        let flags = read_u16(memory.used_ring(), Area::UsedRing, FLAGS_AT)?;
+        let flags = memory.read_used_u16(FLAGS_AT)?;
         Ok(flags & USED_F_NO_NOTIFY == 0)
     }
 
@@ -358,8 +357,7 @@ impl<const WORDS: usize> Queue<WORDS> {
         if !device.is_live() {
             return Err(QueueError::NotLive);
         }
-        let used = memory.used_ring();
-        let index = read_u16(used, Area::UsedRing, INDEX_AT)?;
+        let index = memory.read_used_u16(INDEX_AT)?;
         let pending = index.wrapping_sub(self.last_used);
         if pending == 0 {
             return Ok(None);
@@ -377,8 +375,8 @@ impl<const WORDS: usize> Queue<WORDS> {
         // so a driver that has seen the index has to see the element.
         memory.barrier();
         let at = used_element_at(self.last_used & self.mask());
-        let id = read_u32(used, Area::UsedRing, at)?;
-        let length = read_u32(used, Area::UsedRing, at.saturating_add(USED_LENGTH_AT))?;
+        let id = memory.read_used_u32(at)?;
+        let length = memory.read_used_u32(at.saturating_add(USED_LENGTH_AT))?;
         let head = u16::try_from(id).unwrap_or(u16::MAX);
         if head >= self.size || self.free.test(usize::from(head)).unwrap_or(true) {
             return Err(QueueError::UnknownDescriptor(id));

@@ -11,18 +11,17 @@
 //! the address arithmetic here.
 //!
 //! The layout is fixed at compile time, each piece at the alignment virtio
-//! 2.7 asks for, and the region is cut into its pieces once: the two queues
-//! and the two frame areas are four values that borrow disjoint halves of
-//! one slice, so the driver can hold all four at once.
+//! 2.7 asks for. The device-written pieces remain raw pointers; the driver
+//! borrows only the descriptor tables, available rings and transmit area.
 //! [`REGION_BYTES`] is what it comes to.
 //!
-//! Invariant: every accessor answers a slice inside the region or an empty
-//! one; nothing here computes an address the caller could pass on.
+//! Invariant: every access stays inside its disjoint piece.
 
 use core::sync::atomic::{Ordering, fence};
 
 use driver_virtio_net::frames::Frames;
 use driver_virtio_net::queues::{Queues, Rings};
+use virtio_queue::error::{Area as QueueArea, QueueError};
 use virtio_queue::memory::{
     AVAILABLE_RING_ALIGN, DESCRIPTOR_TABLE_ALIGN, QueueMemory, USED_RING_ALIGN,
     available_ring_bytes, descriptor_table_bytes, used_ring_bytes,
@@ -72,9 +71,6 @@ const USED_AT: usize = align_up(
     USED_RING_ALIGN,
 );
 
-/// Where the used ring ends inside that piece.
-const USED_END: usize = USED_AT + used_ring_bytes(QUEUE_SIZE);
-
 /// `value` rounded up to a multiple of `align`.
 const fn align_up(value: usize, align: usize) -> usize {
     value.next_multiple_of(align)
@@ -82,13 +78,27 @@ const fn align_up(value: usize, align: usize) -> usize {
 
 /// The three rings of one queue, over the bytes of its piece.
 pub struct Ring<'a> {
-    /// The bytes of the piece.
-    bytes: &'a mut [u8],
+    descriptors: &'a mut [u8],
+    available: &'a mut [u8],
+    used: *mut u8,
     /// The physical address the piece begins at.
     physical: u64,
 }
 
 impl Ring<'_> {
+    fn check_used(at: usize, width: usize) -> Result<(), QueueError> {
+        let len = used_ring_bytes(QUEUE_SIZE);
+        if at.checked_add(width).is_none_or(|end| end > len) {
+            Err(QueueError::Region {
+                area: QueueArea::UsedRing,
+                needed: at.saturating_add(width),
+                given: len,
+            })
+        } else {
+            Ok(())
+        }
+    }
+
     /// Where the three rings are, as `initialize` is told them.
     #[must_use]
     #[expect(
@@ -107,25 +117,72 @@ impl Ring<'_> {
     /// Every byte of the piece, which the driver zeroes before it tells
     /// the device where the rings are (virtio 2.7.10.1).
     pub fn clear(&mut self) {
-        self.bytes.fill(0);
+        self.descriptors.fill(0);
+        self.available.fill(0);
+        for at in 0..used_ring_bytes(QUEUE_SIZE) {
+            let pointer = self.used.wrapping_add(at);
+            // SAFETY: construction bounds the used ring; the device is not
+            // configured when clear is called.
+            unsafe { pointer.write_volatile(0) };
+        }
     }
 }
 
 impl QueueMemory for Ring<'_> {
     fn descriptor_table(&self) -> &[u8] {
-        region(self.bytes, 0, AVAILABLE_AT)
+        self.descriptors
     }
 
     fn descriptor_table_mut(&mut self) -> &mut [u8] {
-        region_mut(self.bytes, 0, AVAILABLE_AT)
+        self.descriptors
     }
 
     fn available_ring_mut(&mut self) -> &mut [u8] {
-        region_mut(self.bytes, AVAILABLE_AT, USED_AT)
+        self.available
     }
 
-    fn used_ring(&self) -> &[u8] {
-        region(self.bytes, USED_AT, USED_END)
+    fn read_used(&self, at: usize, out: &mut [u8]) -> Result<(), QueueError> {
+        Self::check_used(at, out.len())?;
+        for (offset, byte) in out.iter_mut().enumerate() {
+            let pointer = self.used.wrapping_add(at.saturating_add(offset));
+            // SAFETY: the range check bounds every offset; the mapping is live.
+            *byte = unsafe { pointer.read_volatile() };
+        }
+        Ok(())
+    }
+
+    fn read_used_u16(&self, at: usize) -> Result<u16, QueueError> {
+        Self::check_used(at, 2)?;
+        if !at.is_multiple_of(2) {
+            let mut bytes = [0; 2];
+            self.read_used(at, &mut bytes)?;
+            return Ok(u16::from_le_bytes(bytes));
+        }
+        // new checks base alignment; at and the width are checked.
+        #[expect(
+            clippy::cast_ptr_alignment,
+            reason = "base and offset alignment checked"
+        )]
+        let pointer = self.used.wrapping_add(at).cast::<u16>();
+        // SAFETY: the pointer is aligned, in bounds and device-shared.
+        Ok(u16::from_le(unsafe { pointer.read_volatile() }))
+    }
+
+    fn read_used_u32(&self, at: usize) -> Result<u32, QueueError> {
+        Self::check_used(at, 4)?;
+        if !at.is_multiple_of(4) {
+            let mut bytes = [0; 4];
+            self.read_used(at, &mut bytes)?;
+            return Ok(u32::from_le_bytes(bytes));
+        }
+        // new checks base alignment; at and the width are checked.
+        #[expect(
+            clippy::cast_ptr_alignment,
+            reason = "base and offset alignment checked"
+        )]
+        let pointer = self.used.wrapping_add(at).cast::<u32>();
+        // SAFETY: the pointer is aligned, in bounds and device-shared.
+        Ok(u32::from_le(unsafe { pointer.read_volatile() }))
     }
 
     /// The ordering virtio 2.7.13.3.1 and 2.7.13.4.1 require.
@@ -140,10 +197,14 @@ impl QueueMemory for Ring<'_> {
 
 /// The frame buffers of one side, over the bytes of its area.
 pub struct Area<'a> {
-    /// The bytes of the area.
-    bytes: &'a mut [u8],
+    bytes: AreaBytes<'a>,
     /// The physical address the area begins at.
     physical: u64,
+}
+
+enum AreaBytes<'a> {
+    Shared(*const u8),
+    Exclusive(&'a mut [u8]),
 }
 
 impl Area<'_> {
@@ -167,14 +228,34 @@ impl Frames for Area<'_> {
         self.physical.checked_add(u64::try_from(at).ok()?)
     }
 
-    fn bytes(&self, index: u16) -> Option<&[u8]> {
+    fn copy(&self, index: u16, offset: usize, out: &mut [u8]) -> Option<()> {
         let at = Self::at(index)?;
-        self.bytes.get(at..at.checked_add(BUFFER_BYTES)?)
+        let end = offset.checked_add(out.len())?;
+        if end > BUFFER_BYTES {
+            return None;
+        }
+        match &self.bytes {
+            AreaBytes::Shared(bytes) => {
+                let start = at.checked_add(offset)?;
+                for (step, byte) in out.iter_mut().enumerate() {
+                    let pointer = bytes.wrapping_add(start.checked_add(step)?);
+                    // SAFETY: at and end bound the access inside AREA_BYTES.
+                    *byte = unsafe { pointer.read_volatile() };
+                }
+            }
+            AreaBytes::Exclusive(bytes) => {
+                out.copy_from_slice(bytes.get(at.checked_add(offset)?..at.checked_add(end)?)?);
+            }
+        }
+        Some(())
     }
 
     fn bytes_mut(&mut self, index: u16) -> Option<&mut [u8]> {
         let at = Self::at(index)?;
-        self.bytes.get_mut(at..at.checked_add(BUFFER_BYTES)?)
+        match &mut self.bytes {
+            AreaBytes::Shared(_) => None,
+            AreaBytes::Exclusive(bytes) => bytes.get_mut(at..at.checked_add(BUFFER_BYTES)?),
+        }
     }
 }
 
@@ -191,33 +272,45 @@ pub struct NetDma<'a> {
 }
 
 impl<'a> NetDma<'a> {
-    /// The region over `bytes`, which begin at physical address
-    /// `physical`.
+    /// The region over `bytes`, which begin at physical address `physical`.
     ///
     /// Answers `None` for fewer than [`REGION_BYTES`] bytes and for a
     /// physical start that is not aligned to the descriptor table, which
     /// virtio 2.7 requires of the table and this layout puts first.
+    /// # Safety
+    ///
+    /// `bytes` must point to a live, writable mapping of `len` bytes for
+    /// the entire lifetime. The driver clears used rings before device
+    /// configuration; afterward only the device writes the used rings and
+    /// receive area. No other CPU access may alias
+    /// the descriptor tables, available rings or transmit area.
     #[must_use]
-    pub fn new(bytes: &'a mut [u8], physical: u64) -> Option<NetDma<'a>> {
+    pub unsafe fn new(bytes: *mut u8, len: usize, physical: u64) -> Option<NetDma<'a>> {
         let align = u64::try_from(DESCRIPTOR_TABLE_ALIGN).unwrap_or(1);
-        if bytes.len() < REGION_BYTES || !physical.is_multiple_of(align) {
+        if bytes.is_null()
+            || len < REGION_BYTES
+            || len > isize::MAX.unsigned_abs()
+            || !physical.is_multiple_of(align)
+            || !bytes.addr().is_multiple_of(DESCRIPTOR_TABLE_ALIGN)
+        {
             return None;
         }
         let step = u64::try_from(QUEUE_BYTES).ok()?;
         let area = u64::try_from(AREA_BYTES).ok()?;
-        let (receive, rest) = bytes.split_at_mut(QUEUE_BYTES);
-        let (transmit, rest) = rest.split_at_mut(QUEUE_BYTES);
-        let (taken, rest) = rest.split_at_mut(AREA_BYTES);
-        let (given, _over) = rest.split_at_mut(AREA_BYTES);
+        // SAFETY: the caller guarantees the mapping and exclusive
+        // driver-written parts; the length check bounds both queues.
+        let receive = unsafe { Self::ring(bytes, physical) };
+        let transmit_at = bytes.wrapping_add(QUEUE_BYTES);
+        // SAFETY: the second queue is disjoint from the first.
+        let transmit = unsafe { Self::ring(transmit_at, physical.wrapping_add(step)) };
+        let taken = AreaBytes::Shared(bytes.wrapping_add(2 * QUEUE_BYTES));
+        let given_at = bytes.wrapping_add(2 * QUEUE_BYTES + AREA_BYTES);
+        // SAFETY: the transmit area is disjoint and driver-written.
+        let given =
+            AreaBytes::Exclusive(unsafe { core::slice::from_raw_parts_mut(given_at, AREA_BYTES) });
         Some(NetDma {
-            receive: Ring {
-                bytes: receive,
-                physical,
-            },
-            transmit: Ring {
-                bytes: transmit,
-                physical: physical.wrapping_add(step),
-            },
+            receive,
+            transmit,
             taken: Area {
                 bytes: taken,
                 physical: physical.wrapping_add(step.wrapping_mul(2)),
@@ -229,6 +322,21 @@ impl<'a> NetDma<'a> {
                     .wrapping_add(area),
             },
         })
+    }
+
+    const unsafe fn ring(bytes: *mut u8, physical: u64) -> Ring<'a> {
+        // SAFETY: new bounds and reserves the descriptor table.
+        let descriptors = unsafe { core::slice::from_raw_parts_mut(bytes, AVAILABLE_AT) };
+        let available_at = bytes.wrapping_add(AVAILABLE_AT);
+        // SAFETY: the available ring is disjoint from the descriptor table.
+        let available =
+            unsafe { core::slice::from_raw_parts_mut(available_at, USED_AT - AVAILABLE_AT) };
+        Ring {
+            descriptors,
+            available,
+            used: bytes.wrapping_add(USED_AT),
+            physical,
+        }
     }
 
     /// Where the rings of both queues are, as `initialize` is told them.
@@ -246,14 +354,4 @@ impl<'a> NetDma<'a> {
         self.receive.clear();
         self.transmit.clear();
     }
-}
-
-/// The bytes from `from` to `to`, or none when the region is shorter.
-fn region(bytes: &[u8], from: usize, to: usize) -> &[u8] {
-    bytes.get(from..to).unwrap_or(&[])
-}
-
-/// The same, for writing.
-fn region_mut(bytes: &mut [u8], from: usize, to: usize) -> &mut [u8] {
-    bytes.get_mut(from..to).unwrap_or(&mut [])
 }

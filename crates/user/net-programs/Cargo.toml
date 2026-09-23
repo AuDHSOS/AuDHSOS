@@ -3,7 +3,7 @@
 
 [package]
 name = "user-net-programs"
-description = "The two programs of the network: the server that drives the device and the client that uses a socket"
+description = "The four network programs: server-net, app-net, app-ssh and app-tls"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -13,7 +13,6 @@ rust-version.workspace = true
 [lib]
 name = "user_net_programs"
 path = "src/lib.rs"
-test = false
 bench = false
 
 [[bin]]

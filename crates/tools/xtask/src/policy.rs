@@ -923,22 +923,19 @@ pub(crate) const CRATES: &[Crate] = &[
         coverage_gate: false,
         target: Target::X86_64None,
     },
-    // The two programs of the network are a package of their own, because
+    // The four programs of the network are a package of their own, because
     // a binary of this workspace names every dependency of its package and
-    // the stack under these two is megabytes of an image every other
+    // the stack under them is megabytes of an image every other
     // program is read out of one message at a time (D-144).
     Crate {
         name: "user-net-programs",
         path: "crates/user/net-programs",
-        // Eight sites, all of `server-net`: the register window, the
-        // region the device reads and writes, the memory the stack writes
-        // into, the socket pages it hands out, and the entry point of each
-        // of its two threads with the gate that thread adopts. The two
-        // programs that use a connection have none left —
-        // `user_programs::socket::Stream` holds the mapping and the
-        // reference into the rings.
+        // The server maps registers and pages, starts two threads, and
+        // builds the DMA region. The DMA adapter uses volatile access to
+        // device-written rings and frames and makes exclusive slices only
+        // for driver-written regions. The three client programs use none.
         kind: Kind::Adapter {
-            unsafe_budget: 8,
+            unsafe_budget: 23,
             asm_budget: 0,
         },
         deps: &[

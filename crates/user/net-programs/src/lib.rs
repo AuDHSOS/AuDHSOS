@@ -26,3 +26,10 @@ use user_sys_x86_64 as _;
 
 pub mod net_dma;
 pub mod net_registers;
+pub mod reseed;
+
+#[cfg(test)]
+extern crate std;
+
+#[cfg(test)]
+mod tests;
