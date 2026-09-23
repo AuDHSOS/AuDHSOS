@@ -18,7 +18,7 @@ use virtio_queue::{F_VERSION_1, Queue};
 const QUEUE_SIZE: u16 = 4;
 
 /// Bytes of one buffer.
-const STRIDE: u32 = 256;
+const STRIDE: u32 = 1526;
 
 /// `VIRTIO_NET_F_MAC`, which the driver asks for.
 const F_MAC: u64 = 1 << 5;

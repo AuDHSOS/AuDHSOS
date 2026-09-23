@@ -15,6 +15,9 @@ use crate::frames::Frames;
 use crate::init::{NO_BUFFER, Net};
 use crate::net::HEADER_LEN;
 
+/// Minimum receive buffer without merged buffers or guest offloads.
+const MIN_RECEIVE_BUFFER: u32 = 1526;
+
 impl<const SLOTS: usize> Net<SLOTS> {
     /// Puts every receive buffer that is not already with the device into
     /// the available ring, and answers how many went in.
@@ -27,18 +30,25 @@ impl<const SLOTS: usize> Net<SLOTS> {
     ///
     /// # Errors
     ///
-    /// [`NetError::Slots`] for an area of more buffers than this driver
-    /// holds, [`NetError::Buffer`] for a buffer the area would not name,
-    /// and [`NetError::Queue`] for what the queue refused.
+    /// [`NetError::Slots`] for a queue or area larger than this driver
+    /// holds, [`NetError::BufferTooShort`] for a receive buffer below the
+    /// virtio minimum, [`NetError::Buffer`] for a buffer the area would
+    /// not name, and [`NetError::Queue`] for what the queue refused.
     pub fn fill<const WORDS: usize>(
         &mut self,
         queue: &mut Queue<WORDS>,
         memory: &mut impl QueueMemory,
         frames: &impl Frames,
     ) -> Result<u16, NetError> {
+        if usize::from(queue.size()) > SLOTS {
+            return Err(NetError::Slots(queue.size()));
+        }
         let count = frames.count();
         if usize::from(count) > SLOTS {
             return Err(NetError::Slots(count));
+        }
+        if frames.len() < MIN_RECEIVE_BUFFER {
+            return Err(NetError::BufferTooShort(frames.len()));
         }
         let mut filled = 0u16;
         for index in 0..count {
@@ -67,18 +77,16 @@ impl<const SLOTS: usize> Net<SLOTS> {
     /// [`NetError::ShortFrame`] for a used element that does not hold the
     /// header, [`NetError::FrameTooLong`] for one longer than `into`,
     /// [`NetError::UnknownBuffer`] for an element naming a descriptor this
-    /// driver did not hand out, [`NetError::Buffer`] for a buffer the area
-    /// would not name, and [`NetError::Queue`] for what the queue refused.
+    /// driver did not hand out, [`NetError::Slots`] for an oversized queue,
+    /// [`NetError::Buffer`] for a buffer the area would not name, and
+    /// [`NetError::Queue`] for what the queue refused.
     ///
-    /// A frame this driver will not hand on costs the device no buffer:
-    /// the first three refusals put the buffer back into the available
-    /// ring before they are reported. The last two are different in kind.
-    /// A refusal of the queue — a used element naming a descriptor that is
-    /// free, one reporting more bytes than the chain gave the device room
-    /// for, a chain that does not end — says that the driver and the
-    /// device no longer agree on what is in the queue, and the queue is
-    /// then rebuilt rather than carried on with: the caller resets the
-    /// device, which is what [`reset`](Net::reset) is for.
+    /// Short frames and frames larger than `into` put the buffer back
+    /// before reporting the refusal. A buffer outside `frames` remains
+    /// available for a later fill using the original area.
+    /// A used length above the buffer clears its ownership before the
+    /// refusal, so a later [`fill`](Net::fill) can post it again. Other
+    /// queue refusals require a device reset with [`reset`](Net::reset).
     pub fn receive<'b, const WORDS: usize>(
         &mut self,
         queue: &mut Queue<WORDS>,
@@ -86,29 +94,47 @@ impl<const SLOTS: usize> Net<SLOTS> {
         frames: &impl Frames,
         into: &'b mut [u8],
     ) -> Result<Option<&'b [u8]>, NetError> {
-        let Some(completion) = queue.next_used(&self.device, memory)? else {
+        if usize::from(queue.size()) > SLOTS {
+            return Err(NetError::Slots(queue.size()));
+        }
+        let completion = match queue.next_used(&self.device, memory) {
+            Err(error @ virtio_queue::QueueError::UsedLength { head, .. }) => {
+                let _released = self.release(head);
+                return Err(NetError::Queue(error));
+            }
+            result => result?,
+        };
+        let Some(completion) = completion else {
             return Ok(None);
         };
-        let slot = usize::from(completion.head);
-        let owner = self
-            .taken
-            .get_mut(slot)
-            .ok_or(NetError::UnknownBuffer(completion.head))?;
-        let index = core::mem::replace(owner, NO_BUFFER);
-        if index == NO_BUFFER || index >= frames.count() {
+        let index = self.release(completion.head)?;
+        if index >= frames.count() {
             return Err(NetError::UnknownBuffer(completion.head));
         }
-        let posted = self
-            .posted
-            .get_mut(usize::from(index))
-            .ok_or(NetError::Buffer(index))?;
-        *posted = false;
         let taken = take(frames, index, completion.length, into);
         // The buffer goes back whatever the length said, so that a frame
         // this driver will not hand on does not cost the device a buffer.
         self.post(queue, memory, frames, index)?;
         let len = taken?;
         Ok(Some(into.get(..len).unwrap_or(&[])))
+    }
+
+    /// Clears ownership after the queue frees a receive descriptor.
+    fn release(&mut self, head: u16) -> Result<u16, NetError> {
+        let owner = self
+            .taken
+            .get_mut(usize::from(head))
+            .ok_or(NetError::UnknownBuffer(head))?;
+        let index = core::mem::replace(owner, NO_BUFFER);
+        if index == NO_BUFFER {
+            return Err(NetError::UnknownBuffer(head));
+        }
+        let posted = self
+            .posted
+            .get_mut(usize::from(index))
+            .ok_or(NetError::Buffer(index))?;
+        *posted = false;
+        Ok(index)
     }
 
     /// Puts buffer `index` into the available ring as one device-writable

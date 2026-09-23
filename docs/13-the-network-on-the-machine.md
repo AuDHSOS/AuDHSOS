@@ -349,8 +349,8 @@ derives them has no other source of an address (D-115).
 ## 13.9 `driver-virtio-net`
 
 A layer-2 logic crate at `crates/drivers/virtio-net`, `no_std`,
-`#![forbid(unsafe_code)]`, no allocation, depending on `pci` and
-`virtio-queue` and on nothing of the network track: it hands out frames as
+`#![forbid(unsafe_code)]`, no allocation, depending on `virtio-queue`
+alone (D-139) and on nothing of the network track: it hands out frames as
 byte slices and takes them as byte slices, and what a frame means is
 `server-net`'s business. Its MAC address is a `[u8; 6]` for the same
 reason.

@@ -154,3 +154,83 @@ fn rings_of_a_size_the_caller_left_out_are_refused() {
     let error = refusal(net.initialize(&mut registers, &queues, &super::support::VECTORS));
     assert_eq!(error, NetError::QueueSize(0));
 }
+
+#[test]
+fn an_oversized_transmit_queue_is_refused_before_any_descriptor_is_used() {
+    let mut registers = device();
+    let mut net = live(&mut registers);
+    let mut memory = virtio_queue::doubles::RamQueue::new(16);
+    let mut queue = virtio_queue::Queue::<1>::new(&mut memory, 16).expect("a queue");
+    let mut area = frames(Side::Transmit);
+    assert_eq!(
+        refusal(net.send(&mut queue, &mut memory, &mut area, FRAME)),
+        NetError::Slots(16)
+    );
+    assert_eq!(refusal(net.drain(&mut queue, &memory)), NetError::Slots(16));
+    assert_eq!(memory.available_index(), 0);
+}
+
+#[test]
+fn a_queue_refusal_leaves_the_frame_in_a_free_buffer() {
+    let mut registers = device();
+    let mut net = live(&mut registers);
+    let mut memory = virtio_queue::doubles::RamQueue::new(4);
+    let mut queue = virtio_queue::Queue::<1>::new(&mut memory, 4).expect("a queue");
+    let mut area = frames(Side::Transmit);
+    for _ in 0..4 {
+        net.send(&mut queue, &mut memory, &mut area, FRAME)
+            .expect("sent");
+    }
+    assert!(matches!(
+        refusal(net.send(&mut queue, &mut memory, &mut area, FRAME)),
+        NetError::Queue(virtio_queue::QueueError::QueueFull { .. })
+    ));
+    assert_eq!(&area.buffer(4)[HEADER_LEN..HEADER_LEN + FRAME.len()], FRAME);
+    assert!(!net.busy[4]);
+    assert_eq!(memory.available_index(), 4);
+}
+
+#[test]
+fn send_starts_at_the_last_buffer_released_by_drain() {
+    let mut registers = device();
+    let mut net = live(&mut registers);
+    let (mut memory, mut queue) = queue();
+    let mut area = frames(Side::Transmit);
+    for _ in 0..QUEUE_SIZE {
+        net.send(&mut queue, &mut memory, &mut area, FRAME)
+            .expect("sent");
+    }
+    for slot in [0, 5] {
+        memory.complete(u32::from(memory.available_entry(slot)), 0);
+    }
+    assert_eq!(net.drain(&mut queue, &memory), Ok(2));
+    assert_eq!(net.free_hint, 5);
+    net.send(&mut queue, &mut memory, &mut area, FRAME)
+        .expect("sent");
+    assert!(net.busy[5]);
+    assert!(!net.busy[0]);
+}
+
+#[test]
+fn an_invalid_transmit_used_length_releases_the_buffer() {
+    let mut registers = device();
+    let mut net = live(&mut registers);
+    let (mut memory, mut queue) = queue();
+    let mut area = frames(Side::Transmit);
+    net.send(&mut queue, &mut memory, &mut area, FRAME)
+        .expect("sent");
+    let head = memory.available_entry(0);
+    memory.complete(u32::from(head), 1);
+    assert_eq!(
+        refusal(net.drain(&mut queue, &memory)),
+        NetError::Queue(virtio_queue::QueueError::UsedLength {
+            head,
+            reported: 1,
+            writable: 0,
+        })
+    );
+    assert!(!net.busy[0]);
+    assert_eq!(net.sending[usize::from(head)], crate::NO_BUFFER);
+    net.send(&mut queue, &mut memory, &mut area, FRAME)
+        .expect("sent again");
+}

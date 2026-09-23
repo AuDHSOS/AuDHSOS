@@ -99,6 +99,8 @@ pub enum QueueError {
     /// buffers it handed in. The chain is freed either way; what is
     /// refused is the number.
     UsedLength {
+        /// The head of the chain returned to the free set.
+        head: u16,
         /// What the used element said.
         reported: u32,
         /// How many bytes the device-writable descriptors of the chain
@@ -150,7 +152,9 @@ impl fmt::Display for QueueError {
                 f,
                 "the used index went from {last} to {now} with {in_flight} chains outstanding"
             ),
-            QueueError::UsedLength { reported, writable } => write!(
+            QueueError::UsedLength {
+                reported, writable, ..
+            } => write!(
                 f,
                 "the device reports {reported} bytes written where {writable} were writable"
             ),
