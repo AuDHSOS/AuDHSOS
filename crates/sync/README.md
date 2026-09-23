@@ -1,7 +1,8 @@
 # audhsos-sync
 
 Two cells for global state that hand out exclusive access one borrower at a
-time and report a second borrower as an error instead of waiting.
+time. A repeated borrow by the same `ExclusiveToken` owner reports an error;
+a different owner waits for the first borrower to release the cell.
 
 `Global<T>` is written once at run time and holds an `Option<T>` until then.
 `Preset<T>` holds its value from the start: no initialization step, no
