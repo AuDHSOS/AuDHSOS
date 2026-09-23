@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Manuel Baesler and contributors
 
-//! Generators for the types of this crate, behind the feature
-//! `test-strategies`.
+//! Generators for crate tests and the `test-strategies` feature.
 
 use test_support::generators::{BoxGen, Generator, one_of, pair, range};
 

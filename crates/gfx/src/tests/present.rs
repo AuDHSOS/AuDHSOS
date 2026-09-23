@@ -178,3 +178,22 @@ fn a_run_that_does_not_fit_the_sink_is_dropped_whole() {
     assert_eq!(front.pixel(1, 0), Some(Color::BLACK));
     assert_eq!(front.pixel(1, 1), Some(Color::BLACK));
 }
+
+#[test]
+fn merged_damage_presents_each_pixel_once() {
+    let mut bytes = buffer(10, 4);
+    let picture = Surface::new(&mut bytes, 10, 4, 10, PixelFormat::Rgbx8888).unwrap();
+    let mut damage = Damage::new();
+    damage.push(Rect::new(0, 0, 4, 4));
+    damage.push(Rect::new(6, 0, 4, 4));
+    damage.push(Rect::new(3, 0, 4, 4));
+
+    let mut sink = Recording::new(10, 4, PixelFormat::Rgbx8888);
+    assert_eq!(present(&picture, &mut sink, &damage).unwrap(), 40);
+    assert_eq!(sink.runs.len(), 4);
+    for (y, run) in sink.runs.iter().enumerate() {
+        assert_eq!(run.x, 0);
+        assert_eq!(run.y, u32::try_from(y).unwrap());
+        assert_eq!(run.bytes.len(), 40);
+    }
+}
