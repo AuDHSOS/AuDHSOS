@@ -1441,3 +1441,67 @@ fn a_label_written_raw_is_read_by_the_path_that_names_it() {
         (r#"'{"a_b":5}' -> 'a_b'"#, r"'5'"),
     ]);
 }
+
+/// A call that answers one of its arguments as it stands answers the
+/// subtype of that argument, which `sqlite3_result_value` copies with the
+/// value, so JSON reaches the call around it as JSON and not as text.
+#[test]
+fn what_carries_the_json_of_an_argument() {
+    calls_answer(&[
+        (
+            "json_insert('{}','$.a',coalesce(null,json('{b:5}')))->>'$.a.b'",
+            "5",
+        ),
+        // Text no `json()` answered is text, which the call around it
+        // writes as one string.
+        (
+            "json_insert('{}','$.a',coalesce(null,'{b:5}'))->>'$.a.b'",
+            "NULL",
+        ),
+        (
+            "json_insert('{}','$.a',iif(1,json('{b:5}'),123))->>'$.a.b'",
+            "5",
+        ),
+        (
+            "json_insert('{}','$.a',iif(0,123,json('{b:5}')))->>'$.a.b'",
+            "5",
+        ),
+        (
+            "json_insert('{}','$.a',ifnull(NULL,json('{b:5}')))->>'$.a.b'",
+            "5",
+        ),
+        (
+            "json_insert('{}','$.a',nullif(json('{b:5}'),8))->>'$.a.b'",
+            "5",
+        ),
+        (
+            "json_insert('{}','$.a',min('~',json('{b:5}')))->>'$.a.b'",
+            "5",
+        ),
+        (
+            "json_insert('{}','$.a',max('...',json('{b:5}')))->>'$.a.b'",
+            "5",
+        ),
+        (
+            "json_insert('{}','$.a',likely(json('{b:5}')))->>'$.a.b'",
+            "5",
+        ),
+        // A sign before the value carries the subtype, and a sign that
+        // computes a number answers a number.
+        (
+            "json_array(+json_extract('{\"x\":[1,2]}','$.x'))",
+            "'[[1,2]]'",
+        ),
+        (
+            "json_array(++json_extract('{\"x\":[1,2]}','$.x'))",
+            "'[[1,2]]'",
+        ),
+        ("json_array(-json_extract('{\"x\":[1,2]}','$.x'))", "'[0]'"),
+        // A call that answers none of its arguments answers no subtype.
+        (
+            "json_array(nullif(json('[1,2]'),json('[1,2]')))",
+            "'[null]'",
+        ),
+        ("json_array(min(json('[1,2]'),'~'))", "'[[1,2]]'"),
+    ]);
+}

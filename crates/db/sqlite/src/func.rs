@@ -1035,6 +1035,11 @@ pub fn call(
     } = given;
     let arg = |at: usize| args.get(at).cloned().unwrap_or(Value::Null);
     let first = arg(0);
+    // Which argument the call answers the value of, where it answers one
+    // as it stands: `sqlite3_result_value` of
+    // `research/sqlite/src/vdbeapi.c` copies the subtype with the value,
+    // so the JSON of that argument is the JSON of the answer.
+    let mut taken = None;
     let answered = (
         match function {
             Function::Date => crate::date::date(args, clock),
@@ -1155,11 +1160,13 @@ pub fn call(
                     _ => Value::Null,
                 }
             }
-            Function::Coalesce => args
-                .iter()
-                .find(|value| **value != Value::Null)
-                .cloned()
-                .unwrap_or(Value::Null),
+            Function::Coalesce => match args.iter().position(|value| *value != Value::Null) {
+                Some(at) => {
+                    taken = Some(at);
+                    arg(at)
+                }
+                None => Value::Null,
+            },
             Function::Iif => {
                 // `iif(a,b,c,d,e)` is `CASE WHEN a THEN b WHEN c THEN d ELSE
                 // e END`, and with an even number of arguments there is no
@@ -1170,43 +1177,50 @@ pub fn call(
                         break Value::Null;
                     };
                     let Some(result) = args.get(at.saturating_add(1)) else {
+                        taken = Some(at);
                         break condition.clone();
                     };
                     if condition.truth(false) {
+                        taken = Some(at.saturating_add(1));
                         break result.clone();
                     }
                     at = at.saturating_add(2);
                 }
             }
-            Function::Unlikely => first,
+            Function::Unlikely => {
+                taken = Some(0);
+                first
+            }
             Function::Nullif => {
                 if compare(&first, &arg(1), collation) == core::cmp::Ordering::Equal {
                     Value::Null
                 } else {
+                    taken = Some(0);
                     first
                 }
             }
             Function::Min | Function::Max => {
                 let wants_greater = function == Function::Max;
-                let mut best = first;
-                for value in args.iter().skip(1) {
-                    if best == Value::Null || *value == Value::Null {
+                let mut best = 0;
+                for (at, value) in args.iter().enumerate().skip(1) {
+                    let held = args.get(best).unwrap_or(&Value::Null);
+                    if *held == Value::Null || *value == Value::Null {
                         return Ok((Value::Null, false));
                     }
                     // `min` takes the later of two that compare equal and
                     // `max` keeps the earlier, which is what the mask in
                     // `minmaxFunc` comes to.
-                    let order = compare(&best, value, collation);
                     let take = if wants_greater {
-                        order == core::cmp::Ordering::Less
+                        compare(held, value, collation) == core::cmp::Ordering::Less
                     } else {
-                        order != core::cmp::Ordering::Less
+                        compare(held, value, collation) != core::cmp::Ordering::Less
                     };
                     if take {
-                        best = value.clone();
+                        best = at;
                     }
                 }
-                best
+                taken = Some(best);
+                arg(best)
             }
             Function::Lower | Function::Upper => match first.text() {
                 None => Value::Null,
@@ -1312,7 +1326,7 @@ pub fn call(
             }
             Function::Json { which, binary } => return json_call(which, binary, args, carried),
         },
-        false,
+        taken.is_some_and(|at| carried.get(at).copied().unwrap_or(false)),
     );
     // `sqlite3VdbeMemTooBig` of `research/sqlite/src/vdbemem.c` holds
     // every value a statement answers to the length the connection

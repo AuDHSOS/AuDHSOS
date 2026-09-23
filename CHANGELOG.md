@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` answers the subtype of the argument a call answers as it
+  stands, so `coalesce`, `ifnull`, `iif`, `nullif`, `min`, `max`,
+  `likely` and a sign before a value each carry the JSON of that
+  argument. D-433 records it. Catalog 6.6.300. `indexexpr1.test` goes
+  from 68 cases passing to 84.
+
 - `db-sqlite` reads a schema in front of the table of a `CREATE
   TRIGGER`, which names the database the trigger stands in and no other,
   and holds a trigger and an index to a table the temp schema or the

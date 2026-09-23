@@ -1051,6 +1051,8 @@ Size: L.
      transaction gave pages up at its end. Built, which D-431 records.
 153. The schema in front of the table of a `CREATE TRIGGER`, which names
      the database the trigger stands in. Built, which D-432 records.
+154. The subtype a call answers, where it answers one of its arguments as
+     it stands. Built, which D-433 records.
 
 ### Done when
 

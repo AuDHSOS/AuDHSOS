@@ -1056,8 +1056,13 @@ fn unary(
         // has no affinity of its own and does not carry the affinity of
         // what it precedes, so `xt == +xi` compares a text column with
         // a number that takes text affinity from it rather than the
-        // other way about. The collation does carry.
-        UnaryOp::Identity => carried(value),
+        // other way about. The collation does carry, and so does the
+        // subtype, because `sqlite3ExprCodeTarget` codes `TK_UPLUS` as
+        // the operand itself.
+        UnaryOp::Identity => Answer {
+            json: inner.json,
+            ..carried(value)
+        },
         UnaryOp::Not => carried(match logic(&value) {
             Some(truth) => Value::Int(i64::from(!truth)),
             None => Value::Null,

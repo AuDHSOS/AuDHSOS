@@ -7118,3 +7118,12 @@ Document 16 step Q8.
   trigger of the temp schema over a table of an attached database, the
   schema the `no such table:` names, and a trigger and an index over a
   table only an attached database holds.
+
+### 6.6.300 The subtype a call answers (`db-sqlite`)
+
+Document 16 step Q8.
+
+- `coalesce`, `ifnull`, `iif` on either side of its condition, `nullif`,
+  `min`, `max` and `likely` over a value `json()` answered, a sign before
+  one, a sign that computes a number, and a call that answers none of its
+  arguments.
