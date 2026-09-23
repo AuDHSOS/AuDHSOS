@@ -507,6 +507,9 @@ Size: S.
     for, which D-426 records.
 54. `sqlite3_limit` reads and sets the limits of a connection, which
     D-427 records.
+55. `DB eval SQL SCRIPT` runs the script once per row of a statement that
+    carries no column, which the `rows` request answers the count of,
+    which D-438 records.
 
 ### Produces
 

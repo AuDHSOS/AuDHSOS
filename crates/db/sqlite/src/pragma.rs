@@ -659,10 +659,12 @@ impl Setting {
             }
             Setting::ForeignKeyCheck => return named(&[b"table", b"rowid", b"parent", b"fkid"]),
             Setting::WalCheckpoint => return named(&[b"busy", b"log", b"checkpointed"]),
-            // `PRAGMA case_sensitive_like` answers no column, which
-            // `PragFlg_NoColumns` states, and the three names no version
-            // of the library still holds answer none either.
-            Setting::CaseSensitiveLike => return Vec::new(),
+            // `PRAGMA case_sensitive_like` and `PRAGMA
+            // incremental_vacuum` answer no column, which the
+            // `NoColumns` of `research/sqlite/tool/mkpragmatab.tcl:206`
+            // and `:317` states, and the three names no version of the
+            // library still holds answer none either.
+            Setting::CaseSensitiveLike | Setting::IncrementalVacuum => return Vec::new(),
             // A name the pragma table does not hold answers no column
             // either, because `sqlite3Pragma` answers no row for it.
             Setting::Ignored

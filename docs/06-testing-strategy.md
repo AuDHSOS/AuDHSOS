@@ -7174,3 +7174,11 @@ Document 16 step Q8.
 - A power of two and a power of ten are answered exactly by the logarithm
   of that base, which `format('%.30f', log10(100.0))` of `func7.test`
   reads.
+
+### 6.6.305 The rows of a statement of no column (`db-sqlite`)
+
+Document 17 step 55.
+
+- `PRAGMA incremental_vacuum` answers one row per page it gives up and
+  names no column, which the count of rows of the statement says and the
+  freelist afterwards holds nothing of.

@@ -756,3 +756,42 @@ fn what_an_incremental_vacuum_of_many_pages_leaves() {
         Some(b"ok".to_vec())
     );
 }
+
+/// `PRAGMA incremental_vacuum` answers one row of no column per page it
+/// gives up, which is what the loop of `OP_IncrVacuum` and its
+/// `OP_ResultRow` of no register answer and what the tester counts the
+/// pages of a vacuum by.
+#[test]
+fn what_an_incremental_vacuum_answers_a_row_for() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.randomness(11);
+    for sql in [
+        "PRAGMA auto_vacuum = 2",
+        "CREATE TABLE t1(x)",
+        "INSERT INTO t1 VALUES(randomblob(400))",
+        "INSERT INTO t1 SELECT randomblob(400) FROM t1",
+        "INSERT INTO t1 SELECT randomblob(400) FROM t1",
+        "INSERT INTO t1 SELECT randomblob(400) FROM t1",
+        "DELETE FROM t1",
+    ] {
+        writer.run(sql.as_bytes()).expect(sql);
+    }
+    let free = answered(&writer, "PRAGMA freelist_count")
+        .first()
+        .and_then(|row| row.first())
+        .map_or(-1, Value::to_integer);
+    assert!(free > 1, "the deletions freed more than one page");
+    // One row per page, each of no value, and the pragma names no column
+    // of its own.
+    let rows = writer.run(b"PRAGMA incremental_vacuum").unwrap();
+    assert_eq!(i64::try_from(rows.len()).unwrap_or(-1), free);
+    assert!(rows.iter().all(alloc::vec::Vec::is_empty));
+    assert!(
+        crate::pragma::of_name(b"incremental_vacuum")
+            .expect("the pragma")
+            .columns(b"incremental_vacuum", false)
+            .is_empty()
+    );
+    // A vacuum that finds no page to give up answers no row.
+    assert!(writer.run(b"PRAGMA incremental_vacuum").unwrap().is_empty());
+}

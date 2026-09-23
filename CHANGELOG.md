@@ -234,6 +234,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` answers `PRAGMA incremental_vacuum` with one row of no
+  column per page it gives up, and the suite harness runs the script of
+  `DB eval SQL SCRIPT` once per row of a statement that carries no
+  column. D-438 records it. Catalog 6.6.305. `incrvacuum.test` runs 170
+  cases of which 158 pass, where before its loop ran 278 times against
+  the deadline.
+
 - `db-sqlite` writes an entry of an index from the values the row holds,
   so an expression of the index and the `WHERE` of a partial index both
   read what a column of a type converted the written text to. D-434

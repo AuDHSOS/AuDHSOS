@@ -621,13 +621,20 @@ proc sqlite3 {args} {
           set body [lindex $args 2]
         }
         set names [harness_send names %N% $sql]
-        set rows [harness_send eval %N% $sql]
         set w [llength $names]
         if {$w == 0} {
-          harness_send eval %N% $sql
-          traced %N% $sql 0
+          # A statement of no column answers rows all the same, which
+          # PRAGMA incremental_vacuum answers one of per page it gives
+          # up, so the script runs once for each of them. The statement
+          # runs once, so its count of rows comes back with the run.
+          set n [lindex [harness_send rows %N% $sql] 0]
+          traced %N% $sql $n
+          for {set i 0} {$i < $n} {incr i} {
+            uplevel 1 $body
+          }
           return {}
         }
+        set rows [harness_send eval %N% $sql]
         traced %N% $sql [expr {[llength $rows] / $w}]
         if {$array ne ""} {
           uplevel 1 [list set ${array}(*) $names]

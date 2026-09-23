@@ -1286,7 +1286,7 @@ impl Session {
             "errcode" => Ok(alloc_one(&last_code(first))),
             "normalize" => Ok(alloc_one(&normalized(first))),
             "columnmeta" => self.column_meta(first, second, args.get(2).map_or("", String::as_str)),
-            "eval" | "names" | "exec" | "exec_names" => self.of_sql(verb, first, second),
+            "eval" | "names" | "exec" | "exec_names" | "rows" => self.of_sql(verb, first, second),
             // `DB deserialize BYTES` of
             // `research/sqlite/src/tclsqlite.c`: the database of the
             // connection is read again from the bytes the tester hands
@@ -2631,6 +2631,13 @@ impl Session {
         if verb.ends_with("names") {
             return self.names(name, &sql);
         }
+        // `DB eval SQL SCRIPT` of `research/sqlite/src/tclsqlite.c:2087`
+        // runs the script once per row whatever the count of columns is,
+        // so a statement of no column is run for its count of rows.
+        if verb == "rows" {
+            self.eval(name, &sql)?;
+            return Ok(alloc_one(&ANSWERED.with(core::cell::Cell::get).to_string()));
+        }
         self.eval(name, &sql)
     }
 
@@ -2951,6 +2958,11 @@ thread_local! {
     /// machine, one a zone that fails, and two the zone
     /// `testLocaltime` answers.
     static ZONED: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
+
+    /// How many rows the last statement of a run answered, which a
+    /// statement of no column answers as many of as one that carries
+    /// columns, because `run_one` carries no connection.
+    static ANSWERED: core::cell::Cell<usize> = const { core::cell::Cell::new(0) };
 
     /// What the walks and the sorts of the last statement counted, which
     /// `db status` answers, because `run_one` carries no connection.
@@ -3426,6 +3438,7 @@ fn run_one(
     if reads(text) {
         let answered = answered_rows(writer, text, collating, defines, outside)?;
         STEPPED.with(|held| held.set(answered.stepped));
+        ANSWERED.with(|held| held.set(answered.rows.len()));
         for row in &answered.rows {
             out.extend(row.iter().cloned());
         }
@@ -3434,6 +3447,7 @@ fn run_one(
     let rows = writer
         .run(&sql_bytes(text))
         .map_err(|error| shape(text, refusal(&error)))?;
+    ANSWERED.with(|held| held.set(rows.len()));
     for row in &rows {
         out.extend(row.iter().cloned());
     }
