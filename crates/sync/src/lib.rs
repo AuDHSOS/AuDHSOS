@@ -37,8 +37,25 @@ impl fmt::Display for Error {
 }
 
 /// Proof, carried by the caller, that nothing else can run on this CPU while
-/// the borrow lives. The kernel implements it for its interrupt guard; the
-/// userland runtime and tests use [`UncontendedToken`].
+/// the borrow lives. The kernel passes `KernelToken` with interrupts disabled;
+/// single-context callers use [`UncontendedToken`].
+///
+/// Owners that differ wait for each other; a repeated borrow by one owner fails.
+///
+/// ```
+/// use audhsos_sync::{Error, ExclusiveToken, Preset};
+///
+/// struct Processor(u32);
+/// impl ExclusiveToken for Processor {
+///     fn owner(&self) -> u32 { self.0 }
+/// }
+///
+/// let cell = Preset::new(7);
+/// let held = cell.borrow(&Processor(0)).unwrap();
+/// assert_eq!(cell.borrow(&Processor(0)).unwrap_err(), Error::AlreadyBorrowed);
+/// drop(held);
+/// assert_eq!(*cell.borrow(&Processor(1)).unwrap(), 7);
+/// ```
 pub trait ExclusiveToken {
     /// Processor holding the borrow; `u32::MAX` is reserved.
     fn owner(&self) -> u32 {
