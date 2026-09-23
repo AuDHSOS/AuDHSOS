@@ -31,6 +31,10 @@ use user_proto::Name;
 /// How many names the registry holds.
 pub const CAPACITY: usize = 64;
 
+/// Maximum names one client may hold in the server binary; eight owners can
+/// each use their full quota.
+pub const PER_OWNER_LIMIT: usize = 8;
+
 /// The rights a registered endpoint is stored with, and so the most a
 /// lookup can hand out: a client sends to the server it found and passes
 /// the handle on.
@@ -71,20 +75,22 @@ pub struct Registered {
 #[derive(Debug)]
 pub struct Registry {
     entries: ArrayVec<Registered, CAPACITY>,
+    per_owner_limit: usize,
 }
 
 impl Default for Registry {
     fn default() -> Self {
-        Self::new()
+        Self::new(PER_OWNER_LIMIT)
     }
 }
 
 impl Registry {
     /// An empty registry.
     #[must_use]
-    pub const fn new() -> Self {
+    pub const fn new(per_owner_limit: usize) -> Self {
         Registry {
             entries: ArrayVec::new(),
+            per_owner_limit,
         }
     }
 
@@ -138,15 +144,16 @@ impl Registry {
                 }
                 Ok(())
             }
-            Err(error) => {
-                handles.close(narrowed);
+            Err((rejected, error)) => {
+                handles.close(rejected);
                 Err(error)
             }
         }
     }
 
     /// Puts `endpoint` under `name` for the client `owner` and answers with
-    /// the handle the entry held before, if it held one.
+    /// the handle the entry held before, if it held one. The caller closes
+    /// that handle.
     ///
     /// A client may replace a name it registered itself, which is what a
     /// server that restarts does. A name another client holds is refused.
@@ -159,28 +166,40 @@ impl Registry {
     /// [`Error::InvalidArgument`] for an owner of zero, which is what a
     /// message that arrived through a capability without a badge has;
     /// [`Error::AlreadyExists`] for a name another client holds;
-    /// [`Error::PoolExhausted`] when the registry is full.
+    /// [`Error::PoolExhausted`] when the registry or the owner's quota is full.
+    /// An error returns `endpoint` to the caller for closing.
     pub fn register(
         &mut self,
         owner: u64,
         name: Name,
         endpoint: Handle,
-    ) -> Result<Option<Handle>, Error> {
+    ) -> Result<Option<Handle>, (Handle, Error)> {
         if owner == 0 {
-            return Err(Error::InvalidArgument);
+            return Err((endpoint, Error::InvalidArgument));
         }
-        match self.position(&name) {
-            Some(index) => self.replace(index, owner, endpoint).map(Some),
-            None => self
-                .entries
-                .push(Registered {
-                    name,
-                    endpoint,
-                    owner,
-                })
-                .map(|()| None)
-                .map_err(|_| Error::PoolExhausted),
+        if let Some(index) = self.position(&name) {
+            return self
+                .replace(index, owner, endpoint)
+                .map(Some)
+                .map_err(|error| (endpoint, error));
         }
+        if self
+            .entries
+            .iter()
+            .filter(|entry| entry.owner == owner)
+            .count()
+            >= self.per_owner_limit
+        {
+            return Err((endpoint, Error::PoolExhausted));
+        }
+        self.entries
+            .push(Registered {
+                name,
+                endpoint,
+                owner,
+            })
+            .map(|()| None)
+            .map_err(|_| (endpoint, Error::PoolExhausted))
     }
 
     /// The endpoint `name` stands for.
