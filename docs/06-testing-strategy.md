@@ -7083,3 +7083,11 @@ Document 16 step Q8.
   text two values make, a literal, the text a replacement grew, the text
   a `group_concat` grew, a value the limit holds, a value that is no
   text, and a pattern longer than the limit of its own.
+
+### 6.6.296 The columns a statement writes a value into (`db-sqlite`)
+
+Document 16 step Q8.
+
+- An `INSERT` of one value per column no expression computes, the count
+  in the refusal, an `INSERT` that names a computed column, an `UPDATE`
+  that writes one, and a table that keeps its rows in the key's own tree.

@@ -89,3 +89,53 @@ fn a_table_the_schema_does_not_hold_computes_nothing() {
     database.compute_row(b"nosuch", &mut values).unwrap();
     assert_eq!(values, alloc::vec![Value::Int(1)]);
 }
+
+/// A statement writes a value into every column but the computed ones,
+/// and one that names a computed column is refused.
+#[test]
+fn what_columns_a_statement_writes_a_value_into() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer
+        .run(b"CREATE TABLE t(a, b AS (a+1) VIRTUAL, c, d AS (a*2) STORED)")
+        .unwrap();
+    // `INSERT INTO t VALUES(...)` writes the two columns no expression
+    // computes, and the count in the refusal is that of those two.
+    writer.run(b"INSERT INTO t VALUES(1,9)").unwrap();
+    assert_eq!(shown(&writer, b"SELECT * FROM t"), "1|2|9|2|");
+    assert_eq!(
+        writer
+            .run(b"INSERT INTO t VALUES(1,2,3)")
+            .expect_err("a refusal")
+            .message(),
+        "table t has 2 columns but 3 values were supplied"
+    );
+    // A computed column an `INSERT` or an `UPDATE` names is refused.
+    assert_eq!(
+        writer
+            .run(b"INSERT INTO t(a,b) VALUES(1,2)")
+            .expect_err("a refusal")
+            .message(),
+        "cannot INSERT into generated column \"b\""
+    );
+    assert_eq!(
+        writer
+            .run(b"UPDATE t SET d=4")
+            .expect_err("a refusal")
+            .message(),
+        "cannot UPDATE generated column \"d\""
+    );
+    // A table that keeps its rows in the key's own tree refuses the
+    // same, which the other walk of an `UPDATE` reads.
+    writer
+        .run(b"CREATE TABLE u(a PRIMARY KEY, b AS (a+1)) WITHOUT ROWID")
+        .unwrap();
+    writer.run(b"INSERT INTO u VALUES(1)").unwrap();
+    assert_eq!(shown(&writer, b"SELECT * FROM u"), "1|2|");
+    assert_eq!(
+        writer
+            .run(b"UPDATE u SET b=4")
+            .expect_err("a refusal")
+            .message(),
+        "cannot UPDATE generated column \"b\""
+    );
+}

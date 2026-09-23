@@ -292,6 +292,12 @@ pub enum Error {
     /// A `SET (a, b) = value` of an `UPDATE` that writes another number
     /// of columns than the value holds, with the two counts.
     Assigned(usize, usize),
+    /// An `INSERT` that names a column a `GENERATED ALWAYS AS`
+    /// computes, with that column.
+    IntoGenerated(Vec<u8>),
+    /// An `UPDATE` that writes a column a `GENERATED ALWAYS AS`
+    /// computes, with that column.
+    OverGenerated(Vec<u8>),
     /// A file name as a URI with a `%00` escape in it, which this
     /// library is built to refuse.
     UriEscape,
@@ -596,8 +602,24 @@ impl Error {
         })
     }
 
-    /// The words an aggregate written where no group has been made is
-    /// refused with, or nothing where the refusal is another.
+    /// The words a statement that writes a column a `GENERATED ALWAYS
+    /// AS` computes is refused with, or nothing where the refusal is
+    /// another.
+    fn computed(&self) -> Option<alloc::string::String> {
+        let shown = |bytes: &[u8]| alloc::string::String::from_utf8_lossy(bytes).into_owned();
+        Some(match self {
+            Error::IntoGenerated(column) => {
+                alloc::format!("cannot INSERT into generated column \"{}\"", shown(column))
+            }
+            Error::OverGenerated(column) => {
+                alloc::format!("cannot UPDATE generated column \"{}\"", shown(column))
+            }
+            _ => return None,
+        })
+    }
+
+    /// The words a misuse is refused with, or nothing where the refusal
+    /// is another.
     fn misused(&self) -> Option<alloc::string::String> {
         let shown = |bytes: &[u8]| alloc::string::String::from_utf8_lossy(bytes).into_owned();
         Some(match self {
@@ -919,6 +941,7 @@ impl Error {
             .or_else(|| self.datatypes())
             .or_else(|| self.defining())
             .or_else(|| self.misused())
+            .or_else(|| self.computed())
             .or_else(|| self.databases())
             .or_else(|| self.compounds())
         {

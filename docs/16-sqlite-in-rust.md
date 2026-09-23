@@ -1042,6 +1042,8 @@ Size: L.
 149. The length of a value and the length of a pattern, which the limits
      of the connection hold every statement to. Built, which D-428
      records.
+150. The columns an `INSERT` with no column list writes, which leave out
+     the computed ones. Built, which D-429 records.
 
 ### Done when
 

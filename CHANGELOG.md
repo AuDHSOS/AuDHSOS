@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` writes one value per column no expression computes for an
+  `INSERT` that names no column, and refuses a statement that writes a
+  computed column. D-429 records it. Catalog 6.6.296. `gencol1.test`
+  goes from 137 cases passing to 158.
+
 - `db-sqlite` holds every value a statement answers to
   `SQLITE_LIMIT_LENGTH` and every pattern to
   `SQLITE_LIMIT_LIKE_PATTERN_LENGTH`. D-428 records it. Catalog 6.6.295.

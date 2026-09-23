@@ -7303,11 +7303,17 @@ impl Writer {
             .iter()
             .map(|set| {
                 let column = crate::schema::dequote(set.column.text(sql));
-                table
+                let at = table
                     .columns
                     .iter()
                     .position(|held| held.name.eq_ignore_ascii_case(&column))
-                    .ok_or(Error::Unsupported)
+                    .ok_or(Error::Unsupported)?;
+                // `sqlite3Update` refuses a column a `GENERATED ALWAYS
+                // AS` computes, which the row computes for itself.
+                if computed_column(table, at) {
+                    return Err(Error::OverGenerated(column));
+                }
+                Ok(at)
             })
             .collect::<Result<_, Error>>()?;
         let joined = match statement.from {
@@ -8988,7 +8994,16 @@ fn names_key(key: &Keys, targets: &[Target]) -> bool {
 /// the rowid and what `sqlite3ColumnIndex` looks for last.
 fn places(table: &Table, named: &[Vec<u8>]) -> Result<Vec<Option<usize>>, Error> {
     if named.is_empty() {
-        return Ok((0..table.columns.len()).map(Some).collect());
+        // `sqlite3Insert` writes one value per column a statement may
+        // write, which leaves out every column a `GENERATED ALWAYS AS`
+        // computes.
+        return Ok(table
+            .columns
+            .iter()
+            .enumerate()
+            .filter(|(_, column)| column.generated == crate::schema::Generated::Never)
+            .map(|(at, _)| Some(at))
+            .collect());
     }
     named
         .iter()
@@ -8998,6 +9013,7 @@ fn places(table: &Table, named: &[Vec<u8>]) -> Result<Vec<Option<usize>>, Error>
                 .iter()
                 .position(|column| column.name.eq_ignore_ascii_case(name));
             match at {
+                Some(at) if computed_column(table, at) => Err(Error::IntoGenerated(name.clone())),
                 Some(at) => Ok(Some(at)),
                 None if is_rowid(name) => Ok(None),
                 // `sqlite3Insert` names the table and the column it does
@@ -9006,6 +9022,15 @@ fn places(table: &Table, named: &[Vec<u8>]) -> Result<Vec<Option<usize>>, Error>
             }
         })
         .collect()
+}
+
+/// Whether the column at that place is one a `GENERATED ALWAYS AS`
+/// computes, which no statement writes a value into.
+fn computed_column(table: &Table, at: usize) -> bool {
+    table
+        .columns
+        .get(at)
+        .is_some_and(|column| column.generated != crate::schema::Generated::Never)
 }
 
 /// Where each `SET` clause of an `UPDATE` over a view writes, or
@@ -9253,6 +9278,7 @@ impl Writer {
                     .iter()
                     .position(|held| held.name.eq_ignore_ascii_case(&column))
                 {
+                    Some(at) if computed_column(table, at) => Err(Error::OverGenerated(column)),
                     Some(at) => Ok(Some(at)),
                     // `rowid` names the column the key is another name
                     // for, where the table has one.
