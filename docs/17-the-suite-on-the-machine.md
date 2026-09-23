@@ -510,6 +510,9 @@ Size: S.
 55. `DB eval SQL SCRIPT` runs the script once per row of a statement that
     carries no column, which the `rows` request answers the count of,
     which D-438 records.
+56. The harness holds the log and the rollback journal beside the file of
+    each database an `ATTACH` added, so a case that reads the size of one
+    finds it, which D-447 records.
 
 ### Produces
 

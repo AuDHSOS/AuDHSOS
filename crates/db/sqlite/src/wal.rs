@@ -184,6 +184,10 @@ pub struct Log {
     big: bool,
     /// The checksum the next frame carries on from.
     running: (u32, u32),
+    /// Whether the file holds no byte, which a truncating checkpoint
+    /// leaves it as. The header stands here all the same, because the
+    /// commit after such a checkpoint writes it again.
+    emptied: bool,
 }
 
 impl Log {
@@ -216,6 +220,7 @@ impl Log {
             salt,
             big,
             running,
+            emptied: false,
         }
     }
 
@@ -264,6 +269,7 @@ impl Log {
             salt,
             big,
             running,
+            emptied: false,
         })
     }
 
@@ -272,6 +278,7 @@ impl Log {
     ///
     /// One commit is O(n) in the bytes of the pages it holds.
     pub fn commit(&mut self, frames: &[(u32, Vec<u8>)], pages: u32) {
+        self.emptied = false;
         let last = frames.len().saturating_sub(1);
         for (index, (number, page)) in frames.iter().enumerate() {
             let mut header = [0u8; FRAME];
@@ -294,9 +301,13 @@ impl Log {
         }
     }
 
-    /// The file the log has become.
+    /// The file the log has become, which holds no byte where a
+    /// truncating checkpoint left it so.
     #[must_use]
     pub fn bytes(&self) -> &[u8] {
+        if self.emptied {
+            return &[];
+        }
         &self.bytes
     }
 
@@ -332,6 +343,17 @@ impl Log {
         let checkpoint = u32_at(&self.bytes, 12).unwrap_or(0).wrapping_add(1);
         let salt = (self.salt.0.wrapping_add(1), self.salt.1);
         *self = Self::new(self.page_size, salt, checkpoint, self.big);
+    }
+
+    /// The log begun again and its file truncated, which
+    /// `sqlite3WalCheckpoint` of `research/sqlite/src/wal.c` does under
+    /// `SQLITE_CHECKPOINT_TRUNCATE`: the file holds no byte, and the
+    /// commit after it writes the header again.
+    ///
+    /// Truncating costs O(1).
+    pub fn truncate(&mut self) {
+        self.restart();
+        self.emptied = true;
     }
 }
 

@@ -274,6 +274,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` reads a database an `ATTACH` added through the pages the
+  connection holds, so a table made in one in write-ahead logging mode is
+  a table every statement after it finds. D-447 records it. Catalog
+  6.6.314. `wal.test` goes from 275 cases passing to 370.
+
+- `db-sqlite` leaves a log file of no byte after a checkpoint written
+  `TRUNCATE`. D-448 records it. Catalog 6.6.314.
+
 - `db-sqlite` reads the database a `PRAGMA [schema.]integrity_check`
   names and no other, so a table only another database holds is refused
   `no such table: <schema>.<table>`. D-445 records it. Catalog 6.6.312.

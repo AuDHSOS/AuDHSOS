@@ -878,6 +878,14 @@ fn locked(text: &str, waiting: &mut bool) -> Locked {
     }
 }
 
+/// The logs and the rollback journals beside the files an `ATTACH`
+/// added, each with its file name.
+type Beside = (Vec<(Vec<u8>, Vec<u8>)>, Vec<(Vec<u8>, Vec<u8>)>);
+
+/// The log and the rollback journal the harness holds beside one file,
+/// each where the file has one.
+type Besides = (Option<Vec<u8>>, Option<Vec<u8>>);
+
 /// The database a name stands for and which of the two files beside it
 /// the name holds, where the name holds one: `test.db-wal` is the log of
 /// `test.db` and `test.db` is the database itself.
@@ -983,6 +991,10 @@ struct Session {
     /// One writer per path a connection opened, which is what two
     /// connections over one path share.
     held: BTreeMap<String, Writer>,
+    /// The log and the rollback journal beside the file of each database
+    /// an `ATTACH` added, which the writer that attached it holds and the
+    /// writer of that path does not.
+    beside: BTreeMap<String, Besides>,
     /// Which path each connection reads.
     connections: BTreeMap<String, String>,
     /// What a `NULL` prints as, per connection.
@@ -1100,6 +1112,7 @@ impl Session {
             over: std::env::temp_dir().join(format!("audhsos-suite-{file}")),
             file: file.to_owned(),
             held: BTreeMap::new(),
+            beside: BTreeMap::new(),
             connections: BTreeMap::new(),
             nulls: BTreeMap::new(),
             stamps: BTreeMap::new(),
@@ -1369,11 +1382,30 @@ impl Session {
             return Some(writer.written().len());
         }
         let (base, tail) = name.rsplit_once('-')?;
-        let writer = self.held.get(base)?;
+        self.beside_bytes(base, tail).map(|bytes| bytes.len())
+    }
+
+    /// The bytes the harness holds beside the database `base` under the
+    /// name `tail`, which is `wal` for the log and `journal` for the
+    /// rollback journal.
+    ///
+    /// The writer of the path holds them where a connection opened that
+    /// path, and the writer that attached the file holds them where no
+    /// connection did, which is what `beside` carries.
+    fn beside_bytes(&self, base: &str, tail: &str) -> Option<Vec<u8>> {
+        let held = self.held.get(base);
+        let mine = match tail {
+            "wal" => held.and_then(|writer| writer.log().map(<[u8]>::to_vec)),
+            "journal" => held.and_then(|writer| writer.journal().map(<[u8]>::to_vec)),
+            _ => return None,
+        };
+        if mine.is_some() {
+            return mine;
+        }
+        let (log, journal) = self.beside.get(base)?;
         match tail {
-            "wal" => writer.log().map(<[u8]>::len),
-            "journal" => writer.journal().map(<[u8]>::len),
-            _ => None,
+            "wal" => log.clone(),
+            _ => journal.clone(),
         }
     }
 
@@ -1634,12 +1666,7 @@ impl Session {
             return Some(writer.written());
         }
         let (base, tail) = name.rsplit_once('-')?;
-        let writer = self.held.get(base)?;
-        match tail {
-            "wal" => writer.log().map(<[u8]>::to_vec),
-            "journal" => writer.journal().map(<[u8]>::to_vec),
-            _ => None,
-        }
+        self.beside_bytes(base, tail)
     }
 
     /// One connection closed, which is `sqlite3_close`.
@@ -2780,6 +2807,7 @@ impl Session {
         let full = kept.fullfsync();
         let began = writer.began();
         let files = writer.attached_files();
+        let beside = (writer.attached_logs(), writer.attached_journals());
         if began {
             self.owners.entry(path.clone()).or_insert(name.to_owned());
         } else {
@@ -2798,7 +2826,7 @@ impl Session {
         self.stepped.insert(name.to_owned(), stepped);
         self.counters.insert(name.to_owned(), counted);
         self.pragmas.insert(name.to_owned(), kept);
-        self.mirror(&path, files);
+        self.mirror(&path, files, &beside);
         ran?;
         Ok(out)
     }
@@ -2809,7 +2837,7 @@ impl Session {
     /// path the connection itself reads.
     ///
     /// Reading one file again costs O(n) in its pages.
-    fn mirror(&mut self, held: &str, files: Vec<(Vec<u8>, Vec<u8>)>) {
+    fn mirror(&mut self, held: &str, files: Vec<(Vec<u8>, Vec<u8>)>, beside: &Beside) {
         for (file, bytes) in files {
             let path = String::from_utf8_lossy(&file).into_owned();
             // A connection that attached its own file writes both
@@ -2824,6 +2852,16 @@ impl Session {
             };
             writer.defines(DEFINED);
             writer.groups(GROUPED);
+            // The copy is opened out of the image alone, so the log and
+            // the journal beside the file are kept where the size of
+            // either is read.
+            let found = |held: &Vec<(Vec<u8>, Vec<u8>)>| {
+                held.iter()
+                    .find(|(name, _)| *name == file)
+                    .map(|(_, bytes)| bytes.clone())
+            };
+            self.beside
+                .insert(path.clone(), (found(&beside.0), found(&beside.1)));
             self.held.insert(path, writer);
         }
     }

@@ -1496,6 +1496,41 @@ impl Writer {
         out
     }
 
+    /// The log beside the file of each database an `ATTACH` added that
+    /// holds one, with that file name.
+    ///
+    /// A second connection over the file reads the log as this one left
+    /// it, so the client writes it beside the file the same way it writes
+    /// the log of `main`. Building them costs O(n) in the frames of those
+    /// logs.
+    #[must_use]
+    pub fn attached_logs(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
+        self.attached
+            .iter()
+            .filter(|held| !held.called.file.is_empty())
+            .filter_map(|held| {
+                let log = held.held.log.as_ref()?;
+                Some((held.called.file.clone(), log.bytes().to_vec()))
+            })
+            .collect()
+    }
+
+    /// The rollback journal beside the file of each database an `ATTACH`
+    /// added that holds one, with that file name.
+    ///
+    /// Building them costs O(n) in the bytes of those journals.
+    #[must_use]
+    pub fn attached_journals(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
+        self.attached
+            .iter()
+            .filter(|held| !held.called.file.is_empty())
+            .filter_map(|held| {
+                let journal = held.held.journal.as_ref()?;
+                Some((held.called.file.clone(), journal.clone()))
+            })
+            .collect()
+    }
+
     /// The names of the databases an `ATTACH` added, in the order they
     /// were attached.
     ///
@@ -2672,7 +2707,7 @@ impl Writer {
                 held.push((
                     beside.called.place,
                     beside.called.name.clone(),
-                    written_image(&beside.held),
+                    read_image(&beside.held),
                 ));
             }
         }
@@ -2906,7 +2941,9 @@ impl Writer {
         let frames = i64::try_from(log.frames()).unwrap_or(i64::MAX);
         let truncating = named(b"truncate");
         let restarting = truncating || named(b"restart");
-        if restarting {
+        if truncating {
+            log.truncate();
+        } else if restarting {
             log.restart();
         }
         self.held.log = Some(log);
@@ -3265,7 +3302,7 @@ impl Writer {
             beside: self
                 .in_place()
                 .into_iter()
-                .map(|held| (held.called.name.clone(), written_image(&held.held)))
+                .map(|held| (held.called.name.clone(), read_image(&held.held)))
                 .collect(),
         }
     }
@@ -3462,7 +3499,7 @@ impl Writer {
             Some(at) => {
                 let mut out = Vec::new();
                 for held in self.attached.iter().skip(at).take(1) {
-                    out = written_image(&held.held);
+                    out = read_image(&held.held);
                 }
                 out
             }
@@ -11116,6 +11153,18 @@ fn named_as(held: &Attached, name: &[u8]) -> bool {
 /// The image of one file a connection holds, which is the file as
 /// write-ahead logging began where no checkpoint has written a frame
 /// back into it.
+/// The file of one database as the connection that writes it reads it:
+/// every page it has written.
+///
+/// A database in write-ahead logging mode leaves its file as the log
+/// began, which [`written_image`] answers for a client to write to the
+/// disk, so a reader over that image would hold none of the pages the
+/// log carries.
+fn read_image(held: &HeldFile) -> Vec<u8> {
+    held.pages.written(&held.header)
+}
+
+/// The file of one database as a client writes it to the disk.
 fn written_image(held: &HeldFile) -> Vec<u8> {
     match &held.origin {
         Some(bytes) => bytes.clone(),

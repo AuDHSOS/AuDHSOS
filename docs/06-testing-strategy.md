@@ -7273,3 +7273,12 @@ Document 16 step Q8.
 - The tables one statement reads under no schema, for a view over two
   tables, a statement in brackets, a source that carries a schema, a name
   a `WITH` term carries, and a statement the parser refuses.
+
+### 6.6.314 What a database an attach added holds beside its file (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A database an `ATTACH` added in write-ahead logging mode: a table made
+  in it, a row written into it, the log beside its file, that log after a
+  truncating checkpoint, and the journal beside the file of one under a
+  mode that keeps the journal.

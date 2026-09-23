@@ -1080,6 +1080,9 @@ Size: L.
 165. The views a rename resolves before it writes one of them, which
      refuse the rename where a source reads a table no database holds.
      Built, which D-446 records.
+166. The pages a statement reads a database an `ATTACH` added through,
+     and the log a truncating checkpoint leaves. Built, which D-447 and
+     D-448 record.
 
 ### Done when
 

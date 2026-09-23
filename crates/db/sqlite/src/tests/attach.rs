@@ -1086,3 +1086,53 @@ fn what_database_a_check_that_names_a_schema_reads() {
         Some(&Value::Text(b"ok".to_vec()))
     );
 }
+
+#[test]
+fn what_a_database_an_attach_added_holds_beside_its_file() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.opens(opening);
+    writer.logging((1, 2));
+    writer.run(b"ATTACH 'one.db' AS a0").unwrap();
+    writer.run(b"PRAGMA a0.journal_mode=WAL").unwrap();
+    // A database in write-ahead logging mode holds its pages in the log,
+    // so a statement that reads it afterwards reads what the log holds.
+    writer.run(b"CREATE TABLE a0.t0(x)").unwrap();
+    writer.run(b"INSERT INTO a0.t0 VALUES(1)").unwrap();
+    assert_eq!(
+        writer.run(b"PRAGMA a0.table_info(t0)").unwrap().len(),
+        1,
+        "the table stands in the attached database"
+    );
+    let held = writer.attached_logs();
+    let (file, bytes) = held.first().cloned().unwrap_or_default();
+    assert_eq!(file, b"one.db");
+    assert!(bytes.len() > 32, "the log holds frames");
+    // A truncating checkpoint leaves a file of no byte at all.
+    writer.run(b"PRAGMA a0.wal_checkpoint(TRUNCATE)").unwrap();
+    let held = writer.attached_logs();
+    assert_eq!(
+        held.first().map(|(_, bytes)| bytes.len()),
+        Some(0),
+        "the log holds no byte"
+    );
+}
+
+#[test]
+fn what_a_journal_a_database_an_attach_added_keeps() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.opens(opening);
+    writer.journalling(crate::journal::Mode::Persist, 7, 512);
+    writer.run(b"ATTACH 'one.db' AS a0").unwrap();
+    writer.run(b"PRAGMA a0.journal_mode=PERSIST").unwrap();
+    // A database under a journal mode that keeps the journal holds one
+    // beside its file, and a database in no logging mode holds no log.
+    writer.run(b"CREATE TABLE a0.t0(x)").unwrap();
+    assert_eq!(
+        writer
+            .attached_journals()
+            .first()
+            .map(|(file, _)| file.clone()),
+        Some(b"one.db".to_vec())
+    );
+    assert!(writer.attached_logs().is_empty());
+}
