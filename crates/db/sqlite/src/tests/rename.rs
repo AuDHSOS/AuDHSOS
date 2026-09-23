@@ -222,7 +222,7 @@ fn what_the_parser_reads_of_a_rename() {
 #[test]
 fn every_place_a_statement_names_the_table() {
     let sql = b"CREATE TRIGGER tr AFTER INSERT ON t BEGIN INSERT INTO t SELECT * FROM t; END";
-    let places = crate::rename::places(sql, b"t");
+    let places = crate::rename::places(sql, b"t", crate::rename::Marking::Every);
     assert_eq!(places.len(), 3);
     assert_eq!(
         crate::rename::written(sql, &places, b"u"),
@@ -255,7 +255,7 @@ fn every_place_a_statement_names_the_table() {
             b"CREATE INDEX i ON \"u\"(a) WHERE \"u\".b>0",
         ),
     ] {
-        let places = crate::rename::places(sql, b"t");
+        let places = crate::rename::places(sql, b"t", crate::rename::Marking::Every);
         assert_eq!(
             alloc::string::String::from_utf8_lossy(&crate::rename::written(sql, &places, b"u")),
             alloc::string::String::from_utf8_lossy(want),
@@ -264,7 +264,10 @@ fn every_place_a_statement_names_the_table() {
         );
     }
     // A statement the parser refuses names nothing.
-    assert_eq!(crate::rename::places(b"NOT A STATEMENT", b"t"), Vec::new());
+    assert_eq!(
+        crate::rename::places(b"NOT A STATEMENT", b"t", crate::rename::Marking::Every),
+        Vec::new()
+    );
     // A name that is not an index SQLite made for a key of the table is
     // left as it is.
     assert_eq!(crate::rename::automatic(b"i", b"t", b"u"), None);
@@ -289,7 +292,7 @@ fn every_place_a_foreign_key_names_the_parent() {
     // A column's own `REFERENCES`, the table's own name beside it, and
     // a `FOREIGN KEY` clause of the table.
     let sql = b"CREATE TABLE t(a PRIMARY KEY, b REFERENCES t, c, FOREIGN KEY(c) REFERENCES t(a))";
-    let places = crate::rename::places(sql, b"t");
+    let places = crate::rename::places(sql, b"t", crate::rename::Marking::Every);
     assert_eq!(places.len(), 3);
     assert_eq!(
         crate::rename::written(sql, &places, b"u"),
@@ -299,9 +302,16 @@ fn every_place_a_foreign_key_names_the_parent() {
     // A key that names another table is left as it is, and so is a
     // table whose columns come out of a statement.
     let sql = b"CREATE TABLE other(a REFERENCES third, UNIQUE(a), FOREIGN KEY(a) REFERENCES third)";
-    assert_eq!(crate::rename::places(sql, b"t"), Vec::new());
     assert_eq!(
-        crate::rename::places(b"CREATE TABLE other AS SELECT 1", b"t"),
+        crate::rename::places(sql, b"t", crate::rename::Marking::Every),
+        Vec::new()
+    );
+    assert_eq!(
+        crate::rename::places(
+            b"CREATE TABLE other AS SELECT 1",
+            b"t",
+            crate::rename::Marking::Every
+        ),
         Vec::new()
     );
 }
@@ -314,16 +324,26 @@ fn a_statement_that_names_another_table_names_nothing_of_this_one() {
         b"CREATE VIEW v AS SELECT a FROM other",
         b"CREATE TRIGGER tr AFTER INSERT ON other BEGIN DELETE FROM other; SELECT 1; END",
     ] {
-        assert_eq!(crate::rename::places(sql, b"t"), Vec::new(), "{sql:?}");
+        assert_eq!(
+            crate::rename::places(sql, b"t", crate::rename::Marking::Every),
+            Vec::new(),
+            "{sql:?}"
+        );
     }
     // A statement in brackets is no name of a table, and the statement
     // inside it carries the names.
     let sql = b"CREATE VIEW v AS SELECT a FROM (SELECT a FROM t)";
-    assert_eq!(crate::rename::places(sql, b"t").len(), 1);
+    assert_eq!(
+        crate::rename::places(sql, b"t", crate::rename::Marking::Every).len(),
+        1
+    );
     // A step that names the table counts, whatever statement it is, and
     // a step that names another table does not.
     let sql = b"CREATE TRIGGER tr AFTER INSERT ON t BEGIN DELETE FROM t; UPDATE other SET a=1; SELECT 1; END";
-    assert_eq!(crate::rename::places(sql, b"t").len(), 2);
+    assert_eq!(
+        crate::rename::places(sql, b"t", crate::rename::Marking::Every).len(),
+        2
+    );
 }
 
 #[test]
@@ -747,4 +767,94 @@ fn a_trigger_of_the_temp_schema_names_the_table_of_every_database() {
             .message(),
         "error in trigger u8t: no such table: u8"
     );
+}
+
+#[test]
+fn what_a_rename_writes_under_legacy_alter_table() {
+    let mut writer = writer();
+    ran(
+        &mut writer,
+        &[
+            b"PRAGMA legacy_alter_table=1",
+            b"CREATE TABLE p(a PRIMARY KEY)",
+            b"CREATE TABLE t(a, b REFERENCES p(a))",
+            b"CREATE INDEX i ON t(a) WHERE a>0",
+            b"CREATE VIEW v AS SELECT a FROM t",
+            b"CREATE TRIGGER tr AFTER INSERT ON t BEGIN INSERT INTO t VALUES(1,2); END",
+            b"ALTER TABLE t RENAME TO u",
+            b"ALTER TABLE p RENAME TO q",
+        ],
+    );
+    // The table's own name, the table an index is over and the table a
+    // trigger stands on are written again; every reference is left as it
+    // stands, and a `REFERENCES` of the renamed parent too, because the
+    // keys are not held.
+    assert_eq!(
+        schema(&writer),
+        concat!(
+            "table|q|q|CREATE TABLE \"q\"(a PRIMARY KEY)|\n",
+            "index|sqlite_autoindex_q_1|q||\n",
+            "table|u|u|CREATE TABLE \"u\"(a, b REFERENCES p(a))|\n",
+            "index|i|u|CREATE INDEX i ON \"u\"(a) WHERE a>0|\n",
+            "view|v|v|CREATE VIEW v AS SELECT a FROM t|\n",
+            "trigger|tr|u|CREATE TRIGGER tr AFTER INSERT ON \"u\" ",
+            "BEGIN INSERT INTO t VALUES(1,2); END|\n",
+        )
+    );
+    assert_eq!(
+        writer.run(b"PRAGMA legacy_alter_table").unwrap(),
+        alloc::vec![alloc::vec![crate::value::Value::Int(1)]]
+    );
+}
+
+#[test]
+fn a_legacy_rename_writes_a_reference_of_the_parent_where_the_keys_are_held() {
+    let mut writer = writer();
+    ran(
+        &mut writer,
+        &[
+            b"PRAGMA legacy_alter_table=1",
+            b"PRAGMA foreign_keys=1",
+            b"CREATE TABLE p(a PRIMARY KEY)",
+            b"CREATE TABLE c(b REFERENCES p(a))",
+            b"ALTER TABLE p RENAME TO q",
+        ],
+    );
+    assert!(schema(&writer).contains("CREATE TABLE c(b REFERENCES \"q\"(a))"));
+}
+
+#[test]
+fn a_legacy_rename_that_leaves_a_statement_unreadable_is_refused() {
+    let mut writer = writer();
+    ran(
+        &mut writer,
+        &[
+            b"PRAGMA legacy_alter_table=1",
+            b"CREATE TABLE t(a, b, CHECK(t.a>0))",
+        ],
+    );
+    // The `CHECK` names the table, which the rename leaves as it stands,
+    // so the statement no longer reads and the rename is refused. A
+    // trigger that names a table no database holds is resolved by no
+    // legacy rename, so the schema below it stands.
+    assert_eq!(
+        writer
+            .run(b"ALTER TABLE t RENAME TO u")
+            .unwrap_err()
+            .message(),
+        "error in table u after rename: no such column: t.a"
+    );
+    assert_eq!(
+        schema(&writer),
+        "table|t|t|CREATE TABLE t(a, b, CHECK(t.a>0))|\n"
+    );
+    ran(
+        &mut writer,
+        &[
+            b"CREATE TABLE w(c)",
+            b"CREATE TRIGGER tr AFTER INSERT ON w BEGIN INSERT INTO gone VALUES(1); END",
+            b"ALTER TABLE w RENAME TO x",
+        ],
+    );
+    assert!(schema(&writer).contains("CREATE TABLE \"x\"(c)"));
 }

@@ -7240,3 +7240,15 @@ Document 16 step Q8.
 - What a column falls back to: a literal, a call, a name, a variable, a
   statement in brackets, an `EXISTS`, a name in double quotes, and
   `false`.
+
+### 6.6.311 A rename under `legacy_alter_table` (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A table with a `REFERENCES`, an index with a partial `WHERE`, a view
+  and a trigger over it, renamed under the pragma, and the parent renamed
+  after it.
+- The same parent renamed with the keys held.
+- A `CHECK` that names the table, which the rename leaves as it stands
+  and the refusal names; and a trigger that names a table no database
+  holds, which such a rename resolves nothing of.

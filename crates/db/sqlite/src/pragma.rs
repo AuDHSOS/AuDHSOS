@@ -376,6 +376,13 @@ pub static HELD: &[Keeps] = &[
         answers: false,
         fixed: false,
     },
+    Keeps {
+        name: b"legacy_alter_table",
+        fallback: 0,
+        written: Written::Truth,
+        answers: false,
+        fixed: false,
+    },
 ];
 
 /// The value a pragma the connection keeps is set to, or nothing where
@@ -470,7 +477,6 @@ pub fn of_name(name: &[u8]) -> Option<Setting> {
         // name it does not know.
         b"default_synchronous"
         | b"legacy_file_format"
-        | b"legacy_alter_table"
         | b"cache_spill"
         | b"shrink_memory"
         | b"optimize" => Setting::Ignored,

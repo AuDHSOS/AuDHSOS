@@ -7,6 +7,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` reads `PRAGMA legacy_alter_table`, which holds a rename of
+  a table to the name each statement carries the table under, resolves no
+  trigger, and refuses the rename `error in <type> <name> after rename:
+  <message>` where a statement it wrote no longer reads. D-444 records
+  it. Catalog 6.6.311. `alterlegacy.test` goes from 31 cases passing to
+  43.
+
 - `db-sqlite` holds a `CHECK`, a generated column, an index term and the
   `WHERE` of a partial index to the columns of their own table, and what
   a column falls back to to a constant, so a name the table does not

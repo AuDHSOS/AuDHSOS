@@ -233,8 +233,6 @@ struct Column<'a> {
     /// The new name as the statement wrote it, which carries the quotes
     /// the statement carried.
     as_written: &'a [u8],
-    /// The new name with the quotes taken off, which a refusal names.
-    to: &'a [u8],
 }
 
 /// One row of `sqlite_schema` written again under the new name of a
@@ -244,7 +242,13 @@ struct Column<'a> {
 /// index SQLite made for a key of it, its `tbl_name` changes where it
 /// named the table, and its text is written again wherever the
 /// statement names the table.
-fn renamed(values: &mut [Value], from: &[u8], to: &[u8], renaming: Renaming<'_>) -> bool {
+fn renamed(
+    values: &mut [Value],
+    from: &[u8],
+    to: &[u8],
+    renaming: Renaming<'_>,
+    marking: crate::rename::Marking,
+) -> bool {
     let text = |value: Option<&Value>| match value {
         Some(Value::Text(bytes)) => bytes.clone(),
         _ => Vec::new(),
@@ -256,7 +260,7 @@ fn renamed(values: &mut [Value], from: &[u8], to: &[u8], renaming: Renaming<'_>)
     if !renaming.reads(&kind, &sql) {
         return false;
     }
-    let places = crate::rename::places(&sql, from);
+    let places = crate::rename::places(&sql, from, marking);
     let automatic = crate::rename::automatic(&name, from, to);
     let mut changed = false;
     let mut write = |at: usize, bytes: &[u8]| {
@@ -458,21 +462,14 @@ enum Making {
 /// Reading one statement costs O(n) in its nodes.
 fn reads_after(
     text: &[u8],
-    to: &[u8],
     collating: &[crate::value::Collating],
 ) -> Option<alloc::string::String> {
     let (arena, definition) = crate::parse::definition(text).ok()?;
     let Definition::Table(made) = definition else {
         return None;
     };
-    crate::schema::table(&arena, &made, text, collating).err()?;
-    // A table the rename leaves with two columns of one name is the one
-    // way a statement stops reading, because a name is all the rename
-    // writes.
-    Some(alloc::format!(
-        "duplicate column name: {}",
-        alloc::string::String::from_utf8_lossy(to)
-    ))
+    let refused = crate::schema::table(&arena, &made, text, collating).err()?;
+    Some(Error::Schema(refused).message())
 }
 
 /// Whether the schema already names a table, an index or a view, which
@@ -1666,8 +1663,11 @@ impl Writer {
         // A rename resolves every statement of the schema before it
         // writes one, so a trigger that names a table no database holds
         // refuses the rename and leaves the schema as it stands.
-        self.resolved()?;
-        self.in_temp(|writer| writer.resolved())?;
+        // `isLegacy` of `renameTableFunc` resolves none of them.
+        if self.marking() == crate::rename::Marking::Every {
+            self.resolved()?;
+            self.in_temp(|writer| writer.resolved())?;
+        }
         // The temp schema holds views and triggers over the tables of
         // every database, so a rename of a table another database holds
         // writes those too. The temp schema is written first, because
@@ -1698,14 +1698,24 @@ impl Writer {
         to: &[u8],
         renaming: Renaming<'_>,
     ) -> Result<(), Error> {
+        let marking = self.marking();
         let bytes = self.image();
         let database = self.reading(&bytes)?;
         let mut written: Vec<(i64, Vec<Value>)> = Vec::new();
         for (rowid, values) in database.rows_of(SCHEMA_TABLE)? {
             let mut values = values;
-            if renamed(&mut values, from, to, renaming) {
-                written.push((rowid, values));
+            if !renamed(&mut values, from, to, renaming, marking) {
+                continue;
             }
+            // `renameTestSchema` under `after rename`: a statement that
+            // no longer reads refuses the whole rename, which a rename
+            // that writes the name alone leaves behind where a `CHECK`
+            // named the table.
+            let text = |at: usize| values.get(at).and_then(Value::text).unwrap_or_default();
+            if let Some(refused) = reads_after(&text(4), self.collating) {
+                return Err(Error::AfterRename(text(0), text(1), refused));
+            }
+            written.push((rowid, values));
         }
         drop(database);
         for (rowid, values) in written {
@@ -2235,7 +2245,6 @@ impl Writer {
     fn rename_column(&mut self, asked: &crate::ast::RenameColumn, sql: &[u8]) -> Result<(), Error> {
         let name = crate::schema::dequote(asked.table.text(sql));
         let from = crate::schema::dequote(asked.column.text(sql));
-        let to = crate::schema::dequote(asked.name.text(sql));
         // `sqlite3AlterRenameColumn` reads `bQuote` off the first byte
         // of the new name, so the name is written as the statement
         // wrote it.
@@ -2260,7 +2269,6 @@ impl Writer {
             table: &name,
             from: &from,
             as_written: &as_written,
-            to: &to,
         };
         self.column_rows(&written, Renaming::Every)?;
         // The temp schema holds views and triggers over the tables of
@@ -2306,7 +2314,7 @@ impl Writer {
             let text = crate::rename::written_as(&statement, &places, column.as_written);
             // `renameTestSchema` under `after rename`: a statement that
             // no longer reads refuses the whole rename.
-            if let Some(refused) = reads_after(&text, column.to, self.collating) {
+            if let Some(refused) = reads_after(&text, self.collating) {
                 return Err(Error::AfterRename(held(0), held(1), refused));
             }
             let mut values = values.clone();
@@ -2479,7 +2487,8 @@ impl Writer {
             // nothing at all.
             if statement.is_empty()
                 || !over.eq_ignore_ascii_case(name)
-                    && crate::rename::places(&statement, name).is_empty()
+                    && crate::rename::places(&statement, name, crate::rename::Marking::Every)
+                        .is_empty()
             {
                 continue;
             }
@@ -6243,16 +6252,33 @@ impl Writer {
         ))
     }
 
+    /// How much of a statement a rename of a table writes again, which
+    /// `PRAGMA legacy_alter_table` holds to the name the statement
+    /// carries the table under.
+    fn marking(&self) -> crate::rename::Marking {
+        if self.kept_truth(b"legacy_alter_table") {
+            return crate::rename::Marking::Named {
+                keys: self.kept_truth(b"foreign_keys"),
+            };
+        }
+        crate::rename::Marking::Every
+    }
+
+    /// Whether the pragma `name` the connection keeps a value for is on.
+    fn kept_truth(&self, name: &[u8]) -> bool {
+        crate::pragma::HELD
+            .iter()
+            .position(|keeps| keeps.name == name)
+            .and_then(|at| self.kept.get(at).copied().flatten())
+            .unwrap_or(0)
+            != 0
+    }
+
     /// Whether a trigger runs from inside another statement of a
     /// trigger, which `PRAGMA recursive_triggers` turns on and
     /// `SQLITE_RecTriggers` reads.
     fn recursive(&self) -> bool {
-        crate::pragma::HELD
-            .iter()
-            .position(|keeps| keeps.name == b"recursive_triggers")
-            .and_then(|at| self.kept.get(at).copied().flatten())
-            .unwrap_or(0)
-            != 0
+        self.kept_truth(b"recursive_triggers")
     }
 
     /// Runs the statements of one trigger's body.

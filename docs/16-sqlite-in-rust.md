@@ -1072,6 +1072,9 @@ Size: L.
 162. The columns a value of the schema may name, which are the ones of
      its own table, and the constant a column falls back to. Built,
      which D-443 records.
+163. The places a rename writes under `PRAGMA legacy_alter_table`, which
+     are the names a statement carries the table under. Built, which
+     D-444 records.
 
 ### Done when
 

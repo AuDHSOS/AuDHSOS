@@ -20,26 +20,52 @@ fn same(one: &[u8], other: &[u8]) -> bool {
     crate::schema::dequote(one).eq_ignore_ascii_case(other)
 }
 
+/// How much of a statement a rename writes again.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Marking {
+    /// Every place the statement names the table, which is what
+    /// `renameTableFunc` of `research/sqlite/src/alter.c:1754` marks.
+    Every,
+    /// The name the statement carries the table under, and a
+    /// `REFERENCES` of it where the keys are held, which is what
+    /// `isLegacy` of `renameTableFunc` holds a rename under `PRAGMA
+    /// legacy_alter_table` to.
+    Named {
+        /// Whether `PRAGMA foreign_keys` is on, which
+        /// `(isLegacy==0 || (db->flags & SQLITE_ForeignKeys))` of
+        /// `research/sqlite/src/alter.c:1815` reads.
+        keys: bool,
+    },
+}
+
 /// Where `sql` names `table`, earliest first.
 ///
 /// A statement the parser refuses names nothing, because a place can
 /// only be marked from the tree.
 #[must_use]
-pub fn places(sql: &[u8], table: &[u8]) -> Vec<Span> {
+pub fn places(sql: &[u8], table: &[u8], marking: Marking) -> Vec<Span> {
     let Ok((arena, definition)) = crate::parse::definition(sql) else {
         return Vec::new();
     };
     let mut out = Vec::new();
+    let keys = marking != Marking::Named { keys: false };
     match definition {
         Definition::Table(made) => {
             if same(made.name.text(sql), table) {
                 out.push(made.name);
             }
-            parents(&arena, &made, sql, table, &mut out);
+            if keys {
+                parents(&arena, &made, sql, table, &mut out);
+            }
         }
         Definition::Index(made) if same(made.table.text(sql), table) => out.push(made.table),
         Definition::Trigger(made) if same(made.table.text(sql), table) => out.push(made.table),
         _ => {}
+    }
+    if marking != Marking::Every {
+        out.sort_unstable_by_key(|span| span.start);
+        out.dedup_by_key(|span| span.start);
+        return out;
     }
     // A `WITH` term stands for itself, so a name it carries names no
     // table of the schema.
