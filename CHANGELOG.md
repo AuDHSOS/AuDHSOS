@@ -268,6 +268,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` reads the database a `PRAGMA [schema.]integrity_check`
+  names and no other, so a table only another database holds is refused
+  `no such table: <schema>.<table>`. D-445 records it. Catalog 6.6.312.
+  `pragma.test` goes from 86 cases passing to 87.
+
 - `db-sqlite` refuses a trigger, and a chain of foreign keys, that
   reaches deeper than the connection carries with `too many levels of
   trigger recursion` rather than as a statement it does not support.

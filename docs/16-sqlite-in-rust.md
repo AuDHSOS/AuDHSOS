@@ -1075,6 +1075,8 @@ Size: L.
 163. The places a rename writes under `PRAGMA legacy_alter_table`, which
      are the names a statement carries the table under. Built, which
      D-444 records.
+164. The database an integrity check reads, which is the one the schema
+     in front of the pragma names. Built, which D-445 records.
 
 ### Done when
 

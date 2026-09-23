@@ -1051,3 +1051,38 @@ fn what_mode_each_database_of_a_connection_is_held_under() {
         "exclusive"
     );
 }
+
+#[test]
+fn what_database_a_check_that_names_a_schema_reads() {
+    let mut writer = opened();
+    writer.run(b"CREATE TABLE m(x)").unwrap();
+    writer.run(b"ATTACH ':memory:' AS aux").unwrap();
+    writer.run(b"CREATE TABLE aux.a(y)").unwrap();
+    // A check that names a schema reads that database alone, so a table
+    // only another database holds is no table of it.
+    assert_eq!(
+        writer
+            .run(b"PRAGMA aux.integrity_check=m")
+            .unwrap_err()
+            .message(),
+        "no such table: aux.m"
+    );
+    assert_eq!(
+        writer
+            .run(b"PRAGMA aux.integrity_check=a")
+            .unwrap()
+            .first()
+            .and_then(|row| row.first()),
+        Some(&Value::Text(b"ok".to_vec()))
+    );
+    // A check that names none reads the databases in turn, so it finds
+    // the table wherever it stands.
+    assert_eq!(
+        writer
+            .run(b"PRAGMA integrity_check=a")
+            .unwrap()
+            .first()
+            .and_then(|row| row.first()),
+        Some(&Value::Text(b"ok".to_vec()))
+    );
+}

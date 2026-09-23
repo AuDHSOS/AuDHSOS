@@ -7252,3 +7252,11 @@ Document 16 step Q8.
 - A `CHECK` that names the table, which the rename leaves as it stands
   and the refusal names; and a trigger that names a table no database
   holds, which such a rename resolves nothing of.
+
+### 6.6.312 The database an integrity check reads (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A check that names a schema, over a table of that database and over a
+  table only another database holds; and a check that names none, over
+  the table of the attached database.

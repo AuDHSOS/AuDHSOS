@@ -2655,15 +2655,22 @@ impl Writer {
         &self,
         quick: bool,
         asked: &crate::check::Checking,
+        under: Option<&[u8]>,
     ) -> Result<Vec<Vec<Value>>, Error> {
         let mut held: Vec<(usize, Vec<u8>, Vec<u8>)> =
             alloc::vec![(self.called.place, self.called.name.clone(), self.image())];
-        for beside in self.in_place() {
-            held.push((
-                beside.called.place,
-                beside.called.name.clone(),
-                written_image(&beside.held),
-            ));
+        // `sqlite3Pragma` of `research/sqlite/src/pragma.c:1700` reads
+        // `iDb` for the schema the pragma named and walks that database
+        // alone, and every database of the connection where the pragma
+        // named none.
+        if under.is_none() {
+            for beside in self.in_place() {
+                held.push((
+                    beside.called.place,
+                    beside.called.name.clone(),
+                    written_image(&beside.held),
+                ));
+            }
         }
         held.sort_by_key(|(place, _, _)| *place);
         let mut left = crate::check::allowed(asked);
@@ -2687,7 +2694,10 @@ impl Writer {
         if let crate::check::Checking::Table(wanted) = asked
             && !named
         {
-            return Err(Error::NoTable(wanted.clone()));
+            return Err(Error::NoTable(match under {
+                Some(schema) => under_schema(schema, wanted),
+                None => wanted.clone(),
+            }));
         }
         if found.is_empty() {
             found.push(b"ok".to_vec());
@@ -4458,8 +4468,11 @@ impl Writer {
             return self.vacuumed_steps(most);
         }
         if let Some(quick) = quick {
-            let asked = crate::check::checking(asked.value.map(|value| value.text(sql)));
-            return self.integrity(quick, &asked);
+            let under = asked
+                .schema
+                .map(|span| crate::schema::dequote(span.text(sql)));
+            let checking = crate::check::checking(asked.value.map(|value| value.text(sql)));
+            return self.integrity(quick, &checking, under.as_deref());
         }
         // `PragTyp_LOCKING_MODE` reads and writes one mode per database
         // of the connection, so it is answered before the pragmas the
