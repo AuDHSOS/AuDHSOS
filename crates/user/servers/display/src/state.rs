@@ -16,6 +16,7 @@
 //! never has to know about it.
 
 use audhsos_abi::Error;
+use audhsos_abi::layout::PAGE_SIZE;
 use audhsos_collections::ArrayVec;
 use gfx::{Damage, PixelFormat, Rect, Surface, present};
 use user_proto::display::{CursorShape, Mode};
@@ -64,7 +65,8 @@ pub struct Display<const N: usize> {
     mode: Option<Mode>,
     /// The surfaces, one per client.
     surfaces: ArrayVec<Held, N>,
-    /// The number the next surface gets.
+    /// The first number the next surface may get; a live surface's number
+    /// is skipped.
     next_id: u32,
     /// Where the pointer is and what is under it.
     cursor: Cursor,
@@ -132,6 +134,23 @@ impl<const N: usize> Display<N> {
         self.surfaces.iter()
     }
 
+    /// The bytes of address space one surface window needs: a surface of
+    /// the whole screen, in whole pages. Zero without a screen.
+    #[must_use]
+    pub fn window(&self) -> u64 {
+        self.mode.map_or(0, |mode| {
+            whole_pages(
+                Held {
+                    badge: NOBODY,
+                    id: 0,
+                    width: mode.width,
+                    height: mode.height,
+                }
+                .bytes(),
+            )
+        })
+    }
+
     /// Makes a surface of `width` by `height` for `badge`.
     ///
     /// # Errors
@@ -152,15 +171,37 @@ impl<const N: usize> Display<N> {
         if self.of(badge).is_some() {
             return Err(Error::AlreadyExists);
         }
+        let id = self.free_id().ok_or(Error::QuotaExceeded)?;
         let held = Held {
             badge,
-            id: self.next_id,
+            id,
             width,
             height,
         };
         self.surfaces.push(held).map_err(|_| Error::QuotaExceeded)?;
-        self.next_id = self.next_id.saturating_add(1);
+        self.next_id = after(id);
         Ok(held)
+    }
+
+    /// The first number from `next_id` on that no live surface has.
+    ///
+    /// `N + 1` candidates hold at least one free number, since at most `N`
+    /// surfaces live: O(N²).
+    fn free_id(&self) -> Option<u32> {
+        let mut id = self.next_id.max(1);
+        for _ in 0..=N {
+            if self.surfaces.iter().all(|held| held.id != id) {
+                return Some(id);
+            }
+            id = after(id);
+        }
+        None
+    }
+
+    /// Sets the first number the next surface may get.
+    #[cfg(test)]
+    pub(crate) const fn number_next(&mut self, id: u32) {
+        self.next_id = id;
     }
 
     /// The surface `badge` holds, if it holds one.
@@ -279,4 +320,22 @@ impl<const N: usize> Display<N> {
     pub fn format(&self) -> Result<PixelFormat, Error> {
         Ok(PixelFormat::from_boot(self.screen()?.format))
     }
+}
+
+/// The number after `id`, wrapping past `u32::MAX` to 1, since 0 names no
+/// surface.
+const fn after(id: u32) -> u32 {
+    match id.checked_add(1) {
+        Some(next) => next,
+        None => 1,
+    }
+}
+
+/// `bytes` rounded up to whole pages, which is what a mapping covers.
+#[must_use]
+pub const fn whole_pages(bytes: u64) -> u64 {
+    bytes
+        .saturating_add(PAGE_SIZE.saturating_sub(1))
+        .wrapping_div(PAGE_SIZE)
+        .saturating_mul(PAGE_SIZE)
 }

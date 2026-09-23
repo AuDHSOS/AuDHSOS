@@ -270,7 +270,7 @@ const PROGRAMS: [Program; 18] = [
         grant: Grant::None,
         names: true,
         memory: true,
-        draws: false,
+        draws: true,
         listens: true,
         talks: false,
         files: false,

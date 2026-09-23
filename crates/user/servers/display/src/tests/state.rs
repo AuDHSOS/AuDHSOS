@@ -4,11 +4,12 @@
 //! Tests of `crate::state`, over byte arrays that stand in for the memory
 //! of a client and for the framebuffer of the machine.
 
+use audhsos_abi::layout::PAGE_SIZE;
 use audhsos_abi::{Error, FramebufferFormat};
 use gfx::{Color, Damage, PixelFormat, Rect, Surface};
 use user_proto::display::{CursorShape, Mode};
 
-use crate::state::{Display, NOBODY};
+use crate::state::{Display, NOBODY, whole_pages};
 
 /// The screen of these tests.
 const SCREEN: Mode = Mode {
@@ -330,4 +331,68 @@ fn a_client_that_carries_no_badge_gets_no_surface() {
         "a capability found under a name names nobody"
     );
     assert!(display.is_empty());
+}
+
+// Regression: issue #139.
+#[test]
+fn a_live_surfaces_number_is_not_handed_out_again_after_the_counter_wraps() {
+    let mut display = display();
+    display.number_next(u32::MAX);
+    let first = display.create(CLIENT, 4, 4).unwrap();
+    assert_eq!(first.id, u32::MAX);
+    let second = display.create(CLIENT + 1, 4, 4).unwrap();
+    assert_eq!(second.id, 1, "the number after u32::MAX is 1, not 0");
+
+    display.number_next(u32::MAX);
+    let third = display.create(CLIENT + 2, 4, 4).unwrap();
+    assert_eq!(third.id, 2, "u32::MAX and 1 are live and skipped");
+    assert_eq!(display.holding(CLIENT + 2, third.id), Ok(third));
+    assert_eq!(display.holding(CLIENT, first.id), Ok(first));
+}
+
+// Regression: issue #139.
+#[test]
+fn a_create_and_destroy_loop_leaves_numbers_unique() {
+    let mut display = display();
+    display.number_next(u32::MAX - 2);
+    let kept = display.create(CLIENT, 4, 4).unwrap();
+    for _ in 0..16 {
+        let passing = display.create(CLIENT + 1, 4, 4).unwrap();
+        assert_ne!(passing.id, kept.id);
+        assert_ne!(passing.id, 0);
+        display.destroy(CLIENT + 1, passing.id).unwrap();
+    }
+    assert_eq!(display.holding(CLIENT, kept.id), Ok(kept));
+}
+
+// Regression: issue #158.
+#[test]
+fn the_surface_window_holds_a_surface_of_the_whole_screen() {
+    for (width, height) in [
+        (8, 6),
+        (1920, 1080),
+        (2560, 1600),
+        (3840, 2160),
+        (7680, 4320),
+    ] {
+        let mut display: Display<4> = Display::new(Some(Mode {
+            width,
+            height,
+            format: FramebufferFormat::Rgbx8888,
+        }));
+        let window = display.window();
+        let whole = display.create(CLIENT, width, height).unwrap();
+        assert!(whole_pages(whole.bytes()) <= window, "{width}x{height}");
+        assert_eq!(window % PAGE_SIZE, 0, "{width}x{height}");
+    }
+    assert_eq!(Display::<4>::default().window(), 0);
+}
+
+#[test]
+fn whole_pages_rounds_up_to_the_page() {
+    assert_eq!(whole_pages(0), 0);
+    assert_eq!(whole_pages(1), PAGE_SIZE);
+    assert_eq!(whole_pages(PAGE_SIZE), PAGE_SIZE);
+    assert_eq!(whole_pages(33_177_600), 33_177_600);
+    assert_eq!(whole_pages(PAGE_SIZE + 1), 2 * PAGE_SIZE);
 }
