@@ -3425,8 +3425,13 @@ fn the_pragmas_a_connection_keeps_answer_what_it_was_told() {
         writer.run(b"PRAGMA synchronous").unwrap(),
         [[Value::Int(3)]]
     );
+    // A word `PRAGMA locking_mode` does not name is a query of the mode
+    // the connection holds databases under.
+    assert_eq!(
+        writer.run(b"PRAGMA locking_mode=sometimes").unwrap(),
+        [[text(b"exclusive")]]
+    );
     // A value the pragma does not name is refused.
-    assert!(writer.run(b"PRAGMA locking_mode=sometimes").is_err());
     assert!(writer.run(b"PRAGMA mmap_size=lots").is_err());
     assert!(writer.run(b"PRAGMA mmap_size=''").is_err());
     assert!(writer.run(b"PRAGMA synchronous=sometimes").is_err());

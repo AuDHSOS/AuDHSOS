@@ -500,6 +500,12 @@ struct HeldFile {
     /// What the commits since the caller last read them did to the
     /// files, in the order they did it.
     did: Vec<Does>,
+    /// Whether the file is held under an exclusive lock, which `PRAGMA
+    /// locking_mode` names and `pPager->exclusiveMode` of
+    /// `research/sqlite/src/pager.c` holds. A file the connection holds
+    /// of its own is under one whatever the pragma says, which
+    /// `sqlite3PagerLockingMode` reads `pPager->tempFile` for.
+    exclusive: bool,
 }
 
 /// Which file of a database one write of a commit reaches.
@@ -780,6 +786,11 @@ pub struct Writer {
     uri: bool,
     /// The limits the connection holds, which `sqlite3_limit` sets.
     limits: crate::db::Limits,
+    /// Whether a database an `ATTACH` adds is held under an exclusive
+    /// lock, which `PRAGMA locking_mode` written under no schema names
+    /// and `db->dfltLockMode` of `research/sqlite/src/pragma.c:1560`
+    /// holds.
+    locking: bool,
     /// What the connection was told for each pragma of
     /// [`crate::pragma::HELD`], where it was told one.
     kept: Vec<Option<i64>>,
@@ -903,6 +914,7 @@ impl Writer {
                 restarting: false,
                 began: None,
                 did: Vec::new(),
+                exclusive: false,
                 header: Header {
                     page_size,
                     write_version: 1,
@@ -937,6 +949,7 @@ impl Writer {
             zone: None,
             uri: false,
             limits: crate::db::Limits::new(),
+            locking: false,
             kept: alloc::vec![None; crate::pragma::HELD.len()],
             running: Vec::new(),
             truth: Truths::default(),
@@ -1051,6 +1064,7 @@ impl Writer {
                 restarting: false,
                 began: None,
                 did: Vec::new(),
+                exclusive: false,
             },
             called: Called {
                 name: b"main".to_vec(),
@@ -1065,6 +1079,7 @@ impl Writer {
             zone: None,
             uri: false,
             limits: crate::db::Limits::new(),
+            locking: false,
             kept: alloc::vec![None; crate::pragma::HELD.len()],
             running: Vec::new(),
             truth: Truths::default(),
@@ -1677,23 +1692,29 @@ impl Writer {
     /// opening function or the function answered nothing, and
     /// [`Error::Image`] for an image whose header the library refuses.
     fn opened_file(&self, file: &[u8]) -> Result<HeldFile, Error> {
-        let fresh = || {
+        // `sqlite3PagerLockingMode` holds a file of the connection's own
+        // under an exclusive lock whatever the pragma says, and every
+        // other database opens under the mode the connection names for
+        // one.
+        let fresh = |exclusive: bool| {
             let held = self.held.header;
             let made = Writer::new(held.page_size, held.reserved, held.encoding)?;
-            Ok(made.held)
+            let mut held = made.held;
+            held.exclusive = exclusive;
+            Ok(held)
         };
         if fresh_file(file) {
-            return fresh();
+            return fresh(true);
         }
         let missing = || Error::NoDatabaseFile(file.to_vec());
         let opening = self.opening.ok_or_else(missing)?;
         let image = opening(file).ok_or_else(missing)?;
         if image.is_empty() {
-            return fresh();
+            return fresh(self.locking);
         }
         let header = Header::parse(&image)?;
         let pages = Pages::opened(&image, &header)?;
-        let mut made = self.opened_file(b":memory:")?;
+        let mut made = fresh(self.locking)?;
         made.pages = pages;
         made.header = header;
         Ok(made)
@@ -4108,6 +4129,13 @@ impl Writer {
             let asked = crate::check::checking(asked.value.map(|value| value.text(sql)));
             return self.integrity(quick, &asked);
         }
+        // `PragTyp_LOCKING_MODE` reads and writes one mode per database
+        // of the connection, so it is answered before the pragmas the
+        // connection holds one value of.
+        if setting == crate::pragma::Setting::LockingMode {
+            let written = asked.value.map(|value| value.text(sql));
+            return Ok(self.locking_mode(written, asked.schema.is_none()));
+        }
         let Some(value) = asked.value else {
             return self.pragma_read(setting);
         };
@@ -4365,6 +4393,54 @@ impl Writer {
         Ok(rows)
     }
 
+    /// `PRAGMA [schema.]locking_mode [= mode]`: the mode the database
+    /// named is held under, where `every` says the pragma named no
+    /// schema.
+    ///
+    /// `PragTyp_LOCKING_MODE` of `research/sqlite/src/pragma.c:1560`
+    /// answers the connection's own default where the pragma names
+    /// neither a schema nor a mode; a pragma that names a mode under no
+    /// schema writes every database of the connection but the temp
+    /// schema, keeps the mode as that default, and answers what `main`
+    /// is held under. A pragma that names no schema and a word that is
+    /// neither mode is a query of that default and writes nothing.
+    ///
+    /// Reading or writing the modes costs O(n) in the databases.
+    fn locking_mode(&mut self, written: Option<&[u8]>, every: bool) -> Vec<Vec<Value>> {
+        let mode = |exclusive: bool| {
+            let text: &[u8] = if exclusive { b"exclusive" } else { b"normal" };
+            alloc::vec![alloc::vec![Value::Text(text.to_vec())]]
+        };
+        let asked = written.and_then(|text| {
+            match crate::schema::dequote(text).to_ascii_lowercase().as_slice() {
+                b"exclusive" => Some(true),
+                b"normal" => Some(false),
+                _ => None,
+            }
+        });
+        // A pragma that names no schema and no mode this crate reads is a
+        // query of the connection's own default, which is what
+        // `getLockingMode` answering `PAGER_LOCKINGMODE_QUERY` for a word
+        // that names neither mode comes to.
+        if every && asked.is_none() {
+            return mode(self.locking);
+        }
+        if let Some(exclusive) = asked {
+            if every {
+                self.locking = exclusive;
+                for held in &mut self.attached {
+                    if !held_alone(&held.called) {
+                        held.held.exclusive = exclusive;
+                    }
+                }
+            }
+            if !held_alone(&self.called) {
+                self.held.exclusive = exclusive;
+            }
+        }
+        mode(self.held.exclusive)
+    }
+
     /// `PRAGMA name = value`, with `text` for what is written.
     ///
     /// # Errors
@@ -4614,8 +4690,10 @@ impl Writer {
                 .get(at)
                 .map_or(0, |keeps| keeps.fallback),
         };
-        let value = self.kept.get(at).copied().flatten().unwrap_or(fallback);
-        crate::pragma::kept(at, value)
+        // Every pragma the connection keeps answers the number it was
+        // told, because the one that answered a word of its own is
+        // `PRAGMA locking_mode`, which each database holds one of.
+        Value::Int(self.kept.get(at).copied().flatten().unwrap_or(fallback))
     }
 
     /// The pragma at `at` of [`crate::pragma::HELD`] set to what `text`
@@ -10805,6 +10883,17 @@ fn joined(held: HeldFile, began: bool) -> HeldFile {
         held.began = Some(held.header);
     }
     held
+}
+
+/// Whether the database is one the connection holds of its own rather
+/// than a file the client holds, which the temp schema and a database
+/// attached under `:memory:` are.
+///
+/// `sqlite3PagerLockingMode` holds such a database under an exclusive
+/// lock whatever `PRAGMA locking_mode` names, which is what
+/// `pPager->tempFile` reads for.
+fn held_alone(called: &Called) -> bool {
+    called.place != 0 && fresh_file(&called.file)
 }
 
 /// Whether a file name stands for a database of the connection's own

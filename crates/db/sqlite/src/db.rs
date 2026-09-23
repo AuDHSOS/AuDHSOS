@@ -3648,7 +3648,7 @@ impl<'a> Database<'a> {
         let value = match setting {
             crate::pragma::Setting::Held(at) => crate::pragma::HELD
                 .get(at)
-                .map(|keeps| crate::pragma::kept(at, keeps.fallback)),
+                .map(|keeps| Value::Int(keeps.fallback)),
             // The mode belongs to the connection that writes, which a
             // database read here was told, unless the file itself is in
             // write-ahead logging, which its header says.
@@ -3657,6 +3657,10 @@ impl<'a> Database<'a> {
                 let word = if logged { b"wal" } else { self.journalled };
                 Some(Value::Text(word.to_vec()))
             }
+            // A reader holds the one file it was given, which is a file
+            // of the client and stands under the mode a connection told
+            // nothing holds one under.
+            crate::pragma::Setting::LockingMode => Some(Value::Text(b"normal".to_vec())),
             other => other.read(self.image.header()),
         }
         .ok_or(Error::Unsupported)?;

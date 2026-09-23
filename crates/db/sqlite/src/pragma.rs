@@ -26,6 +26,9 @@ pub enum Setting {
     AutoVacuum,
     /// What a commit writes beside the file.
     JournalMode,
+    /// `PRAGMA [schema.]locking_mode`, which every database of the
+    /// connection holds one of and no byte of the file carries.
+    LockingMode,
     /// How many pages the file holds.
     PageCount,
     /// How many pages the free list holds.
@@ -118,9 +121,6 @@ pub enum Written {
     /// A truth value, which is `sqlite3GetBoolean` with nought for a
     /// word it does not know.
     Truth,
-    /// `normal` or `exclusive`, which the pragma answers back as the
-    /// word it was written as.
-    Locking,
     /// `off`, `on` or `fast`, which the pragma answers back as nought,
     /// one or two.
     Secure,
@@ -183,13 +183,6 @@ pub static HELD: &[Keeps] = &[
         written: Written::Number,
         answers: true,
         fixed: true,
-    },
-    Keeps {
-        name: b"locking_mode",
-        fallback: 0,
-        written: Written::Locking,
-        answers: true,
-        fixed: false,
     },
     Keeps {
         name: b"secure_delete",
@@ -385,22 +378,6 @@ pub static HELD: &[Keeps] = &[
     },
 ];
 
-/// What a pragma the connection keeps answers for `value`.
-#[must_use]
-pub fn kept(at: usize, value: i64) -> Value {
-    match HELD.get(at).map(|keeps| keeps.written) {
-        Some(Written::Locking) => Value::Text(
-            if value == 0 {
-                b"normal".as_slice()
-            } else {
-                b"exclusive".as_slice()
-            }
-            .to_vec(),
-        ),
-        _ => Value::Int(value),
-    }
-}
-
 /// The value a pragma the connection keeps is set to, or nothing where
 /// what is written is not one of its values.
 #[must_use]
@@ -410,11 +387,6 @@ pub fn keeping(at: usize, text: &[u8]) -> Option<i64> {
         // `PragTyp_FLAG` reads `sqlite3GetBoolean(zRight, 0)`, so a
         // word that names no truth value turns the flag off.
         Some(Written::Truth) => Some(i64::from(truth(&written).unwrap_or(false))),
-        Some(Written::Locking) => match written.as_slice() {
-            b"normal" => Some(0),
-            b"exclusive" => Some(1),
-            _ => None,
-        },
         Some(Written::Secure) => match written.as_slice() {
             b"fast" => Some(2),
             _ => truth(&written).map(i64::from),
@@ -469,6 +441,7 @@ pub fn of_name(name: &[u8]) -> Option<Setting> {
         b"encoding" => Setting::Encoding,
         b"auto_vacuum" => Setting::AutoVacuum,
         b"journal_mode" => Setting::JournalMode,
+        b"locking_mode" => Setting::LockingMode,
         b"page_count" => Setting::PageCount,
         b"freelist_count" => Setting::FreelistCount,
         b"schema_version" => Setting::SchemaVersion,
@@ -739,6 +712,7 @@ impl Setting {
             // holds, and the two that walk the file rather than read
             // its header have no answer out of a header.
             Setting::JournalMode
+            | Setting::LockingMode
             | Setting::CountChanges
             | Setting::Held(_)
             | Setting::Ignored
@@ -765,7 +739,7 @@ impl Setting {
 /// Where `cache_size` stands in [`HELD`], which `PRAGMA
 /// default_cache_size` sets along with the word at offset 48 of the
 /// header.
-pub const CACHED: usize = 23;
+pub const CACHED: usize = 22;
 
 /// What a header word of `held` answers for `PRAGMA
 /// default_cache_size` and for the cache size a connection was told

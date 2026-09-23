@@ -1060,6 +1060,8 @@ Size: L.
 157. The elementary functions of binary64, which `SQLITE_ENABLE_MATH_FUNCTIONS`
      adds: the root, the exponential, the logarithms, the circular
      functions and the hyperbolic ones. Built, which D-437 records.
+158. The locking mode of each database of a connection, which `PRAGMA
+     locking_mode` names. Built, which D-439 records.
 
 ### Done when
 

@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` holds every database of a connection under a locking mode
+  of its own, which `PRAGMA [schema.]locking_mode` names and a database
+  the connection holds of its own is exclusive whatever the pragma says.
+  D-439 records it. Catalog 6.6.306. `exclusive.test` goes from 23 cases
+  passing to 33.
+
 - `db-sqlite` answers the elementary functions of the math library:
   `sqrt`, `exp`, `ln`, `log`, `log2`, `log10`, `pow`, `power`, `atan2`,
   the three circular functions with their inverses, and the three

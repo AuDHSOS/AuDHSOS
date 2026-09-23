@@ -7182,3 +7182,13 @@ Document 17 step 55.
 - `PRAGMA incremental_vacuum` answers one row per page it gives up and
   names no column, which the count of rows of the statement says and the
   freelist afterwards holds nothing of.
+
+### 6.6.306 The mode a database is held under (`db-sqlite`)
+
+Document 16 step Q8.
+
+- `exclusive-1.*` of `exclusive.test` read against the writer: the
+  default and each database of a connection, a pragma that names a
+  schema, one that names none, a word that names neither mode, the temp
+  schema, a database attached after the default was named, and one
+  attached under `:memory:`.

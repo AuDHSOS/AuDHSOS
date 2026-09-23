@@ -937,11 +937,117 @@ fn what_a_schema_in_front_of_the_table_of_a_trigger_names() {
         ),
         (b"CREATE INDEX ub ON u(b)", "no such table: main.u"),
     ] {
-        assert_eq!(
-            refused(&mut writer, sql),
-            message,
-            "{}",
-            alloc::string::String::from_utf8_lossy(sql)
-        );
+        let written = alloc::string::String::from_utf8_lossy(sql).into_owned();
+        assert_eq!(refused(&mut writer, sql), message, "{written}");
     }
+}
+
+/// `exclusive-1.*` of `test/exclusive.test`: the mode each database of a
+/// connection is held under, which `PRAGMA locking_mode` names one of
+/// per database and keeps one default of.
+#[test]
+fn what_mode_each_database_of_a_connection_is_held_under() {
+    let mut writer = opened();
+    // One answer per statement of the text, which is how the tester
+    // writes a run of pragmas.
+    let shown = |writer: &mut Writer, sql: &str| -> alloc::string::String {
+        let mut out = alloc::string::String::new();
+        for statement in sql.split(';') {
+            let text = statement.trim();
+            for row in writer.run(text.as_bytes()).expect("the pragma") {
+                for value in &row {
+                    if !out.is_empty() {
+                        out.push(' ');
+                    }
+                    out.push_str(&alloc::string::String::from_utf8_lossy(
+                        &value.text().unwrap_or_default(),
+                    ));
+                }
+            }
+        }
+        out
+    };
+    // The temp schema is a database of the connection's own, which is
+    // held under an exclusive lock whatever the pragma names.
+    let every = "PRAGMA locking_mode; PRAGMA main.locking_mode; PRAGMA temp.locking_mode";
+    assert_eq!(shown(&mut writer, every), "normal normal exclusive");
+    assert_eq!(
+        shown(&mut writer, "PRAGMA locking_mode = exclusive"),
+        "exclusive"
+    );
+    assert_eq!(shown(&mut writer, every), "exclusive exclusive exclusive");
+    assert_eq!(shown(&mut writer, "PRAGMA locking_mode = normal"), "normal");
+    assert_eq!(shown(&mut writer, every), "normal normal exclusive");
+    // A word that names neither mode, under no schema, is a query of the
+    // default and writes nothing.
+    assert_eq!(
+        shown(&mut writer, "PRAGMA locking_mode = invalid"),
+        "normal"
+    );
+    assert_eq!(shown(&mut writer, every), "normal normal exclusive");
+    // A database attached after the default was named takes it.
+    assert_eq!(
+        shown(&mut writer, "PRAGMA locking_mode = exclusive"),
+        "exclusive"
+    );
+    writer.run(b"ATTACH 'one.db' AS aux").unwrap();
+    assert_eq!(
+        shown(
+            &mut writer,
+            "PRAGMA main.locking_mode; PRAGMA aux.locking_mode"
+        ),
+        "exclusive exclusive"
+    );
+    // A pragma that names a schema writes that database alone and leaves
+    // the default where it stood.
+    assert_eq!(
+        shown(&mut writer, "PRAGMA main.locking_mode = normal"),
+        "normal"
+    );
+    assert_eq!(
+        shown(
+            &mut writer,
+            "PRAGMA main.locking_mode; PRAGMA temp.locking_mode; PRAGMA aux.locking_mode"
+        ),
+        "normal exclusive exclusive"
+    );
+    assert_eq!(shown(&mut writer, "PRAGMA locking_mode"), "exclusive");
+    writer.run(b"ATTACH 'utf16.db' AS aux2").unwrap_err();
+    writer.run(b"ATTACH 'one.db' AS aux2").unwrap();
+    assert_eq!(
+        shown(
+            &mut writer,
+            "PRAGMA main.locking_mode; PRAGMA aux.locking_mode; PRAGMA aux2.locking_mode"
+        ),
+        "normal exclusive exclusive"
+    );
+    assert_eq!(
+        shown(&mut writer, "PRAGMA aux.locking_mode = normal"),
+        "normal"
+    );
+    assert_eq!(
+        shown(
+            &mut writer,
+            "PRAGMA main.locking_mode; PRAGMA aux.locking_mode; PRAGMA aux2.locking_mode"
+        ),
+        "normal normal exclusive"
+    );
+    // A pragma under no schema writes every database but the temp schema
+    // and answers what `main` is held under.
+    assert_eq!(shown(&mut writer, "PRAGMA locking_mode = normal"), "normal");
+    assert_eq!(
+        shown(
+            &mut writer,
+            "PRAGMA main.locking_mode; PRAGMA temp.locking_mode; \
+             PRAGMA aux.locking_mode; PRAGMA aux2.locking_mode"
+        ),
+        "normal exclusive normal normal"
+    );
+    // A database of no file of its own is one the connection holds.
+    writer.run(b"ATTACH ':memory:' AS held").unwrap();
+    assert_eq!(shown(&mut writer, "PRAGMA held.locking_mode"), "exclusive");
+    assert_eq!(
+        shown(&mut writer, "PRAGMA held.locking_mode = normal"),
+        "exclusive"
+    );
 }
