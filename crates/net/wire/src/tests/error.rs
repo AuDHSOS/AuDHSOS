@@ -3,6 +3,7 @@
 
 //! Every error says what went wrong in one line.
 
+use crate::addr::IpVersion;
 use crate::error::WireError;
 
 #[test]
@@ -20,8 +21,18 @@ fn every_variant_writes_a_sentence_of_its_own() {
             "the text is not an address in canonical form",
         ),
         (
-            WireError::PrefixLength(33),
+            WireError::PrefixLength {
+                version: IpVersion::V4,
+                length: 33,
+            },
             "an IPv4 prefix is at most 32 bits, not 33",
+        ),
+        (
+            WireError::PrefixLength {
+                version: IpVersion::V6,
+                length: 129,
+            },
+            "an IPv6 prefix is at most 128 bits, not 129",
         ),
         (
             WireError::Length(70000),
@@ -39,10 +50,26 @@ fn every_variant_writes_a_sentence_of_its_own() {
 
 #[test]
 fn the_errors_compare_and_can_be_copied() {
-    let error = WireError::PrefixLength(33);
+    let error = WireError::PrefixLength {
+        version: IpVersion::V4,
+        length: 33,
+    };
     let copy = error;
     assert_eq!(error, copy);
-    assert_ne!(error, WireError::PrefixLength(34));
+    assert_ne!(
+        error,
+        WireError::PrefixLength {
+            version: IpVersion::V4,
+            length: 34,
+        }
+    );
+    assert_ne!(
+        error,
+        WireError::PrefixLength {
+            version: IpVersion::V6,
+            length: 33,
+        }
+    );
     assert_ne!(WireError::Address, WireError::Length(0));
     assert!(format!("{error:?}").contains("PrefixLength"));
 }

@@ -299,7 +299,10 @@ impl Ipv4Cidr {
     /// [`WireError::PrefixLength`] when `prefix_len` is greater than 32.
     pub const fn new(address: Ipv4Addr, prefix_len: u8) -> Result<Ipv4Cidr, WireError> {
         if prefix_len > Ipv4Cidr::MAX_PREFIX_LEN {
-            return Err(WireError::PrefixLength(prefix_len));
+            return Err(WireError::PrefixLength {
+                version: IpVersion::V4,
+                length: prefix_len,
+            });
         }
         Ok(Ipv4Cidr {
             address,
@@ -350,11 +353,10 @@ impl Ipv4Cidr {
     ///
     /// # Errors
     ///
-    /// [`WireError::Address`] when there is no slash or the part before it
-    /// is not an address, and [`WireError::PrefixLength`] when the part
-    /// after it is a decimal number above 255 or not decimal at all, and
-    /// [`WireError::PrefixLength`] when it is a number of at most 255 that
-    /// is nonetheless longer than a prefix.
+    /// [`WireError::Address`] when there is no slash, when the part before
+    /// it is not an address, or when the part after it is not a decimal
+    /// number of at most 255; [`WireError::PrefixLength`] when that number
+    /// is longer than a prefix.
     pub fn parse(text: &str) -> Result<Ipv4Cidr, WireError> {
         let (address, prefix) = text.split_once('/').ok_or(WireError::Address)?;
         Ipv4Cidr::new(Ipv4Addr::parse(address)?, decimal_prefix(prefix)?)
@@ -685,7 +687,10 @@ impl Ipv6Cidr {
     /// [`WireError::PrefixLength`] when `prefix_len` is greater than 128.
     pub const fn new(address: Ipv6Addr, prefix_len: u8) -> Result<Ipv6Cidr, WireError> {
         if prefix_len > Ipv6Cidr::MAX_PREFIX_LEN {
-            return Err(WireError::PrefixLength(prefix_len));
+            return Err(WireError::PrefixLength {
+                version: IpVersion::V6,
+                length: prefix_len,
+            });
         }
         Ok(Ipv6Cidr {
             address,

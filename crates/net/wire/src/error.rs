@@ -5,6 +5,8 @@
 
 use core::fmt;
 
+use crate::addr::{IpVersion, Ipv4Cidr, Ipv6Cidr};
+
 /// What this crate found wrong with a buffer, or with the text it was
 /// asked to read an address from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -22,9 +24,13 @@ pub enum WireError {
     /// a wrong number of groups, a group that is empty, too long, or not a
     /// number, a leading zero, or a byte the form does not allow.
     Address,
-    /// A prefix length no IPv4 network has. IPv4 addresses are 32 bits, so
-    /// 32 is the last one that names a network.
-    PrefixLength(u8),
+    /// A prefix longer than the address of its IP version.
+    PrefixLength {
+        /// The address version.
+        version: IpVersion,
+        /// The rejected prefix length.
+        length: u8,
+    },
     /// A length that has to fit in a header field and does not: sixteen
     /// bits for an IPv4 pseudo-header, thirty-two for an IPv6 one.
     Length(usize),
@@ -41,8 +47,15 @@ impl fmt::Display for WireError {
                 write!(f, "{needed} bytes were needed and {available} are left")
             }
             WireError::Address => f.write_str("the text is not an address in canonical form"),
-            WireError::PrefixLength(length) => {
-                write!(f, "an IPv4 prefix is at most 32 bits, not {length}")
+            WireError::PrefixLength { version, length } => {
+                let limit = match version {
+                    IpVersion::V4 => Ipv4Cidr::MAX_PREFIX_LEN,
+                    IpVersion::V6 => Ipv6Cidr::MAX_PREFIX_LEN,
+                };
+                write!(
+                    f,
+                    "an {version} prefix is at most {limit} bits, not {length}"
+                )
             }
             WireError::Length(length) => {
                 write!(f, "{length} bytes do not fit in the length field")
