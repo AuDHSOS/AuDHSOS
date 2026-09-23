@@ -1765,6 +1765,11 @@ impl Session {
             if text.is_empty() {
                 continue;
             }
+            // A statement that only reads writes no byte of any file, so
+            // it counts for nothing here and the writer takes none.
+            if reads(text) {
+                continue;
+            }
             if writer.run(text.as_bytes()).is_err() {
                 break;
             }

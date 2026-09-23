@@ -274,6 +274,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- The SQLite suite harness passes over a statement of a `crashsql` script
+  that only reads, so the script runs to its end and the crash counts the
+  syncs the statements after it make. Document 17 item 58. `crash.test`
+  goes from 137 cases passing to 169 and `crash6.test` answers every case
+  it reaches.
+
 - The SQLite suite harness gives up every database an `ATTACH` added once
   the last connection over that path closes, so a file that opens the
   path again attaches the same names. Document 17 item 57.

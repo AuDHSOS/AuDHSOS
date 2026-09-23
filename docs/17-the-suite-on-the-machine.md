@@ -517,6 +517,10 @@ Size: S.
     `ATTACH` added once the last connection over that path closes, which
     `sqlite3Close` does, so a file that opens the path again attaches the
     same names.
+58. A statement of a `crashsql` script that only reads is passed over
+    rather than run, because the writer answers a reader's statement with
+    a refusal and the script would stop at it, while the machine that
+    loses power writes no byte for such a statement.
 
 ### Produces
 
