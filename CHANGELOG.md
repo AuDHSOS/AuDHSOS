@@ -217,6 +217,16 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` writes an entry of an index from the values the row holds,
+  so an expression of the index and the `WHERE` of a partial index both
+  read what a column of a type converted the written text to. D-434
+  records it. Catalog 6.6.301.
+
+- `db-sqlite` reads an entry of a unique index that holds a null at any
+  of its places as one of its own in `PRAGMA integrity_check`. D-435
+  records it. Catalog 6.6.301. `indexexpr1.test` goes from 84 cases
+  passing to 87 and `without_rowid1.test` from 62 to 63.
+
 - `db-sqlite` writes the file back to the length it had when the
   transaction began, where the transaction gave pages up at its end.
   D-431 records it. Catalog 6.6.298. `incrvacuum3.test` goes from 22

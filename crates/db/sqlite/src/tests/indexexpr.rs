@@ -244,3 +244,70 @@ fn an_index_over_an_expression_is_read_under_the_collation_it_writes() {
     );
     assert_eq!(checked(&writer), [b"ok".to_vec()]);
 }
+
+/// An entry holds the values the row holds, so an expression over a
+/// column of a type reads the value the column converted it to and not
+/// the one the statement wrote.
+#[test]
+fn an_index_over_an_expression_reads_the_value_the_column_holds() {
+    let mut writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t1(a INTEGER, b)".as_slice(),
+        b"CREATE INDEX idx1 ON t1(lower(a))",
+        b"INSERT INTO t1 VALUES('0001234',3)",
+        b"INSERT INTO t1 VALUES('1234',0),('001234',2),('01234',1)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    assert_eq!(checked(&writer), [b"ok".to_vec()]);
+    // Every row holds the integer 1234, so `lower(a)` answers `1234`
+    // for each of the four.
+    assert_eq!(
+        query(
+            &writer,
+            b"SELECT b FROM t1 WHERE lower(a)='1234' ORDER BY +b"
+        ),
+        [
+            [Value::Int(0)],
+            [Value::Int(1)],
+            [Value::Int(2)],
+            [Value::Int(3)]
+        ]
+    );
+    // The `WHERE` of a partial index reads the values the row holds as
+    // well.
+    for sql in [
+        b"CREATE TABLE t2(a INTEGER, b)".as_slice(),
+        b"CREATE INDEX i2 ON t2(b) WHERE lower(a)='1234'",
+        b"INSERT INTO t2 VALUES('0001234',7),('99',8)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    assert_eq!(entries(&writer, b"i2"), 1);
+    assert_eq!(checked(&writer), [b"ok".to_vec()]);
+}
+
+/// `integrity_check` reads an entry of a unique index that holds a null
+/// at any of its places as one of its own, because a null stands equal to
+/// nothing.
+#[test]
+fn what_a_unique_index_holding_a_null_answers_the_integrity_check() {
+    let mut writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t9(a,b,c,d)".as_slice(),
+        b"CREATE UNIQUE INDEX t9x1 ON t9(c,abs(d),b)",
+        b"INSERT INTO t9(rowid,a,b,c,d) VALUES(1,2,3,4,5),(2,NULL,NULL,NULL,NULL),\
+          (3,NULL,NULL,NULL,NULL),(4,5,6,7,8)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    assert_eq!(checked(&writer), [b"ok".to_vec()]);
+    // A row whose places hold no null is still held to the key.
+    assert_eq!(
+        writer
+            .run(b"INSERT INTO t9(a,b,c,d) VALUES(5,6,7,-8)")
+            .unwrap_err()
+            .message(),
+        "UNIQUE constraint failed: index 't9x1'"
+    );
+}

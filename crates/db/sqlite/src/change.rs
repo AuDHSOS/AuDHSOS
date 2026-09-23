@@ -10122,13 +10122,31 @@ pub(crate) fn indexes_row(
     let Some(filter) = index.filter else {
         return Ok(true);
     };
+    let held = held_values(over.table, values);
     let row = Indexing {
         table: over.table,
-        values,
+        values: &held,
         encoding: over.encoding,
     };
     let value = crate::eval::evaluate_row(over.arena, filter, over.sql, &row)?;
     Ok(value.truth(false))
+}
+
+/// The values of one row as the table holds them, which is what
+/// `sqlite3TableAffinity` of `research/sqlite/src/insert.c` converts the
+/// row to before the row and its entries are written.
+///
+/// Converting one row costs O(n) in its values.
+fn held_values(table: &Table, values: &[Value]) -> Vec<Value> {
+    let mut held = values.to_vec();
+    for (at, value) in held.iter_mut().enumerate() {
+        let affinity = table
+            .columns
+            .get(at)
+            .map_or(Affinity::None, |column| column.affinity);
+        crate::value::apply(value, affinity);
+    }
+    held
 }
 
 /// The entry an index holds for one row: what it holds at each of its
@@ -10151,28 +10169,20 @@ pub(crate) fn entry_of(
     values: &[Value],
     tail: &[Value],
 ) -> Result<Vec<Value>, Error> {
+    // `sqlite3TableAffinity` converts the row before both the row and
+    // its entries are written, so an entry holds the values the row
+    // holds and not the ones the statement wrote, which an expression
+    // over a column reads as well.
+    let held = held_values(over.table, values);
     let row = Indexing {
         table: over.table,
-        values,
+        values: &held,
         encoding: over.encoding,
     };
     let mut key = Vec::new();
     for keyed in &index.columns {
         key.push(match keyed.of {
-            crate::schema::Of::Place(at) => {
-                // `sqlite3TableAffinity` converts the row before both
-                // the row and its entries are written, so an entry
-                // holds the value the row holds and not the one the
-                // statement wrote.
-                let mut value = values.get(at).cloned().unwrap_or(Value::Null);
-                let affinity = over
-                    .table
-                    .columns
-                    .get(at)
-                    .map_or(Affinity::None, |column| column.affinity);
-                crate::value::apply(&mut value, affinity);
-                value
-            }
+            crate::schema::Of::Place(at) => held.get(at).cloned().unwrap_or(Value::Null),
             crate::schema::Of::Term(term) => {
                 crate::eval::evaluate_row(over.arena, term, over.sql, &row)?
             }

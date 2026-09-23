@@ -438,6 +438,16 @@ fn entries_held(
     if index.unique {
         for (one, other) in keys.iter().zip(keys.iter().skip(1)) {
             let columns = index.columns.len();
+            // `sqlite3Pragma` of `research/sqlite/src/pragma.c:2132`
+            // reads an entry that holds a null at any of its places as
+            // one of its own, because a null stands equal to nothing.
+            if one
+                .get(..columns)
+                .unwrap_or_default()
+                .contains(&Value::Null)
+            {
+                continue;
+            }
             if order_of(
                 one.get(..columns).unwrap_or_default(),
                 other.get(..columns).unwrap_or_default(),

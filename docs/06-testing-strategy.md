@@ -7127,3 +7127,11 @@ Document 16 step Q8.
   `min`, `max` and `likely` over a value `json()` answered, a sign before
   one, a sign that computes a number, and a call that answers none of its
   arguments.
+
+### 6.6.301 The values an entry of an index holds (`db-sqlite`)
+
+Document 16 step Q8.
+
+- An expression over a column of a type that converted the text it was
+  written, the `WHERE` of a partial index over the same column, and a
+  unique index whose places hold nulls in more than one row.
