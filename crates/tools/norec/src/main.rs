@@ -114,7 +114,7 @@ fn start(args: &[String]) -> Result<bool, Error> {
     if options.mode == Mode::Script {
         for number in 0..options.runs {
             let seed = options.seed.wrapping_add(number);
-            let (case, style) = generated(seed, number);
+            let (case, style) = generated(seed);
             println!("-- seed {seed}");
             print!("{}", oracle::script(&case, style));
         }
@@ -131,7 +131,7 @@ pub(crate) fn campaign(engine: &mut dyn Engine, options: &Options) -> Result<Sum
     let mut summary = Summary::default();
     for number in 0..options.runs {
         let seed = options.seed.wrapping_add(number);
-        let (case, style) = generated(seed, number);
+        let (case, style) = generated(seed);
         summary.cases = summary.cases.saturating_add(1);
         match oracle::check(engine, &case, style)? {
             Verdict::Agree(rows) => {
@@ -168,11 +168,11 @@ pub(crate) fn campaign(engine: &mut dyn Engine, options: &Options) -> Result<Sum
     Ok(summary)
 }
 
-/// The case of one seed, and how its optimized query is counted. The two
-/// ways alternate, as section 3.3 of the paper has it: `COUNT(*)` is
-/// cheaper, and the plain row set is the one an optimizer is given plainly.
-fn generated(seed: u64, number: u64) -> (Case, CountStyle) {
-    let style = if number.checked_rem(2) == Some(0) {
+/// The case of one seed, and how its optimized query is counted. The style
+/// alternates with the seed, as section 3.3 of the paper has it, so that
+/// `--seed N --runs 1` reruns case N with its style.
+pub(crate) fn generated(seed: u64) -> (Case, CountStyle) {
+    let style = if seed.checked_rem(2) == Some(0) {
         CountStyle::Rows
     } else {
         CountStyle::Count

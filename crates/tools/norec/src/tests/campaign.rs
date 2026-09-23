@@ -3,10 +3,26 @@
 
 //! Tests of the run loop in `crate`.
 
+use crate::case::CountStyle;
 use crate::engine::Run;
 use crate::options::{Mode, Options};
 use crate::tests::{Fake, Scratch, agreeing, answer};
-use crate::{campaign, start};
+use crate::{campaign, generated, start};
+
+/// The scripts a campaign of `runs` cases from `seed` hands the engine.
+fn scripts(scratch: &Scratch, seed: u64, runs: u64) -> Vec<String> {
+    let mut sent = Vec::new();
+    let mut engine = Fake {
+        answer: |script: &str| {
+            sent.push(script.to_owned());
+            answer(&["1"], "1")
+        },
+    };
+    let mut settings = options(scratch, runs);
+    settings.seed = seed;
+    campaign(&mut engine, &settings).unwrap();
+    sent
+}
 
 /// Options that run `runs` cases into `scratch` and shrink nothing.
 fn options(scratch: &Scratch, runs: u64) -> Options {
@@ -49,7 +65,7 @@ fn what_the_engine_refuses_is_counted_by_the_message_it_refused_with() {
 fn a_disagreement_is_written_out_and_named_after_its_seed() {
     let scratch = Scratch::new();
     let mut engine = Fake {
-        answer: |_: &str| answer(&["1", "2"], "1"),
+        answer: |_: &str| answer(&["2", "2"], "1"),
     };
     let mut settings = options(&scratch, 1);
     settings.seed = 11;
@@ -67,7 +83,7 @@ fn a_disagreement_is_written_out_and_named_after_its_seed() {
 fn stopping_at_the_first_finding_leaves_the_rest_unrun() {
     let scratch = Scratch::new();
     let mut engine = Fake {
-        answer: |_: &str| answer(&["1", "2"], "1"),
+        answer: |_: &str| answer(&["2", "2"], "1"),
     };
     let mut settings = options(&scratch, 10);
     settings.stop = true;
@@ -81,7 +97,7 @@ fn stopping_at_the_first_finding_leaves_the_rest_unrun() {
 fn a_finding_is_shrunk_before_it_is_written_when_there_is_a_budget() {
     let scratch = Scratch::new();
     let mut engine = Fake {
-        answer: |_: &str| answer(&["1", "2"], "1"),
+        answer: |_: &str| answer(&["2", "2"], "1"),
     };
     let mut settings = options(&scratch, 1);
     settings.reduce = 200;
@@ -115,4 +131,21 @@ fn a_command_line_that_is_wrong_is_an_error_and_not_a_run() {
 #[test]
 fn the_script_mode_is_what_the_default_is_not() {
     assert_eq!(Options::default().mode, Mode::Run);
+}
+
+#[test]
+fn the_count_style_follows_the_seed_and_not_the_position_in_the_run() {
+    assert_eq!(generated(0).1, CountStyle::Rows);
+    assert_eq!(generated(1).1, CountStyle::Count);
+    assert_eq!(generated(124).1, CountStyle::Rows);
+    assert_eq!(generated(u64::MAX).1, CountStyle::Count);
+}
+
+#[test]
+fn a_seed_rerun_alone_hands_the_engine_the_script_it_had_in_the_campaign() {
+    let scratch = Scratch::new();
+    let campaign = scripts(&scratch, 1, 2);
+    let alone = scripts(&scratch, 2, 1);
+    assert_eq!(campaign.len(), 2);
+    assert_eq!(campaign.last(), alone.first());
 }
