@@ -14,6 +14,8 @@ use crate::controller::{AUX, OUTPUT_FULL, Ports, READ_CONFIG, SELF_TEST, TEST_AU
 pub enum Access {
     /// The status register was read and answered this.
     Status(u8),
+    /// One elapsed poll interval.
+    Pause,
     /// The data register was read and answered this.
     Data(u8),
     /// The data register was written.
@@ -88,6 +90,18 @@ impl ScriptedPorts {
     /// Queues one byte the controller answers with once it has been asked.
     pub fn answer(&mut self, byte: u8) {
         self.script.push_back((byte, false));
+    }
+
+    /// Queues one mouse answer.
+    pub fn answer_aux(&mut self, byte: u8) {
+        self.script.push_back((byte, true));
+    }
+
+    /// Queues mouse answers in order.
+    pub fn answer_aux_all(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.answer_aux(*byte);
+        }
     }
 
     /// Queues every byte the controller answers with, in order.
@@ -187,6 +201,10 @@ impl Ports for ScriptedPorts {
         };
         self.log.push(Access::Status(value));
         value
+    }
+
+    fn pause(&mut self) {
+        self.log.push(Access::Pause);
     }
 
     fn write_data(&mut self, value: u8) {

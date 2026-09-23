@@ -11,7 +11,7 @@ use crate::controller::{
 use crate::device::{
     ACK, ENABLE_REPORTING, GET_ID, RESET, RESET_PASSED, SET_SAMPLE_RATE, WHEEL_ID,
 };
-use crate::doubles::ScriptedPorts;
+use crate::doubles::{Access, ScriptedPorts};
 
 /// What the firmware left in the configuration byte: translation on and
 /// both interrupts on, which is what the driver has to turn off.
@@ -24,10 +24,10 @@ fn keyboard_answers(ports: &mut ScriptedPorts) {
 
 /// Queues what a mouse with a wheel answers to `start_mouse`.
 fn mouse_answers(ports: &mut ScriptedPorts, id: u8) {
-    ports.answer_all(&[ACK, RESET_PASSED, 0x00]);
+    ports.answer_aux_all(&[ACK, RESET_PASSED, 0x00]);
     // The three sample rates of the knock, each a command and a value.
-    ports.answer_all(&[ACK; 6]);
-    ports.answer_all(&[ACK, id, ACK]);
+    ports.answer_aux_all(&[ACK; 6]);
+    ports.answer_aux_all(&[ACK, id, ACK]);
 }
 
 /// A controller on which everything works, with `leftover` standing in its
@@ -203,6 +203,18 @@ fn a_mouse_without_a_wheel_keeps_the_identifier_it_gave() {
 }
 
 #[test]
+fn a_key_during_mouse_reset_does_not_hide_the_mouse() {
+    let mut ports = ScriptedPorts::new();
+    ports.answer_all(&[FIRMWARE_CONFIG, SELF_TEST_PASSED, 0, 0]);
+    keyboard_answers(&mut ports);
+    ports.answer(0x1C);
+    mouse_answers(&mut ports, WHEEL_ID);
+    let mut controller = Controller::new(ports);
+    assert_eq!(controller.init().map(|devices| devices.mouse), Ok(true));
+    assert_eq!(controller.ports().remaining(), 0);
+}
+
+#[test]
 fn an_output_buffer_that_never_fills_runs_into_the_poll_limit() {
     let mut ports = ScriptedPorts::new();
     ports.fixed_status(0);
@@ -234,6 +246,67 @@ fn the_aux_bit_of_the_status_says_which_device_sent_the_byte() {
     let mut controller = Controller::new(ports);
     assert_eq!(controller.take(), Some((0x1C, false)));
     assert_eq!(controller.take(), Some((0x08, true)));
+}
+
+#[test]
+fn a_device_answer_skips_bytes_from_the_other_port() {
+    let mut ports = ScriptedPorts::new();
+    ports.push(0x1C);
+    ports.push_aux(ACK);
+    ports.push_aux(0x08);
+    ports.push(RESET_PASSED);
+    let mut controller = Controller::new(ports);
+    assert_eq!(controller.read_from(true), Ok(ACK));
+    assert_eq!(controller.read_from(false), Ok(RESET_PASSED));
+    assert_eq!(controller.ports().reads(), 4);
+}
+
+#[test]
+fn a_read_from_the_wrong_port_uses_the_same_poll_bound() {
+    let mut ports = ScriptedPorts::new();
+    ports.push(ACK);
+    let mut controller = Controller::new(ports);
+    assert_eq!(controller.read_from(true), Err(Error::Timeout));
+    let pauses = controller
+        .ports()
+        .log()
+        .iter()
+        .filter(|entry| **entry == Access::Pause)
+        .count();
+    assert_eq!(
+        pauses,
+        usize::try_from(crate::controller::MAX_POLLS).unwrap()
+    );
+    assert_eq!(controller.ports().reads(), 1);
+}
+
+#[test]
+fn each_failed_poll_and_each_flushed_byte_has_one_pause() {
+    let mut ports = ScriptedPorts::new();
+    ports.push(0x1C);
+    ports.push_aux(0x08);
+    let mut controller = Controller::new(ports);
+    controller.flush();
+    let pauses = controller
+        .ports()
+        .log()
+        .iter()
+        .filter(|entry| **entry == Access::Pause)
+        .count();
+    assert_eq!(pauses, 2);
+
+    controller.ports().clear();
+    assert_eq!(controller.read(), Err(Error::Timeout));
+    let pauses = controller
+        .ports()
+        .log()
+        .iter()
+        .filter(|entry| **entry == Access::Pause)
+        .count();
+    assert_eq!(
+        pauses,
+        usize::try_from(crate::controller::MAX_POLLS).unwrap()
+    );
 }
 
 #[test]

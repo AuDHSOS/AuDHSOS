@@ -215,23 +215,40 @@ key_codes! {
     Numpad9 = 105, Plain(0x7D),
 }
 
+/// Plain and extended scancodes indexed by their byte.
+#[expect(
+    clippy::as_conversions,
+    clippy::indexing_slicing,
+    reason = "u8 indexes a 256-entry table"
+)]
+const SET2_LOOKUP: [[Option<KeyCode>; 256]; 2] = {
+    let mut tables = [[None; 256]; 2];
+    let mut index = 0;
+    while index < KeyCode::ALL.len() {
+        let key = KeyCode::ALL[index];
+        match key.encoding() {
+            Encoding::Plain(scan) => tables[0][scan as usize] = Some(key),
+            Encoding::Extended(scan) => tables[1][scan as usize] = Some(key),
+            Encoding::Sequence(_) => {}
+        }
+        index += 1;
+    }
+    tables
+};
+
 impl KeyCode {
     /// The key `scan` spells on its own, if any does.
     #[must_use]
+    #[expect(clippy::indexing_slicing, reason = "u8 indexes a 256-entry table")]
     pub fn from_set2(scan: u8) -> Option<KeyCode> {
-        KeyCode::ALL
-            .iter()
-            .copied()
-            .find(|key| key.encoding() == Encoding::Plain(scan))
+        SET2_LOOKUP[0][usize::from(scan)]
     }
 
     /// The key `scan` spells behind [`EXTENDED_PREFIX`], if any does.
     #[must_use]
+    #[expect(clippy::indexing_slicing, reason = "u8 indexes a 256-entry table")]
     pub fn from_set2_extended(scan: u8) -> Option<KeyCode> {
-        KeyCode::ALL
-            .iter()
-            .copied()
-            .find(|key| key.encoding() == Encoding::Extended(scan))
+        SET2_LOOKUP[1][usize::from(scan)]
     }
 }
 

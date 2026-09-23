@@ -16,6 +16,14 @@ fn answering(answers: &[u8]) -> Controller<ScriptedPorts> {
     Controller::new(ScriptedPorts::with(answers))
 }
 
+fn answering_mouse(answers: &[u8]) -> Controller<ScriptedPorts> {
+    let mut ports = ScriptedPorts::new();
+    for answer in answers {
+        ports.push_aux(*answer);
+    }
+    Controller::new(ports)
+}
+
 #[test]
 fn a_keyboard_that_answers_is_reset_set_to_set_two_and_told_to_report() {
     let mut controller = answering(&[ACK, RESET_PASSED, ACK, ACK, ACK]);
@@ -72,7 +80,7 @@ fn a_mouse_hears_the_knock_and_answers_with_its_wheel() {
     let mut answers = vec![ACK, RESET_PASSED, 0x00];
     answers.extend_from_slice(&[ACK; 6]);
     answers.extend_from_slice(&[ACK, WHEEL_ID, ACK]);
-    let mut controller = answering(&answers);
+    let mut controller = answering_mouse(&answers);
     assert_eq!(start_mouse(&mut controller), Ok(WHEEL_ID));
 
     let written = controller.ports().written();
@@ -99,7 +107,7 @@ fn a_mouse_hears_the_knock_and_answers_with_its_wheel() {
 
 #[test]
 fn a_mouse_that_does_not_answer_its_reset_is_no_mouse() {
-    let mut controller = answering(&[0x00]);
+    let mut controller = answering_mouse(&[0x00]);
     assert_eq!(
         start_mouse(&mut controller),
         Err(Error::NotAcknowledged(0x00))

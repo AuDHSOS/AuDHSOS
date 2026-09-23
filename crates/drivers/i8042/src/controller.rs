@@ -87,8 +87,11 @@ pub const CONFIG_AUX_DISABLED: u8 = 0x20;
 /// translates would hand it something else.
 pub const CONFIG_TRANSLATE: u8 = 0x40;
 
-/// How often a wait asks before it gives up.
-pub const MAX_POLLS: u32 = 100_000;
+/// Maximum one-millisecond pauses before a wait gives up: about one second.
+pub const MAX_POLLS: u32 = 1_000;
+
+/// Duration of one pause in microseconds.
+pub const POLL_PAUSE_US: u64 = 1_000;
 
 /// Access to the two ports of one controller.
 pub trait Ports {
@@ -97,6 +100,9 @@ pub trait Ports {
 
     /// Reads the status register.
     fn read_status(&mut self) -> u8;
+
+    /// Waits until the clock advances by at least [`POLL_PAUSE_US`].
+    fn pause(&mut self);
 
     /// Writes the data register.
     fn write_data(&mut self, value: u8);
@@ -108,7 +114,7 @@ pub trait Ports {
 /// Why an operation on the controller failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Error {
-    /// A buffer did not become ready within [`MAX_POLLS`] polls.
+    /// A buffer did not become ready within [`MAX_POLLS`] one-millisecond pauses.
     Timeout,
     /// The self-test answered something other than [`SELF_TEST_PASSED`].
     SelfTest(u8),
@@ -267,6 +273,7 @@ impl<P: Ports> Controller<P> {
     pub fn flush(&mut self) {
         let mut polls = 0u32;
         while polls < MAX_POLLS && self.take().is_some() {
+            self.ports.pause();
             polls = polls.saturating_add(1);
         }
     }
@@ -314,6 +321,26 @@ impl<P: Ports> Controller<P> {
         Ok(self.ports.read_data())
     }
 
+    /// Reads the next answer from the selected device, discarding bytes
+    /// from the other device under the same poll limit.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Timeout`] when the selected device sends no byte.
+    pub fn read_from(&mut self, aux: bool) -> Result<u8, Error> {
+        for _ in 0..MAX_POLLS {
+            let status = self.ports.read_status();
+            if status & OUTPUT_FULL != 0 {
+                let byte = self.ports.read_data();
+                if (status & AUX != 0) == aux {
+                    return Ok(byte);
+                }
+            }
+            self.ports.pause();
+        }
+        Err(Error::Timeout)
+    }
+
     /// Sends a command and reads the byte it answers with.
     fn ask(&mut self, command: u8) -> Result<u8, Error> {
         self.command(command)?;
@@ -338,6 +365,7 @@ impl<P: Ports> Controller<P> {
             if self.ports.read_status() & INPUT_FULL == 0 {
                 return Ok(());
             }
+            self.ports.pause();
             polls = polls.saturating_add(1);
         }
         Err(Error::Timeout)
@@ -350,6 +378,7 @@ impl<P: Ports> Controller<P> {
             if self.ports.read_status() & OUTPUT_FULL != 0 {
                 return Ok(());
             }
+            self.ports.pause();
             polls = polls.saturating_add(1);
         }
         Err(Error::Timeout)

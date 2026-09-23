@@ -190,13 +190,13 @@ impl Decoder {
     }
 }
 
-/// One delta of a packet: nine bits, sign and magnitude apart, clamped to
-/// what those nine bits hold when the device says the movement did not fit.
-fn delta(magnitude: u8, negative: bool, overflow: bool) -> i16 {
+/// One nine-bit two's complement delta, with its sign bit in the first
+/// packet byte. Overflow clamps the delta to its limit.
+fn delta(low: u8, negative: bool, overflow: bool) -> i16 {
     if overflow {
         return if negative { DELTA_MIN } else { DELTA_MAX };
     }
-    let value = i16::from(magnitude);
+    let value = i16::from(low);
     if negative {
         return value.saturating_sub(256);
     }

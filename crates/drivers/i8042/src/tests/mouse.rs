@@ -121,6 +121,12 @@ fn the_sign_bits_extend_the_deltas_downwards() {
         Some(DELTA_MIN),
         "a sign with nothing under it is the smallest delta of the nine bits"
     );
+    assert_eq!(
+        decode(0, &[SYNC | X_SIGN, 0x01, 0x00])
+            .first()
+            .map(|event| event.dx),
+        Some(-255)
+    );
 }
 
 #[test]
