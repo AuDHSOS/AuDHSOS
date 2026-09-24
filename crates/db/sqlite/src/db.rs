@@ -316,6 +316,9 @@ pub enum Error {
     /// A file name as a URI whose `mode=` or `cache=` parameter names no
     /// mode the library holds, with which parameter and the value.
     NoUriMode(Moded, Vec<u8>),
+    /// A statement that writes on a connection `PRAGMA query_only` holds
+    /// to reading.
+    ReadOnlyDatabase,
     /// A `VACUUM` on a connection with a transaction open.
     VacuumInTransaction,
     /// A `PRAGMA synchronous = value` on a connection with a transaction
@@ -754,6 +757,7 @@ impl Error {
                 alloc::format!("table {} may not be modified", shown(name))
             }
             Error::LockedTable => alloc::string::String::from(errstr(6)),
+            Error::ReadOnlyDatabase => alloc::string::String::from(errstr(8)),
             Error::Schema(schema::Error::UnsetDefault(name)) => {
                 alloc::format!("default value of column [{}] is not constant", shown(name))
             }
@@ -941,6 +945,7 @@ impl Error {
             Error::Constraint | Error::HeldConstraint(_) => Code::plain(19, b"SQLITE_CONSTRAINT"),
             Error::Auth(_) => Code::plain(23, b"SQLITE_AUTH"),
             Error::LockedTable => Code::plain(6, b"SQLITE_LOCKED"),
+            Error::ReadOnlyDatabase => Code::plain(8, b"SQLITE_READONLY"),
             Error::Mismatch => Code::plain(20, b"SQLITE_MISMATCH"),
             Error::Image(crate::error::Error::Full) => Code::plain(13, b"SQLITE_FULL"),
             Error::Image(

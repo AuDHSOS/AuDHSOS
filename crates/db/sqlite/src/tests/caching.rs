@@ -320,3 +320,50 @@ fn what_a_pragma_writes_of_the_header_words() {
         alloc::vec![alloc::vec![Value::Int(0)]]
     );
 }
+
+/// A connection under `PRAGMA query_only` refuses every statement that
+/// writes a page or a word of the header, leaves the file as the
+/// statement found it, and takes them again once the pragma is off.
+#[test]
+fn what_a_connection_under_query_only_refuses() {
+    let mut writer = spelled();
+    let was = writer.written();
+    writer.run(b"PRAGMA query_only=ON").unwrap();
+    for sql in [
+        b"INSERT INTO t VALUES('d')".as_slice(),
+        b"DELETE FROM t",
+        b"UPDATE t SET x='e'",
+        b"CREATE TABLE u(y)",
+        b"CREATE INDEX i ON t(x)",
+        b"DROP TABLE t",
+        b"ANALYZE",
+        b"VACUUM",
+    ] {
+        assert_eq!(
+            writer.run(sql).unwrap_err().message(),
+            "attempt to write a readonly database",
+            "{}",
+            alloc::string::String::from_utf8_lossy(sql)
+        );
+    }
+    assert_eq!(writer.written(), was);
+    // A statement that writes nothing runs under the pragma, which
+    // `OP_Transaction` reads the write flag of the statement for.
+    assert!(writer.run(b"REINDEX").unwrap().is_empty());
+    assert!(
+        writer
+            .run(b"DELETE FROM t WHERE x='none'")
+            .unwrap()
+            .is_empty()
+    );
+    writer.run(b"PRAGMA query_only=OFF").unwrap();
+    assert!(writer.run(b"INSERT INTO t VALUES('d')").unwrap().is_empty());
+    assert_eq!(
+        Database::open(&writer.written())
+            .unwrap()
+            .query(b"SELECT count(*) FROM t")
+            .unwrap()
+            .rows,
+        alloc::vec![alloc::vec![Value::Int(4)]]
+    );
+}

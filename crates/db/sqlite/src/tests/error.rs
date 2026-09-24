@@ -186,6 +186,13 @@ fn what_code_a_refusal_of_a_statement_carries() {
             20,
             "SQLITE_MISMATCH",
         ),
+        (
+            Refused::ReadOnlyDatabase,
+            8,
+            "SQLITE_READONLY",
+            8,
+            "SQLITE_READONLY",
+        ),
         (Refused::Incomplete, 1, "SQLITE_ERROR", 1, "SQLITE_ERROR"),
     ] {
         let held = refused.code();

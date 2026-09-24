@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` refuses every statement that writes a page or a word of the
+  header on a connection under `PRAGMA query_only` with `attempt to write
+  a readonly database`, where the pragma was held and read and refused
+  nothing. D-467 records it. Catalog 6.6.327. `queryonly.test` goes from 5
+  cases passing to 15, which is every case of the file.
+
 - `db-sqlite` answers `memory` for the journal mode of a database that
   stands in memory alone and takes `off` and no other mode for it, where
   every mode was taken. `Writer::memoried` says that `main` stands there,

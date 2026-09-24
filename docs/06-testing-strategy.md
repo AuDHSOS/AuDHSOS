@@ -7405,3 +7405,13 @@ Document 16 step Q8.
 - `REINDEX schema.name`, which writes the named database alone.
 - `REINDEX` with no name and `REINDEX <collation>`, each of which writes
   both.
+
+### 6.6.327 What `PRAGMA query_only` refuses (`db-sqlite`)
+
+Document 16 step Q8.
+
+- Eight statements that write, each refused `attempt to write a readonly
+  database`, with the file unchanged after them.
+- A `REINDEX` over a table of no index and a `DELETE` that matches no row,
+  both of which run.
+- The pragma off again, after which an `INSERT` writes.

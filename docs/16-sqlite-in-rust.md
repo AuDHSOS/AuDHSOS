@@ -1116,6 +1116,8 @@ Size: L.
 178. The databases a `REINDEX` writes the indexes of, which is every one
      the connection holds where the statement names no schema. Built,
      which D-466 records.
+179. The statements `PRAGMA query_only` refuses, which are the ones that
+     write a page or a word of the header. Built, which D-467 records.
 
 ### Done when
 

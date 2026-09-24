@@ -3864,6 +3864,12 @@ impl Writer {
     }
 
     /// One statement run against the database the connection writes.
+    /// Whether this connection may write no page of the file, which
+    /// `PRAGMA query_only` says.
+    fn reads_only(&self) -> bool {
+        self.told(b"query_only") != 0
+    }
+
     fn ran_held(&mut self, sql: &[u8]) -> Result<Vec<Vec<Value>>, Error> {
         // A text of comments alone holds no statement, so it writes no
         // byte and raises no counter of the header.
@@ -3909,6 +3915,17 @@ impl Writer {
         self.writing = 0;
         self.returned.clear();
         let ran = self.ran(sql);
+        // `OP_Transaction` of `research/sqlite/src/vdbe.c:4113` refuses a
+        // statement that writes where `PRAGMA query_only` is on. The pages
+        // the statement wrote say that it writes, because a statement that
+        // changes a word of the header writes page one with it.
+        let ran = match ran {
+            Ok(_) if self.reads_only() && self.held.pages.changed() => {
+                self.refusing = Refusing::Abort;
+                Err(Error::ReadOnlyDatabase)
+            }
+            held => held,
+        };
         // A statement that refuses what it was given leaves the file
         // as it found it, which is what `OE_Abort` does: the pages go
         // back to where the transaction of the statement began. A
