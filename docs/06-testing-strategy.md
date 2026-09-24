@@ -7325,3 +7325,12 @@ Document 16 step Q8.
 - A checkpoint after twenty commits, one commit, and a second checkpoint:
   the second writes fewer pages than the file holds, because the commit
   before it began the log again, and a third checkpoint writes nothing.
+
+### 6.6.320 The journal of a vacuum that writes another page size (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A `VACUUM` under `PRAGMA page_size` naming another size: the journal
+  holds one record per page of the file the vacuum found, each as wide as
+  that file's page size, and playing it back over the file the vacuum
+  wrote answers the file it found.

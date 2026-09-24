@@ -568,3 +568,53 @@ fn what_the_pragma_that_turns_logging_on_writes() {
     again.run(b"PRAGMA journal_mode=wal").unwrap();
     assert_eq!(shown_did(&again.did()), "lL");
 }
+
+#[test]
+fn what_the_journal_of_a_vacuum_that_writes_another_page_size_holds() {
+    let mut writer = crate::change::Writer::new(1024, 0, crate::header::Encoding::Utf8).unwrap();
+    writer
+        .run(b"CREATE TABLE abc(a PRIMARY KEY, b, c)")
+        .unwrap();
+    writer
+        .run(b"INSERT INTO abc VALUES(randomblob(100), randomblob(200), randomblob(1000))")
+        .unwrap();
+    let before = writer.written();
+    let _ = writer.did();
+    writer.caching(10);
+    writer.run(b"PRAGMA page_size = 2048").unwrap();
+    writer.run(b"VACUUM").unwrap();
+    let after = writer.written();
+    // The journal holds one record per page of the file the vacuum
+    // found, each as wide as the page size that file had.
+    let did = writer.did();
+    let mut journal: Vec<u8> = Vec::new();
+    for held in &did {
+        if matches!(held, crate::change::Does::Sync(crate::change::Onto::Main)) {
+            break;
+        }
+        if let crate::change::Does::Write {
+            onto: crate::change::Onto::Journal,
+            at,
+            bytes,
+        } = held
+        {
+            let at = usize::try_from(*at).unwrap_or(usize::MAX);
+            let end = at.saturating_add(bytes.len());
+            if journal.len() < end {
+                journal.resize(end, 0);
+            }
+            for (slot, byte) in journal.iter_mut().skip(at).zip(bytes) {
+                *slot = *byte;
+            }
+        }
+    }
+    assert_eq!(journal.len(), 512 + (before.len() / 1024) * (1024 + 8));
+    // A machine that loses power before the commit wrote the file is
+    // recovered by playing that journal back, which answers the file the
+    // vacuum found and not the one it wrote.
+    assert_ne!(after.len(), before.len());
+    assert_eq!(
+        crate::journal::Journal::open(&journal).rolled_back(&after),
+        before
+    );
+}

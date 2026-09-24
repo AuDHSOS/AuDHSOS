@@ -299,6 +299,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` writes the journal of a `VACUUM` with one record per page
+  of the file the vacuum found, each as wide as the page size that file
+  had, so a machine that loses power part way through a vacuum plays the
+  journal back and finds the file it had. D-456 records it. Catalog
+  6.6.320. `crash7.test` goes from 210 cases passing to 293, which is
+  every case of the file.
+
 - The suite harness answers `ifcapable memorymanage` with false, because
   this engine has no `sqlite3_release_memory` to write a dirty page out of
   a cache on demand. D-455 records it. `crash5.test` stops before its

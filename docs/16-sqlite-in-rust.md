@@ -1096,6 +1096,9 @@ Size: L.
      D-452 records.
 171. The pages a checkpoint writes back, which are the pages the frames
      of the log hold and no others. Built, which D-453 records.
+172. The journal a `VACUUM` commits, which holds every page of the file
+     the vacuum found at the page size that file had. Built, which D-456
+     records.
 
 ### Done when
 

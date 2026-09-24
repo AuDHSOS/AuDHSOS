@@ -82,6 +82,12 @@ pub struct Pages {
     /// Whether the file keeps pointer maps, which is what a file that
     /// vacuums itself needs to say which page names each other page.
     vacuum: bool,
+    /// The file the transaction found, which a `VACUUM` wrote again
+    /// whole, and nothing for every other transaction. The journal of
+    /// the commit holds these pages rather than the ones the pages of
+    /// the transaction were built over, because a `VACUUM` may write the
+    /// file again under another page size.
+    found: Option<Vec<u8>>,
     /// The most pages the file may hold, which `PRAGMA max_page_count`
     /// sets and which a connection told nothing leaves at the most a
     /// page number counts to.
@@ -195,6 +201,7 @@ impl Pages {
             list: (0, 0),
             freelist_count: 0,
             vacuum: false,
+            found: None,
             most: u32::MAX,
         })
     }
@@ -257,6 +264,7 @@ impl Pages {
             // Section 1.6: a file keeps pointer maps where the header
             // names a largest root page.
             vacuum: header.largest_root != 0,
+            found: None,
             most: u32::MAX,
         })
     }
@@ -887,6 +895,7 @@ impl Pages {
     /// the transaction freed onto a trunk keeps in the file what it held
     /// when the transaction began.
     pub fn begin(&mut self) {
+        self.found = None;
         self.before.fill(None);
         self.started.fill(None);
         self.freed.fill(false);
@@ -920,6 +929,7 @@ impl Pages {
         self.freed.fill(false);
         self.journalled.clear();
         self.spills.clear();
+        self.found = None;
     }
 
     /// Begins one statement of a transaction, which is the statement
@@ -1002,6 +1012,24 @@ impl Pages {
         let held = self.spills.last().copied().unwrap_or(0);
         if self.journalled.len().saturating_sub(held) >= caching {
             self.spills.push(self.journalled.len());
+        }
+    }
+
+    /// The file the transaction found, where a `VACUUM` wrote the pages
+    /// again whole: the journal of the commit holds every page of that
+    /// file, and every page of the file the pages now make is opened to
+    /// write, which is `backupOnePage` of
+    /// `research/sqlite/src/backup.c` writing each page of the
+    /// destination through the pager.
+    ///
+    /// Telling the pages costs O(n) in the pages of the file.
+    pub fn made_again(&mut self, image: &[u8]) {
+        self.found = Some(image.to_vec());
+        let held: Vec<Vec<u8>> = self.held.clone();
+        for (slot, page) in self.before.iter_mut().zip(&held) {
+            if slot.is_none() {
+                *slot = Some(page.clone());
+            }
         }
     }
 
@@ -1305,6 +1333,25 @@ impl Pages {
     /// `nonce` and `sector` are what [`crate::journal::write`] takes.
     #[must_use]
     pub fn journal(&self, was: &Header, nonce: u32, sector: u32) -> Vec<u8> {
+        // A `VACUUM` wrote the file again whole, so the journal holds
+        // every page of the file the transaction found, at the page size
+        // that file had.
+        if let Some(image) = &self.found {
+            let page_size = size(u64::from(was.page_size)).max(1);
+            let pages: Vec<&[u8]> = image.chunks(page_size).collect();
+            let records: Vec<(u32, &[u8])> = pages
+                .iter()
+                .enumerate()
+                .map(|(at, page)| {
+                    (
+                        u32::try_from(at.saturating_add(1)).unwrap_or(u32::MAX),
+                        *page,
+                    )
+                })
+                .collect();
+            let count = u32::try_from(records.len()).unwrap_or(u32::MAX);
+            return crate::journal::write(&records, count, nonce, sector);
+        }
         let content = |number: u32| -> Vec<u8> {
             let at = size(u64::from(number)).saturating_sub(1);
             let mut page = self

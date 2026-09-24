@@ -3052,8 +3052,12 @@ impl Writer {
             return Ok(());
         }
         let held = self.held.header;
+        // The file the vacuum found, which the journal of its commit
+        // holds every page of.
+        let found = self.held.pages.written(&held);
         let fresh = self.vacuumed()?;
         self.held.pages = fresh.held.pages;
+        self.held.pages.made_again(&found);
         self.held.header.page_size = fresh.held.header.page_size;
         self.held.header.pages = fresh.held.header.pages;
         self.held.header.freelist = fresh.held.header.freelist;
@@ -4479,7 +4483,13 @@ fn logged(bytes: &[u8], stood: usize, page_size: u32) -> Vec<Does> {
 fn journalled(written: &[u8], held: &HeldFile) -> Vec<Does> {
     let sector = crate::bytes::size(u64::from(held.sector));
     let page_size = crate::bytes::size(u64::from(held.header.page_size));
-    let record = page_size.saturating_add(8);
+    // The records of the journal are as wide as the page size the header
+    // of the journal names, which is the page size the file had: a
+    // `VACUUM` writes the file again under another page size and the
+    // journal still holds the pages it found.
+    let record = crate::bytes::size(u64::from(crate::bytes::u32_at(written, 24).unwrap_or(0)))
+        .max(1)
+        .saturating_add(8);
     // `writeJournalHdr` writes the header with no count of the records
     // that follow it, and `syncJournal` writes the count after the first
     // sync and holds the journal a second time, so a machine that lost
