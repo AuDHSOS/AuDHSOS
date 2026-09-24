@@ -220,6 +220,17 @@ static VALUEWISE: &[Collating] = &[Collating {
     by: by_value,
 }];
 
+/// Answers that two values are the same whatever they hold.
+fn as_one(_name: &'static [u8], _left: &[u8], _right: &[u8]) -> core::cmp::Ordering {
+    core::cmp::Ordering::Equal
+}
+
+/// The same name under a comparison every value is one under.
+static AS_ONE: &[Collating] = &[Collating {
+    name: b"SORTER",
+    by: as_one,
+}];
+
 /// The file the `ATTACH` of the reindex test names.
 fn attaching(file: &[u8]) -> Option<Vec<u8>> {
     (file == b"two.db").then(|| Writer::new(1024, 0, Encoding::Utf8).unwrap().written())
@@ -276,4 +287,25 @@ fn which_databases_a_reindex_writes_the_indexes_of() {
     writer.run(b"REINDEX SORTER").unwrap();
     assert_eq!(ordered(&writer, held), length);
     assert_eq!(ordered(&writer, beside), length);
+}
+
+/// A `REINDEX` of a unique index whose collation the connection has been
+/// told again is refused where two rows share the columns of the index
+/// under the new comparison, which no row shared under the old one.
+#[test]
+fn what_a_reindex_of_a_unique_index_over_rows_that_share_a_key_is_refused_with() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.collates(LENGTHWISE);
+    for sql in [
+        b"CREATE TABLE t2(x)".as_slice(),
+        b"INSERT INTO t2 VALUES('aa'),('b')",
+        b"CREATE UNIQUE INDEX u ON t2(x COLLATE SORTER)",
+    ] {
+        writer.run(sql).expect("a statement the writer takes");
+    }
+    writer.collates(AS_ONE);
+    assert_eq!(
+        writer.run(b"REINDEX").unwrap_err().message(),
+        "UNIQUE constraint failed: t2.x"
+    );
 }

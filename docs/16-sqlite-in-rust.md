@@ -1118,6 +1118,8 @@ Size: L.
      which D-466 records.
 179. The statements `PRAGMA query_only` refuses, which are the ones that
      write a page or a word of the header. Built, which D-467 records.
+180. The refusal a unique index written over rows that share its columns
+     carries. Built, which D-468 records.
 
 ### Done when
 

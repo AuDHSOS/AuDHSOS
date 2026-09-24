@@ -7415,3 +7415,16 @@ Document 16 step Q8.
 - A `REINDEX` over a table of no index and a `DELETE` that matches no row,
   both of which run.
 - The pragma off again, after which an `INSERT` writes.
+
+### 6.6.328 A unique index over rows that share a key (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A table with a rowid and one that keeps its rows in the key's own tree,
+  each holding two rows that share two columns and two that hold nulls
+  there.
+- A unique index over one column, over two, and over an expression, each
+  refused and each naming what it is over.
+- A partial index whose `WHERE` holds the rows that share no key, and a
+  non-unique index over the same columns, both written.
+- A `REINDEX` over both.

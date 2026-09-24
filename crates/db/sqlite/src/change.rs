@@ -7280,7 +7280,7 @@ impl Writer {
         root: u32,
         over: &[u8],
     ) -> Result<(), Error> {
-        let (entries, collations) = {
+        let (entries, collations, shared) = {
             let bytes = self.image();
             let database = self.reading(&bytes)?;
             // The statement was held to a table that is there before
@@ -7307,9 +7307,17 @@ impl Writer {
                 }
                 entries.push(entry_of(&read, &over, &values, &key)?);
             }
-            (entries, collations)
+            let shared = read
+                .unique
+                .then(|| (read.columns.len(), Self::shown_index(table, &read)));
+            (entries, collations, shared)
         };
-        self.write_entries(entries, &collations, root)
+        self.write_entries(
+            entries,
+            &collations,
+            root,
+            shared.as_ref().map(|(count, named)| (*count, &named[..])),
+        )
     }
 
     /// What an `INSERT` writes: the rows the statement answered, each
@@ -8528,12 +8536,22 @@ impl Writer {
         entries: Vec<Vec<Value>>,
         collations: &[crate::value::Placing],
         root: u32,
+        shared: Option<(usize, &[u8])>,
     ) -> Result<(), Error> {
         // `sqlite3VdbeSorterInit`: the entries are sorted before any is
         // written, so the pages fill in the order the entries run and
         // not in the order the rows do.
         let mut entries = entries;
         entries.sort_by(|one, other| order_of_keys(one, other, collations));
+        // `sqlite3RefillIndex` of `research/sqlite/src/build.c` compares
+        // each entry of a unique index against the one before it over the
+        // columns of the index and refuses two that share them.
+        if let Some((count, named)) = shared
+            && shares_key(&entries, count, collations)
+        {
+            self.refusing(Conflict::Abort);
+            return Err(Error::Unique(named.to_vec()));
+        }
         let affinities = alloc::vec![Affinity::None; collations.len().saturating_add(1)];
         for key in entries {
             let record = crate::record::write_in(&key, &affinities, 4, self.held.header.encoding);
@@ -8626,7 +8644,20 @@ impl Writer {
                 entries
             };
             let collations = collations_of(&index, self.held.header.schema_format);
-            self.write_entries(entries, &collations, root)?;
+            let shared = {
+                let bytes = self.image();
+                let database = self.reading(&bytes)?;
+                let (over, _) = database.table(&table).ok_or(Error::Unsupported)?;
+                index
+                    .unique
+                    .then(|| (index.columns.len(), Self::shown_index(over, &index)))
+            };
+            self.write_entries(
+                entries,
+                &collations,
+                root,
+                shared.as_ref().map(|(count, named)| (*count, &named[..])),
+            )?;
         }
         Ok(())
     }
@@ -11017,20 +11048,23 @@ impl Writer {
     /// `table.column` per column with a comma between them, or `index
     /// 'NAME'` for an index that holds a place over an expression.
     fn shown_key_of(table: &Table, kept: &[Kept], at: usize) -> Vec<u8> {
+        kept.get(at)
+            .map(|held| Self::shown_index(table, &held.index))
+            .unwrap_or_default()
+    }
+
+    /// The columns of `index` as `sqlite3UniqueConstraint` names them:
+    /// the table and the column of each place, or the name of the index
+    /// where one of its terms is an expression rather than a column.
+    fn shown_index(table: &Table, index: &crate::schema::Index) -> Vec<u8> {
         let mut out = Vec::new();
-        let columns = kept
-            .get(at)
-            .map_or(&[][..], |held| held.index.columns.as_slice());
-        if columns.iter().any(|keyed| keyed.place().is_none()) {
-            let named = kept
-                .get(at)
-                .map_or(&[][..], |held| held.index.name.as_slice());
+        if index.columns.iter().any(|keyed| keyed.place().is_none()) {
             out.extend_from_slice(b"index '");
-            out.extend_from_slice(named);
+            out.extend_from_slice(&index.name);
             out.push(b'\'');
             return out;
         }
-        for keyed in columns {
+        for keyed in &index.columns {
             if !out.is_empty() {
                 out.extend_from_slice(b", ");
             }
@@ -11448,6 +11482,26 @@ const fn moded(memory: bool, mode: Mode, was: Mode) -> Mode {
         return was;
     }
     mode
+}
+
+/// Whether two entries of the sorted list share the first `count`
+/// values of their keys, which is what `OP_SorterCompare` reads for a
+/// unique index.
+///
+/// An entry that holds a null among those values shares them with no
+/// other entry, which `sqlite3VdbeSorterCompare` of
+/// `research/sqlite/src/vdbesort.c` answers before it compares. The walk
+/// is O(n) over the entries and copies `count` values of each.
+fn shares_key(entries: &[Vec<Value>], count: usize, collations: &[crate::value::Placing]) -> bool {
+    let held = |entry: &Vec<Value>| -> Vec<Value> { entry.iter().take(count).cloned().collect() };
+    entries
+        .iter()
+        .zip(entries.iter().skip(1))
+        .any(|(one, other)| {
+            let one = held(one);
+            !one.contains(&Value::Null)
+                && order_of_keys(&one, &held(other), collations) == core::cmp::Ordering::Equal
+        })
 }
 
 /// The key of a row as a rowid, which is the one value a table that

@@ -351,6 +351,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` refuses a `CREATE UNIQUE INDEX` and a `REINDEX` over rows
+  two of which share the columns of the index with `UNIQUE constraint
+  failed`, where it wrote the index and left the file holding two entries
+  under one key. D-468 records it. Catalog 6.6.328. `unique2.test` goes
+  from 14 cases passing to 26 and `unique.test` from 39 to 45.
+
 - `db-sqlite` writes the indexes of every database the connection holds
   again for a `REINDEX` that names no object and for one that names a
   collation, and writes the database a schema names for `REINDEX

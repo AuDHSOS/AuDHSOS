@@ -477,3 +477,47 @@ fn a_window_function_in_a_create_index_is_refused() {
     // A term that calls no window function is one the index holds.
     writer.run(b"CREATE INDEX t6i ON t6(abs(a))").unwrap();
 }
+
+/// A `CREATE UNIQUE INDEX` over rows two of which share the columns of
+/// the index is refused, whether the table keeps a rowid or its rows in
+/// the key's own tree; nulls share nothing, a partial index reads the
+/// rows it holds alone, and an index over an expression is named by the
+/// index rather than by its columns.
+#[test]
+fn what_a_unique_index_over_rows_that_share_a_key_is_refused_with() {
+    for rest in [b"".as_slice(), b"WITHOUT ROWID"] {
+        let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+        let made = [b"CREATE TABLE t1(w PRIMARY KEY, y, z) ".as_slice(), rest].concat();
+        for sql in [
+            made.as_slice(),
+            b"INSERT INTO t1 VALUES(1, 2, 3),(2, 2, 3),(3, NULL, NULL),(4, NULL, NULL)",
+        ] {
+            writer.run(sql).expect("a statement the writer takes");
+        }
+        let shown = alloc::string::String::from_utf8_lossy(rest);
+        assert_eq!(
+            refused(&mut writer, b"CREATE UNIQUE INDEX i1 ON t1(y)"),
+            "UNIQUE constraint failed: t1.y",
+            "{shown}"
+        );
+        assert_eq!(
+            refused(&mut writer, b"CREATE UNIQUE INDEX i1 ON t1(y, z)"),
+            "UNIQUE constraint failed: t1.y, t1.z",
+            "{shown}"
+        );
+        assert_eq!(
+            refused(&mut writer, b"CREATE UNIQUE INDEX i1 ON t1(y+z)"),
+            "UNIQUE constraint failed: index 'i1'",
+            "{shown}"
+        );
+        // The two rows that share the columns stand outside the index,
+        // and the two that hold nulls share nothing.
+        writer
+            .run(b"CREATE UNIQUE INDEX i1 ON t1(y) WHERE w > 2")
+            .expect("a partial index over the rows that share no key");
+        writer
+            .run(b"CREATE INDEX i2 ON t1(y, z)")
+            .expect("an index two rows may share a key in");
+        writer.run(b"REINDEX").expect("both indexes written again");
+    }
+}
