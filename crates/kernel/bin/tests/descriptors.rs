@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Manuel Baesler and contributors
 
-//! The descriptor tables are in place once and refuse a second load.
+//! The descriptor tables are in place once and refuse a second load
+//! without touching the loaded ones.
 
 #![no_std]
 #![no_main]
@@ -36,4 +37,19 @@ fn a_second_install_of_the_tables_is_refused() {
     // and touches no register.
     let outcome = unsafe { descriptors::install(BOOT_STACK_TOP) };
     assert_eq!(outcome, Err(InstallError::AlreadyInstalled));
+}
+
+/// A refused second install leaves the task state segment as it was
+/// (issue #103).
+#[test_case]
+fn a_refused_install_leaves_the_task_state_segment_alone() {
+    let marker = BOOT_STACK_TOP.wrapping_sub(0x1000);
+    assert_eq!(descriptors::set_kernel_stack(marker), Ok(()));
+    // SAFETY: the tables are already in place, so the call reports that
+    // and touches no register.
+    let outcome = unsafe { descriptors::install(BOOT_STACK_TOP) };
+    let kept = descriptors::kernel_stack();
+    assert_eq!(descriptors::set_kernel_stack(BOOT_STACK_TOP), Ok(()));
+    assert_eq!(outcome, Err(InstallError::AlreadyInstalled));
+    assert_eq!(kept, Ok(marker));
 }

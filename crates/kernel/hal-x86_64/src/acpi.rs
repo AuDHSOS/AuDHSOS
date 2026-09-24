@@ -13,7 +13,7 @@ use kernel_acpi::error::AcpiError;
 use kernel_acpi::madt::{MADT_SIGNATURE, Madt};
 use kernel_acpi::mcfg::{MCFG_SIGNATURE, Mcfg};
 use kernel_acpi::rsdp::{RSDP_LEN, parse_rsdp};
-use kernel_acpi::sdt::{RootTable, SDT_HEADER_LEN, SdtHeader, announced_length};
+use kernel_acpi::sdt::{RootTable, SDT_HEADER_LEN, announced_length, find_table};
 use kernel_hal_api::platform::{MemoryRegionKind, Platform};
 use kernel_types::PhysAddr;
 
@@ -65,7 +65,9 @@ impl From<AcpiError> for TableError {
 ///
 /// The walk is the one the specification prescribes: the root pointer, the
 /// root table it names, then every table the root table names until one
-/// carries the `APIC` signature.
+/// carries the `APIC` signature. The kernel skips a table the window does
+/// not reach or whose header does not parse, which the specification
+/// leaves open.
 ///
 /// # Errors
 ///
@@ -76,24 +78,17 @@ impl From<AcpiError> for TableError {
 /// The tables the loader built must be active, so that the window maps
 /// every frame of the memory the firmware reported.
 pub unsafe fn find_madt(platform: &X86Platform) -> Result<Madt, TableError> {
-    let limit = window_limit(platform);
     // SAFETY: the caller promises that the loader's tables are active, so
-    // the window maps every frame of memory; every range this value hands
-    // out is checked against `limit` first.
+    // the window maps every frame of memory; `find` checks every range
+    // against the window limit first.
     let window = unsafe { PhysicalWindow::kernel() };
-    let address = platform.acpi_rsdp().ok_or(TableError::NoRootPointer)?;
-    let pointer: [u8; RSDP_LEN] = read_array(&window, limit, address)?;
-    let rsdp = parse_rsdp(&pointer)?;
-    let root_bytes = read_table(&window, limit, rsdp.root())?;
-    let root = RootTable::parse(root_bytes)?;
-    for entry in root.addresses() {
-        let bytes = read_table(&window, limit, entry)?;
-        let header = SdtHeader::parse(bytes)?;
-        if header.signature == MADT_SIGNATURE {
-            return Ok(kernel_acpi::madt::parse(bytes)?);
-        }
-    }
-    Err(TableError::NoMadt)
+    find(
+        &window,
+        platform,
+        MADT_SIGNATURE,
+        TableError::NoMadt,
+        kernel_acpi::madt::parse,
+    )
 }
 
 /// Reads the memory mapped configuration table of the machine.
@@ -112,24 +107,37 @@ pub unsafe fn find_madt(platform: &X86Platform) -> Result<Madt, TableError> {
 /// The tables the loader built must be active, so that the window maps
 /// every frame of the memory the firmware reported.
 pub unsafe fn find_mcfg(platform: &X86Platform) -> Result<Mcfg, TableError> {
-    let limit = window_limit(platform);
-    // SAFETY: the caller promises that the loader's tables are active, so
-    // the window maps every frame of memory; every range this value hands
-    // out is checked against `limit` first.
+    // SAFETY: as in `find_madt`.
     let window = unsafe { PhysicalWindow::kernel() };
+    find(
+        &window,
+        platform,
+        MCFG_SIGNATURE,
+        TableError::NoMcfg,
+        kernel_acpi::mcfg::parse,
+    )
+}
+
+/// Hands the bytes of the table that carries `signature` to `parse`, or
+/// returns `missing` when no table the root table names carries it.
+fn find<R>(
+    window: &PhysicalWindow,
+    platform: &X86Platform,
+    signature: [u8; 4],
+    missing: TableError,
+    parse: impl FnOnce(&[u8]) -> Result<R, AcpiError>,
+) -> Result<R, TableError> {
+    let limit = window_limit(platform);
     let address = platform.acpi_rsdp().ok_or(TableError::NoRootPointer)?;
-    let pointer: [u8; RSDP_LEN] = read_array(&window, limit, address)?;
+    let pointer: [u8; RSDP_LEN] = read_array(window, limit, address)?;
     let rsdp = parse_rsdp(&pointer)?;
-    let root_bytes = read_table(&window, limit, rsdp.root())?;
+    let root_bytes = read_table(window, limit, rsdp.root())?;
     let root = RootTable::parse(root_bytes)?;
-    for entry in root.addresses() {
-        let bytes = read_table(&window, limit, entry)?;
-        let header = SdtHeader::parse(bytes)?;
-        if header.signature == MCFG_SIGNATURE {
-            return Ok(kernel_acpi::mcfg::parse(bytes)?);
-        }
-    }
-    Err(TableError::NoMcfg)
+    let bytes = find_table(root.addresses(), signature, |entry| {
+        read_table(window, limit, entry)
+    })
+    .ok_or(missing)?;
+    Ok(parse(bytes)?)
 }
 
 /// The first byte above the memory the window maps, which is what the
@@ -168,7 +176,7 @@ fn read_bytes(
         return Err(TableError::Unreachable(start));
     }
     // SAFETY: the range was just checked to lie inside the memory the
-    // window maps, which the caller of `find_madt` promises is mapped.
+    // window maps, which the constructor of `window` promised is mapped.
     unsafe { window.bytes(start, len) }.ok_or(TableError::Unreachable(start))
 }
 

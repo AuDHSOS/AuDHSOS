@@ -190,3 +190,22 @@ impl<'a> RootTable<'a> {
         (0..self.len()).filter_map(|index| self.get(index))
     }
 }
+
+/// The bytes of the first table among `addresses` that `read` returns,
+/// whose header parses, and that carries `signature`, in O(n) reads.
+///
+/// An address `read` refuses and a table whose header does not parse are
+/// skipped, so that one broken table hides no later one.
+pub fn find_table<'a, E>(
+    addresses: impl IntoIterator<Item = PhysAddr>,
+    signature: [u8; 4],
+    mut read: impl FnMut(PhysAddr) -> Result<&'a [u8], E>,
+) -> Option<&'a [u8]> {
+    addresses
+        .into_iter()
+        .filter_map(|address| read(address).ok())
+        .find(|bytes| {
+            SdtHeader::parse(bytes)
+                .is_ok_and(|header| matches_signature(header.signature, signature))
+        })
+}

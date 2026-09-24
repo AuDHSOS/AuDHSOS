@@ -16,7 +16,7 @@ pub use error::AcpiError;
 pub use madt::{IoApic, MAX_IO_APICS, MAX_OVERRIDES, Madt, Override, Polarity, Routing, Trigger};
 pub use mcfg::{BYTES_PER_BUS, Ecam, MAX_ECAM_ALLOCATIONS, Mcfg};
 pub use rsdp::{RSDP_LEN, Rsdp, parse_rsdp};
-pub use sdt::{RootTable, SDT_HEADER_LEN, SdtHeader, announced_length};
+pub use sdt::{RootTable, SDT_HEADER_LEN, SdtHeader, announced_length, find_table};
 
 #[cfg(test)]
 mod tests;

@@ -34,3 +34,9 @@ pub mod traps;
 pub mod window;
 
 pub use kernel_x86_tables::vectors;
+
+// Only the feature-gated modules use these crates.
+#[cfg(not(feature = "debug-uart"))]
+use driver_uart16550 as _;
+#[cfg(not(all(feature = "debug-uart", feature = "test-exit")))]
+use kernel_test_harness as _;

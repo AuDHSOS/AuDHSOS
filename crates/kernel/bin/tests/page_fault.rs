@@ -57,5 +57,7 @@ fn on_page_fault(report: TrapReport) -> ! {
 #[test_case]
 fn a_read_from_an_unmapped_address_reports_that_address() {
     testing::set_trap_hook(|report| on_page_fault(report));
-    let _ = testing::read_byte(UNMAPPED);
+    // SAFETY: nothing is mapped at `UNMAPPED`, so the read faults and
+    // `on_page_fault` ends the machine.
+    let _ = unsafe { testing::read_byte(UNMAPPED) };
 }

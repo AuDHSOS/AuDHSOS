@@ -8,19 +8,26 @@
 //! tables are loaded, the trap handlers report through the function the
 //! caller registered, and the debug console is programmed.
 
+#[cfg(feature = "debug-uart")]
 use crate::processor::KernelToken;
+#[cfg(feature = "debug-uart")]
 use audhsos_sync::Global;
+#[cfg(feature = "debug-uart")]
 use kernel_hal_api::console::DebugConsole;
+#[cfg(feature = "test-exit")]
 use kernel_hal_api::exit::{ExitStatus, TestExit};
 
 use crate::bootinfo::X86Platform;
+#[cfg(feature = "debug-uart")]
 use crate::console::{COM1, SerialConsole};
 use crate::descriptors;
+#[cfg(feature = "test-exit")]
 use crate::exit::QemuExit;
 use crate::instructions::halt_forever;
 use crate::traps::{TrapHandler, set_handler};
 
 /// The debug console, reachable from a trap handler.
+#[cfg(feature = "debug-uart")]
 static CONSOLE: Global<SerialConsole> = Global::new();
 
 /// Programs the console, loads the descriptor tables, registers `trap`,
@@ -36,10 +43,13 @@ pub unsafe fn start<F>(boot_info: u64, stack_top: u64, trap: TrapHandler, main: 
 where
     F: FnOnce(&X86Platform),
 {
-    // SAFETY: the first serial controller belongs to the kernel while the
-    // debug console is enabled; no userland driver exists yet.
-    let console = unsafe { SerialConsole::new(COM1) };
-    let _ = CONSOLE.init(console);
+    #[cfg(feature = "debug-uart")]
+    {
+        // SAFETY: the first serial controller belongs to the kernel while
+        // the debug console is enabled; no userland driver exists yet.
+        let console = unsafe { SerialConsole::new(COM1) };
+        let _ = CONSOLE.init(console);
+    }
     set_handler(trap);
     // SAFETY: the caller promises that this runs once, on the boot
     // processor, with interrupts off.
@@ -71,26 +81,34 @@ where
 /// Runs `body` with the debug console, if it is reachable. It is not while
 /// another borrow is alive, which is what a trap inside a report looks
 /// like.
+#[cfg(feature = "debug-uart")]
 pub fn with_console<R>(body: impl FnOnce(&mut SerialConsole) -> R) -> Option<R> {
     let _guard = crate::instructions::InterruptGuard::new();
     let mut console = CONSOLE.borrow(&KernelToken).ok()?;
     Some(body(&mut console))
 }
 
-/// Reports `message` on the console, if it is reachable, and ends the
-/// machine with a failure.
+/// Reports `message` on the console with `debug-uart`, ends the machine
+/// with a failure with `test-exit`, and halts.
 pub fn fail(message: &[u8]) -> ! {
     // The machine ends here, so nothing else will write on the line and
     // the kernel may say the last word on it even after it gave the port
     // to a driver.
-    crate::console::reclaim();
-    with_console(|console| console.write_bytes(message));
+    #[cfg(feature = "debug-uart")]
+    {
+        crate::console::reclaim();
+        with_console(|console| console.write_bytes(message));
+    }
+    #[cfg(not(feature = "debug-uart"))]
+    let _ = message;
+    #[cfg(feature = "test-exit")]
     QemuExit::new().exit(ExitStatus::Failure);
     halt_forever();
 }
 
-/// Ends the machine with a success.
+/// Ends the machine with a success with `test-exit`, and halts.
 pub fn succeed() -> ! {
+    #[cfg(feature = "test-exit")]
     QemuExit::new().exit(ExitStatus::Success);
     halt_forever();
 }

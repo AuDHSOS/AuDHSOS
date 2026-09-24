@@ -8,7 +8,9 @@
 //! lives next to it; the tables are loaded once, before interrupts are
 //! turned on.
 
-use audhsos_sync::{Global, UncontendedToken};
+use core::sync::atomic::{AtomicBool, Ordering};
+
+use audhsos_sync::{Preset, UncontendedToken};
 
 use kernel_x86_tables::gdt::{KERNEL_CODE_SELECTOR, KERNEL_DATA_SELECTOR, TSS_SELECTOR, build_gdt};
 use kernel_x86_tables::idt::{DOUBLE_FAULT_IST, IDT_ENTRIES, MISSING};
@@ -22,8 +24,11 @@ use crate::instructions::{
 /// Size of the stack the double fault handler runs on.
 pub const DOUBLE_FAULT_STACK_LEN: usize = 16 * 1024;
 
-/// The interrupt descriptor table.
-static IDT: Global<[[u64; 2]; IDT_ENTRIES]> = Global::new();
+/// The interrupt descriptor table, in `.bss` and filled in place (D-66).
+static IDT: Preset<[[u64; 2]; IDT_ENTRIES]> = Preset::new([MISSING; IDT_ENTRIES]);
+
+/// Set once [`install`] has filled [`IDT`].
+static IDT_FILLED: AtomicBool = AtomicBool::new(false);
 
 /// Why the tables could not be installed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,8 +37,7 @@ pub enum InstallError {
     AlreadyInstalled,
 }
 
-/// The address a static array of `len` bytes at `base` ends at, which is
-/// where a stack starts growing down from.
+/// The address of `value`.
 fn address_of<T>(value: &T) -> u64 {
     u64::try_from(core::ptr::from_ref(value).addr()).unwrap_or(0)
 }
@@ -50,19 +54,19 @@ fn address_of<T>(value: &T) -> u64 {
 /// This must run exactly once, on the boot processor, before interrupts
 /// are turned on. No other code may hold a reference to the tables.
 pub unsafe fn install(kernel_stack_top: u64) -> Result<(), InstallError> {
+    if IDT_FILLED.load(Ordering::Acquire) {
+        return Err(InstallError::AlreadyInstalled);
+    }
     // SAFETY: the caller owns this processor with interrupts disabled.
     unsafe {
         install_private(kernel_stack_top)?;
     }
-    let token = UncontendedToken;
-    let mut table = [MISSING; IDT_ENTRIES];
-    crate::traps::fill(&mut table);
-    IDT.init(table)
-        .map_err(|_| InstallError::AlreadyInstalled)?;
     let idt_pointer = {
-        let idt = IDT
-            .borrow(&token)
+        let mut idt = IDT
+            .borrow(&UncontendedToken)
             .map_err(|_| InstallError::AlreadyInstalled)?;
+        crate::traps::fill(&mut idt);
+        IDT_FILLED.store(true, Ordering::Release);
         table_pointer(address_of(&*idt), size_of_val(&*idt))
     };
     // SAFETY: the table lives in a `static` cell, so it outlives the load,
@@ -168,6 +172,9 @@ pub unsafe fn install_application(kernel_stack_top: u64) -> Result<(), InstallEr
     // SAFETY: this processor owns its descriptor images.
     unsafe {
         install_private(kernel_stack_top)?;
+    }
+    if !IDT_FILLED.load(Ordering::Acquire) {
+        return Err(InstallError::AlreadyInstalled);
     }
     let pointer = {
         let idt = IDT
