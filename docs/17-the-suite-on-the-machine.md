@@ -527,6 +527,11 @@ Size: S.
 60. The writer of a `crashsql` child holds its cache to ten pages, which
     `crashsql` sets through `btree_set_cache_size`, so the transaction
     spills as the child's does.
+61. A file the writer disposes of is taken away at once rather than at
+    the next sync of that file, which `cfDelete` of
+    `research/sqlite/src/test6.c:661` does, so a machine that loses power
+    after a commit finds no journal of the transaction before it, which
+    D-454 records.
 
 ### Produces
 

@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` writes back the pages the frames of the log hold and no
+  other page of the file where a checkpoint runs, and writes nothing where
+  every frame has reached the file already. D-453 records it. Catalog
+  6.6.319.
+
 - `db-sqlite` writes page one through a rollback journal where `PRAGMA
   journal_mode=wal` turns logging on, which holds the file on the disk
   before the log's header reaches it. D-452 records it. Catalog 6.6.318.
@@ -293,6 +298,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   from 34 to 49 and `skipscan1.test` from 18 to 30.
 
 ### Fixed
+
+- The suite harness takes a file away at once where the writer disposes of
+  one, so a machine that loses power after a commit finds no journal of
+  the transaction before it. D-454 records it. `walcrash.test` goes from
+  2906 cases passing to 2970, which is every case of the file.
 
 - The SQLite suite harness names a connection under the command `sqlite`
   as well as `sqlite3`, which the files written for the library of version

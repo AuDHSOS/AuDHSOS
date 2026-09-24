@@ -745,6 +745,16 @@ impl Crashing {
         let mut pending: Vec<&Does> = Vec::new();
         let mut random = Rolling::new(seed);
         for held in did {
+            // `cfDelete` of `research/sqlite/src/test6.c:661` takes a
+            // file away at once, where `cfWrite` and `cfTruncate` hold
+            // what they do back for the sync, so a journal a commit
+            // disposed of is gone whatever the machine does after it and
+            // the writes it held are gone with it.
+            if let Does::Remove(onto) = held {
+                pending.retain(|entry| onto_of(entry) != *onto);
+                self.does(held);
+                continue;
+            }
             let Does::Sync(synced) = held else {
                 pending.push(held);
                 continue;

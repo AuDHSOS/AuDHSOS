@@ -236,3 +236,43 @@ fn a_frame_after_the_last_commit_is_not_read() {
     let database = Database::open_with_log(super::LOGGED, &log).unwrap();
     assert!(database.tables().count() <= 1);
 }
+
+#[test]
+fn a_checkpoint_writes_back_the_pages_the_log_holds() {
+    let mut writer = crate::change::Writer::new(1024, 0, crate::header::Encoding::Utf8).unwrap();
+    writer.run(b"PRAGMA journal_mode=wal").unwrap();
+    writer.run(b"CREATE TABLE t(a)").unwrap();
+    for _ in 0..20 {
+        writer
+            .run(b"INSERT INTO t VALUES(randomblob(400))")
+            .unwrap();
+    }
+    writer.run(b"PRAGMA wal_checkpoint").unwrap();
+    let pages = writer.written().len() / 1024;
+    assert!(pages > 4, "{pages}");
+    // The commit after a checkpoint begins the log again, so the log
+    // holds the frames of that one commit.
+    writer
+        .run(b"INSERT INTO t VALUES(randomblob(400))")
+        .unwrap();
+    let _ = writer.did();
+    writer.run(b"PRAGMA wal_checkpoint").unwrap();
+    let did = writer.did();
+    let written = did
+        .iter()
+        .filter(|held| {
+            matches!(
+                held,
+                crate::change::Does::Write {
+                    onto: crate::change::Onto::Main,
+                    ..
+                }
+            )
+        })
+        .count();
+    assert!(written < pages, "{written} of {pages}");
+    // A checkpoint that follows one with no commit between them writes
+    // nothing, because every frame of the log is in the file already.
+    writer.run(b"PRAGMA wal_checkpoint").unwrap();
+    assert_eq!(super::journal::shown_did(&writer.did()), "");
+}

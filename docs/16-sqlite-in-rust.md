@@ -1094,6 +1094,8 @@ Size: L.
 170. The transaction that turns logging on, which writes page one
      through a rollback journal before the log is there. Built, which
      D-452 records.
+171. The pages a checkpoint writes back, which are the pages the frames
+     of the log hold and no others. Built, which D-453 records.
 
 ### Done when
 

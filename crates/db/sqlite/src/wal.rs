@@ -332,6 +332,23 @@ impl Log {
             .unwrap_or(0)
     }
 
+    /// The pages the frames of the log hold, each once, in the order
+    /// their numbers run, which is the order `walIteratorInit` of
+    /// `research/sqlite/src/wal.c` sorts them into for a checkpoint to
+    /// write them back in.
+    ///
+    /// Reading them costs O(n log n) in the frames.
+    #[must_use]
+    pub fn holds(&self) -> Vec<u32> {
+        let each = FRAME.saturating_add(size(u64::from(self.page_size)));
+        let mut out: Vec<u32> = (0..self.frames())
+            .filter_map(|at| u32_at(&self.bytes, HEADER.saturating_add(at.saturating_mul(each))))
+            .collect();
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
     /// The log begun again, which `walRestartHdr` writes after a
     /// checkpoint moved every frame into the database: the frames go,
     /// the count of checkpoints rises by one, and the first salt rises

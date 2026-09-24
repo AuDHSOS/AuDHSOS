@@ -464,7 +464,7 @@ fn the_pages_a_connection_wrote_are_what_it_reads_back() {
 }
 
 /// The list of what one transaction did, as the kinds of its entries.
-fn shown_did(did: &[crate::change::Does]) -> alloc::string::String {
+pub(super) fn shown_did(did: &[crate::change::Does]) -> alloc::string::String {
     let mut out = alloc::string::String::new();
     for held in did {
         out.push_str(match held {

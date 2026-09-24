@@ -7317,3 +7317,11 @@ Document 16 step Q8.
   syncs that hold it, page one written into the file, the sync that holds
   it, and the log's header after all of it. The same pragma over a file
   that already names version two writes the log's header alone.
+
+### 6.6.319 The pages a checkpoint writes back (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A checkpoint after twenty commits, one commit, and a second checkpoint:
+  the second writes fewer pages than the file holds, because the commit
+  before it began the log again, and a third checkpoint writes nothing.

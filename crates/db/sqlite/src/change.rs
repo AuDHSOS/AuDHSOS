@@ -2893,22 +2893,44 @@ impl Writer {
     /// is what `walCheckpoint` of `research/sqlite/src/wal.c` writes for
     /// every page a frame holds, and the image those writes leave.
     ///
+    /// `held` names the pages the frames of the log hold, which the
+    /// caller reads off the log before a checkpoint that begins the log
+    /// again takes those frames away.
+    ///
     /// `pager_write_changecounter`: the file the checkpoint writes
     /// carries the counter the frames carried, which is one past the one
-    /// the file holds. It costs O(n) in the pages of the file.
-    fn writes_back(&mut self) -> Vec<u8> {
+    /// the file holds. It costs O(n) in the pages the frames hold.
+    fn writes_back(&mut self, held: &[u32]) -> Vec<u8> {
         let mut now = self.now();
         now.change_counter = now.change_counter.saturating_add(1);
         now.version_valid_for = now.change_counter;
         let image = self.held.pages.written(&now);
         let page_size = crate::bytes::size(u64::from(self.held.header.page_size));
-        for (at, page) in image.chunks(page_size.max(1)).enumerate() {
+        // `walCheckpoint` writes the page of every frame the log holds
+        // and no other page of the file, so a machine that loses power
+        // in the middle of a checkpoint leaves a page the log holds no
+        // frame for as it stood, which the recovery has no frame to
+        // write again.
+        let count = self.held.pages.count();
+        for number in held.iter().copied().filter(|number| *number <= count) {
+            let at =
+                crate::bytes::size(u64::from(number.saturating_sub(1))).saturating_mul(page_size);
             self.held.did.push(Does::Write {
                 onto: Onto::Main,
-                at: u64::try_from(at.saturating_mul(page_size)).unwrap_or(u64::MAX),
-                bytes: page.to_vec(),
+                at: u64::try_from(at).unwrap_or(u64::MAX),
+                bytes: image
+                    .get(at..at.saturating_add(page_size))
+                    .unwrap_or_default()
+                    .to_vec(),
             });
         }
+        // `sqlite3OsTruncate`: the file is cut to the pages the log's
+        // header counts once every frame the checkpoint writes back has
+        // reached it.
+        self.held.did.push(Does::Truncate {
+            onto: Onto::Main,
+            at: u64::try_from(image.len()).unwrap_or(u64::MAX),
+        });
         self.held.did.push(Does::Sync(Onto::Main));
         self.held.header.change_counter = now.change_counter;
         self.held.header.version_valid_for = now.version_valid_for;
@@ -2924,10 +2946,10 @@ impl Writer {
     ///
     /// It costs O(n) in the pages of the file.
     pub fn closing(&mut self) {
-        if self.held.log.take().is_none() {
+        let Some(log) = self.held.log.take() else {
             return;
-        }
-        let _ = self.writes_back();
+        };
+        let _ = self.writes_back(&log.holds());
         self.held.did.push(Does::Remove(Onto::Log));
         self.held.origin = None;
         self.held.restarting = false;
@@ -2953,8 +2975,18 @@ impl Writer {
             return alloc::vec![alloc::vec![Value::Int(0), Value::Int(-1), Value::Int(-1)]];
         };
         let frames = i64::try_from(log.frames()).unwrap_or(i64::MAX);
+        // The pages the frames hold are read before the log is begun
+        // again, because `walCheckpoint` writes them back and
+        // `walRestartHdr` runs after it.
+        let held = log.holds();
         let truncating = named(b"truncate");
         let restarting = truncating || named(b"restart");
+        // `walCheckpoint` of `research/sqlite/src/wal.c:2276` writes
+        // nothing where every frame of the log has reached the file
+        // already, which `pInfo->nBackfill < pWal->hdr.mxFrame` reads:
+        // the checkpoint before this one wrote them, and the commit that
+        // would begin the log again has not run.
+        let backfilling = frames > 0 && !self.held.restarting;
         if truncating {
             log.truncate();
         } else if restarting {
@@ -2962,11 +2994,13 @@ impl Writer {
         }
         self.held.log = Some(log);
         self.held.restarting = !restarting;
-        // `walCheckpoint` of `research/sqlite/src/wal.c:2276` holds the
-        // log on the disk before it writes a frame back into the file, so
-        // the file never holds a page the log has lost.
-        self.held.did.push(Does::Sync(Onto::Log));
-        let image = self.writes_back();
+        if backfilling {
+            // The log is on the disk before a frame of it reaches the
+            // file, so the file never holds a page the log has lost.
+            self.held.did.push(Does::Sync(Onto::Log));
+            let image = self.writes_back(&held);
+            self.held.origin = Some(image);
+        }
         if restarting {
             let bytes = self.held.log.as_ref().map(Log::bytes).unwrap_or_default();
             self.held.did.push(Does::Write {
@@ -2976,7 +3010,6 @@ impl Writer {
             });
             self.held.did.push(Does::Sync(Onto::Log));
         }
-        self.held.origin = Some(image);
         let counted = if truncating { 0 } else { frames };
         alloc::vec![alloc::vec![
             Value::Int(0),
