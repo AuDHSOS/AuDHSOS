@@ -302,22 +302,32 @@ pub fn raise_general_protection() {
 /// Reads one byte from `address`, which raises the page fault exception
 /// when nothing is mapped there. The exception is a fault, so the handler
 /// must end the machine instead of resuming.
+///
+/// # Safety
+///
+/// `address` is mapped readable and no live mutable reference covers it, or
+/// nothing is mapped at `address` and the trap hook of the image ends the
+/// machine on the page fault.
 #[must_use]
-pub fn read_byte(address: u64) -> u8 {
+pub unsafe fn read_byte(address: u64) -> u8 {
     let pointer = core::ptr::without_provenance::<u8>(usize::try_from(address).unwrap_or(0));
-    // SAFETY: the caller uses this only to provoke a page fault the trap
-    // hook of the image ends the machine in; nothing reads the value.
+    // SAFETY: the caller promises a readable mapping or a trap hook that
+    // ends the machine on the fault.
     unsafe { pointer.read_volatile() }
 }
 
 /// Writes one byte to `address`, which raises the page fault exception
 /// when nothing is mapped there or the mapping is read-only. The exception
 /// is a fault, so the handler must end the machine instead of resuming.
-pub fn write_byte(address: u64, value: u8) {
+///
+/// # Safety
+///
+/// `address` is mapped writable and nothing else reaches it, or the write
+/// faults and the trap hook of the image ends the machine on the fault.
+pub unsafe fn write_byte(address: u64, value: u8) {
     let pointer = core::ptr::without_provenance_mut::<u8>(usize::try_from(address).unwrap_or(0));
-    // SAFETY: the caller writes either into memory the image mapped itself
-    // and nothing else reaches, or into a guard page, where the trap hook
-    // of the image ends the machine before the write takes effect.
+    // SAFETY: the caller promises a writable mapping nothing else reaches,
+    // or a trap hook that ends the machine before the write takes effect.
     unsafe {
         pointer.write_volatile(value);
     }

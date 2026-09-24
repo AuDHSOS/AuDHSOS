@@ -13,27 +13,44 @@ pub struct Instance<'a, 'c> {
     hvar: Option<Hvar<'a>>,
     mvar: Option<Mvar<'a>>,
 }
-impl<'a, 'c> Instance<'a, 'c> {
-    /// Validate coordinates and the instance's metric variation tables.
+/// Validated metric tables of one face, independent of its coordinates.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Tables<'a> {
+    font: Font<'a>,
+    metrics: Metrics<'a>,
+    axes: usize,
+    hvar: Option<Hvar<'a>>,
+    mvar: Option<Mvar<'a>>,
+}
+fn axis_count(font: &Font<'_>) -> Result<usize, FontError> {
+    Ok(font
+        .table(*b"fvar")
+        .map(|t| Axes::parse(t.data, font.table(*b"avar").map(|a| a.data)))
+        .transpose()?
+        .map_or(0, Axes::len))
+}
+fn check(coords: &[Fixed], axes: usize) -> Result<(), FontError> {
+    if coords.len() != axes
+        || coords
+            .iter()
+            .any(|v| *v < Fixed::from_i32(-1) || *v > Fixed::ONE)
+    {
+        return Err(FontError::InvalidTable);
+    }
+    Ok(())
+}
+impl<'a> Tables<'a> {
+    /// Validate the face's metric and metric variation tables.
     /// # Errors
-    /// Rejects malformed tables, wrong axis counts, or out-of-range coordinates.
-    pub fn new(font: &Font<'a>, coords: &'c [Fixed]) -> Result<Self, FontError> {
-        let axes = font
-            .table(*b"fvar")
-            .map(|t| Axes::parse(t.data, font.table(*b"avar").map(|a| a.data)))
-            .transpose()?
-            .map_or(0, Axes::len);
-        if coords.len() != axes
-            || coords
-                .iter()
-                .any(|v| *v < Fixed::from_i32(-1) || *v > Fixed::ONE)
-        {
-            return Err(FontError::InvalidTable);
-        }
+    /// Rejects malformed tables.
+    pub(crate) fn parse(font: &Font<'a>) -> Result<Self, FontError> {
+        Self::with_axes(font, axis_count(font)?)
+    }
+    fn with_axes(font: &Font<'a>, axes: usize) -> Result<Self, FontError> {
         Ok(Self {
             font: *font,
             metrics: font.metrics()?,
-            coords,
+            axes,
             hvar: if axes == 0 {
                 None
             } else {
@@ -49,6 +66,36 @@ impl<'a, 'c> Instance<'a, 'c> {
                     .transpose()?
             },
         })
+    }
+    /// The validated metrics of the face.
+    pub(crate) const fn metrics(self) -> Metrics<'a> {
+        self.metrics
+    }
+    /// Bind coordinates in O(axes), without parsing a table again.
+    /// # Errors
+    /// Rejects wrong axis counts or out-of-range coordinates.
+    pub(crate) fn instance<'c>(self, coords: &'c [Fixed]) -> Result<Instance<'a, 'c>, FontError> {
+        check(coords, self.axes)?;
+        Ok(self.bind(coords))
+    }
+    const fn bind<'c>(self, coords: &'c [Fixed]) -> Instance<'a, 'c> {
+        Instance {
+            font: self.font,
+            metrics: self.metrics,
+            coords,
+            hvar: self.hvar,
+            mvar: self.mvar,
+        }
+    }
+}
+impl<'a, 'c> Instance<'a, 'c> {
+    /// Validate coordinates and the instance's metric variation tables.
+    /// # Errors
+    /// Rejects malformed tables, wrong axis counts, or out-of-range coordinates.
+    pub fn new(font: &Font<'a>, coords: &'c [Fixed]) -> Result<Self, FontError> {
+        let axes = axis_count(font)?;
+        check(coords, axes)?;
+        Ok(Tables::with_axes(font, axes)?.bind(coords))
     }
     /// Read an instance advance, applying HVAR or gvar phantom deltas once.
     ///

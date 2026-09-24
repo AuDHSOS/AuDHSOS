@@ -26,7 +26,7 @@
 //! bytes.
 
 use crate::error::HttpError;
-use crate::field::{is_token, is_value, same_name, trim};
+use crate::field::{is_token, is_value, is_value_byte, same_name, trim};
 use crate::request::Method;
 
 /// The longest status line this decoder reads.
@@ -40,7 +40,7 @@ pub const MAX_STATUS_LINE: usize = 256;
 /// The longest header line this decoder reads.
 pub const MAX_HEADER_LINE: usize = 1024;
 
-/// The longest chunk-size line and trailer line this decoder reads. A
+/// The longest chunk-size, chunk ending, or trailer line this decoder reads. A
 /// chunk size is at most sixteen hex digits; the rest is room for the
 /// extensions RFC 9112, section 7.1.1 allows and this decoder ignores.
 const MAX_CHUNK_LINE: usize = 256;
@@ -133,7 +133,7 @@ impl Status {
 /// What one call to [`Decoder::feed`] made of its input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Event<'a> {
-    /// Nothing can be said until more bytes arrive.
+    /// No head or body event from this call. Unconsumed input may remain.
     NeedMore,
     /// The head is complete; [`Decoder::head`] has it.
     Head,
@@ -323,10 +323,11 @@ impl<'b, const HEADERS: usize> Decoder<'b, HEADERS> {
 
     /// Takes in the bytes that arrived and answers what it made of them.
     ///
-    /// The answer names how many bytes were taken; a caller loops over
-    /// what is left until the answer is [`Event::NeedMore`] or the message
-    /// is done. At most one line of the head is read per call, so no byte
-    /// of the body is ever copied into the head buffer.
+    /// The answer names how many bytes were taken. A caller feeds the
+    /// remaining input while the answer consumed at least one byte, even
+    /// when the event is [`Event::NeedMore`]. A zero-byte answer needs
+    /// more input or marks the message done. At most one line of the head
+    /// is read per call, so no body byte enters the head buffer.
     ///
     /// # Errors
     ///
@@ -520,7 +521,7 @@ impl<'b, const HEADERS: usize> Decoder<'b, HEADERS> {
                 Ok((take, Event::Body(body)))
             }
             Chunk::Size | Chunk::After | Chunk::Trailer => {
-                let (consumed, complete) = match self.chunk_line(input) {
+                let (consumed, complete) = match self.chunk_line(input, chunk) {
                     Ok(taken) => taken,
                     Err(error) => return self.fail(error),
                 };
@@ -572,7 +573,7 @@ impl<'b, const HEADERS: usize> Decoder<'b, HEADERS> {
 
     /// Takes bytes into the chunk-line scratch, up to and including the
     /// first newline, and answers whether a line is now complete.
-    fn chunk_line(&mut self, input: &[u8]) -> Result<(usize, bool), HttpError> {
+    fn chunk_line(&mut self, input: &[u8], chunk: Chunk) -> Result<(usize, bool), HttpError> {
         let end = input
             .iter()
             .position(|byte| *byte == b'\n')
@@ -580,7 +581,11 @@ impl<'b, const HEADERS: usize> Decoder<'b, HEADERS> {
         let piece = input.get(..end).unwrap_or(&[]);
         let filled = self.chunk_len.saturating_add(piece.len());
         let Some(slot) = self.chunk.get_mut(self.chunk_len..filled) else {
-            return Err(HttpError::ChunkSize);
+            return Err(if chunk == Chunk::Size {
+                HttpError::ChunkSize
+            } else {
+                HttpError::Chunk
+            });
         };
         slot.copy_from_slice(piece);
         self.chunk_len = filled;
@@ -641,18 +646,19 @@ fn parse_field(start: usize, line: &[u8]) -> Result<(Span, Span), HttpError> {
         return Err(HttpError::HeaderName);
     };
     let after = colon.saturating_add(1);
-    let (Ok(name), Ok(value)) = (
-        core::str::from_utf8(line.get(..colon).unwrap_or(&[])),
-        core::str::from_utf8(line.get(after..).unwrap_or(&[])),
-    ) else {
-        return Err(HttpError::HeaderName);
-    };
+    let name = core::str::from_utf8(line.get(..colon).unwrap_or(&[]))
+        .map_err(|_| HttpError::HeaderName)?;
     // RFC 9112, section 5.1: no whitespace between the name and the
     // colon, which `is_token` refuses along with everything else that is
     // not a token.
     if !is_token(name) {
         return Err(HttpError::HeaderName);
     }
+    let value_bytes = line.get(after..).unwrap_or(&[]);
+    if value_bytes.iter().any(|byte| !is_value_byte(*byte)) {
+        return Err(HttpError::HeaderValue);
+    }
+    let value = core::str::from_utf8(value_bytes).map_err(|_| HttpError::HeaderValue)?;
     let trimmed = trim(value);
     if !is_value(trimmed) {
         return Err(HttpError::HeaderValue);
@@ -710,10 +716,16 @@ fn single_length<'a, I: Iterator<Item = &'a str>>(values: I) -> Result<u64, Http
 /// The size a chunk-size line names, with the extensions behind it
 /// ignored.
 fn chunk_size(line: &[u8]) -> Result<u64, HttpError> {
-    let digits = line
-        .iter()
-        .position(|byte| *byte == b';')
-        .map_or(line, |at| line.get(..at).unwrap_or(&[]));
+    let extension = line.iter().position(|byte| *byte == b';');
+    let mut digits = extension.map_or(line, |at| line.get(..at).unwrap_or(&[]));
+    if extension.is_some() {
+        while digits
+            .last()
+            .is_some_and(|byte| matches!(byte, b' ' | b'\t'))
+        {
+            digits = digits.get(..digits.len().saturating_sub(1)).unwrap_or(&[]);
+        }
+    }
     if digits.is_empty() || digits.len() > 16 {
         return Err(HttpError::ChunkSize);
     }

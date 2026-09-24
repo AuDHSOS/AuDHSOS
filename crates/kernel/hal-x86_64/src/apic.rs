@@ -352,6 +352,7 @@ pub struct Apics {
 
 impl Apics {
     /// The controller over `local` and `io`, routing through `madt`.
+    /// `local` is enabled, so that its identifier reads back.
     #[must_use]
     pub fn new(
         local: LocalApic,

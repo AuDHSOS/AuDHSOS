@@ -697,7 +697,8 @@ pub(crate) const CRATES: &[Crate] = &[
         // and the call at the entry (Phase 13).
         kind: Kind::Adapter {
             // D-192: per-processor tables, startup trampoline and PIT delays.
-            unsafe_budget: 174,
+            // D-194: four `unsafe fn` and one call.
+            unsafe_budget: 179,
             asm_budget: 31,
         },
         deps: &[
@@ -719,7 +720,8 @@ pub(crate) const CRATES: &[Crate] = &[
         path: "crates/kernel/bin",
         kind: Kind::Adapter {
             // D-192: AP startup and the shared atomic-page acceptance test.
-            unsafe_budget: 40,
+            // D-194: nine `unsafe` blocks, eight around its new `unsafe fn`.
+            unsafe_budget: 49,
             asm_budget: 0,
         },
         deps: &[
@@ -1331,6 +1333,15 @@ pub(crate) fn crates_for(target: Target) -> Vec<&'static str> {
         .map(|krate| krate.name)
         .collect()
 }
+
+/// Feature lists a cross crate builds with besides `--all-features`, each
+/// under `--no-default-features`; the empty list is no feature at all
+/// (issue #92).
+pub(crate) const FEATURE_SETS: &[(&str, &str)] = &[
+    ("kernel-hal-x86_64", ""),
+    ("kernel-hal-x86_64", "debug-uart"),
+    ("kernel-hal-x86_64", "test-exit"),
+];
 
 /// The crate with the given name.
 pub(crate) fn find(name: &str) -> Option<&'static Crate> {

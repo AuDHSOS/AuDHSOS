@@ -10,7 +10,7 @@ use crate::{
     glyf::{Glyf, Point},
     resolve::Run,
     segment,
-    shape::{self, Buffer, Caret, Gdef, LayoutTable},
+    shape::{self, Buffer, Caret, LayoutTable},
     variation::{Instance, VariationPoint},
 };
 
@@ -18,8 +18,9 @@ use crate::{
     clippy::too_many_arguments,
     reason = "caller-owned outline scratch is split from glyph storage"
 )]
-pub(super) fn advance(
-    font: &Font<'_>,
+pub(super) fn advance<'f>(
+    font: &Font<'f>,
+    glyf: &mut Option<Glyf<'f>>,
     coords: &[Fixed],
     instance: &Instance<'_, '_>,
     glyph: u16,
@@ -30,8 +31,11 @@ pub(super) fn advance(
 ) -> Result<Fixed, FontError> {
     match instance.advance(glyph, size, None) {
         Err(FontError::MissingOutline) => {
-            let outline =
-                Glyf::parse(font)?.outline_instance(glyph, coords, points, contours, variation)?;
+            let parsed = match *glyf {
+                Some(parsed) => parsed,
+                None => *glyf.insert(Glyf::parse(font)?),
+            };
+            let outline = parsed.outline_instance(glyph, coords, points, contours, variation)?;
             instance.advance(glyph, size, Some(&outline))
         }
         result => result,
@@ -78,25 +82,20 @@ impl Context<'_, '_, '_> {
         from: usize,
         to: usize,
     ) -> Result<(usize, i64, [Fixed; 3]), TextError> {
-        let font = self
-            .set
-            .chain(self.style.role)
-            .get(run.face)
-            .ok_or(TextError::NoFont)?;
-        let instance = Instance::new(font, run.coordinates())?;
-        let line = instance.line_metrics(self.style.size)?;
-        let metrics = font.metrics()?;
-        let units_per_em = i64::from(metrics.head.units_per_em);
-        let design_size = Fixed::from_i32(i32::from(metrics.head.units_per_em));
-        let gdef = font
-            .table(*b"GDEF")
-            .map(|t| Gdef::parse(t.data, run.coordinates().len()))
-            .transpose()?
-            .unwrap_or_default();
+        let mut face = self.faces.get(
+            self.set.chain(self.style.role),
+            run.face,
+            run.coordinates(),
+            self.style.size,
+        )?;
+        let font = &face.font;
+        let instance = face.instance(run.coordinates())?;
+        let design_size = Fixed::from_i32(i32::from(face.tables.metrics().head.units_per_em));
+        let gdef = face.gdef;
         let text = self.text.get(from..to).ok_or(TextError::InvalidInput)?;
         let n = shape::prepare(
             text,
-            font.cmap()?,
+            face.cmap,
             run.script,
             run.level & 1 != 0,
             workspace.glyphs,
@@ -130,6 +129,7 @@ impl Context<'_, '_, '_> {
                 } else {
                     advance(
                         font,
+                        &mut face.glyf,
                         run.coordinates(),
                         &instance,
                         glyph.id,
@@ -144,6 +144,7 @@ impl Context<'_, '_, '_> {
             buffer.set_advances(|id| {
                 advance(
                     font,
+                    &mut face.glyf,
                     run.coordinates(),
                     &instance,
                     id,
@@ -169,7 +170,9 @@ impl Context<'_, '_, '_> {
             }
             shape::finish(&mut buffer, run.level & 1 != 0)?;
         }
-        Ok((buffer.glyphs().len(), units_per_em, line))
+        let n = buffer.glyphs().len();
+        self.faces.put(&face);
+        Ok((n, face.units_per_em, face.line))
     }
     #[expect(
         clippy::too_many_arguments,
@@ -250,12 +253,7 @@ impl Context<'_, '_, '_> {
         self.charge(source.chars().count())?;
         let content = source.trim_end_matches(hard);
         let bidi_end = add(start, content.len())?;
-        let visible = if soft {
-            content.trim_end_matches([' ', '\t'])
-        } else {
-            content
-        };
-        let visible_end = add(start, visible.len())?;
+        let visible_end = self.visible_end(start, end, soft)?;
         let first = self.bidi_line(workspace, start, bidi_end)?;
         let mut count = 0;
         let mut extents = self.base;
@@ -388,7 +386,7 @@ impl Context<'_, '_, '_> {
         reason = "line source, bidi, and output intervals"
     )]
     fn clusters(
-        &self,
+        &mut self,
         workspace: &mut Workspace<'_>,
         glyph_count: usize,
         start: usize,
@@ -501,7 +499,7 @@ impl Context<'_, '_, '_> {
         Ok(())
     }
     fn cluster_group(
-        &self,
+        &mut self,
         workspace: &mut Workspace<'_>,
         first: usize,
         last: usize,
@@ -595,39 +593,42 @@ impl Context<'_, '_, '_> {
         Ok(())
     }
     fn carets(
-        &self,
+        &mut self,
         workspace: &mut Workspace<'_>,
         run: &Run,
         glyph: PositionedGlyph,
     ) -> Result<usize, TextError> {
-        let font = self
-            .set
-            .chain(self.style.role)
-            .get(run.face)
-            .ok_or(TextError::NoFont)?;
-        let Some(table) = font.table(*b"GDEF") else {
-            return Ok(0);
-        };
-        let gdef = Gdef::parse(table.data, run.coordinates().len())?;
-        let n = gdef.carets(glyph.id, run.coordinates(), workspace.caret_values)?;
+        let mut face = self.faces.get(
+            self.set.chain(self.style.role),
+            run.face,
+            run.coordinates(),
+            self.style.size,
+        )?;
+        let n = face
+            .gdef
+            .carets(glyph.id, run.coordinates(), workspace.caret_values)?;
         let carets = workspace
             .caret_values
             .get_mut(..n)
             .ok_or(TextError::BufferTooSmall)?;
         let points = if carets.iter().any(|c| matches!(c, Caret::Point(_))) {
-            Glyf::parse(font)?
-                .outline_instance(
-                    glyph.id,
-                    run.coordinates(),
-                    workspace.points,
-                    workspace.contours,
-                    workspace.variation,
-                )?
-                .points
+            let glyf = match face.glyf {
+                Some(glyf) => glyf,
+                None => *face.glyf.insert(Glyf::parse(&face.font)?),
+            };
+            self.faces.put(&face);
+            glyf.outline_instance(
+                glyph.id,
+                run.coordinates(),
+                workspace.points,
+                workspace.contours,
+                workspace.variation,
+            )?
+            .points
         } else {
             0
         };
-        let units = i64::from(font.metrics()?.head.units_per_em);
+        let units = face.units_per_em;
         for caret in carets {
             let value = match *caret {
                 Caret::Coordinate(v) => v,

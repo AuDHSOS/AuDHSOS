@@ -15,24 +15,30 @@ use crate::instructions;
 /// The ports of this processor.
 ///
 /// The type holds nothing: a port access needs no state, and one value of
-/// this is what says that the caller has the right to make one.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Ports;
+/// this is what says that the caller has the right to make one. The
+/// private field keeps every crate but this one on [`Ports::new`].
+#[derive(Clone, Copy, Debug)]
+pub struct Ports(());
 
 impl Ports {
     /// The ports of this processor.
+    ///
+    /// # Safety
+    ///
+    /// The caller checks every port it hands to the value against an
+    /// `IoPortRange` capability before the access.
     #[must_use]
-    pub const fn new() -> Self {
-        Ports
+    pub const unsafe fn new() -> Self {
+        Ports(())
     }
 }
 
 impl PortAccess for Ports {
     fn read_u8(&mut self, port: u16) -> u8 {
-        // SAFETY: the system call layer has checked the port against an
-        // `IoPortRange` capability of the caller, which the root task
-        // created from `SystemControl` and handed to the driver that owns
-        // the device.
+        // SAFETY: the creator of this value promised to check the port
+        // against an `IoPortRange` capability, which the root task created
+        // from `SystemControl` and handed to the driver that owns the
+        // device.
         unsafe { instructions::read_port_u8(port) }
     }
 
@@ -84,11 +90,16 @@ pub struct DeviceAccess<'a> {
 
 impl<'a> DeviceAccess<'a> {
     /// The devices over `apics` and the ports of this processor.
+    ///
+    /// # Safety
+    ///
+    /// As [`Ports::new`].
     #[must_use]
-    pub const fn new(apics: &'a mut crate::apic::Apics) -> Self {
+    pub const unsafe fn new(apics: &'a mut crate::apic::Apics) -> Self {
         DeviceAccess {
             apics,
-            ports: Ports::new(),
+            // SAFETY: the caller takes over the promise of `Ports::new`.
+            ports: unsafe { Ports::new() },
             random: None,
         }
     }
@@ -162,6 +173,7 @@ impl kernel_hal_api::interrupt::InterruptController for DeviceAccess<'_> {
 
 /// The ports of the first serial controller, which the kernel writes its
 /// own diagnostics on until somebody else asks for them.
+#[cfg(feature = "debug-uart")]
 const COM1: core::ops::Range<u16> = 0x3F8..0x400;
 
 /// Notes that userland has reached `port`, and gives the serial controller
@@ -170,11 +182,16 @@ const COM1: core::ops::Range<u16> = 0x3F8..0x400;
 /// The handover is here and not at `ioport_create`, because this is where
 /// it is true: a capability that has been created and not used yet has
 /// taken nothing over.
+#[cfg(feature = "debug-uart")]
 fn note(port: u16) {
     if COM1.contains(&port) {
         crate::console::give_up();
     }
 }
+
+/// Without the debug console the kernel holds no port to give up.
+#[cfg(not(feature = "debug-uart"))]
+const fn note(_port: u16) {}
 
 impl PortAccess for DeviceAccess<'_> {
     fn read_u8(&mut self, port: u16) -> u8 {

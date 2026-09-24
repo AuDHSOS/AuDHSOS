@@ -244,7 +244,9 @@ fn a_frame_mapped_by_the_kernel_carries_what_the_window_wrote() {
         )),
     }
 
-    let read = testing::read_byte(PROBE);
+    // SAFETY: the frame was just mapped readable at `PROBE`, and no
+    // reference covers it.
+    let read = unsafe { testing::read_byte(PROBE) };
     if read != PATTERN {
         testing::fail(format_args!(
             "the mapping reads {read:#x}, not {PATTERN:#x}"

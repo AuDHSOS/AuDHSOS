@@ -114,7 +114,9 @@ fn a_read_after_the_unmap_faults_at_the_address_of_the_mapping() {
     if mapped != Some(Some(())) {
         testing::fail(format_args!("the frame could not be mapped at {PROBE:#x}"));
     }
-    let _ = testing::read_byte(PROBE);
+    // SAFETY: the frame was just mapped readable at `PROBE`, and no
+    // reference covers it.
+    let _ = unsafe { testing::read_byte(PROBE) };
 
     let removed = memory::with_memory(|kernel| {
         let root = kernel.root();
@@ -135,7 +137,9 @@ fn a_read_after_the_unmap_faults_at_the_address_of_the_mapping() {
     }
 
     testing::set_trap_hook(|report| on_page_fault(report));
-    let _ = testing::read_byte(PROBE);
+    // SAFETY: the mapping is gone, so the read faults and
+    // `on_page_fault` ends the machine.
+    let _ = unsafe { testing::read_byte(PROBE) };
     testing::fail(format_args!(
         "the read from {PROBE:#x} did not fault after the unmap"
     ));

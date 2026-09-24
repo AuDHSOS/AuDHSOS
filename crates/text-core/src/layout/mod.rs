@@ -4,6 +4,7 @@
 //! Fractional line layout, cursor geometry, and deterministic serialization.
 mod encode;
 mod engine;
+mod face;
 mod line;
 #[cfg(feature = "alloc")]
 mod owned;
@@ -13,6 +14,17 @@ pub use engine::{layout_into, measure_into};
 #[cfg(feature = "alloc")]
 pub use owned::{Layout, layout, measure};
 
+/// Counters of the last layout call on the current thread.
+#[cfg(test)]
+pub(crate) mod probe {
+    use core::cell::Cell;
+    std::thread_local! {
+        /// Face validations.
+        pub(crate) static VALIDATIONS: Cell<usize> = const { Cell::new(0) };
+        /// Scalars charged to the work budget.
+        pub(crate) static WORK: Cell<usize> = const { Cell::new(0) };
+    }
+}
 /// Largest accepted text input in Unicode scalars.
 pub const MAX_SCALARS: usize = 65_536;
 /// Numeric placement in output units, with positive y downward.
@@ -182,9 +194,9 @@ pub struct Workspace<'a> {
     pub runs: &'a mut [Run],
     /// Largest expanded shaping run, including canonical decomposition.
     pub glyphs: &'a mut [shape::Glyph],
-    /// Largest shaped candidate line.
+    /// Largest shaped paragraph; wrapping shapes windows of up to one paragraph.
     pub line_glyphs: &'a mut [PositionedGlyph],
-    /// Largest candidate line's original graphemes.
+    /// Largest paragraph's original graphemes.
     pub line_clusters: &'a mut [ClusterBox],
     /// Largest requested glyph's unhinted outline points.
     pub points: &'a mut [glyf::Point],

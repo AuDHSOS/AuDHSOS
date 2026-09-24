@@ -108,12 +108,45 @@ fn a_body_of_a_declared_length_comes_out_whole() {
 }
 
 #[test]
+fn need_more_can_leave_input_for_the_next_call() {
+    let mut buffer = [0u8; 128];
+    let mut decoder = Decoder::<4>::new(&mut buffer, Method::Get);
+    let response = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello";
+    let (consumed, event) = decoder.feed(response).expect("a status line");
+    assert_eq!(consumed, b"HTTP/1.1 200 OK\r\n".len());
+    assert_eq!(event, Event::NeedMore);
+    let (more, event) = decoder
+        .feed(response.get(consumed..).expect("remaining input"))
+        .expect("a field line");
+    assert_eq!(more, b"Content-Length: 5\r\n".len());
+    assert_eq!(event, Event::NeedMore);
+}
+
+#[test]
 fn a_chunked_body_comes_out_whole() {
     let response = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n\
         5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n";
     let out = decode(response).expect("a response");
     assert_eq!(out.body, b"hello world");
     assert!(out.done);
+}
+
+#[test]
+fn whitespace_before_a_chunk_extension_is_accepted() {
+    for separator in [" ", "\t", " \t"] {
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5{separator};name=value\r\nhello\r\n0\r\n\r\n"
+        );
+        let out = decode(response.as_bytes()).expect("a response");
+        assert_eq!(out.body, b"hello");
+        assert!(out.done);
+    }
+}
+
+#[test]
+fn whitespace_without_a_chunk_extension_is_refused() {
+    let response = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5 \r\nhello\r\n0\r\n\r\n";
+    assert_eq!(decode(response), Err(HttpError::ChunkSize));
 }
 
 #[test]
@@ -338,6 +371,14 @@ fn a_field_that_is_not_one_is_refused() {
             b"HTTP/1.1 200 OK\r\nX-Thing: a\x01b\r\n\r\n",
             HttpError::HeaderValue,
         ),
+        (
+            b"HTTP/1.1 200 OK\r\nX-Thing: \xff\r\n\r\n",
+            HttpError::HeaderValue,
+        ),
+        (
+            b"HTTP/1.1 200 OK\r\nX-Thing: \xc3\xa9\r\n\r\n",
+            HttpError::HeaderValue,
+        ),
     ] {
         assert_eq!(decode(response), Err(error), "{response:?}");
     }
@@ -419,6 +460,23 @@ fn a_chunk_size_line_longer_than_it_may_be_is_refused() {
     let response =
         format!("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n{extension}a\r\n0\r\n\r\n");
     assert_eq!(decode(response.as_bytes()), Err(HttpError::ChunkSize));
+}
+
+#[test]
+fn an_overlong_trailer_line_is_a_chunk_error() {
+    let trailer = "x".repeat(300);
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n0\r\nX-Long: {trailer}\r\n\r\n"
+    );
+    assert_eq!(decode(response.as_bytes()), Err(HttpError::Chunk));
+}
+
+#[test]
+fn an_overlong_chunk_ending_is_a_chunk_error() {
+    let ending = "x".repeat(300);
+    let response =
+        format!("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1\r\na{ending}\r\n");
+    assert_eq!(decode(response.as_bytes()), Err(HttpError::Chunk));
 }
 
 #[test]

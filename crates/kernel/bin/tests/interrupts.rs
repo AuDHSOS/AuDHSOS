@@ -32,7 +32,7 @@ use kernel_hal_x86_64::interrupts;
 use kernel_hal_x86_64::paging::{LocalTlb, X86Entry, active_root};
 use kernel_hal_x86_64::testing;
 use kernel_hal_x86_64::window::PhysicalWindow;
-use kernel_hal_x86_64::{instructions, traps, vectors};
+use kernel_hal_x86_64::{apic, instructions, processor, traps, vectors};
 use kernel_types::{PhysFrame, PhysFrameRange, VirtAddr};
 
 kernel_hal_x86_64::test_kernel!();
@@ -341,4 +341,28 @@ fn a_routed_line_carries_its_wiring_and_follows_the_mask() {
     }
     assert_eq!(unmasked.vector, routed.vector);
     assert_eq!(masked.vector, routed.vector);
+}
+
+/// The boot processor's identifier and the destination of a message
+/// interrupt are the identifier the enabled local APIC reads back. A smoke
+/// test for issue #105: the firmware of QEMU leaves the unit enabled.
+#[test_case]
+fn a_message_interrupt_targets_the_enabled_local_apic() {
+    ensure_ready();
+    let observed = interrupts::with_controller(|apics| {
+        let id = apics.local().id();
+        let message = apics.allocate_msi().ok()?;
+        apics.release_msi(message.vector);
+        Some((id, message.address))
+    });
+    let Some(Some((id, address))) = observed else {
+        testing::fail(format_args!(
+            "no message interrupt, or the controller is not reachable"
+        ));
+    };
+    assert_eq!(address, apic::msi_address(id));
+    let boot = processor::IDENTIFIERS
+        .first()
+        .map(|entry| entry.load(Ordering::Relaxed));
+    assert_eq!(boot, Some(u32::from(id)));
 }

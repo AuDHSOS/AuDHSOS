@@ -109,7 +109,11 @@ fn on_syscall() {
     // line or a port need. Holding it turns interrupts off for the length
     // of the call.
     let reschedule = interrupts::with_controller(|apics| {
-        let mut devices = kernel_hal_x86_64::ports::DeviceAccess::new(apics).with_entropy();
+        // SAFETY: `task::answer` reaches a port only through `ioport_read`,
+        // `ioport_write`, and `ioport_write_string`, which check it against
+        // the caller's `IoPortRange` capability first.
+        let mut devices =
+            unsafe { kernel_hal_x86_64::ports::DeviceAccess::new(apics) }.with_entropy();
         task::answer(caller, Some(&mut devices))
     })
     .unwrap_or(false);

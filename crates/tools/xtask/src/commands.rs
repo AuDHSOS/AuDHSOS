@@ -11,7 +11,9 @@ use crate::anchors;
 use crate::error::Error;
 use crate::image::{archive, boot_image, disk, fat32};
 use crate::out::{self, note, note_raw};
-use crate::policy::{FUZZ_TARGETS, FuzzTarget, MIRI_TARGETS, Target, crates_for};
+use crate::policy::{
+    FEATURE_SETS, FUZZ_TARGETS, FuzzTarget, MIRI_TARGETS, Target, crates_for, find,
+};
 use crate::ppm;
 use crate::process::{Cmd, run_parallel, test_jobs};
 use crate::qemu::{self, Machine, Run};
@@ -50,6 +52,19 @@ pub(crate) fn lint(root: &Path) -> Result<(), Error> {
             cmd = cmd.arg("-p").arg(krate);
         }
         cmd.arg("--target")
+            .arg(triple)
+            .args(["--", "-D", "warnings"])
+            .run()?;
+    }
+    for &(krate, features) in FEATURE_SETS {
+        let triple = find(krate)
+            .and_then(|entry| entry.target.triple())
+            .ok_or_else(|| Error::Usage(format!("feature set of `{krate}`: no cross crate")))?;
+        Cmd::cargo()
+            .cwd(root)
+            .args(["clippy", "-p", krate, "--no-default-features", "--features"])
+            .arg(features)
+            .arg("--target")
             .arg(triple)
             .args(["--", "-D", "warnings"])
             .run()?;
