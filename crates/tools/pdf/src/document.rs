@@ -4,9 +4,9 @@
 //! The document, and how it becomes a file.
 //!
 //! Object numbers are handed out before anything is written: the catalogue,
-//! the page tree, the information dictionary, the outline root, the five
-//! fonts, then two objects per page and one per outline entry. Knowing the
-//! numbers in advance is what lets a page refer to an outline entry and an
+//! the page tree, the information dictionary, the outline root, the six
+//! fonts, then two objects per page, one per outline entry, and one per link.
+//! Knowing the numbers in advance lets a page refer to an outline entry and an
 //! outline entry to a page without a second pass over the file.
 //!
 //! Nothing here records the time. Two runs over the same sources write
@@ -16,7 +16,7 @@
 use std::collections::BTreeMap;
 
 use crate::outline::{Entry, Node, tree};
-use crate::page::{LinkTarget, Page};
+use crate::page::{Link, LinkTarget, Page};
 use crate::units::{Mils, number};
 
 /// The catalogue.
@@ -122,10 +122,14 @@ impl Document {
     pub fn finish(&self) -> Vec<u8> {
         let nodes = tree(&self.outline);
         let outline_base = FIRST_PAGE.saturating_add(count(self.pages.len()).saturating_mul(2));
-        // The highest object number in use: the outline items run from
-        // `outline_base`, so the last of them is one below the sum.
-        let total = outline_base
-            .saturating_add(count(nodes.len()))
+        let annotation_base = outline_base.saturating_add(count(nodes.len()));
+        let links = self
+            .pages
+            .iter()
+            .map(|page| page.links().len())
+            .sum::<usize>();
+        let total = annotation_base
+            .saturating_add(count(links))
             .saturating_sub(1);
         let mut file = File::new();
         file.header();
@@ -134,11 +138,20 @@ impl Document {
         self.info(&mut file);
         Self::outline_root(&mut file, &nodes, outline_base);
         fonts(&mut file);
+        let mut annotation_id = annotation_base;
         for (index, page) in self.pages.iter().enumerate() {
-            Self::page(&mut file, index, page, self.compressed);
+            Self::page(&mut file, index, page, self.compressed, annotation_id);
+            annotation_id = annotation_id.saturating_add(count(page.links().len()));
         }
         for (index, node) in nodes.iter().enumerate() {
             Self::outline_item(&mut file, index, node, outline_base);
+        }
+        let mut annotation_id = annotation_base;
+        for (index, page) in self.pages.iter().enumerate() {
+            for link in page.links() {
+                Self::annotation(&mut file, annotation_id, index, link);
+                annotation_id = annotation_id.saturating_add(1);
+            }
         }
         file.trailer(total);
         file.bytes
@@ -209,8 +222,8 @@ impl Document {
         file.end_object();
     }
 
-    /// One page: its dictionary, its annotations, and its content stream.
-    fn page(file: &mut File, index: usize, page: &Page, compressed: bool) {
+    /// One page: its dictionary and content stream.
+    fn page(file: &mut File, index: usize, page: &Page, compressed: bool, annotation_base: u32) {
         let size = page.size();
         file.object(page_object(index));
         file.push("<< /Type /Page /Parent ");
@@ -231,31 +244,9 @@ impl Document {
         file.reference(content_object(index));
         if !page.links().is_empty() {
             file.push(" /Annots [");
-            for link in page.links() {
-                file.push(" << /Type /Annot /Subtype /Link /Border [0 0 0] /Rect [");
-                file.push(&number(link.x));
+            for offset in 0..page.links().len() {
                 file.push(" ");
-                file.push(&number(link.y));
-                file.push(" ");
-                file.push(&number(link.x.saturating_add(link.width)));
-                file.push(" ");
-                file.push(&number(link.y.saturating_add(link.height)));
-                file.push("] ");
-                match &link.target {
-                    LinkTarget::Uri(uri) => {
-                        file.push("/A << /S /URI /URI ");
-                        file.string(uri);
-                        file.push(" >>");
-                    }
-                    LinkTarget::Page { index, top } => {
-                        file.push("/Dest [");
-                        file.reference(page_object(*index));
-                        file.push(" /XYZ null ");
-                        file.push(&number(*top));
-                        file.push(" null]");
-                    }
-                }
-                file.push(" >>");
+                file.reference(annotation_base.saturating_add(count(offset)));
             }
             file.push(" ]");
         }
@@ -277,6 +268,38 @@ impl Document {
         file.push(" >>\nstream\n");
         file.bytes.extend_from_slice(bytes);
         file.push("\nendstream\n");
+        file.end_object();
+    }
+
+    /// One link annotation, with a reference to its page.
+    fn annotation(file: &mut File, id: u32, page: usize, link: &Link) {
+        file.object(id);
+        file.push("<< /Type /Annot /Subtype /Link /P ");
+        file.reference(page_object(page));
+        file.push(" /Border [0 0 0] /Rect [");
+        file.push(&number(link.x));
+        file.push(" ");
+        file.push(&number(link.y));
+        file.push(" ");
+        file.push(&number(link.x.saturating_add(link.width)));
+        file.push(" ");
+        file.push(&number(link.y.saturating_add(link.height)));
+        file.push("] ");
+        match &link.target {
+            LinkTarget::Uri(uri) => {
+                file.push("/A << /S /URI /URI ");
+                file.uri(uri);
+                file.push(" >>");
+            }
+            LinkTarget::Page { index, top } => {
+                file.push("/Dest [");
+                file.reference(page_object(*index));
+                file.push(" /XYZ null ");
+                file.push(&number(*top));
+                file.push(" null]");
+            }
+        }
+        file.push(" >>\n");
         file.end_object();
     }
 
@@ -411,11 +434,29 @@ impl File {
         self.push(&format!("{id} 0 R"));
     }
 
-    /// A literal string, escaped.
+    /// A UTF-16BE text string with a byte order mark, escaped as a literal.
     fn string(&mut self, text: &str) {
         self.bytes.push(b'(');
-        for byte in crate::font::encode(text) {
+        for byte in [0xFE, 0xFF] {
             crate::page::escape(byte, &mut self.bytes);
+        }
+        for unit in text.encode_utf16() {
+            for byte in unit.to_be_bytes() {
+                crate::page::escape(byte, &mut self.bytes);
+            }
+        }
+        self.bytes.push(b')');
+    }
+
+    /// A URI as a 7-bit ASCII string.
+    fn uri(&mut self, uri: &str) {
+        self.bytes.push(b'(');
+        for byte in uri.bytes() {
+            if byte <= 0x20 || byte >= 0x7F {
+                self.push(&format!("%{byte:02X}"));
+            } else {
+                crate::page::escape(byte, &mut self.bytes);
+            }
         }
         self.bytes.push(b')');
     }

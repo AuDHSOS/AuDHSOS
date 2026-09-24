@@ -87,3 +87,14 @@ fn every_link_points_at_a_node_that_exists() {
         }
     }
 }
+
+#[test]
+fn a_deep_outline_counts_each_descendant_once() {
+    let entries: Vec<Entry> = (0..1024).map(|level| entry(level, "heading")).collect();
+    let nodes = tree(&entries);
+    assert_eq!(nodes.len(), entries.len());
+    assert_eq!(nodes.first().map(|node| node.descendants), Some(1023));
+    assert_eq!(nodes.get(512).map(|node| node.descendants), Some(511));
+    assert_eq!(nodes.last().and_then(|node| node.parent), Some(1022));
+    assert_eq!(nodes.last().map(|node| node.descendants), Some(0));
+}

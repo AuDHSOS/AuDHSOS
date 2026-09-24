@@ -36,6 +36,16 @@ fn text_of(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
+fn ascii_title(title: &str) -> String {
+    assert!(title.is_ascii());
+    let mut encoded = String::from("/Title (\\376\\377");
+    for byte in title.bytes() {
+        let _ = write!(encoded, "\\000{}", char::from(byte));
+    }
+    encoded.push(')');
+    encoded
+}
+
 #[test]
 fn a_document_becomes_a_pdf() {
     let (bytes, pages) = markdown("# An Example\n\nOne paragraph.\n");
@@ -65,8 +75,8 @@ fn a_long_document_runs_onto_further_pages() {
 fn a_heading_becomes_an_outline_entry() {
     let (bytes, _) = markdown("# An Example\n\n## A section\n\ntext\n\n### Deeper\n\ntext\n");
     let content = text_of(&bytes);
-    assert!(content.contains("/Title (A section)"));
-    assert!(content.contains("/Title (Deeper)"));
+    assert!(content.contains(&ascii_title("A section")));
+    assert!(content.contains(&ascii_title("Deeper")));
     assert!(content.contains("/PageMode /UseOutlines"));
 }
 
@@ -135,8 +145,8 @@ fn the_sections_of_an_rfc_become_its_outline() {
     let text = "1. Introduction\n\nText.\n\n2.1. Details\n\nMore.\n";
     let (bytes, _) = rfc::render(&source(Kind::Rfc), text, false);
     let content = text_of(&bytes);
-    assert!(content.contains("/Title (1. Introduction)"));
-    assert!(content.contains("/Title (2.1. Details)"));
+    assert!(content.contains(&ascii_title("1. Introduction")));
+    assert!(content.contains(&ascii_title("2.1. Details")));
 }
 
 #[test]
@@ -144,7 +154,7 @@ fn a_table_of_contents_line_is_not_a_section() {
     let text = "1. Introduction .......................... 3\n\n1. Introduction\n\nText.\n";
     let (bytes, _) = rfc::render(&source(Kind::Rfc), text, false);
     let content = text_of(&bytes);
-    assert_eq!(content.matches("/Title (1. Introduction)").count(), 1);
+    assert_eq!(content.matches(&ascii_title("1. Introduction")).count(), 1);
 }
 
 #[test]

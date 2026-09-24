@@ -115,8 +115,8 @@ fn the_cross_reference_table_points_at_every_object() {
         .and_then(|count| count.parse().ok())
         .unwrap_or_default();
     // Four fixed objects, six fonts, two per page, one per outline
-    // entry, and the free entry the table always starts with.
-    assert_eq!(total, 17);
+    // entry, one per link, and the free entry.
+    assert_eq!(total, 19);
     for (number, line) in lines.take(total.saturating_sub(1)).enumerate() {
         let number = number.saturating_add(1);
         let offset: usize = line
@@ -146,7 +146,7 @@ fn the_outline_is_a_tree_the_catalogue_points_at() {
     assert!(content.contains("/Outlines 4 0 R"));
     assert!(content.contains("/PageMode /UseOutlines"));
     assert!(content.contains("/Type /Outlines /First 15 0 R /Last 15 0 R /Count 2"));
-    assert!(content.contains("/Title (Sub) /Parent 15 0 R"));
+    assert!(content.contains("/Parent 15 0 R"));
 }
 
 #[test]
@@ -165,7 +165,7 @@ fn a_heading_that_skips_a_level_is_lifted_to_the_one_below_its_predecessor() {
     document.outline(0, "a", 0, pt(700));
     document.outline(3, "b", 0, pt(600));
     let content = text(&document);
-    assert!(content.contains("/Title (b) /Parent 13 0 R"));
+    assert!(content.contains("/Parent 13 0 R"));
 }
 
 #[test]
@@ -173,6 +173,53 @@ fn both_kinds_of_link_reach_the_page() {
     let content = text(&sample());
     assert!(content.contains("/A << /S /URI /URI (https://example.invalid/a) >>"));
     assert!(content.contains("/Dest [11 0 R /XYZ null 720 null]"));
+}
+
+#[test]
+fn a_uri_uses_ascii_bytes() {
+    let mut document = Document::new("links");
+    let mut page = Page::new(PageSize::A4);
+    page.link(Link {
+        x: pt(0),
+        y: pt(0),
+        width: pt(10),
+        height: pt(10),
+        target: LinkTarget::Uri("https://example.invalid/café (one)".to_owned()),
+    });
+    document.push(page);
+    assert!(text(&document).contains("/URI (https://example.invalid/caf%C3%A9%20\\(one\\))"));
+}
+
+#[test]
+fn link_annotations_are_indirect_and_name_their_pages() {
+    let content = text(&sample());
+    assert!(content.contains("/Annots [ 17 0 R ]"));
+    assert!(content.contains("/Annots [ 18 0 R ]"));
+    assert!(content.contains("17 0 obj\n<< /Type /Annot /Subtype /Link /P 11 0 R"));
+    assert!(content.contains("18 0 obj\n<< /Type /Annot /Subtype /Link /P 13 0 R"));
+}
+
+#[test]
+fn multiple_links_on_one_page_receive_distinct_objects() {
+    let mut document = Document::new("links");
+    let mut page = Page::new(PageSize::A4);
+    for index in 0..2 {
+        page.link(Link {
+            x: pt(index * 20),
+            y: pt(100),
+            width: pt(10),
+            height: pt(10),
+            target: LinkTarget::Page {
+                index: 0,
+                top: pt(100),
+            },
+        });
+    }
+    document.push(page);
+    let content = text(&document);
+    assert!(content.contains("/Annots [ 13 0 R 14 0 R ]"));
+    assert!(content.contains("13 0 obj\n<< /Type /Annot /Subtype /Link /P 11 0 R"));
+    assert!(content.contains("14 0 obj\n<< /Type /Annot /Subtype /Link /P 11 0 R"));
 }
 
 #[test]
@@ -246,7 +293,25 @@ fn the_five_fonts_are_declared_on_every_page() {
 fn the_title_of_a_document_reaches_the_information_dictionary() {
     let mut document = Document::new("A (parenthesised) title");
     document.push(Page::new(PageSize::A4));
-    assert!(text(&document).contains("/Title (A \\(parenthesised\\) title)"));
+    let bytes = document.finish();
+    assert!(find(&bytes, b"/Title (\\376\\377\\000A\\000 \\000\\(\\000p").is_some());
+    assert!(find(&bytes, b"\\000d\\000\\)\\000 \\000t").is_some());
+}
+
+#[test]
+fn information_and_outline_titles_keep_unicode() {
+    let mut document = Document::new("jrs — 🌐");
+    document.push(Page::new(PageSize::A4));
+    document.outline(0, "jrs — 🌐", 0, pt(700));
+    let bytes = document.finish();
+    let title = b"/Title (\\376\\377\\000j\\000r\\000s\\000  \\024\\000 \\330<\\337\\020)";
+    assert_eq!(
+        bytes
+            .windows(title.len())
+            .filter(|part| *part == title)
+            .count(),
+        2
+    );
 }
 
 /// A document with enough on its page that deflating it pays.
