@@ -732,9 +732,8 @@ fn what_lock_every_database_of_a_connection_is_held_under() {
     let mut writer = opened();
     writer.run(b"ATTACH 'one.db' AS held").unwrap();
     let text = |bytes: &[u8]| Value::Text(bytes.to_vec());
-    // This engine holds no file, so every database it holds answers
-    // `unlocked` and the temp schema answers `closed` until a statement
-    // opens it.
+    // A database no transaction has written answers `unlocked`, and the
+    // temp schema answers `closed` until a statement opens it.
     assert_eq!(
         writer.run(b"PRAGMA lock_status").unwrap(),
         [
@@ -752,6 +751,34 @@ fn what_lock_every_database_of_a_connection_is_held_under() {
             alloc::vec![text(b"held"), text(b"unlocked")],
         ]
     );
+    // A transaction that has opened a page to write holds the file under
+    // a reserved lock, and one that has written nothing holds no lock.
+    writer.run(b"CREATE TABLE m(a)").unwrap();
+    writer.run(b"BEGIN").unwrap();
+    assert_eq!(
+        writer.run(b"PRAGMA lock_status").unwrap().first(),
+        Some(&alloc::vec![text(b"main"), text(b"unlocked")])
+    );
+    writer.run(b"INSERT INTO m VALUES(1)").unwrap();
+    assert_eq!(
+        writer.run(b"PRAGMA lock_status").unwrap().first(),
+        Some(&alloc::vec![text(b"main"), text(b"reserved")])
+    );
+    writer.run(b"COMMIT").unwrap();
+    assert_eq!(
+        writer.run(b"PRAGMA lock_status").unwrap().first(),
+        Some(&alloc::vec![text(b"main"), text(b"unlocked")])
+    );
+    // A database in write-ahead logging takes no reserved lock, because
+    // the pages of a transaction go into the log.
+    writer.run(b"PRAGMA journal_mode=WAL").unwrap();
+    writer.run(b"BEGIN").unwrap();
+    writer.run(b"INSERT INTO m VALUES(2)").unwrap();
+    assert_eq!(
+        writer.run(b"PRAGMA lock_status").unwrap().first(),
+        Some(&alloc::vec![text(b"main"), text(b"unlocked")])
+    );
+    writer.run(b"COMMIT").unwrap();
 }
 
 /// A trigger of the temp schema is fixed to no database, so a statement

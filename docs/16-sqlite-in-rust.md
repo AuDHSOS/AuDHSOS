@@ -1129,6 +1129,8 @@ Size: L.
 184. The decimal arithmetic of `ext/misc/decimal.c`, with the nine
      functions and the collation `load_static_extension db decimal` adds.
      Built, which D-472 records.
+185. The lock `PRAGMA lock_status` answers for a database whose
+     transaction has written. Built, which D-477 records.
 
 ### Done when
 

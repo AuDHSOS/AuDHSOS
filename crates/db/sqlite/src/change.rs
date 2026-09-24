@@ -6133,21 +6133,20 @@ impl Writer {
     /// `research/sqlite/src/pragma.c:1877` answers out of the pager of
     /// each.
     ///
-    /// This engine holds no file and takes no lock, so every database it
-    /// holds answers `unlocked`; the temp schema answers `closed` until
-    /// a statement opens it. Reading them costs O(n) in their number.
+    /// The temp schema answers `closed` until a statement opens it.
+    /// Reading the databases costs O(n) in their number.
     fn locks_held(&self) -> Vec<Vec<Value>> {
         let row = |name: &[u8], held: &[u8]| {
             alloc::vec![Value::Text(name.to_vec()), Value::Text(held.to_vec())]
         };
-        let mut out = alloc::vec![row(b"main", b"unlocked")];
+        let mut out = alloc::vec![row(b"main", locked(&self.held))];
         let temp = self.attached.iter().any(|held| named_as(held, b"temp"));
         out.push(row(b"temp", if temp { b"unlocked" } else { b"closed" }));
         for held in self.in_place() {
             if named_as(held, b"temp") {
                 continue;
             }
-            out.push(row(&held.called.name, b"unlocked"));
+            out.push(row(&held.called.name, locked(&held.held)));
         }
         out
     }
@@ -11572,6 +11571,24 @@ fn shares_key(entries: &[Vec<Value>], count: usize, collations: &[crate::value::
             !one.contains(&Value::Null)
                 && order_of_keys(&one, &held(other), collations) == core::cmp::Ordering::Equal
         })
+}
+
+/// The lock one database is held under, which `sqlite3PagerLockstate` of
+/// `research/sqlite/src/pager.c` answers out of `pPager->eLock`: a
+/// transaction that has opened a page to write holds the file under a
+/// reserved lock, and every other database holds no lock. A database in
+/// write-ahead logging takes no reserved lock, because the pages of a
+/// transaction go into the log and not into the file.
+///
+/// This engine reads a database through a reader of its own, so a
+/// transaction that has only read is one no statement of the connection
+/// has reached, and answers no lock where the C library answers a shared
+/// one.
+fn locked(held: &HeldFile) -> &'static [u8] {
+    if held.log.is_none() && held.began.is_some() && held.pages.changed() {
+        return b"reserved";
+    }
+    b"unlocked"
 }
 
 /// The key of a row as a rowid, which is the one value a table that

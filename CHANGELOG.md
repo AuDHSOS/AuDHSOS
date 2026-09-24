@@ -379,6 +379,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` answers `reserved` from `PRAGMA lock_status` for a database
+  whose transaction has opened a page to write, where every database
+  answered `unlocked`. D-477 records it. `savepoint.test` goes from 107
+  cases passing to 111 and `cache.test` from 178 to 180.
+
 - `db-sqlite` refuses a name no database of a view's or a trigger's own
   holds with that database in front of it, where the refusal carried the
   bare name. D-470 records it. Catalog 6.6.330. `alterlegacy.test` goes
