@@ -203,13 +203,11 @@ pub fn range<T: Int>(bounds: RangeInclusive<T>) -> Range<T> {
 
 fn int_tree<T: Int>(value: i128, target: i128) -> Tree<T> {
     Tree::new(T::from_i128(value), move || {
-        let mut candidates = Vec::new();
-        let mut step = value.saturating_sub(target);
-        while step != 0 {
-            candidates.push(int_tree(value.saturating_sub(step), target));
-            step /= 2;
-        }
-        candidates
+        std::iter::successors(Some(value.saturating_sub(target)), |&step| {
+            (step / 2 != 0).then_some(step / 2)
+        })
+        .take_while(|&step| step != 0)
+        .map(move |step| int_tree(value.saturating_sub(step), target))
     })
 }
 
@@ -297,7 +295,7 @@ impl Generator for Bool {
 
     fn generate(&self, rng: &mut Rng) -> Tree<bool> {
         if rng.bool() {
-            Tree::new(true, || vec![Tree::leaf(false)])
+            Tree::new(true, || std::iter::once(Tree::leaf(false)))
         } else {
             Tree::leaf(false)
         }
@@ -383,9 +381,7 @@ impl<G: Generator> Generator for OptionGen<G> {
         let some = inner.map(Rc::new(Some));
         let value = some.value().clone();
         Tree::new(value, move || {
-            std::iter::once(Tree::leaf(None))
-                .chain(some.shrinks())
-                .collect()
+            std::iter::once(Tree::leaf(None)).chain(some.shrinks())
         })
     }
 }
