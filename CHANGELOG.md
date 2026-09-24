@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The suite harness answers `sqlite3_memdebug_fail` with the count of
+  allocations it failed, which is nought, where it raised. D-475 records
+  it. `tkt-9d68c883.test` goes from 1 case passing to 101, `printf.test`
+  from 1382 to 1399, and `bitvec.test` runs 46 cases where it ran 1204 and
+  reached the deadline.
+
 - The suite harness answers `sqlite3BitvecBuiltinTest`, which runs the
   program of a case against two arrays of bits and answers the first bit
   they disagree on. D-474 records it. `bitvec.test` goes from no case

@@ -562,6 +562,8 @@ Size: S.
 70. `sqlite3BitvecBuiltinTest` runs the program of a case against two
     arrays of bits and answers the first bit they disagree on, which
     D-474 records.
+71. `sqlite3_memdebug_fail` answers that no allocation failed, which
+    ends the loops a case drives from that count, which D-475 records.
 
 ### Produces
 

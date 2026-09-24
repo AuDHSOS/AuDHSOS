@@ -1320,7 +1320,7 @@ foreach cmd {
   sqlite3_create_function sqlite3_limit
   sqlite3_extended_result_codes
   sqlite3_enable_shared_cache sqlite3_release_memory sqlite3_db_release_memory
-  sqlite3_memdebug_vfs_oom_test sqlite3_memdebug_settitle sqlite3_memdebug_fail
+  sqlite3_memdebug_vfs_oom_test sqlite3_memdebug_settitle
   sqlite3_memdebug_pending sqlite3_memdebug_log sqlite3_stmt_status
   testvfs test_syscall
   register_wholenumber_module register_echo_module register_tclvar_module
@@ -1354,6 +1354,13 @@ proc utf16_as_utf8 {text} {
   }
   return [encoding convertfrom unicode $text]
 }
+
+# `sqlite3_memdebug_fail N` of `research/sqlite/src/test_malloc.c:340`
+# tells the C library to fail the Nth allocation from here on, and
+# `sqlite3_memdebug_fail -1` answers how many allocations it failed and
+# stops failing them. This harness fails none, so it answers that none
+# failed, which is what a case that counts them reads.
+proc sqlite3_memdebug_fail {args} { return 0 }
 
 # `sqlite3BitvecBuiltinTest N PROGRAM` of `research/sqlite/src/bitvec.c`:
 # the program run against a bit vector and against a bare array of bits
