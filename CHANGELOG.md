@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The suite harness answers `sqlite_rename_table`, which
+  `SQLITE_TESTCTRL_INTERNAL_FUNCTIONS` turns on for one connection and off
+  again. D-476 records it. `fkey2.test` goes from 1175 cases passing to
+  1184 and `without_rowid3.test` from 1159 to 1168.
+
 - The suite harness answers `sqlite3_memdebug_fail` with the count of
   allocations it failed, which is nought, where it raised. D-475 records
   it. `tkt-9d68c883.test` goes from 1 case passing to 101, `printf.test`

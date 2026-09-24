@@ -564,6 +564,9 @@ Size: S.
     D-474 records.
 71. `sqlite3_memdebug_fail` answers that no allocation failed, which
     ends the loops a case drives from that count, which D-475 records.
+72. `sqlite_rename_table` answers the statement with the name of a table
+    written again, and `SQLITE_TESTCTRL_INTERNAL_FUNCTIONS` turns it on
+    for one connection and off again, which D-476 records.
 
 ### Produces
 

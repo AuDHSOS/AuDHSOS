@@ -1544,15 +1544,20 @@ proc sqlite3_initialize {args} { return 0 }
 proc sqlite3_db_config_lookaside {args} { return 0 }
 proc optimization_control {args} { return "" }
 # `sqlite3_test_control` turns on what the C library keeps for its own
-# tests: the internal functions, the imposter tables and the sorter's
-# use of a mapped file, which this engine holds none of, so a case that
-# reads one of those answers differently rather than ending the file.
+# tests. `SQLITE_TESTCTRL_INTERNAL_FUNCTIONS` turns the functions the
+# library keeps for its own use on for one connection and off again. The
+# imposter tables and the sorter's use of a mapped file this engine holds
+# none of, so a case that reads one of those answers differently rather
+# than ending the file.
 # `SQLITE_TESTCTRL_LOCALTIME_FAULT` names the zone `localtime` reads:
 # nought the zone of the machine, one a zone that fails, and two the
 # zone `testLocaltime` of `research/sqlite/src/test1.c:7937` answers.
 proc sqlite3_test_control {args} {
   if {[lindex $args 0] eq "SQLITE_TESTCTRL_LOCALTIME_FAULT"} {
     harness_send zone [lindex $args 1]
+  }
+  if {[lindex $args 0] eq "SQLITE_TESTCTRL_INTERNAL_FUNCTIONS"} {
+    harness_send internal [lindex $args 1]
   }
   return 0
 }

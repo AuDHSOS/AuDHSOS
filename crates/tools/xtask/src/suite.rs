@@ -1381,6 +1381,12 @@ impl Session {
                 self.told(verb, first, second);
                 Ok(Vec::new())
             }
+            // `SQLITE_TESTCTRL_INTERNAL_FUNCTIONS` turns the functions
+            // the library keeps for its own use on and off again.
+            "internal" => {
+                self.internals(first);
+                Ok(Vec::new())
+            }
             // `sqlite3_create_collation` with no function deletes the
             // collation of that name.
             "uncollate" => {
@@ -2220,6 +2226,29 @@ impl Session {
             by: asked,
         });
         *held = Box::leak(collating.into_boxed_slice());
+    }
+
+    /// Turns the functions the C library keeps for its own use on where
+    /// the connection holds none of them and off where it holds them,
+    /// which `SQLITE_TESTCTRL_INTERNAL_FUNCTIONS` does.
+    fn internals(&mut self, connection: &str) {
+        self.stamped(connection);
+        let held = self.functions.entry(connection.to_owned()).or_default();
+        let on = held
+            .iter()
+            .any(|one| INTERNAL.iter().any(|carried| carried.name == one.name));
+        let mut defined: Vec<Defined> = held
+            .iter()
+            .filter(|one| !INTERNAL.iter().any(|carried| carried.name == one.name))
+            .copied()
+            .collect();
+        if defined.is_empty() {
+            defined.extend_from_slice(DEFINED);
+        }
+        if !on {
+            defined.extend_from_slice(INTERNAL);
+        }
+        *held = Box::leak(defined.into_boxed_slice());
     }
 
     /// Takes the collation of that name off the connection, which
@@ -3902,6 +3931,44 @@ static DEFINED: &[Defined] = &[Defined {
     count: Some(2),
     answer: randstr,
 }];
+
+/// The functions the C library keeps for its own use, which
+/// `SQLITE_TESTCTRL_INTERNAL_FUNCTIONS` of
+/// `research/sqlite/src/main.c:4290` turns on for one connection and off
+/// again; a statement of any other connection is refused `no such
+/// function`.
+static INTERNAL: &[Defined] = &[Defined {
+    name: b"sqlite_rename_table",
+    count: Some(7),
+    answer: rename_table,
+}];
+
+/// `sqlite_rename_table(DB, TYPE, OBJECT, SQL, OLD, NEW, TEMP)`, which is
+/// `renameTableFunc` of `research/sqlite/src/alter.c:1754`: the statement
+/// with every place that names `OLD` written under `NEW` in quotes, which
+/// is what an `ALTER TABLE ... RENAME TO` writes into the schema.
+///
+/// A statement the parser refuses is refused here as well, which
+/// `renameParseSql` of the same file answers an error for.
+///
+/// It costs what reading the statement costs.
+fn rename_table(
+    _: &'static [u8],
+    args: &[Value],
+    _: Option<&Source>,
+) -> Result<Value, db_sqlite::eval::Error> {
+    let text = |at: usize| args.get(at).and_then(Value::text).unwrap_or_default();
+    let sql = text(3);
+    if db_sqlite::parse::definition(&sql).is_err() {
+        return Err(db_sqlite::eval::Error::Malformed);
+    }
+    let places = db_sqlite::rename::places(&sql, &text(4), db_sqlite::rename::Marking::Every);
+    Ok(Value::Text(db_sqlite::rename::written(
+        &sql,
+        &places,
+        &text(5),
+    )))
+}
 
 /// `sqlite3BitvecBuiltinTest` of `research/sqlite/src/bitvec.c:400`: the
 /// program is run against a bit vector and against a bare array of bits
