@@ -91,12 +91,12 @@ impl<'a> Request<'a> {
     ///
     /// [`HttpError::Target`] for a target that is not one,
     /// [`HttpError::HeaderName`] for a name that is not a token or is one
-    /// this method writes itself, [`HttpError::HeaderValue`] for a value
-    /// carrying a control character or an empty host, and
+    /// this method writes itself, [`HttpError::HeaderValue`] for an
+    /// invalid field value or host, and
     /// [`HttpError::Wire`] when the buffer has no room.
     pub fn write(&self, writer: &mut Writer<'_>) -> Result<(), HttpError> {
         check_target(self.target)?;
-        if self.host.is_empty() || !is_value(self.host) {
+        if self.host.is_empty() || !uri_chars(self.host, b"[]:") {
             return Err(HttpError::HeaderValue);
         }
         for (name, value) in self.headers {
@@ -119,7 +119,7 @@ impl<'a> Request<'a> {
         for (name, value) in self.headers {
             field(writer, name, value)?;
         }
-        if !self.body.is_empty() {
+        if self.method == Method::Post || !self.body.is_empty() {
             let mut digits = [0u8; DIGITS];
             let text = decimal(self.body.len(), &mut digits);
             field(writer, "Content-Length", text)?;
@@ -139,15 +139,45 @@ fn field(writer: &mut Writer<'_>, name: &str, value: &str) -> Result<(), HttpErr
     Ok(())
 }
 
-/// Whether `target` is an origin-form target: a path that begins with a
-/// slash and carries no byte that would end the request line.
+/// Whether `target` is an origin-form target.
 fn check_target(target: &str) -> Result<(), HttpError> {
-    let usable = target.bytes().all(|byte| byte.is_ascii_graphic());
-    if target.starts_with('/') && usable {
+    if target.starts_with('/') && uri_chars(target, b":@/?") {
         Ok(())
     } else {
         Err(HttpError::Target)
     }
+}
+
+/// Whether text uses only URI characters, with valid percent escapes.
+fn uri_chars(text: &str, extra: &[u8]) -> bool {
+    let bytes = text.as_bytes();
+    let mut at = 0;
+    while at < bytes.len() {
+        let Some(&byte) = bytes.get(at) else {
+            return false;
+        };
+        if byte == b'%' {
+            if !bytes
+                .get(at.saturating_add(1)..at.saturating_add(3))
+                .is_some_and(|hex| hex.len() == 2 && hex.iter().all(u8::is_ascii_hexdigit))
+            {
+                return false;
+            }
+            at = at.saturating_add(3);
+        } else if byte.is_ascii_alphanumeric()
+            || matches!(byte, b'-' | b'.' | b'_' | b'~')
+            || matches!(
+                byte,
+                b'!' | b'$' | b'&' | b'\'' | b'(' | b')' | b'*' | b'+' | b',' | b';' | b'='
+            )
+            || extra.contains(&byte)
+        {
+            at = at.saturating_add(1);
+        } else {
+            return false;
+        }
+    }
+    true
 }
 
 /// `value` as decimal digits, written into the back of `digits`.

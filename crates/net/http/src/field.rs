@@ -62,7 +62,7 @@ pub fn is_value(text: &str) -> bool {
 /// that buys is that every value this crate hands out is ASCII and
 /// therefore text, with no place where a caller has to decide what a byte
 /// above 127 meant.
-const fn is_value_byte(byte: u8) -> bool {
+pub(crate) const fn is_value_byte(byte: u8) -> bool {
     byte == b'\t' || byte.is_ascii_graphic() || byte == b' '
 }
 
