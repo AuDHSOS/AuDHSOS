@@ -578,6 +578,9 @@ Size: S.
     which D-486 records. A connection whose database carries a journal the
     client may only read is refused `unable to open database file`, which
     D-487 records.
+75. `sqlite3 NAME` with no file name and `sqlite3 NAME ""` open the empty
+    file name rather than a database in memory alone, which D-493
+    records.
 
 ### Produces
 

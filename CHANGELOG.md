@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` leaves a database whose file name has no bytes in the mode it
+  stands in where `PRAGMA journal_mode = wal` names write-ahead logging, and
+  the suite harness opens the empty file name where a connection was given
+  one. D-492 and D-493 record it. Catalog 6.6.341. `walmode.test` goes from
+  67 cases passing to 76.
+
 - `db-sqlite` asks the authorizer about the statements of a trigger's body,
   each under the name of that trigger, and an `UPDATE` asks about the value a
   column is written with before the column. D-490 and D-491 record it.

@@ -568,7 +568,10 @@ proc sqlite3 {args} {
     if {$word eq "-readonly"} { set only [lindex $rest [expr {$i+1}]] }
     incr i
   }
-  if {$file eq ""} { set file ":memory:" }
+  # `sqlite3 NAME` with no file name and `sqlite3 NAME ""` both open the
+  # empty name, which `zFile==0 ? "" : zFile` of
+  # `research/sqlite/src/tclsqlite.c:4376` writes: a file the library
+  # makes and takes away again, and not a database in memory alone.
   set uri [expr {[string is boolean -strict $uri] && $uri ? 1 : 0}]
   set only [expr {[string is boolean -strict $only] && $only ? 1 : 0}]
   set ::harness_error [lindex [harness_send open $name $file $uri $only] 0]

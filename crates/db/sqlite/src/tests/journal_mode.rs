@@ -112,6 +112,33 @@ fn what_journal_mode_a_database_that_stands_in_memory_is_in() {
     assert_eq!(word(&mut writer, b"PRAGMA journal_mode=memory"), "memory");
 }
 
+/// A database whose file name has no bytes is a file the library makes
+/// and takes away again: every mode but write-ahead logging is written to
+/// it, and the pragma that names write-ahead logging leaves it where it
+/// stands.
+#[test]
+fn what_journal_mode_a_database_of_no_file_name_is_in() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.unnamed();
+    assert_eq!(word(&mut writer, b"PRAGMA journal_mode"), "delete");
+    assert_eq!(word(&mut writer, b"PRAGMA journal_mode=wal"), "delete");
+    assert_eq!(word(&mut writer, b"PRAGMA journal_mode=memory"), "memory");
+    assert_eq!(
+        word(&mut writer, b"PRAGMA journal_mode=truncate"),
+        "truncate"
+    );
+    assert_eq!(word(&mut writer, b"PRAGMA journal_mode=wal"), "truncate");
+    // The temp schema is such a database as well.
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TEMP TABLE t(a)").unwrap();
+    assert_eq!(word(&mut writer, b"PRAGMA temp.journal_mode"), "delete");
+    assert_eq!(word(&mut writer, b"PRAGMA temp.journal_mode=wal"), "delete");
+    assert_eq!(
+        word(&mut writer, b"PRAGMA temp.journal_mode=truncate"),
+        "truncate"
+    );
+}
+
 /// A database an `ATTACH` holds in memory alone is left at `memory`
 /// where a pragma that names no schema sets every other database, and a
 /// database the `ATTACH` names by no file at all is set with them.

@@ -7565,3 +7565,13 @@ with `.auth on` for the same statements.
 - Three triggers of one table, two `AFTER` and one `BEFORE`, which are
   read with the one made last first.
 
+### 6.6.341 The journal mode of a database of no file name (`db-sqlite`)
+
+Document 16 step Q8. Every answer is the one the C library's shell writes
+for a connection opened under the empty file name.
+
+- `PRAGMA journal_mode` over such a database, which is `delete`.
+- `= wal`, which leaves it where it stands, and `= memory` and
+  `= truncate`, which are written to it.
+- The same over the temp schema.
+

@@ -2259,6 +2259,11 @@ impl Session {
         // the path names `:memory:`, and stands in a file the library
         // makes where the path holds no byte.
         let memory = path.eq_ignore_ascii_case(":memory:");
+        // `zFile==0 ? "" : zFile` of
+        // `research/sqlite/src/tclsqlite.c:4376`: a connection opened
+        // under no file name writes a file the library makes and takes
+        // away again, which no name of the client's names.
+        let unnamed = path.is_empty();
         let held = if path.is_empty() || memory {
             self.opened = self.opened.saturating_add(1);
             format!("{path}\0{name}\0{}", self.opened)
@@ -2287,6 +2292,8 @@ impl Session {
             ticked(&mut writer, self.clock);
             if memory {
                 writer.memoried();
+            } else if unnamed {
+                writer.unnamed();
             }
             if let Some(journal) = under.journal {
                 let mut sql = b"PRAGMA journal_mode=".to_vec();

@@ -1153,6 +1153,8 @@ Size: L.
 193. The actions of a trigger's body, each under the name of that
      trigger, and the order an `UPDATE` asks about its values and its
      columns in. Built, which D-490 and D-491 record.
+194. The journal mode of a database whose file name has no bytes, which
+     does not go into write-ahead logging. Built, which D-492 records.
 
 ### Done when
 

@@ -782,6 +782,13 @@ struct Called {
     /// a URI under `mode=memory` both name and which `MEMDB` of
     /// `research/sqlite/src/pager.c:7427` reads.
     memory: bool,
+    /// Whether the file name of the database has no bytes, which a
+    /// database in memory alone, a file the library makes and takes away
+    /// again and the temp schema all carry, and which
+    /// `sqlite3Strlen30(zFilename)==0` of
+    /// `research/sqlite/src/vdbe.c:8089` reads: such a database does not
+    /// go into write-ahead logging.
+    unnamed: bool,
 }
 
 /// One database of a connection beside the one the statement running now
@@ -1107,6 +1114,7 @@ impl Writer {
                 file: Vec::new(),
                 place: 0,
                 memory: false,
+                unnamed: false,
             },
             attached: Vec::new(),
             opening: None,
@@ -1241,6 +1249,7 @@ impl Writer {
                 file: Vec::new(),
                 place: 0,
                 memory: false,
+                unnamed: false,
             },
             attached: Vec::new(),
             opening: None,
@@ -1481,6 +1490,9 @@ impl Writer {
                 file: Vec::new(),
                 place: 1,
                 memory: false,
+                // The temp schema is a database of the connection's own,
+                // so no file of the client names it.
+                unnamed: true,
             },
             held,
         });
@@ -1496,7 +1508,18 @@ impl Writer {
     /// leaves its journal mode at `memory` for every mode but `off`.
     pub const fn memoried(&mut self) {
         self.called.memory = true;
+        self.called.unnamed = true;
         self.held.mode = Mode::Memory;
+    }
+
+    /// The file name of the database the connection writes has no bytes,
+    /// which names a file the library makes and takes away again: the
+    /// database is written as any other file is, and `PRAGMA
+    /// journal_mode = wal` leaves it in the mode it stands in, which
+    /// `sqlite3Strlen30(zFilename)==0` of
+    /// `research/sqlite/src/vdbe.c:8089` reads.
+    pub const fn unnamed(&mut self) {
+        self.called.unnamed = true;
     }
 
     /// The encoding the connection keeps its text in, which a reader
@@ -2112,6 +2135,7 @@ impl Writer {
         self.attached.push(Attached {
             called: Called {
                 name,
+                unnamed: memory || fresh_file(&file),
                 file,
                 place,
                 memory,
@@ -3908,6 +3932,9 @@ impl Writer {
                 file: Vec::new(),
                 place: 1,
                 memory: false,
+                // The temp schema is a database of the connection's own,
+                // so no file of the client names it.
+                unnamed: true,
             },
             held,
         });
@@ -5376,7 +5403,7 @@ impl Writer {
             // `OP_JournalMode` of `research/sqlite/src/vdbe.c:8089` leaves
             // the mode as it is where the database stands in memory
             // alone, which holds no log.
-            if !held && !self.called.memory {
+            if !held && !self.called.unnamed {
                 self.log_mode();
             }
         } else {
