@@ -77,15 +77,16 @@ impl WaitQueue {
     /// # Errors
     ///
     /// [`Error::InvalidHandle`] when the pool does not hold `id` or a
-    /// thread the queue names; [`Error::InvalidState`] when `id` is already
-    /// in a queue.
+    /// thread the queue names; [`Error::InvalidState`] when `id` already
+    /// waits or belongs to a queue.
     pub fn enqueue<const N: usize>(
         &mut self,
         threads: &mut Pool<Thread, N>,
         id: ThreadId,
     ) -> Result<(), Error> {
-        let priority = threads.get(id).map_err(|_| Error::InvalidHandle)?.priority;
-        if !links_of(threads, id)?.is_unlinked() || self.head == Some(id) {
+        let thread = threads.get(id).map_err(|_| Error::InvalidHandle)?;
+        let priority = thread.priority;
+        if !thread.wait.is_nothing() || !thread.wait_links.is_unlinked() || self.head == Some(id) {
             return Err(Error::InvalidState);
         }
         let before = self.first_below(threads, priority);
@@ -113,8 +114,9 @@ impl WaitQueue {
         threads: &mut Pool<Thread, N>,
         id: ThreadId,
     ) -> Result<(), Error> {
-        let priority = threads.get(id).map_err(|_| Error::InvalidHandle)?.priority;
-        if !links_of(threads, id)?.is_unlinked() || self.head == Some(id) {
+        let thread = threads.get(id).map_err(|_| Error::InvalidHandle)?;
+        let priority = thread.priority;
+        if !thread.wait.is_nothing() || !thread.wait_links.is_unlinked() || self.head == Some(id) {
             return Err(Error::InvalidState);
         }
         match self.first_at_or_below(threads, priority) {
@@ -125,7 +127,8 @@ impl WaitQueue {
         Ok(())
     }
 
-    /// Takes the thread at the front out of the queue.
+    /// Takes the thread at the front out of the queue. A stale head clears
+    /// the queue because its links cannot identify the remaining members.
     pub fn dequeue_front<const N: usize>(
         &mut self,
         threads: &mut Pool<Thread, N>,
@@ -134,6 +137,7 @@ impl WaitQueue {
         if self.unlink(threads, head) {
             Some(head)
         } else {
+            *self = Self::EMPTY;
             None
         }
     }
@@ -270,14 +274,6 @@ impl WaitQueue {
             steps: self.len,
         }
     }
-}
-
-/// The links of `id`, for the checks before an insertion.
-fn links_of<const N: usize>(threads: &Pool<Thread, N>, id: ThreadId) -> Result<Links, Error> {
-    threads
-        .get(id)
-        .map(|thread| thread.wait_links)
-        .map_err(|_| Error::InvalidHandle)
 }
 
 /// The threads of one wait queue, as [`WaitQueue::iter`] walks them.

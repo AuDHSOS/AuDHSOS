@@ -370,9 +370,8 @@ pub fn undo_meeting<const NP: usize, const NT: usize, const NM: usize, const NH:
         let Ok(held) = endpoints.get_mut(endpoint) else {
             return;
         };
-        // The peer has just left this queue, so its links are clear and the
-        // pool holds it: `requeue` refuses only a thread that is in a queue
-        // already.
+        // The peer has left this queue; clear its wait record before requeue.
+        threads.with(peer, |thread| thread.wait = Wait::Nothing);
         let _ = if queue.is_sender() {
             held.senders.requeue(threads, peer)
         } else {
