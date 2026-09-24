@@ -203,21 +203,7 @@ impl<'a> Layout<'a> {
             return;
         };
         let measure = theme::MEASURE.saturating_sub(indent);
-        // A user unit of an SVG is a pixel, and a pixel is three quarters
-        // of a point. A figure is never drawn larger than it was made.
-        let natural = drawing.width.saturating_mul(3).wrapping_div(4);
-        let mut width = measure.min(natural).max(1);
-        let tallest = theme::PAGE
-            .height
-            .saturating_sub(theme::TOP)
-            .saturating_sub(theme::BOTTOM);
-        let height = drawing.height_at(width);
-        if height > tallest
-            && let Some(fitted) = width.saturating_mul(tallest).checked_div(height)
-        {
-            width = fitted;
-        }
-        let height = drawing.height_at(width);
+        let (width, height) = figure_size(&drawing, measure);
         self.ensure(height.saturating_add(theme::PARAGRAPH));
         let left = theme::SIDE
             .saturating_add(indent)
@@ -371,7 +357,7 @@ impl<'a> Layout<'a> {
             } else {
                 "\u{2022}".to_owned()
             };
-            self.ensure(theme::BODY.leading);
+            self.ensure(self.first_block_height(item.first(), inner));
             let baseline = self.baseline(theme::BODY.size);
             let width = style.width(&marker);
             let x = theme::SIDE
@@ -384,6 +370,48 @@ impl<'a> Layout<'a> {
         self.spacing = outer;
         if tight {
             self.advance(outer.saturating_sub(theme::TIGHT));
+        }
+    }
+
+    /// The space an item's first block reserves before it draws.
+    fn first_block_height(&self, block: Option<&Block>, indent: Mils) -> Mils {
+        match block {
+            Some(Block::Heading { level, .. }) => theme::space_before(*level)
+                .saturating_add(theme::heading(*level).leading)
+                .saturating_add(theme::space_after(*level))
+                .saturating_add(theme::BODY.leading.saturating_mul(2)),
+            Some(Block::Paragraph(content)) => {
+                if let Some((source, _)) = alone(content)
+                    && let Some(drawing) = self.drawing(source)
+                {
+                    let measure = theme::MEASURE.saturating_sub(indent);
+                    let (_, height) = figure_size(&drawing, measure);
+                    return height.saturating_add(theme::PARAGRAPH);
+                }
+                theme::BODY.leading
+            }
+            Some(Block::Code { .. }) => theme::CODE.leading.saturating_add(theme::PADDING),
+            Some(Block::Quote(inner)) => theme::BODY
+                .leading
+                .saturating_mul(2)
+                .max(self.first_block_height(inner.first(), indent.saturating_add(theme::INDENT))),
+            Some(Block::List { items, .. }) => items.first().map_or(theme::BODY.leading, |item| {
+                self.first_block_height(item.first(), indent.saturating_add(theme::INDENT))
+            }),
+            Some(Block::Table {
+                alignments: _,
+                header,
+                rows,
+            }) => {
+                let widths = columns(header, rows, theme::MEASURE.saturating_sub(indent));
+                theme::BODY.leading.saturating_mul(3).max(Self::row_height(
+                    header,
+                    &widths,
+                    Font::Bold,
+                ))
+            }
+            Some(Block::Rule) => pt(14),
+            None => theme::BODY.leading,
         }
     }
 
@@ -400,22 +428,21 @@ impl<'a> Layout<'a> {
         let measure = theme::MEASURE.saturating_sub(indent);
         let widths = columns(header, rows, measure);
         let left = theme::SIDE.saturating_add(indent);
-        self.ensure(theme::BODY.leading.saturating_mul(3));
-        self.row(header, alignments, &widths, left, true);
+        self.ensure(theme::BODY.leading.saturating_mul(3).max(Self::row_height(
+            header,
+            &widths,
+            Font::Bold,
+        )));
+        self.row(header, alignments, &widths, left, true, None);
         for row in rows {
-            let height = Self::row_height(row, &widths);
-            if self.y.saturating_sub(height) < theme::BOTTOM {
-                self.start_page();
-                self.row(header, alignments, &widths, left, true);
-            }
-            self.row(row, alignments, &widths, left, false);
+            self.row(row, alignments, &widths, left, false, Some(header));
         }
         self.advance(theme::PARAGRAPH);
     }
 
     /// How tall a row is once its cells are broken.
-    fn row_height(cells: &[Vec<Inline>], widths: &[Mils]) -> Mils {
-        let style = Style::new(Font::Regular, theme::BODY.size, theme::INK);
+    fn row_height(cells: &[Vec<Inline>], widths: &[Mils], font: Font) -> Mils {
+        let style = Style::new(font, theme::BODY.size, theme::INK);
         let mut tallest = 1;
         for (index, cell) in cells.iter().enumerate() {
             let width = widths.get(index).copied().unwrap_or(0);
@@ -436,10 +463,87 @@ impl<'a> Layout<'a> {
         widths: &[Mils],
         left: Mils,
         head: bool,
+        header: Option<&[Vec<Inline>]>,
     ) {
         let font = if head { Font::Bold } else { Font::Regular };
         let style = Style::new(font, theme::BODY.size, theme::INK);
-        let height = Self::row_height(cells, widths);
+        let broken: Vec<Vec<Line>> = cells
+            .iter()
+            .enumerate()
+            .map(|(index, cell)| {
+                let width = widths.get(index).copied().unwrap_or(0);
+                lines(
+                    cell,
+                    &style,
+                    width.saturating_sub(theme::PADDING.saturating_mul(2)),
+                )
+            })
+            .collect();
+        let tallest = broken.iter().map(Vec::len).max().unwrap_or(0).max(1);
+        let page_height = theme::PAGE
+            .height
+            .saturating_sub(theme::TOP)
+            .saturating_sub(theme::BOTTOM);
+        let header_height = header.map_or(0, |header| Self::row_height(header, widths, Font::Bold));
+        let row_height = theme::BODY
+            .leading
+            .saturating_mul(Mils::try_from(tallest).unwrap_or(0))
+            .saturating_add(pt(6));
+        if header.is_some()
+            && row_height <= page_height.saturating_sub(header_height)
+            && self.y.saturating_sub(row_height) < theme::BOTTOM
+        {
+            self.start_page();
+            if let Some(header) = header {
+                self.row(header, alignments, widths, left, true, None);
+            }
+        }
+        let mut first = 0;
+        while first < tallest {
+            let room = self.y.saturating_sub(theme::BOTTOM).saturating_sub(pt(6));
+            let fits = room
+                .checked_div(theme::BODY.leading)
+                .and_then(|count| usize::try_from(count).ok())
+                .unwrap_or(0);
+            if fits == 0 {
+                self.start_page();
+                if let Some(header) = header
+                    && header_height
+                        .saturating_add(theme::BODY.leading)
+                        .saturating_add(pt(6))
+                        <= page_height
+                {
+                    self.row(header, alignments, widths, left, true, None);
+                }
+                continue;
+            }
+            let taken = fits.min(tallest.saturating_sub(first));
+            self.row_fragment(
+                &broken,
+                alignments,
+                widths,
+                left,
+                head,
+                first..first.saturating_add(taken),
+            );
+            first = first.saturating_add(taken);
+        }
+    }
+
+    /// Sets one part of a row on the current page.
+    fn row_fragment(
+        &mut self,
+        broken: &[Vec<Line>],
+        alignments: &[Align],
+        widths: &[Mils],
+        left: Mils,
+        head: bool,
+        range: std::ops::Range<usize>,
+    ) {
+        let height = theme::BODY
+            .leading
+            .saturating_mul(Mils::try_from(range.len()).unwrap_or(0))
+            .saturating_add(pt(6));
         let top = self.y;
         let total: Mils = widths.iter().copied().fold(0, Mils::saturating_add);
         if head {
@@ -452,15 +556,14 @@ impl<'a> Layout<'a> {
             );
         }
         let mut x = left;
-        for (index, cell) in cells.iter().enumerate() {
+        for (index, cell) in broken.iter().enumerate() {
             let width = widths.get(index).copied().unwrap_or(0);
             let inner = width.saturating_sub(theme::PADDING.saturating_mul(2));
-            let broken = lines(cell, &style, inner);
             let align = alignments.get(index).copied().unwrap_or(Align::Left);
             let mut baseline = top
                 .saturating_sub(pt(3))
                 .saturating_sub(theme::BODY.size.saturating_mul(78).wrapping_div(100));
-            for line in &broken {
+            for line in cell.iter().skip(range.start).take(range.len()) {
                 let slack = inner.saturating_sub(line.width);
                 let shift = match align {
                     Align::Left => 0,
@@ -704,6 +807,23 @@ fn furniture(page: &mut Page, title: &str, number: usize) {
     );
 }
 
+/// Fits an SVG to the text measure and page height.
+fn figure_size(drawing: &Drawing, measure: Mils) -> (Mils, Mils) {
+    let natural = drawing.width.saturating_mul(3).wrapping_div(4);
+    let mut width = measure.min(natural).max(1);
+    let tallest = theme::PAGE
+        .height
+        .saturating_sub(theme::TOP)
+        .saturating_sub(theme::BOTTOM);
+    let height = drawing.height_at(width);
+    if height > tallest
+        && let Some(fitted) = width.saturating_mul(tallest).checked_div(height)
+    {
+        width = fitted;
+    }
+    (width, drawing.height_at(width))
+}
+
 /// The picture a block of nothing but one picture holds.
 fn alone(content: &[Inline]) -> Option<(&str, &str)> {
     let mut found = None;
@@ -735,13 +855,15 @@ fn wrap_fixed(line: &str, style: &Style, measure: Mils) -> Vec<String> {
     }
     let mut out = Vec::new();
     let mut current = String::new();
+    let mut width: Mils = 0;
     for character in line.chars() {
-        let mut candidate = current.clone();
-        candidate.push(character);
-        if !current.is_empty() && style.width(&candidate) > measure {
+        let character_width = style.char_width(character);
+        if !current.is_empty() && width.saturating_add(character_width) > measure {
             out.push(std::mem::take(&mut current));
+            width = 0;
         }
         current.push(character);
+        width = width.saturating_add(character_width);
     }
     if !current.is_empty() || out.is_empty() {
         out.push(current);
@@ -819,4 +941,95 @@ fn divide(value: Mils, by: Mils) -> Mils {
 /// The sum of a list of lengths.
 fn sum(widths: &[Mils]) -> Mils {
     widths.iter().copied().fold(0, Mils::saturating_add)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use doc_markdown::{Align, Block, Inline};
+    use doc_pdf::units::pt;
+
+    use super::Layout;
+    use crate::links::Links;
+    use crate::sources::{Kind, Source};
+    use crate::theme;
+
+    #[test]
+    fn a_list_marker_follows_its_first_block_to_the_next_page() {
+        let source = Source {
+            path: PathBuf::from("docs/example.md"),
+            target: PathBuf::from("handbook/example.pdf"),
+            kind: Kind::Markdown,
+            title: "Example".to_owned(),
+            origin: "docs/example.md".to_owned(),
+            size: 0,
+        };
+        let links = Links::new(std::slice::from_ref(&source));
+        let blocks = [
+            Block::Code {
+                language: None,
+                lines: vec!["first code line".to_owned()],
+            },
+            Block::Heading {
+                level: 2,
+                content: vec![Inline::Text("First heading".to_owned())],
+            },
+            Block::Table {
+                alignments: vec![Align::Left],
+                header: vec![vec![Inline::Text("First header".to_owned())]],
+                rows: vec![vec![vec![Inline::Text("First cell".to_owned())]]],
+            },
+            Block::Quote(vec![Block::Code {
+                language: None,
+                lines: vec!["First quoted line".to_owned()],
+            }]),
+        ];
+        for block in blocks {
+            let mut layout = Layout::new(&source, &links, false);
+            layout.y = theme::BOTTOM
+                .saturating_add(theme::BODY.leading)
+                .saturating_add(pt(1));
+            layout.list(false, 1, true, &[vec![block]], 0);
+            let written = String::from_utf8_lossy(&layout.finish()).into_owned();
+            let pages: Vec<&str> = written
+                .split("\nstream\n")
+                .skip(1)
+                .filter_map(|part| part.split_once("\nendstream").map(|(stream, _)| stream))
+                .collect();
+            assert_eq!(pages.len(), 2);
+            assert!(!pages[0].contains("(\\225) Tj"));
+            assert!(pages[1].contains("(\\225) Tj"));
+            assert!(pages[1].to_ascii_lowercase().contains("first"));
+        }
+    }
+
+    #[test]
+    fn a_header_that_fits_on_one_page_starts_on_that_page() {
+        let source = Source {
+            path: PathBuf::from("docs/example.md"),
+            target: PathBuf::from("handbook/example.pdf"),
+            kind: Kind::Markdown,
+            title: "Example".to_owned(),
+            origin: "docs/example.md".to_owned(),
+            size: 0,
+        };
+        let links = Links::new(std::slice::from_ref(&source));
+        let mut layout = Layout::new(&source, &links, false);
+        layout.y = theme::BOTTOM.saturating_add(theme::BODY.leading.saturating_mul(4));
+        let header = [vec![Inline::Text(format!(
+            "HeaderStart {}",
+            "word ".repeat(90)
+        ))]];
+        layout.table(&[Align::Left], &header, &[], 0);
+        let written = String::from_utf8_lossy(&layout.finish()).into_owned();
+        let pages: Vec<&str> = written
+            .split("\nstream\n")
+            .skip(1)
+            .filter_map(|part| part.split_once("\nendstream").map(|(stream, _)| stream))
+            .collect();
+        assert_eq!(pages.len(), 2);
+        assert!(!pages[0].contains("HeaderStart"));
+        assert!(pages[1].contains("HeaderStart"));
+    }
 }

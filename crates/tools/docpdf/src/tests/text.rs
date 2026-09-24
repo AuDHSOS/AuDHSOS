@@ -49,6 +49,19 @@ fn a_line_that_does_not_fit_is_broken_at_a_space() {
 }
 
 #[test]
+fn a_no_break_space_stays_inside_its_word() {
+    let measure = body().width("longword a").saturating_add(1);
+    assert_eq!(
+        rendered(&words("longword a\u{a0}b"), measure),
+        ["longword", "a\u{a0}b"]
+    );
+    assert_eq!(
+        extent(&words("a\u{a0}b"), &body()).1,
+        body().width("a\u{a0}b")
+    );
+}
+
+#[test]
 fn no_line_is_wider_than_the_measure_it_was_given() {
     let measure = pt(120);
     let text = "the quick brown fox jumps over the lazy dog again and again and again";
@@ -76,6 +89,14 @@ fn a_word_wider_than_the_measure_is_cut_rather_than_left_hanging() {
         .map(|piece| piece.text.clone())
         .collect();
     assert_eq!(joined, long);
+}
+
+#[test]
+fn a_long_unbroken_word_keeps_every_character() {
+    let word = "a\u{a0}b".repeat(3000);
+    let broken = rendered(&words(&word), pt(80));
+    assert!(broken.len() > 1);
+    assert_eq!(broken.concat(), word);
 }
 
 #[test]

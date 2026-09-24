@@ -25,10 +25,9 @@ target/pdf/
 └── other/        anything Markdown that none of the above claimed
 ```
 
-The last directory is the one that matters most. A rule that silently drops
-a document it has no category for is a rule that loses documents; whatever
-is not claimed is still converted, under a name made from its path. Today
-it is empty, which is the point.
+`other/` holds Markdown files that no category claims, under names made from
+their paths. Today it includes the README of each reference directory under
+`docs/`, plus the READMEs in `anchors/` and `fonts/`.
 
 Links survive the move. A chapter that links to `12-parallel-work.md` gets
 a link to `12-parallel-work.pdf`; a crate README that climbs three
