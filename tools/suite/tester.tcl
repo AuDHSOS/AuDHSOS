@@ -890,9 +890,19 @@ proc sqlite3 {args} {
       serialize {
         return [binary format H* [lindex [harness_send serialize %N%] 0]]
       }
-      copy - collation_needed - enable_load_extension - interrupt -
-      rekey - timeout - version - config -
       backup - restore {
+        # `$db backup ?DB? FILE` writes the database into a file and
+        # `$db restore ?DB? FILE` reads it back, which
+        # `sqlite3_backup_init` copies page by page for.
+        set file [lindex $args end]
+        set schema main
+        if {[llength $args] > 1} { set schema [lindex $args 0] }
+        harness_send backup [expr {$method eq "backup" ? "file" : "into"}] \
+          %N% $schema $file
+        return {}
+      }
+      copy - collation_needed - enable_load_extension - interrupt -
+      rekey - timeout - version - config {
         return {}
       }
       default { error "no such method: $method" }
@@ -2040,6 +2050,41 @@ proc sqlite3_expanded_sql {stmt} { return [lindex [harness_send stmt $stmt expan
 proc sqlite3_errcode {db} { return [lindex [harness_send errcode primary] 0] }
 proc sqlite3_extended_errcode {db} { return [lindex [harness_send errcode extended] 0] }
 proc sqlite3_get_autocommit {db} { return [lindex [harness_send autocommit $db] 0] }
+
+# `sqlite3_backup DEST DESTDB SRC SRCDB` of
+# `research/sqlite/src/test_backup.c:76`: the backup it begins is held
+# under the name the call wrote, which answers its four calls.
+proc sqlite3_backup {handle destdb destname srcdb srcname} {
+  set ::harness_error ""
+  if {[catch {
+    harness_send backup init $handle $destdb $destname $srcdb $srcname
+  } out]} {
+    set ::harness_error $out
+    error $out
+  }
+  proc ::$handle {verb args} "backup_held [list $handle] \$verb \$args"
+  return $handle
+}
+
+# The four calls a backup answers: `step N` copies N pages and answers
+# `SQLITE_DONE` where it copied the last of them, `remaining` and
+# `pagecount` count the pages, and `finish` ends the backup.
+proc backup_held {handle verb args} {
+  set held [lindex $args 0]
+  switch -- $verb {
+    step {
+      return [lindex [harness_send backup step $handle [lindex $held 0]] 0]
+    }
+    remaining { return [lindex [harness_send backup remaining $handle] 0] }
+    pagecount { return [lindex [harness_send backup pagecount $handle] 0] }
+    finish {
+      set out [lindex [harness_send backup finish $handle] 0]
+      rename ::$handle {}
+      return $out
+    }
+    default { error "no such backup method: $verb" }
+  }
+}
 
 # `sqlite3_wal_checkpoint DB ?NAME?` and
 # `sqlite3_wal_checkpoint_v2 DB MODE ?NAME?` of

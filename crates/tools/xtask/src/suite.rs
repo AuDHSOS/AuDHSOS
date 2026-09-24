@@ -649,6 +649,25 @@ struct Crashing {
     log: Vec<u8>,
 }
 
+/// One backup `sqlite3_backup_init` began: the connection it writes, the
+/// connection it reads, the page it copies next and the image the source
+/// held when the last step ran.
+struct Backing {
+    /// The connection whose database the backup writes.
+    into: String,
+    /// The connection whose database the backup reads.
+    from: String,
+    /// The page the next step copies, counting from one.
+    next: u32,
+    /// The pages the source held when its count was last read.
+    pages: u32,
+    /// The pages the connections over the source had written then, which
+    /// a step reads again: a source written since begins the backup
+    /// again, which `sqlite3BackupRestart` of
+    /// `research/sqlite/src/backup.c:719` does.
+    wrote: u64,
+}
+
 /// A child process a crash runs its statements in: the three files of the
 /// path as it found them, the connection its script runs over,
 /// everything that connection has done, and where the machine loses
@@ -998,6 +1017,24 @@ fn simplified(path: &str) -> String {
     if absolute { format!("/{held}") } else { held }
 }
 
+/// The image a backup writes into `path`, with the two version bytes of
+/// its header read back to one where the path names a database the
+/// connection holds of its own.
+///
+/// `pPager->memDb` of `research/sqlite/src/pager.c` is never read through
+/// a log whatever page one says, so a copy of a database in write-ahead
+/// logging mode is held in memory as a database that keeps a journal.
+fn held_alone(image: Vec<u8>, path: &str) -> Vec<u8> {
+    if !path.is_empty() && !path.contains('\0') && !path.eq_ignore_ascii_case(":memory:") {
+        return image;
+    }
+    let mut image = image;
+    for slot in image.iter_mut().skip(18).take(2) {
+        *slot = 1;
+    }
+    image
+}
+
 /// The path of the file a crash counts on, which is the database itself
 /// where the name carries the tail of a journal or of a log.
 fn pathed(named: &str) -> &str {
@@ -1109,6 +1146,9 @@ struct Session {
     /// statement at a time and whose crash is applied when the script
     /// ends.
     crashing: Option<Crashed>,
+    /// The backups `sqlite3_backup_init` began, under the names the
+    /// tester holds them by.
+    backups: BTreeMap<String, Backing>,
     /// The directory the interpreter runs in, which is where a file the
     /// session holds is written when the tester opens it as a file of
     /// the machine.
@@ -1180,6 +1220,7 @@ impl Session {
             temps: BTreeMap::new(),
             tempers: BTreeMap::new(),
             crashing: None,
+            backups: BTreeMap::new(),
             over: std::env::temp_dir().join(format!("audhsos-suite-{file}")),
             file: file.to_owned(),
             held: BTreeMap::new(),
@@ -1324,6 +1365,9 @@ impl Session {
                 usize::from(db_sqlite::token::complete(second.as_bytes())).to_string(),
             ]),
             "copy" => self.copy(first, second),
+            // `sqlite3_backup_init` and the four calls that drive the
+            // backup it answers.
+            "backup" => self.backed(args),
             // `sqlite3_create_collation` and `sqlite3_create_function`
             // name a proc the engine reaches back over the line, and
             // `load_static_extension` names a module.
@@ -2813,6 +2857,223 @@ impl Session {
 
     /// One database written again under another path, which is what a
     /// file that saves itself and reads the save back asks for.
+    /// `sqlite3_backup_init` of `research/sqlite/src/backup.c:129` and
+    /// the calls that drive the backup it answers: `init` begins one,
+    /// `step` copies pages, `remaining` and `pagecount` count them,
+    /// `finish` ends it, and `file` and `into` are the `backup` and
+    /// `restore` methods of a connection, which write the database into
+    /// a file and read it back.
+    ///
+    /// A step copies the image the source held when the backup began; a
+    /// step that finds the source written since then begins the backup
+    /// again, which `sqlite3BackupRestart` does. The destination is
+    /// written when the last page is copied, because
+    /// `sqlite3_backup_finish` rolls the destination back where the
+    /// backup did not run to its end.
+    ///
+    /// # Errors
+    ///
+    /// The words the C API writes for a backup it refuses to begin.
+    fn backed(&mut self, args: &[String]) -> Result<Vec<String>, String> {
+        let verb = args.first().map_or("", String::as_str);
+        let held = args.get(1).map_or("", String::as_str).to_owned();
+        if verb == "init" {
+            return self.backup_init(args);
+        }
+        if verb == "file" || verb == "into" {
+            return self.backup_file(verb, args);
+        }
+        let from = self
+            .backups
+            .get(&held)
+            .map(|backing| backing.from.clone())
+            .ok_or_else(|| format!("no such backup: {held}"))?;
+        let wrote = self.wrote_of(&from)?;
+        let written = self
+            .backups
+            .get(&held)
+            .is_some_and(|backing| backing.wrote != wrote);
+        let pages = if written {
+            u32::try_from(pages_of(&self.image_of(&from)?)).unwrap_or(0)
+        } else {
+            0
+        };
+        let backing = self
+            .backups
+            .get_mut(&held)
+            .ok_or_else(|| format!("no such backup: {held}"))?;
+        if written {
+            backing.wrote = wrote;
+            backing.pages = pages;
+            backing.next = 1;
+        }
+        let pages = backing.pages;
+        match verb {
+            "remaining" => Ok(alloc_one(
+                &pages
+                    .saturating_add(1)
+                    .saturating_sub(backing.next)
+                    .to_string(),
+            )),
+            "pagecount" => Ok(alloc_one(&pages.to_string())),
+            "finish" => {
+                self.backups.remove(&held);
+                Ok(alloc_one("SQLITE_OK"))
+            }
+            "step" => {
+                // `sqlite3_backup_step` of
+                // `research/sqlite/src/backup.c:408` answers
+                // `SQLITE_BUSY` where a connection holds a transaction on
+                // the source or on the destination, because the pages it
+                // would copy are not the ones a commit left.
+                let into = backing.into.clone();
+                if self.began_of(&from)? || self.began_of(&into)? {
+                    return Ok(alloc_one("SQLITE_BUSY"));
+                }
+                let backing = self
+                    .backups
+                    .get_mut(&held)
+                    .ok_or_else(|| format!("no such backup: {held}"))?;
+                let asked = args
+                    .get(2)
+                    .map_or("", String::as_str)
+                    .parse::<i64>()
+                    .unwrap_or(0);
+                let copied = if asked < 0 {
+                    pages
+                } else {
+                    u32::try_from(asked).unwrap_or(0)
+                };
+                backing.next = backing
+                    .next
+                    .saturating_add(copied)
+                    .min(pages.saturating_add(1));
+                if backing.next <= pages {
+                    return Ok(alloc_one("SQLITE_OK"));
+                }
+                let path = self.path_of(&into)?;
+                let bytes = held_alone(self.image_of(&from)?, &path);
+                self.opened_again(&path, (bytes, Vec::new(), Vec::new()))?;
+                self.stamped(&into);
+                Ok(alloc_one("SQLITE_DONE"))
+            }
+            other => Err(format!("this harness has no backup {other}")),
+        }
+    }
+
+    /// Begins one backup: the connection it writes, the connection it
+    /// reads and the pages the source holds.
+    ///
+    /// # Errors
+    ///
+    /// The words the C API writes for a backup it refuses to begin.
+    fn backup_init(&mut self, args: &[String]) -> Result<Vec<String>, String> {
+        let held = args.get(1).map_or("", String::as_str).to_owned();
+        let into = args.get(2).map_or("", String::as_str).to_owned();
+        let from = args.get(4).map_or("", String::as_str).to_owned();
+        for (connection, schema) in [(&into, args.get(3)), (&from, args.get(5))] {
+            let named = schema.map_or("", String::as_str);
+            if !named.eq_ignore_ascii_case("main") {
+                return Err(format!("unknown database {named}"));
+            }
+            if !self.connections.contains_key(connection) {
+                return Err(format!("no such connection: {connection}"));
+            }
+        }
+        if self.path_of(&into)? == self.path_of(&from)? {
+            return Err("source and destination must be distinct".to_owned());
+        }
+        let pages = u32::try_from(pages_of(&self.image_of(&from)?)).unwrap_or(0);
+        let wrote = self.wrote_of(&from)?;
+        self.backups.insert(
+            held,
+            Backing {
+                into,
+                from,
+                next: 1,
+                pages,
+                wrote,
+            },
+        );
+        Ok(Vec::new())
+    }
+
+    /// The `backup` and `restore` methods of a connection: the database
+    /// written into a file the session holds, and the file read back.
+    ///
+    /// # Errors
+    ///
+    /// The words for a schema that is not `main` and for a name no
+    /// connection carries.
+    fn backup_file(&mut self, verb: &str, args: &[String]) -> Result<Vec<String>, String> {
+        let held = args.get(1).map_or("", String::as_str).to_owned();
+        let schema = args.get(2).map_or("", String::as_str);
+        if !schema.eq_ignore_ascii_case("main") {
+            return Err(format!("unknown database {schema}"));
+        }
+        let file = args.get(3).map_or("", String::as_str).to_owned();
+        if verb == "file" {
+            let image = held_alone(self.image_of(&held)?, &file);
+            return self.opened_again(&file, (image, Vec::new(), Vec::new()));
+        }
+        let path = self.path_of(&held)?;
+        let image = held_alone(self.bytes_of(&file).unwrap_or_default(), &path);
+        self.opened_again(&path, (image, Vec::new(), Vec::new()))
+    }
+
+    /// The path a connection opened.
+    ///
+    /// # Errors
+    ///
+    /// The words for a name no connection carries.
+    fn path_of(&self, connection: &str) -> Result<String, String> {
+        self.connections
+            .get(connection)
+            .cloned()
+            .ok_or_else(|| format!("no such connection: {connection}"))
+    }
+
+    /// The pages the connections over the database of a connection have
+    /// written, which says whether it was written since a backup read it.
+    ///
+    /// # Errors
+    ///
+    /// The words for a name no connection carries.
+    fn wrote_of(&self, connection: &str) -> Result<u64, String> {
+        let path = self.path_of(connection)?;
+        Ok(self.writes.get(&path).copied().unwrap_or(0))
+    }
+
+    /// The image the database of a connection holds, with the pages a log
+    /// beside it has taken, which is the file a reader of that connection
+    /// sees and the file a backup copies.
+    ///
+    /// # Errors
+    ///
+    /// The words for a name no connection carries.
+    fn image_of(&self, connection: &str) -> Result<Vec<u8>, String> {
+        let path = self.path_of(connection)?;
+        let writer = self
+            .held
+            .get(&path)
+            .ok_or_else(|| format!("no such database: {path}"))?;
+        Ok(writer.inside())
+    }
+
+    /// Whether a connection holds a transaction, which a backup over its
+    /// database answers `SQLITE_BUSY` for.
+    ///
+    /// # Errors
+    ///
+    /// The words for a name no connection carries.
+    fn began_of(&self, connection: &str) -> Result<bool, String> {
+        let path = self.path_of(connection)?;
+        Ok(self
+            .held
+            .get(&path)
+            .is_some_and(db_sqlite::change::Writer::began))
+    }
+
     fn copy(&mut self, from: &str, to: &str) -> Result<Vec<String>, String> {
         let Some(bytes) = self.bytes_of(from) else {
             self.removed(to);
@@ -3197,12 +3458,29 @@ impl Session {
                 say("C failed");
                 say(&format!(
                     "F {name}\n  mine {:?}\n  want {:?}",
-                    args.get(2).map_or("", String::as_str),
-                    args.get(3).map_or("", String::as_str)
+                    shortened(args.get(2).map_or("", String::as_str)),
+                    shortened(args.get(3).map_or("", String::as_str))
                 ));
             }
         }
     }
+}
+
+/// The first bytes of a value a case answered, which is what the report
+/// of a case that answered differently writes.
+///
+/// A run of one file writes its report onto a pipe the run of every file
+/// reads once the file ended, so a value longer than the pipe holds would
+/// stop the file until the deadline ended it. The tail of a value tells a
+/// reader nothing the head does not.
+fn shortened(held: &str) -> String {
+    const MOST: usize = 300;
+    if held.len() <= MOST {
+        return held.to_owned();
+    }
+    let mut out: String = held.chars().take(MOST).collect();
+    out.push_str("...");
+    out
 }
 
 /// The line to the tester while one file runs, which a collation the

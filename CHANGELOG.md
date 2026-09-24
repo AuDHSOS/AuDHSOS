@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The suite harness answers `sqlite3_backup` and the `backup` and
+  `restore` methods of a connection, which copy a database the session
+  holds into another. D-461 records it. `backup_ioerr.test` goes from 2
+  cases passing to 50, `walbak.test` from 43 to 56 and `backup.test` from
+  5 to 11.
+
 - `db-sqlite` reads an `ON CONFLICT` clause that names an index whose
   places hold expressions, and one that names a partial index by writing
   its `WHERE` again, where it refused both; an index that holds more than
@@ -321,6 +327,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   from 34 to 49 and `skipscan1.test` from 18 to 30.
 
 ### Fixed
+
+- The suite harness cuts the report of a case that answered differently
+  to the first 300 characters of each value, so a case that answered a
+  value longer than the pipe the report is written onto no longer stops
+  the run of its file until the deadline. D-462 records it. `walbak.test`
+  runs every one of its 83 cases where it ran 25 of them in 300 seconds.
 
 - The suite harness answers `casesensitivelike` and `stat4` with false,
   because `LIKE` compares no case here and `ANALYZE` writes

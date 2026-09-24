@@ -548,6 +548,12 @@ Size: S.
 66. `casesensitivelike` and `stat4` are among the options this harness
     does not carry, and `update_delete_limit` reads false in both lists
     the files read it from, which D-460 records.
+67. `sqlite3_backup` and the `backup` and `restore` methods of a
+    connection copy a database the session holds into another, which
+    D-461 records.
+68. The report of a case that answered differently carries the first 300
+    characters of each value, so a case that answered a long value does
+    not stop the run of its file until the deadline, which D-462 records.
 
 ### Produces
 
