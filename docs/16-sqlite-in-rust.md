@@ -1155,6 +1155,9 @@ Size: L.
      columns in. Built, which D-490 and D-491 record.
 194. The journal mode of a database whose file name has no bytes, which
      does not go into write-ahead logging. Built, which D-492 records.
+195. The refusal of a statement used as a value, which reaches the client
+     as the refusal of the statement that holds it. Built, which D-494
+     records.
 
 ### Done when
 
@@ -1164,8 +1167,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 123 484 cases in 843 files, 118 438
-pass, 2706 answer differently, and 2340 name something the engine
+under the `tclsh` of the machine. Of 123 487 cases in 843 files, 118 463
+pass, 2684 answer differently, and 2340 name something the engine
 refuses or a command that needs the C library's internals. The files
 that answer for tens of thousands of rows reach the five-minute
 deadline and are counted with the cases they ran by then. One run over

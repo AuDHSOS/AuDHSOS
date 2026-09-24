@@ -7574,4 +7574,12 @@ for a connection opened under the empty file name.
 - `= wal`, which leaves it where it stands, and `= memory` and
   `= truncate`, which are written to it.
 - The same over the temp schema.
+### 6.6.342 The refusal of a statement used as a value (`db-sqlite`)
 
+Document 16 step Q8. Every answer is the one the C library's shell writes.
+
+- A name on the right of an `IN` that no database holds, and one under a
+  schema the connection holds no database under, which name the table as
+  the statement wrote it.
+- A subquery whose own statement is refused, which carries that refusal
+  and its code.

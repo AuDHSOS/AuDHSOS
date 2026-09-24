@@ -23,7 +23,7 @@ use crate::parse::MAX_DEPTH;
 use crate::value::{Affinity, Collation, Value, apply_comparison, cast, compare, compare_affinity};
 
 /// Why an expression could not be answered.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Error {
     /// A name that is not a column of this row, as it was written.
     NoColumn(Vec<u8>),
@@ -118,6 +118,10 @@ pub enum Error {
     /// What the matcher of `crate::regexp` refuses a pattern for, which
     /// carries its own message.
     Regexp(&'static str),
+    /// What a statement used as a value was refused with, which carries
+    /// that refusal: this module reads one row and the reader answers the
+    /// statement, so the refusal of the reader stands.
+    Refused(alloc::boxed::Box<crate::db::Error>),
 }
 
 impl Error {
@@ -188,6 +192,10 @@ impl Error {
             Error::Overflow => "integer overflow".to_string(),
             Error::Json(refused) => refused.message(),
             Error::Regexp(why) => (*why).to_string(),
+            // The refusal of a statement used as a value is the refusal
+            // the reader wrote, which `sqlite3_errmsg` answers for the
+            // statement that holds it.
+            Error::Refused(held) => held.message(),
             other => alloc::format!("{other:?}"),
         }
     }
@@ -332,8 +340,12 @@ pub trait Row {
     ///
     /// A statement used as a value is answered by whatever walks the
     /// rows, because this module reads one row and knows no tables.
-    fn answered(&self, _used: Used) -> Option<Value> {
-        None
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Refused`] carries what the statement was refused with.
+    fn answered(&self, _used: Used) -> Result<Option<Value>, Error> {
+        Ok(None)
     }
 
     /// The aggregates the application defined on the connection, which
@@ -393,13 +405,18 @@ pub trait Row {
     /// which is what a row compared against `(SELECT a, b)` compares
     /// against. A statement that answers no row answers a null per
     /// column.
-    fn answered_items(
-        &self,
-        _select: SelectId,
-    ) -> Option<Vec<(Value, Affinity, Option<Collation>)>> {
-        None
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Refused`] carries what the statement was refused with.
+    fn answered_items(&self, _select: SelectId) -> Result<Option<Vec<Item>>, Error> {
+        Ok(None)
     }
 }
+
+/// One value of the first row a statement used as a value answered, with
+/// what a comparison against it does.
+pub type Item = (Value, Affinity, Option<Collation>);
 
 /// What a function reads beside its arguments, taken off the row it is
 /// read against.
@@ -756,7 +773,7 @@ fn calling(
 /// a `TK_SELECT`. A statement that answers any other number of columns
 /// is a refusal.
 fn alone(row: &dyn Row, select: SelectId) -> Result<Answer, Error> {
-    let items = row.answered_items(select).ok_or(Error::Unsupported)?;
+    let items = row.answered_items(select)?.ok_or(Error::Unsupported)?;
     let answered = items.len();
     let mut held = items.into_iter();
     let (value, affinity, collation) = held.next().ok_or(Error::Columns(answered, 1))?;
@@ -775,7 +792,7 @@ fn alone(row: &dyn Row, select: SelectId) -> Result<Answer, Error> {
 /// What a statement an expression uses answers, which is a refusal
 /// where the row answers no statement.
 fn used(row: &dyn Row, what: Used) -> Result<Answer, Error> {
-    row.answered(what)
+    row.answered(what)?
         .map_or(Err(Error::Unsupported), |value| Ok(Answer::plain(value)))
 }
 
@@ -1722,7 +1739,7 @@ fn row_answers(
         // answers columns, which is `sqlite3ExprCodeSubselect` over a
         // vector.
         Some(Node::Subquery(select)) => {
-            let held = row.answered_items(select).ok_or(Error::Unsupported)?;
+            let held = row.answered_items(select)?.ok_or(Error::Unsupported)?;
             return Ok(held
                 .into_iter()
                 .map(|(value, affinity, collation)| Answer {

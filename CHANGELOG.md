@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` carries the refusal of a statement used as a value out to the
+  client, where the refusal stood for nothing, and names the table of a name
+  on the right of an `IN` as the statement wrote it. D-494 records it.
+  Catalog 6.6.342. `joinI.test` goes from 27 cases passing to 30,
+  `misc5.test` from 32 to 34 and `select7.test` from 20 to 22.
+
 - `db-sqlite` leaves a database whose file name has no bytes in the mode it
   stands in where `PRAGMA journal_mode = wal` names write-ahead logging, and
   the suite harness opens the empty file name where a connection was given

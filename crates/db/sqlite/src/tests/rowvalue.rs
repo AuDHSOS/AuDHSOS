@@ -423,3 +423,29 @@ fn what_a_set_of_more_than_one_column_writes() {
         );
     }
 }
+
+/// What a statement used as a value is refused with, which is the
+/// refusal of the statement it holds: `sqlite3ExprCodeSubselect` builds
+/// the rows of such a statement into the program of the statement that
+/// holds it, so one `OP_Halt` ends both.
+#[test]
+fn what_a_statement_used_as_a_value_is_refused_with() {
+    let writer = connection();
+    // A refusal of the reader is carried out under the message and the
+    // code that refusal names.
+    for sql in [
+        "SELECT (SELECT a FROM nope)",
+        "SELECT EXISTS(SELECT a FROM nope)",
+        "SELECT (1,2)=(SELECT a,b FROM nope)",
+        "SELECT 1 IN (SELECT a FROM nope)",
+        "SELECT 1 IN nope",
+    ] {
+        let held = refusal(&writer, sql);
+        assert_eq!(held.message(), "no such table: nope", "{sql}");
+        assert_eq!(held.code().number, 1, "{sql}");
+        assert_eq!(held.code().extended_name, b"SQLITE_ERROR", "{sql}");
+    }
+    // A refusal the walk of an expression raised itself stands as it is.
+    let held = refusal(&writer, "SELECT (SELECT nope)");
+    assert_eq!(held.message(), "no such column: nope");
+}

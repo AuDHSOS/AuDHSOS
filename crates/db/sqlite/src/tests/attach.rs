@@ -294,17 +294,15 @@ fn what_a_statement_reads_out_of_an_attached_database() {
         answered(b"SELECT a FROM main.u").unwrap_err(),
         "no such table: main.u"
     );
-    // A name on the right of an `IN` that no database holds is refused
-    // where the statement is read, and `crate::eval::Row::answered`
-    // carries a value or nothing rather than the refusal, so the message
-    // is the one that stands for nothing.
+    // A name on the right of an `IN` names the table the same way, and
+    // the refusal reaches the client through `crate::eval::Row`.
     assert_eq!(
         answered(b"SELECT 1 WHERE 3 IN two.t").unwrap_err(),
-        "Unsupported"
+        "no such table: two.t"
     );
     assert_eq!(
         answered(b"SELECT 1 WHERE 3 IN nope").unwrap_err(),
-        "Unsupported"
+        "no such table: nope"
     );
     // A column named under a schema the side does not read is no column
     // of it.

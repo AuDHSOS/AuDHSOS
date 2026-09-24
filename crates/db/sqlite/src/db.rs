@@ -948,6 +948,9 @@ impl Error {
             // `sqlite3ExprCodeTarget` sets to this one for a `RAISE` the
             // body of a trigger holds.
             Error::Eval(eval::Error::Raised(..)) => Code::broke(1811, b"SQLITE_CONSTRAINT_TRIGGER"),
+            // A statement used as a value carries the refusal of the
+            // statement, so the code is the one that refusal names.
+            Error::Eval(eval::Error::Refused(held)) => held.code(),
             Error::Constraint | Error::HeldConstraint(_) => Code::plain(19, b"SQLITE_CONSTRAINT"),
             Error::Auth(_) => Code::plain(23, b"SQLITE_AUTH"),
             Error::LockedTable => Code::plain(6, b"SQLITE_LOCKED"),
@@ -4289,17 +4292,18 @@ impl<'a> Database<'a> {
                 )
             }
             Used::InTable(value, schema, table, negated) => {
-                let called = dequote(table.text(sql));
+                let Named {
+                    name: called,
+                    shown,
+                } = table_named(schema, table, sql);
                 let place = match schema {
                     Some(span) => match self.placed(&dequote(span.text(sql))) {
                         Some(place) => Some(place),
-                        None => return Err(Error::NoTable(called)),
+                        None => return Err(Error::NoTable(shown)),
                     },
                     None => None,
                 };
-                let stored = self
-                    .located(place, &called)
-                    .ok_or_else(|| Error::NoTable(called.clone()))?;
+                let stored = self.located(place, &called).ok_or(Error::NoTable(shown))?;
                 let side = Side {
                     shape: shape_of(&self.named_place(stored.place), &stored.table),
                     source: Source::Table(stored),
@@ -9728,6 +9732,17 @@ pub const fn schema_named(name: &[u8]) -> bool {
         || name.eq_ignore_ascii_case(b"sqlite_temp_schema")
 }
 
+/// One refusal of the reader as the walk of an expression carries it: a
+/// refusal the walk raised itself stands as it is, so a statement used as
+/// a value that named no column is refused `no such column` and not the
+/// refusal of a statement.
+pub(crate) fn refused(error: Error) -> eval::Error {
+    match error {
+        Error::Eval(held) => held,
+        held => eval::Error::Refused(alloc::boxed::Box::new(held)),
+    }
+}
+
 /// What a comparison against an expression does: the affinity and the
 /// collation of the column it names, where it names one.
 ///
@@ -10433,23 +10448,22 @@ impl eval::Row for Cursor<'_> {
             .map(|(_, value)| value.clone())
     }
 
-    fn answered(&self, used: Used) -> Option<Value> {
+    fn answered(&self, used: Used) -> Result<Option<Value>, eval::Error> {
         let reach = self.reach;
         reach
             .database
             .answer(reach.arena, reach.sql, used, reach.scope, self)
-            .ok()
+            .map(Some)
+            .map_err(refused)
     }
 
-    fn answered_items(
-        &self,
-        select: SelectId,
-    ) -> Option<Vec<(Value, Affinity, Option<Collation>)>> {
+    fn answered_items(&self, select: SelectId) -> Result<Option<Vec<eval::Item>>, eval::Error> {
         let reach = self.reach;
         reach
             .database
             .answer_items(reach.arena, reach.sql, select, reach.scope, self)
-            .ok()
+            .map(Some)
+            .map_err(refused)
     }
 
     fn column(

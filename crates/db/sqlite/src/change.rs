@@ -9912,23 +9912,29 @@ impl crate::eval::Row for Held<'_> {
         self.counted
     }
 
-    fn answered(&self, used: crate::eval::Used) -> Option<Value> {
-        let reading = self.reading?;
-        reading
-            .database
-            .subquery(reading.arena, reading.sql, used, self)
-            .ok()
+    fn answered(&self, used: crate::eval::Used) -> Result<Option<Value>, crate::eval::Error> {
+        self.reading
+            .map(|reading| {
+                reading
+                    .database
+                    .subquery(reading.arena, reading.sql, used, self)
+                    .map_err(crate::db::refused)
+            })
+            .transpose()
     }
 
     fn answered_items(
         &self,
         select: crate::ast::SelectId,
-    ) -> Option<Vec<(Value, Affinity, Option<Collation>)>> {
-        let reading = self.reading?;
-        reading
-            .database
-            .subquery_items(reading.arena, reading.sql, select, self)
-            .ok()
+    ) -> Result<Option<Vec<crate::eval::Item>>, crate::eval::Error> {
+        self.reading
+            .map(|reading| {
+                reading
+                    .database
+                    .subquery_items(reading.arena, reading.sql, select, self)
+                    .map_err(crate::db::refused)
+            })
+            .transpose()
     }
 
     fn encoding(&self) -> Encoding {
