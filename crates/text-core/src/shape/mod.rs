@@ -55,6 +55,10 @@ pub struct Glyph {
 }
 
 impl Glyph {
+    #[cfg(test)]
+    pub(crate) const fn code(&self) -> u32 {
+        self.code
+    }
     /// Initialize a glyph with its source cluster and zero positions.
     #[must_use]
     pub fn new(id: u16, start: usize, end: usize) -> Self {

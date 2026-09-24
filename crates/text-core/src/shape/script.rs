@@ -197,7 +197,7 @@ fn hangul(first: u32, second: u32) -> Option<u32> {
 /// Normalize supported scripts, map glyphs, and assign joining forms and clusters.
 /// Returns a glyph count; refused scripts retain simple scalar placement.
 /// # Errors
-/// Returns insufficient capacity or bounded normalization work errors.
+/// Returns insufficient capacity or decomposition depth errors.
 pub fn prepare(
     text: &str,
     cmap: Cmap<'_>,
@@ -299,62 +299,109 @@ pub fn prepare(
     Ok(len)
 }
 
-fn normalize(cmap: Cmap<'_>, out: &mut [Glyph], mut len: usize) -> Result<usize, FontError> {
-    let mut work = 0;
-    {
-        for i in 1..len {
+/// Canonical ordering and composition, O(n) in `len`.
+fn normalize(cmap: Cmap<'_>, out: &mut [Glyph], len: usize) -> Result<usize, FontError> {
+    let glyphs = out.get_mut(..len).ok_or(FontError::BufferTooSmall)?;
+    let mut i = 0;
+    while i < len {
+        let first = *glyphs.get(i).ok_or(FontError::BufferTooSmall)?;
+        let mut end = add(i, 1)?;
+        if mark_order(first.code) != 0 {
+            while let Some(g) = glyphs.get(end)
+                && g.start == first.start
+                && mark_order(g.code) != 0
+            {
+                end = add(end, 1)?;
+            }
+            order_marks(glyphs.get_mut(i..end).ok_or(FontError::BufferTooSmall)?)?;
+        }
+        i = end;
+    }
+    let mut starter: Option<usize> = None;
+    let mut last = 0;
+    let mut write = 0;
+    for read in 0..len {
+        let g = *glyphs.get(read).ok_or(FontError::BufferTooSmall)?;
+        let class = mark_order(g.code);
+        if let Some(s) = starter {
+            let p = glyphs.get_mut(s).ok_or(FontError::BufferTooSmall)?;
+            if p.start == g.start
+                && (last == 0 || last < class)
+                && let Some(code) = hangul(p.code, g.code)
+                    .filter(|c| mapped(cmap, *c) != 0)
+                    .or_else(|| unicode::composition(p.code, g.code, |c| mapped(cmap, c) != 0))
+            {
+                p.code = code;
+                continue;
+            }
+        }
+        if class == 0 {
+            starter = Some(write);
+        }
+        last = class;
+        *glyphs.get_mut(write).ok_or(FontError::BufferTooSmall)? = g;
+        write = add(write, 1)?;
+    }
+    Ok(write)
+}
+
+/// Stable sort of one run of marks by `mark_order`, O(m): insertion sort up
+/// to `SHORT` marks, else a counting sort that permutes by swaps.
+fn order_marks(marks: &mut [Glyph]) -> Result<(), FontError> {
+    const SHORT: usize = 32;
+    if marks.len() <= SHORT {
+        for i in 1..marks.len() {
             let mut j = i;
             while j > 0 {
-                work = add(work, 1)?;
-                if work > 1_000_000 {
-                    return Err(FontError::LimitExceeded);
-                }
                 let before = sub(j, 1)?;
-                let g = *out.get(j).ok_or(FontError::BufferTooSmall)?;
-                let p = *out.get(before).ok_or(FontError::BufferTooSmall)?;
-                let c = mark_order(g.code);
-                let pc = mark_order(p.code);
-                if g.start != p.start || c == 0 || pc <= c {
+                let c = mark_order(marks.get(j).ok_or(FontError::BufferTooSmall)?.code);
+                let pc = mark_order(marks.get(before).ok_or(FontError::BufferTooSmall)?.code);
+                if pc <= c {
                     break;
                 }
-                out.swap(before, j);
+                marks.swap(before, j);
                 j = before;
             }
         }
-        let mut starter: Option<usize> = None;
-        let mut last = 0;
-        let mut i = 0;
-        while i < len {
-            let g = *out.get(i).ok_or(FontError::BufferTooSmall)?;
-            let class = mark_order(g.code);
-            let composed = if let Some(s) = starter {
-                let p = *out.get(s).ok_or(FontError::BufferTooSmall)?;
-                if p.start == g.start && (last == 0 || last < class) {
-                    hangul(p.code, g.code)
-                        .filter(|c| mapped(cmap, *c) != 0)
-                        .or_else(|| unicode::composition(p.code, g.code, |c| mapped(cmap, c) != 0))
-                        .map(|code| (s, code))
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-            if let Some((s, code)) = composed {
-                out.get_mut(s).ok_or(FontError::BufferTooSmall)?.code = code;
-                out.copy_within(add(i, 1)?..len, i);
-                len = sub(len, 1)?;
-            } else {
-                if class == 0 {
-                    starter = Some(i);
-                }
-                last = class;
-                i = add(i, 1)?;
+        return Ok(());
+    }
+    let mut next = [0_usize; 256];
+    for g in &*marks {
+        let slot = next
+            .get_mut(usize::from(mark_order(g.code)))
+            .ok_or(FontError::Overflow)?;
+        *slot = add(*slot, 1)?;
+    }
+    let mut total = 0;
+    for slot in &mut next {
+        let count = *slot;
+        *slot = total;
+        total = add(total, count)?;
+    }
+    // `source_order` holds the destination until the permutation ends.
+    for g in &mut *marks {
+        let slot = next
+            .get_mut(usize::from(mark_order(g.code)))
+            .ok_or(FontError::Overflow)?;
+        g.source_order = *slot;
+        *slot = add(*slot, 1)?;
+    }
+    for i in 0..marks.len() {
+        loop {
+            let to = marks.get(i).ok_or(FontError::BufferTooSmall)?.source_order;
+            if to == i {
+                break;
             }
+            if to >= marks.len() {
+                return Err(FontError::Overflow);
+            }
+            marks.swap(i, to);
         }
     }
-
-    Ok(len)
+    for g in marks {
+        g.source_order = 0;
+    }
+    Ok(())
 }
 
 fn mark_order(code: u32) -> u8 {

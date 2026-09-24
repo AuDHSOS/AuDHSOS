@@ -16,7 +16,7 @@ kept under it, and D-153 this directory.
 
 **Unicode 18.0.0**, which every file here is of.
 
-The seven annexes and reports each print `Version: Unicode 18.0.0` in
+The eight annexes and reports each print `Version: Unicode 18.0.0` in
 their header, except the two that carry a version of their own: UTS #37
 is at 7.0 and UTS #51 at 18.0, both released with Unicode 18.0.0. The
 database files come from `https://www.unicode.org/Public/18.0.0/ucd/`
@@ -38,6 +38,7 @@ The annexes and reports, as HTML, at the revision named in the file name:
 | `reports/tr9/tr9-52.html` | UAX #9, *Unicode Bidirectional Algorithm*, revision 52 of 2026-09-01, version Unicode 18.0.0 | 2026-09-16 from `https://www.unicode.org/reports/tr9/tr9-52.html` | 188933 | `3c281b38800bad85b16bf3a169b8cb693d8a2dbceb60903feb26e68a2659ee8a` |
 | `reports/tr11/tr11-46.html` | UAX #11, *East Asian Width*, revision 46 of 2026-07-31, version Unicode 18.0.0 | 2026-09-16 from `https://www.unicode.org/reports/tr11/tr11-46.html` | 36549 | `2c60f3da0010870eaa4d9665a4bbae3e473c016c82d27bb508ea075cbf2afa7a` |
 | `reports/tr14/tr14-57.html` | UAX #14, *Unicode Line Breaking Algorithm*, revision 57 of 2026-09-01, version Unicode 18.0.0 | 2026-09-16 from `https://www.unicode.org/reports/tr14/tr14-57.html` | 226166 | `296df5332aefe695b4951b511288b118bc6a7b43db7fadfd60f6062096acc7c0` |
+| `reports/tr15/tr15-58.html` | UAX #15, *Unicode Normalization Forms*, revision 58 of 2026-08-12, version Unicode 18.0.0 | 2026-09-24 from `https://www.unicode.org/reports/tr15/tr15-58.html` | 141588 | `efcf19da85342bd87fb93b590975ca422597243f2e19c6cb46e941d0d2d48d73` |
 | `reports/tr29/tr29-49.html` | UAX #29, *Unicode Text Segmentation*, revision 49 of 2026-09-01, version Unicode 18.0.0 | 2026-09-16 from `https://www.unicode.org/reports/tr29/tr29-49.html` | 141203 | `60fb49ee640a154d9e40468306c6b283edcef73be3af5ede778107b4787bdec8` |
 | `reports/tr37/tr37-16.html` | UTS #37, *Unicode Ideographic Variation Database*, revision 16 of 2026-04-30, version 7.0 | 2026-09-16 from `https://www.unicode.org/reports/tr37/tr37-16.html` | 33708 | `92ae55ff5f162ec416dbb5616556e9d4ebd7bce68f5c7c03c71467a7a7a448d4` |
 | `reports/tr50/tr50-35.html` | UAX #50, *Unicode Vertical Text Layout*, revision 35 of 2026-07-31, version Unicode 18.0.0 | 2026-09-16 from `https://www.unicode.org/reports/tr50/tr50-35.html` | 528174 | `e8662f3394d20212beaa1862b505582cee5383c4b502a46966e317967f7bc65e` |
@@ -75,9 +76,12 @@ versioned UCD directory:
 | `ucd/BidiMirroring.txt` | 27294 | `cd54810ebf52f0e61a730c8b9cb25975de6c85f6d788a559b416afd548923fd6` |
 | `ucd/ArabicShaping.txt` | 42356 | `8ccde4ebd070500a68e8bcb9d5514522fb0bebe57b9ebad3ff925b8e1e669f83` |
 | `ucd/PropertyValueAliases.txt` | 83536 | `06c4c8eaf7b0bf34abe73b113da1215bd784ac254d4c223600b90267caa4bbbd` |
+| `ucd/CompositionExclusions.txt` | 9007 | `c759b100e9ae8960ae6b50fc5765950a7581fd9f30d4ef95f68f25a6d97e818e` |
 
 These files supply script runs, Indic conjunct boundaries, bidi defaults,
 brackets, mirroring, Arabic joining, and property aliases.
+`CompositionExclusions.txt`, retrieved on 2026-09-24, supplies the script-specific
+and post-composition-version exclusions of UAX #15, section 5.
 
 The conformance test files, which say what a correct implementation
 answers:
@@ -93,19 +97,19 @@ answers:
 The checksums are here so that a reader can tell a file has not been
 edited since. Each file is byte for byte what the server delivered; the original
 2026-09-16 files were fetched twice and the two fetches agreed.
-The seven reports are 3479, 340, 4623, 3326, 491, 2208, and 4356 lines,
-in the order of their table; the six property files 41341, 2754, 3740,
+The eight reports are 3479, 340, 4623, 2658, 3326, 491, 2208, and 4356
+lines, in the order of their table; the six property files 41341, 2754, 3740,
 1519, 1558, and 1305; the five test files 883, 1974, 19376, 497590, and
 96465.
 
 ### The figure files
 
-A report names its figures by a relative path, so 139 further files sit
+A report names its figures by a relative path, so 144 further files sit
 below `reports/`, at the paths the reports name them by: 132 for UTS #51,
 which illustrates each emoji sequence with how four vendors render it,
-three for UAX #50, two for UAX #11, and one each for UAX #29 and UTS #37.
+five for UAX #15, three for UAX #50, two for UAX #11, and one each for UAX #29 and UTS #37.
 They are listed one per line with its own checksum by `fetch.sh`, and not
-in a table here, because 139 rows of `apple_1f469.png` would bury the
+in a table here, because 144 rows of `apple_1f469.png` would bury the
 documents above without telling a reader anything. What pins them is one
 digest over that listing:
 
@@ -115,7 +119,7 @@ LC_ALL=C find reports -type f ! -name '*.html' | LC_ALL=C sort |
 ```
 
 answers
-`35505943891193cceccbbc7534fe19b3d72c9a540bc13276b8657797ff2959fc`.
+`1d4d01f5a1e529a135b1bcd6cdc9bb868033441c775275ce81309f0e59e3b743`.
 
 Four references reach outside these files and are left as they stand,
 because the copies are unmodified: the stylesheet `reports-v2.css`, the
@@ -149,8 +153,12 @@ which is the only question this project's display asks of it today.
 
 **UAX #14** is line breaking: the Line_Break property, the pair table of
 section 6, and the rules LB1 to LB31 that say where a line may be broken
-and where it may not. It is the longest chain of rules of the seven and
+and where it may not. It is the longest chain of rules of the eight and
 the one with the most exceptions.
+
+**UAX #15** is normalization: canonical ordering, canonical composition,
+and the composition exclusions of section 5 that `text-core` applies when it
+recomposes a cluster.
 
 **UAX #29** is text segmentation: grapheme cluster, word and sentence
 boundaries. The grapheme cluster is what a user calls a character, and it
@@ -198,7 +206,7 @@ data. Each file carries that notice in its own header, and the files here
 are unmodified. That is the first case of D-124, and there is nothing
 further to state.
 
-The seven annexes and reports are not Data Files. Each prints the
+The eight annexes and reports are not Data Files. Each prints the
 Consortium's notice at its end — © 1999–2026 Unicode, Inc. for UAX #9,
 with the year of first publication differing per report — and each states
 the restriction in the same words:
@@ -212,7 +220,7 @@ the restriction in the same words:
 > or in part into any product or publication without the express written
 > permission of Unicode.
 
-So the seven copies here are ones the notice does not permit, and they
+So the eight copies here are ones the notice does not permit, and they
 stand where the ITU documents in [`docs/itu/`](../itu/README.md) stand,
 under the second case of D-124 and for the same reason: the copy is what
 D-59 is for, and no arrangement that respects the restriction delivers

@@ -674,6 +674,9 @@ classes after substitutions and before advances.
 Normalization preserves grapheme source ranges, decomposes canonically,
 orders Hebrew pronunciation marks before vowels and Arabic shadda before
 vowels, and recomposes only glyphs the face covers. CGJ blocks reordering.
+Recomposition skips `Full_Composition_Exclusion` composites
+(`docs/unicode/reports/tr15/tr15-58.html:860`, section 5;
+`docs/unicode/ucd/CompositionExclusions.txt`); ordering and composition are O(n).
 The Hebrew order follows `docs/unicode/sbl-hebrew-manual-1.5.pdf`; script
 feature orders follow `docs/microsoft/script-{arabic,hebrew,hangul}.html`.
 Anchors use design coordinates; contour-point hinting and Device pixels remain

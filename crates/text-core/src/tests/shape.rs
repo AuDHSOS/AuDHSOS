@@ -672,6 +672,62 @@ fn normalization_join_controls_refusal_and_buffer_limits() {
 }
 
 #[test]
+fn composition_of_65536_scalars_is_one_pass() {
+    use crate::unicode::Script;
+    let data = include_bytes!("fixtures/DejaVu-shaping.ttf");
+    let cmap = crate::Font::parse(data).unwrap().cmap().unwrap();
+    let n = 32_768;
+    let text = "e\u{301}".repeat(n);
+    let mut output = vec![Glyph::default(); 2 * n];
+    assert_eq!(
+        shape::prepare(&text, cmap, Script::Latin, false, &mut output),
+        Ok(n)
+    );
+    let id = cmap.glyph_index('é');
+    assert_ne!(id, 0);
+    for (k, g) in output[..n].iter().enumerate() {
+        assert_eq!(
+            (g.id, g.code(), g.start, g.end),
+            (id, 0xe9, 3 * k, 3 * k + 3)
+        );
+    }
+}
+
+#[test]
+fn canonical_ordering_of_2000_marks_is_stable_and_unbounded_by_work() {
+    use crate::unicode::Script;
+    let data = include_bytes!("fixtures/DejaVu-shaping.ttf");
+    let cmap = crate::Font::parse(data).unwrap().cmap().unwrap();
+    // `mark_order`: U+05B8 21, U+05B0 22, U+0316 220, U+0301 230.
+    for (text, expected) in [
+        (
+            format!("x{}{}", "\u{301}".repeat(1000), "\u{316}".repeat(1000)),
+            [vec![0x78], vec![0x316; 1000], vec![0x301; 1000]].concat(),
+        ),
+        (
+            format!("x{}", "\u{301}\u{316}\u{5b8}\u{5b0}".repeat(40)),
+            [
+                vec![0x78],
+                vec![0x5b8; 40],
+                vec![0x5b0; 40],
+                vec![0x316; 40],
+                vec![0x301; 40],
+            ]
+            .concat(),
+        ),
+        (
+            "x\u{301}\u{316}y\u{5b0}\u{5b8}".to_owned(),
+            vec![0x78, 0x316, 0x301, 0x79, 0x5b8, 0x5b0],
+        ),
+    ] {
+        let mut output = vec![Glyph::default(); text.chars().count()];
+        let n = shape::prepare(&text, cmap, Script::Latin, false, &mut output).unwrap();
+        let codes: Vec<u32> = output[..n].iter().map(Glyph::code).collect();
+        assert_eq!(codes, expected);
+    }
+}
+
+#[test]
 fn contextual_depth_expansion_and_work_limits() {
     for depth in [15, 16] {
         let mut lookups = Vec::new();

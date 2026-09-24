@@ -9,10 +9,10 @@ dir=$(cd "$(dirname "$0")" && pwd)
 base=https://www.unicode.org
 version=18.0.0
 
-reports='tr9:52 tr11:46 tr14:57 tr29:49 tr37:16 tr50:35 tr51:31'
+reports='tr9:52 tr11:46 tr14:57 tr15:58 tr29:49 tr37:16 tr50:35 tr51:31'
 ucd='Scripts.txt ScriptExtensions.txt DerivedCoreProperties.txt
 extracted/DerivedBidiClass.txt BidiBrackets.txt BidiMirroring.txt
-ArabicShaping.txt PropertyValueAliases.txt UnicodeData.txt EastAsianWidth.txt LineBreak.txt BidiTest.txt
+ArabicShaping.txt PropertyValueAliases.txt CompositionExclusions.txt UnicodeData.txt EastAsianWidth.txt LineBreak.txt BidiTest.txt
 BidiCharacterTest.txt auxiliary/GraphemeBreakProperty.txt
 auxiliary/WordBreakProperty.txt auxiliary/GraphemeBreakTest.txt
 auxiliary/WordBreakTest.txt auxiliary/LineBreakTest.txt emoji/emoji-data.txt'
