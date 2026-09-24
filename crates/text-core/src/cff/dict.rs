@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Manuel Baesler and contributors
 
-use super::blend::Blend;
+use super::{CFF_STACK, CFF2_STACK, blend::Blend};
 use crate::{
     Fixed, FontError,
     read::{self, add},
@@ -161,23 +161,33 @@ impl Dict {
     pub(super) fn parse(data: &[u8], cff2: bool) -> Result<Self, FontError> {
         Self::parse_with(data, cff2, Blend::default())
     }
+    pub(super) fn parse_with(data: &[u8], cff2: bool, blend: Blend<'_>) -> Result<Self, FontError> {
+        if cff2 {
+            Self::parse_in::<CFF2_STACK>(data, cff2, blend)
+        } else {
+            Self::parse_in::<CFF_STACK>(data, cff2, blend)
+        }
+    }
+    /// Holds an `N`-operand stack; `inline(never)` gives each `N` its own
+    /// frame, so the CFF caller's frame omits the 513-entry array.
+    #[inline(never)]
     #[expect(
         clippy::many_single_char_names,
         reason = "six affine matrix entries follow the CFF notation"
     )]
-    pub(super) fn parse_with(
+    fn parse_in<const N: usize>(
         data: &[u8],
         cff2: bool,
         mut blend: Blend<'_>,
     ) -> Result<Self, FontError> {
         let mut c = Cursor { data, at: 0 };
-        let mut stack = [Fixed::ZERO; 513];
+        let mut stack = [Fixed::ZERO; N];
         let mut len = 0;
         let mut d = Self::default();
         while c.at < data.len() {
             let b = c.byte()?;
             if let Some(n) = c.number(b, true)? {
-                if len >= if cff2 { 513 } else { 48 } {
+                if len >= N {
                     return Err(FontError::LimitExceeded);
                 }
                 *stack.get_mut(len).ok_or(FontError::LimitExceeded)? = n;

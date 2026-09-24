@@ -3,7 +3,7 @@
 
 use super::blend::Blend;
 use super::{
-    Index,
+    CFF_STACK, CFF2_STACK, Index,
     dict::{Cursor, integer, offset},
 };
 use crate::{
@@ -67,10 +67,29 @@ pub(super) fn decode(
     commands: &mut [Command],
     blend: Blend<'_>,
 ) -> Result<(usize, Option<[Fixed; 4]>), FontError> {
-    let mut m = Machine {
-        stack: [Fixed::ZERO; 513],
+    if cff2 {
+        decode_in::<CFF2_STACK>(program, local, global, cff2, commands, blend)
+    } else {
+        decode_in::<CFF_STACK>(program, local, global, cff2, commands, blend)
+    }
+}
+
+/// Holds an `N`-operand stack; `inline(never)` gives each `N` its own
+/// frame, so the CFF caller's frame omits the 513-entry array.
+#[inline(never)]
+fn decode_in<const N: usize>(
+    program: &[u8],
+    local: Index<'_>,
+    global: Index<'_>,
+    cff2: bool,
+    commands: &mut [Command],
+    blend: Blend<'_>,
+) -> Result<(usize, Option<[Fixed; 4]>), FontError> {
+    let mut m = Machine::<N> {
+        stack: [Fixed::ZERO; N],
         len: 0,
-        transient: [None; 32],
+        transient: [Fixed::ZERO; 32],
+        stored: [false; 32],
         position: Position::default(),
         open: false,
         width_seen: cff2,
@@ -95,10 +114,19 @@ pub(super) fn decode(
     Ok((m.count, m.seac))
 }
 
-struct Machine<'a, 'b> {
-    stack: [Fixed; 513],
+/// Bytes of the CFF and CFF2 decoder state.
+#[cfg(test)]
+pub(crate) const MACHINE_BYTES: [usize; 2] = [
+    size_of::<Machine<'static, 'static, CFF_STACK>>(),
+    size_of::<Machine<'static, 'static, CFF2_STACK>>(),
+];
+
+struct Machine<'a, 'b, const N: usize> {
+    stack: [Fixed; N],
     len: usize,
-    transient: [Option<Fixed>; 32],
+    transient: [Fixed; 32],
+    /// `stored[i]`: `transient[i]` holds a `put` value.
+    stored: [bool; 32],
     position: Position,
     open: bool,
     width_seen: bool,
@@ -112,9 +140,9 @@ struct Machine<'a, 'b> {
     seac: Option<[Fixed; 4]>,
     blend: Blend<'b>,
 }
-impl Machine<'_, '_> {
+impl<const N: usize> Machine<'_, '_, N> {
     fn push(&mut self, value: Fixed) -> Result<(), FontError> {
-        if self.len >= if self.cff2 { 513 } else { 48 } {
+        if self.len >= N {
             return Err(FontError::LimitExceeded);
         }
         *self
@@ -568,15 +596,18 @@ impl Machine<'_, '_> {
             20 => {
                 let i = offset(self.pop()?)?;
                 let v = self.pop()?;
-                *self.transient.get_mut(i).ok_or(FontError::InvalidTable)? = Some(v);
+                *self.transient.get_mut(i).ok_or(FontError::InvalidTable)? = v;
+                *self.stored.get_mut(i).ok_or(FontError::InvalidTable)? = true;
             }
             21 => {
                 let i = offset(self.pop()?)?;
+                if self.stored.get(i) != Some(&true) {
+                    return Err(FontError::InvalidTable);
+                }
                 let v = self
                     .transient
                     .get(i)
                     .copied()
-                    .flatten()
                     .ok_or(FontError::InvalidTable)?;
                 self.push(v)?;
             }
