@@ -4438,7 +4438,10 @@ fn what_the_integrity_check_finds_in_an_index_written_over() {
         ]
     );
 
-    // Both entries of a unique index hold one value.
+    // Both entries of a unique index hold one value. The check walks the
+    // rows in turn and holds each to the index, so the first row's key,
+    // which the second entry holds as well, comes before the second row,
+    // which no entry holds.
     let mut same = sound;
     let at = same
         .windows(5)
@@ -4448,8 +4451,8 @@ fn what_the_integrity_check_finds_in_an_index_written_over() {
     assert_eq!(
         checked(&same),
         [
-            b"row 2 missing from index i".to_vec(),
-            b"non-unique entry in index i".to_vec()
+            b"non-unique entry in index i".to_vec(),
+            b"row 2 missing from index i".to_vec()
         ]
     );
 }
@@ -4726,4 +4729,36 @@ fn what_a_create_and_a_drop_name_in_a_refusal() {
             alloc::string::String::from_utf8_lossy(sql)
         );
     }
+}
+
+#[test]
+fn what_the_integrity_check_finds_where_a_key_of_a_unique_index_may_not_be_nothing() {
+    use crate::change::Writer;
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t1(a,b)".as_slice(),
+        b"CREATE INDEX t1a ON t1(a)",
+        b"INSERT INTO t1 VALUES(1,1),(2,2),(3,3),(2,4),(NULL,5),(NULL,6)",
+        b"PRAGMA writable_schema=ON",
+        b"UPDATE sqlite_master SET sql='CREATE UNIQUE INDEX t1a ON t1(a)' WHERE name='t1a'",
+        b"UPDATE sqlite_master SET sql='CREATE TABLE t1(a NOT NULL,b)' WHERE name='t1'",
+        b"PRAGMA writable_schema=OFF",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    // The rows are walked in turn and each is held to the columns and
+    // then to the index, so the problems of one row stand together: the
+    // second row shares its key with the fourth, and the two rows that
+    // hold nothing in a column that may not share a key as well, because
+    // the check holds a column declared `NOT NULL` to its key whatever
+    // the column holds.
+    assert_eq!(
+        checked(&writer.written()),
+        [
+            b"non-unique entry in index t1a".to_vec(),
+            b"NULL value in t1.a".to_vec(),
+            b"non-unique entry in index t1a".to_vec(),
+            b"NULL value in t1.a".to_vec(),
+        ]
+    );
 }

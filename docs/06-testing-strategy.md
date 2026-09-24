@@ -7486,3 +7486,13 @@ for the same statements.
 - An `AFTER DELETE` body that writes another table with `OR IGNORE`,
   which keeps its `IGNORE` because a `DELETE` says nothing.
 
+### 6.6.334 The order the integrity check writes its problems in (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A unique index over a column declared `NOT NULL` whose rows hold
+  nothing there, with the four problems in the order the C library's
+  shell writes them.
+- Two entries of a unique index under one key, with the problem of the
+  row they belong to before the problem of the row no entry holds.
+

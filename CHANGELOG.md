@@ -7,6 +7,16 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The suite harness answers a read of a file with the bytes the machine
+  wrote for it while the writer of its path has written nothing since, so a
+  file the tester built by hand keeps the bytes past the pages its header
+  names. D-479 records it. `pragma.test` goes from 116 cases passing to 130.
+
+- `db-sqlite` writes the problems `PRAGMA integrity_check` found for one row
+  together, and holds a place of a unique index whose column is declared
+  `NOT NULL` to its key whatever the place holds. D-480 records it. Catalog
+  6.6.334. `pragma.test` goes from 130 cases passing to 134.
+
 - `db-sqlite` runs a statement of a trigger's body under what the statement
   that fired the trigger said a row sharing a key does, where the step's own
   `ON CONFLICT` clause stood in every case. D-478 records it. Catalog

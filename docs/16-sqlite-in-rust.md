@@ -1134,6 +1134,9 @@ Size: L.
 186. The conflict policy a statement of a trigger's body runs under,
      which the statement that fired the trigger sets where it said
      anything. Built, which D-478 records.
+187. The order `PRAGMA integrity_check` writes the problems of one row
+     in, and the key a unique index holds a place that may not be
+     nothing to. Built, which D-480 records.
 
 ### Done when
 

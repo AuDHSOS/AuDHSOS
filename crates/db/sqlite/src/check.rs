@@ -331,6 +331,11 @@ fn map_pages(image: &Image<'_>) -> Vec<u32> {
 
 /// Every row of one table held to the columns that may not be nothing
 /// and to the indexes the table carries.
+///
+/// `sqlite3Pragma` of `research/sqlite/src/pragma.c:1822` writes the
+/// count of every index before it walks the rows, and holds each row to
+/// the columns and then to every index in turn, so the problems of one
+/// row stand together.
 fn rows_held(
     database: &Database<'_>,
     table: &crate::schema::Table,
@@ -338,54 +343,79 @@ fn rows_held(
     found: &mut Found,
 ) -> Result<(), Error> {
     let rows = database.held_rows_of(&table.name)?;
-    for (_, values) in &rows {
-        for (at, column) in table.columns.iter().enumerate() {
-            if !column.not_null || values.get(at) != Some(&Value::Null) {
-                continue;
-            }
-            let mut text = b"NULL value in ".to_vec();
-            text.extend_from_slice(&table.name);
-            text.push(b'.');
-            text.extend_from_slice(&column.name);
-            found.note_row(&text);
+    let mut kept = Vec::new();
+    if !quick {
+        for indexed in database.indexes(&table.name) {
+            kept.push(entries_of(database, indexed)?);
         }
     }
-    if quick {
-        return Ok(());
+    for held in &kept {
+        counted_held(&rows, held, found)?;
     }
-    for kept in database.indexes(&table.name) {
-        entries_held(database, &kept, &rows, found)?;
+    for (at, (key, values)) in rows.iter().enumerate() {
+        nulls_held(table, values, found);
+        for held in &kept {
+            row_held(database, table, held, (at, key, values), found)?;
+        }
     }
     Ok(())
 }
 
-/// One index held to the rows it is over: every row has an entry, the
-/// index holds no entry more than the rows have, and a unique index
-/// holds no key twice.
-fn entries_held(
+/// Every column of one row that may not be nothing and holds nothing.
+fn nulls_held(table: &crate::schema::Table, values: &[Value], found: &mut Found) {
+    for (at, column) in table.columns.iter().enumerate() {
+        if !column.not_null || values.get(at) != Some(&Value::Null) {
+            continue;
+        }
+        let mut text = b"NULL value in ".to_vec();
+        text.extend_from_slice(&table.name);
+        text.push(b'.');
+        text.extend_from_slice(&column.name);
+        found.note_row(&text);
+    }
+}
+
+/// One index read once: its entries in the order it holds them, what a
+/// comparison of two entries does, and how many entries it holds.
+struct Kept<'a> {
+    /// The index and where its tree begins.
+    indexed: crate::db::Indexed<'a>,
+    /// The entries, in order.
+    keys: Vec<Vec<Value>>,
+    /// How each place of an entry is compared.
+    collations: Vec<crate::value::Placing>,
+}
+
+impl Kept<'_> {
+    /// What a statement of the index is read against.
+    const fn over(&self, database: &Database<'_>) -> crate::change::Over<'_> {
+        crate::change::Over {
+            arena: self.indexed.arena,
+            sql: self.indexed.sql,
+            table: self.indexed.table,
+            encoding: database.encoding(),
+        }
+    }
+}
+
+/// Every entry of one index read into order, which costs O(n log n) in
+/// the entries so that holding `n` rows to them costs O(n log n) and not
+/// O(n²).
+fn entries_of<'a>(
     database: &Database<'_>,
-    kept: &crate::db::Indexed<'_>,
-    rows: &[(Vec<Value>, Vec<Value>)],
-    found: &mut Found,
-) -> Result<(), Error> {
-    let index = kept.index;
-    let root = kept.root;
-    let over = crate::change::Over {
-        arena: kept.arena,
-        sql: kept.sql,
-        table: kept.table,
-        encoding: database.encoding(),
-    };
+    indexed: crate::db::Indexed<'a>,
+) -> Result<Kept<'a>, Error> {
+    let index = indexed.index;
     let image = database.image();
     let collations = crate::change::collations_of(index, database.schema_format());
+    let rows = database.held_rows_of(&index.table)?;
     // The entry of a row ends with the key of that row, which is one
     // value for a rowid and the columns of the `PRIMARY KEY` for a
     // table that keeps its rows in the key's own tree.
     let tail = rows.first().map_or(1, |(key, _)| key.len());
     let mut keys: Vec<Vec<Value>> = Vec::new();
     let mut payload = Vec::new();
-    let mut count = 0_usize;
-    for entry in image.entries(root) {
+    for entry in image.entries(indexed.root) {
         let entry = entry?;
         payload.resize(entry.total, 0);
         image.read_payload(&entry, &mut payload)?;
@@ -396,73 +426,116 @@ fn entries_held(
             key.push(held(record.value(at)?));
         }
         keys.push(key);
-        count = count.saturating_add(1);
     }
-    // The entries are put in order once, so holding `n` rows to them
-    // costs O(n log n) and not O(n²).
     keys.sort_by(|one, other| order_of(one, other, &collations));
-    // `sqlite3Pragma` counts the rows of the table as it walks them and
-    // names a row by that count, which is register 7 of the routine it
-    // writes and not the key of the row.
-    let mut held_rows = 0_usize;
-    for (at, (key, values)) in rows.iter().enumerate() {
-        if !crate::change::indexes_row(index, &over, values)? {
-            continue;
+    Ok(Kept {
+        indexed,
+        keys,
+        collations,
+    })
+}
+
+/// Whether the index holds as many entries as the rows it is over,
+/// counting the rows a partial index leaves out.
+fn counted_held(
+    rows: &[(Vec<Value>, Vec<Value>)],
+    held: &Kept<'_>,
+    found: &mut Found,
+) -> Result<(), Error> {
+    let index = held.indexed.index;
+    let over = crate::change::Over {
+        arena: held.indexed.arena,
+        sql: held.indexed.sql,
+        table: held.indexed.table,
+        encoding: crate::header::Encoding::Utf8,
+    };
+    let mut count = 0_usize;
+    for (_, values) in rows {
+        if crate::change::indexes_row(index, &over, values)? {
+            count = count.saturating_add(1);
         }
-        held_rows = held_rows.saturating_add(1);
-        // An entry holds its text in the encoding the file names, and
-        // the row was read into UTF-8, so the entry this row would make
-        // is written into that encoding before the two are compared.
-        let wanted = crate::value::written(
-            &crate::change::entry_of(index, &over, values, key)?,
-            database.encoding(),
-        );
-        if keys
-            .binary_search_by(|held| order_of(held, &wanted, &collations))
-            .is_ok()
-        {
-            continue;
-        }
+    }
+    if count == held.keys.len() {
+        return Ok(());
+    }
+    let mut text = b"wrong # of entries in index ".to_vec();
+    text.extend_from_slice(&index.name);
+    found.note(&text);
+    Ok(())
+}
+
+/// One row held to one index: the index holds an entry for the row, and
+/// a unique index holds no other entry under the key of that entry.
+///
+/// `sqlite3Pragma` counts the rows of the table as it walks them and
+/// names a row by that count, which is register 7 of the routine it
+/// writes and not the key of the row.
+fn row_held(
+    database: &Database<'_>,
+    table: &crate::schema::Table,
+    held: &Kept<'_>,
+    row: (usize, &[Value], &[Value]),
+    found: &mut Found,
+) -> Result<(), Error> {
+    let (at, key, values) = row;
+    let index = held.indexed.index;
+    let over = held.over(database);
+    if !crate::change::indexes_row(index, &over, values)? {
+        return Ok(());
+    }
+    // An entry holds its text in the encoding the file names, and the
+    // row was read into UTF-8, so the entry this row would make is
+    // written into that encoding before the two are compared.
+    let wanted = crate::value::written(
+        &crate::change::entry_of(index, &over, values, key)?,
+        database.encoding(),
+    );
+    let Ok(place) = held
+        .keys
+        .binary_search_by(|one| order_of(one, &wanted, &held.collations))
+    else {
         let mut text = b"row ".to_vec();
         let counted = i64::try_from(at).unwrap_or(0).saturating_add(1);
         text.extend_from_slice(&crate::number::integer_text(counted));
         text.extend_from_slice(b" missing from index ");
         text.extend_from_slice(&index.name);
         found.note_row(&text);
-    }
-    if count != held_rows {
-        let mut text = b"wrong # of entries in index ".to_vec();
+        return Ok(());
+    };
+    if shares_next(held, table, (place, &wanted)) {
+        let mut text = b"non-unique entry in index ".to_vec();
         text.extend_from_slice(&index.name);
-        found.note(&text);
-    }
-    if index.unique {
-        for (one, other) in keys.iter().zip(keys.iter().skip(1)) {
-            let columns = index.columns.len();
-            // `sqlite3Pragma` of `research/sqlite/src/pragma.c:2132`
-            // reads an entry that holds a null at any of its places as
-            // one of its own, because a null stands equal to nothing.
-            if one
-                .get(..columns)
-                .unwrap_or_default()
-                .contains(&Value::Null)
-            {
-                continue;
-            }
-            if order_of(
-                one.get(..columns).unwrap_or_default(),
-                other.get(..columns).unwrap_or_default(),
-                &collations,
-            ) != core::cmp::Ordering::Equal
-            {
-                continue;
-            }
-            let mut text = b"non-unique entry in index ".to_vec();
-            text.extend_from_slice(&index.name);
-            found.note_row(&text);
-            break;
-        }
+        found.note_row(&text);
     }
     Ok(())
+}
+
+/// Whether the entry at `place` of a unique index and the entry after it
+/// hold one key.
+///
+/// `sqlite3Pragma` of `research/sqlite/src/pragma.c:2135` passes over an
+/// entry that holds nothing at a place whose column may hold nothing,
+/// because nothing stands equal to nothing, and holds a place whose
+/// column may not to its key whatever it holds.
+fn shares_next(held: &Kept<'_>, table: &crate::schema::Table, row: (usize, &[Value])) -> bool {
+    let (place, one) = row;
+    let index = held.indexed.index;
+    if !index.unique {
+        return false;
+    }
+    for (at, keyed) in index.columns.iter().enumerate() {
+        let told = keyed
+            .place()
+            .and_then(|at| table.columns.get(at))
+            .is_some_and(|column| column.not_null);
+        if !told && one.get(at) == Some(&Value::Null) {
+            return false;
+        }
+    }
+    let Some(other) = held.keys.get(place.saturating_add(1)) else {
+        return false;
+    };
+    order_of_places(one, other, &held.collations, index.columns.len()) == core::cmp::Ordering::Equal
 }
 
 /// One value of a record as a value of its own.
@@ -485,6 +558,27 @@ fn order_of(
 ) -> core::cmp::Ordering {
     one.iter()
         .zip(other)
+        .enumerate()
+        .map(|(at, (mine, theirs))| {
+            let placing = collations.get(at).copied().unwrap_or_default();
+            crate::value::compare_placed(mine, theirs, placing)
+        })
+        .find(|order| *order != core::cmp::Ordering::Equal)
+        .unwrap_or(core::cmp::Ordering::Equal)
+}
+
+/// Where the first `places` of one entry stand against another's, which
+/// is how a unique index compares two entries: the key that ends an
+/// entry stands outside the places the index holds two rows apart by.
+fn order_of_places(
+    one: &[Value],
+    other: &[Value],
+    collations: &[crate::value::Placing],
+    places: usize,
+) -> core::cmp::Ordering {
+    one.iter()
+        .zip(other)
+        .take(places)
         .enumerate()
         .map(|(at, (mine, theirs))| {
             let placing = collations.get(at).copied().unwrap_or_default();

@@ -567,6 +567,10 @@ Size: S.
 72. `sqlite_rename_table` answers the statement with the name of a table
     written again, and `SQLITE_TESTCTRL_INTERNAL_FUNCTIONS` turns it on
     for one connection and off again, which D-476 records.
+73. A read of a file answers the bytes the machine wrote for it while
+    the writer of its path has written nothing since, so a file the
+    tester built by hand keeps the bytes past the pages its header names
+    and the count that header carries, which D-479 records.
 
 ### Produces
 

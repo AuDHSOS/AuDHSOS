@@ -1095,6 +1095,13 @@ struct Session {
     /// One writer per path a connection opened, which is what two
     /// connections over one path share.
     held: BTreeMap<String, Writer>,
+    /// The bytes the machine wrote for a path and the image its writer
+    /// answered then, kept where the two differ. Writing a database out
+    /// again drops the bytes past the pages its header names and writes
+    /// the count of pages into the header, which a file the tester wrote
+    /// by hand carries neither of, so these bytes stand while the writer
+    /// has written nothing since.
+    raw: BTreeMap<String, (Vec<u8>, Vec<u8>)>,
     /// The log and the rollback journal beside the file of each database
     /// an `ATTACH` added, which the writer that attached it holds and the
     /// writer of that path does not.
@@ -1225,6 +1232,7 @@ impl Session {
             over: std::env::temp_dir().join(format!("audhsos-suite-{file}")),
             file: file.to_owned(),
             held: BTreeMap::new(),
+            raw: BTreeMap::new(),
             beside: BTreeMap::new(),
             connections: BTreeMap::new(),
             nulls: BTreeMap::new(),
@@ -1510,11 +1518,7 @@ impl Session {
     /// `file exists` reads. Writing the database out costs O(n) in its
     /// pages.
     fn sized(&self, name: &str) -> Option<usize> {
-        if let Some(writer) = self.held.get(name) {
-            return Some(writer.written().len());
-        }
-        let (base, tail) = name.rsplit_once('-')?;
-        self.beside_bytes(base, tail).map(|bytes| bytes.len())
+        self.bytes_of(name).map(|bytes| bytes.len())
     }
 
     /// The bytes the harness holds beside the database `base` under the
@@ -1627,7 +1631,9 @@ impl Session {
         let mut writer = Writer::opened(&bytes).map_err(|error| refusal(&error))?;
         writer.defines(DEFINED);
         writer.groups(GROUPED);
+        let image = writer.written();
         self.held.insert(name.to_owned(), writer);
+        self.machined(name, bytes, image);
         Ok(vec![written.len().to_string()])
     }
 
@@ -1795,10 +1801,26 @@ impl Session {
     /// Writing the database out costs O(n) in its pages.
     fn bytes_of(&self, name: &str) -> Option<Vec<u8>> {
         if let Some(writer) = self.held.get(name) {
-            return Some(writer.written());
+            let image = writer.written();
+            if let Some((bytes, held)) = self.raw.get(name)
+                && *held == image
+            {
+                return Some(bytes.clone());
+            }
+            return Some(image);
         }
         let (base, tail) = name.rsplit_once('-')?;
         self.beside_bytes(base, tail)
+    }
+
+    /// The bytes the machine wrote for `path` kept beside its writer,
+    /// and given up where writing the database out again answers them.
+    fn machined(&mut self, path: &str, bytes: Vec<u8>, image: Vec<u8>) {
+        if bytes == image {
+            self.raw.remove(path);
+            return;
+        }
+        self.raw.insert(path.to_owned(), (bytes, image));
     }
 
     /// One connection closed, which is `sqlite3_close`.
@@ -3172,6 +3194,7 @@ impl Session {
     /// of those two alone, which leaves the database where it is.
     fn removed(&mut self, name: &str) -> Vec<String> {
         if self.held.remove(name).is_some() {
+            self.raw.remove(name);
             return Vec::new();
         }
         let (base, tail) = named_beside(name);
@@ -3196,10 +3219,21 @@ impl Session {
         path: &str,
         files: (Vec<u8>, Vec<u8>, Vec<u8>),
     ) -> Result<Vec<String>, String> {
+        // A journal or a log beside the file is played back as the
+        // writer opens, so the bytes the machine wrote are no longer the
+        // file and only a database that stands alone keeps them.
+        let alone = files.1.is_empty() && files.2.is_empty();
+        let bytes = files.0.clone();
         let mut writer = Crashing::new(files).opened()?;
         writer.defines(DEFINED);
         writer.groups(GROUPED);
+        let image = writer.written();
         self.held.insert(path.to_owned(), writer);
+        if alone {
+            self.machined(path, bytes, image);
+        } else {
+            self.raw.remove(path);
+        }
         Ok(Vec::new())
     }
 
