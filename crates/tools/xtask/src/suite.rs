@@ -271,7 +271,7 @@ const LOOPING: usize = 5000;
 
 /// The capabilities an `ifcapable` may name that this engine does not
 /// have. Every other name is answered as held.
-const MISSING: [&str; 20] = [
+const MISSING: [&str; 21] = [
     "vtab",
     "fts1",
     "fts2",
@@ -300,6 +300,10 @@ const MISSING: [&str; 20] = [
     // on demand. This engine writes a page out where the cache it is
     // held to is full and on no other call.
     "memorymanage",
+    // `SQLITE_ENABLE_STAT4` writes `sqlite_stat4`, which holds samples of
+    // the keys of an index. `ANALYZE` writes `sqlite_stat1` here and no
+    // other table.
+    "stat4",
 ];
 
 /// Runs every file of the suite, or the one `only` names, and answers

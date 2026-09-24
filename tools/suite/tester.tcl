@@ -2548,11 +2548,12 @@ foreach option {
   fts3 fts5 rtree icu vtab shared_cache codec atomicwrite vacuum
   explain session setlk_timeout configslower
   memorymanage threadsafe
+  casesensitivelike stat4 update_delete_limit
 } { set ::sqlite_options($option) 0 }
 foreach option {
-  wal utf16 integrityck casesensitivelike trigger view subquery compound attach
+  wal utf16 integrityck trigger view subquery compound attach
   foreignkey json1 like_match_blobs pragma reindex analyze altertable
-  cast check conflict datetime floatingpoint or_opt stat4 update_delete_limit
+  cast check conflict datetime floatingpoint or_opt
   autovacuum incrblob
 } { set ::sqlite_options($option) 1 }
 set ::sqlite_options(default_autovacuum) 0

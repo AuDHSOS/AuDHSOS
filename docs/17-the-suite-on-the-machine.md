@@ -545,6 +545,9 @@ Size: S.
 65. `faultsim_save` and `faultsim_restore` copy the three files of the
     path aside and copy them back, so a case that runs a child over the
     database it saved finds that database, which D-458 records.
+66. `casesensitivelike` and `stat4` are among the options this harness
+    does not carry, and `update_delete_limit` reads false in both lists
+    the files read it from, which D-460 records.
 
 ### Produces
 

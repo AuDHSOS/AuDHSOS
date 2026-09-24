@@ -322,6 +322,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- The suite harness answers `casesensitivelike` and `stat4` with false,
+  because `LIKE` compares no case here and `ANALYZE` writes
+  `sqlite_stat1` and no `sqlite_stat4`. D-460 records it. `expr.test`
+  goes from 627 cases passing to 655 and fails none of the 28 it failed;
+  the eight files that read `stat4` stop before their first case, as they
+  do in a build of the C library without the option.
+
 - `db-sqlite` writes the journal of a `VACUUM` with one record per page
   of the file the vacuum found, each as wide as the page size that file
   had, so a machine that loses power part way through a vacuum plays the
