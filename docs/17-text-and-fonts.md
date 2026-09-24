@@ -500,8 +500,10 @@ Type 2 widths, stacks, masks, and cubic paths; validate CFF2 blend structure.
 `Cff` validates INDEX arrays and all font dictionaries once; outline decoding
 reuses validated immutable arrays. Limits: 65,536 INDEX objects, 256 font
 dictionaries, 48 CFF or 513 CFF2 operands, ten subroutine calls, 65,536
-operations per glyph. Type 2 `random` uses xorshift32 with shifts 13, 17, 5,
-seed 1 per glyph invocation, and result `(state + 1) / 2^32` in Q32.32.
+operations per glyph. The operand stack is sized by format: on 64-bit
+targets the CFF decoder state is 1,016 bytes, the CFF2 state 4,736 bytes.
+Type 2 `random` uses xorshift32 with shifts 13, 17, 5, seed 1 per glyph
+invocation, and result `(state + 1) / 2^32` in Q32.32.
 Determinism takes precedence over the specified randomness in Adobe #5177,
 section 4.4, page 26 (`docs/adobe/5177.Type2.pdf`); D-166 fixes the sequence
 across address spaces. Uninitialized transient reads are errors.
@@ -514,7 +516,8 @@ StandardEncoding and permit one component level. CFF2 DICT/charstring blends
 validate the variation store and evaluate the default instance in T5.
 The caller owns the cubic-command buffer; errors invalidate its contents.
 Parsing is O(INDEX entries + dictionary bytes); outline work is bounded by
-the operation limit. FDSelect lookup is O(range count).
+the operation limit. FDSelect formats 3 and 4 are O(log range count);
+an endchar component lookup is O(charset range count), O(G) for format 0.
 **Done when:** CFF-based Noto Sans CJK host input yields checked glyph contours;
 INDEX offSize/count errors, operand overflow, invalid operators, recursive
 subroutines, stack and depth limits all pass negative tests; report acceptance before continuing.

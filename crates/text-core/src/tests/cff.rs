@@ -8,7 +8,7 @@
 
 use crate::{
     Fixed, Font, FontError,
-    cff::{Cff, Command, Index, Position},
+    cff::{Cff, Command, Index, MACHINE_BYTES, Position},
 };
 
 fn index(objects: &[Vec<u8>], cff2: bool) -> Vec<u8> {
@@ -52,13 +52,36 @@ fn font_extra(
     global: &[Vec<u8>],
     extra: &[u8],
 ) -> Vec<u8> {
+    let mut charset = vec![0];
+    for id in 1..programs.len() {
+        charset.extend(
+            u16::try_from(if id == 1 {
+                34
+            } else if id == 2 {
+                125
+            } else {
+                id
+            })
+            .expect("SID")
+            .to_be_bytes(),
+        );
+    }
+    font_charset(programs, local, global, extra, &charset)
+}
+fn font_charset(
+    programs: &[Vec<u8>],
+    local: &[Vec<u8>],
+    global: &[Vec<u8>],
+    extra: &[u8],
+    charset_bytes: &[u8],
+) -> Vec<u8> {
     let names = index(&[b"Test".to_vec()], false);
     let globals = index(global, false);
     let chars = index(programs, false);
     let prefix =
         4 + names.len() + index(&[vec![0; 23 + extra.len()]], false).len() + 2 + globals.len();
     let charset = prefix + chars.len();
-    let private = charset + 1 + (programs.len() - 1) * 2;
+    let private = charset + charset_bytes.len();
     let mut top = Vec::new();
     number(&mut top, prefix);
     top.push(17);
@@ -74,20 +97,7 @@ fn font_extra(
     bytes.extend([0, 0]);
     bytes.extend(globals);
     bytes.extend(chars);
-    bytes.push(0);
-    for id in 1..programs.len() {
-        bytes.extend(
-            u16::try_from(if id == 1 {
-                34
-            } else if id == 2 {
-                125
-            } else {
-                id
-            })
-            .expect("SID")
-            .to_be_bytes(),
-        );
-    }
+    bytes.extend(charset_bytes);
     number(&mut bytes, 6);
     bytes.push(19);
     bytes.extend(index(local, false));
@@ -460,8 +470,18 @@ fn cff_decimal_exponents_and_affine_matrices() {
 }
 
 fn fd_font(select: &[u8]) -> Vec<u8> {
-    let chars = index(&[vec![140, 141, 21], vec![140, 141, 21]], true);
-    let fds = index(&[vec![], vec![141, 139, 139, 142, 140, 141, 12, 7]], true);
+    fd_font_glyphs(2, select)
+}
+fn fd_font_glyphs(glyphs: usize, select: &[u8]) -> Vec<u8> {
+    cff2_font(
+        &vec![vec![140, 141, 21]; glyphs],
+        &[vec![], vec![141, 139, 139, 142, 140, 141, 12, 7]],
+        select,
+    )
+}
+fn cff2_font(programs: &[Vec<u8>], fds: &[Vec<u8>], select: &[u8]) -> Vec<u8> {
+    let chars = index(programs, true);
+    let fds = index(fds, true);
     let mut top = Vec::new();
     number(&mut top, 29);
     top.push(17);
@@ -527,6 +547,205 @@ fn cff_predefined_charsets_resolve_composite_space() {
                 Command::Move(p(11, 22)),
                 Command::Close
             ])
+        );
+    }
+}
+
+/// Issue #483: `FDSelect` ranges resolve by binary search at every boundary.
+#[test]
+fn cff2_font_dictionary_selection_many_ranges() {
+    // Range lengths 1, 2, 3, ... alternate between FD 0 and FD 1.
+    let mut ranges = Vec::new();
+    let mut first = 0;
+    while first < 1000 {
+        ranges.push((first, ranges.len() % 2));
+        first += ranges.len();
+    }
+    let glyphs = first;
+    let mut narrow = vec![3];
+    narrow.extend(u16::try_from(ranges.len()).expect("count").to_be_bytes());
+    let mut wide = vec![4];
+    wide.extend(u32::try_from(ranges.len()).expect("count").to_be_bytes());
+    for &(first, fd) in &ranges {
+        narrow.extend(u16::try_from(first).expect("first").to_be_bytes());
+        narrow.push(u8::try_from(fd).expect("fd"));
+        wide.extend(u32::try_from(first).expect("first").to_be_bytes());
+        wide.extend(u16::try_from(fd).expect("fd").to_be_bytes());
+    }
+    narrow.extend(u16::try_from(glyphs).expect("sentinel").to_be_bytes());
+    wide.extend(u32::try_from(glyphs).expect("sentinel").to_be_bytes());
+    for select in [narrow, wide] {
+        let bytes = fd_font_glyphs(glyphs, &select);
+        let cff = Cff::parse_table(&bytes, true, 1000).expect("FDSelect");
+        let mut out = [Command::Close; 8];
+        let mut range = 0;
+        for glyph in 0..glyphs {
+            if ranges.get(range + 1).is_some_and(|r| r.0 == glyph) {
+                range += 1;
+            }
+            let expected = if ranges[range].1 == 0 {
+                p(1, 2)
+            } else {
+                p(3, 8)
+            };
+            let id = u16::try_from(glyph).expect("glyph");
+            assert_eq!(cff.outline(id, &mut out), Ok(2), "glyph {glyph}");
+            assert_eq!(out[0], Command::Move(expected), "glyph {glyph}");
+        }
+    }
+}
+
+/// Issue #482: endchar components resolve through format 1 and 2 charset
+/// ranges; the lowest glyph wins a duplicate SID.
+#[test]
+fn cff_composite_components_resolve_through_charset_ranges() {
+    // (first SID, glyphs after the first); `A` is SID 34, `grave` SID 125.
+    let mut ranges = vec![(200, 99), (30, 9)];
+    ranges.extend((0..50).map(|k| (400 + k, 0)));
+    ranges.extend([(120, 10), (34, 0)]);
+    let glyphs = 1 + ranges.iter().map(|r| r.1 + 1).sum::<usize>();
+    assert_eq!(glyphs, 173);
+    let mut programs = vec![vec![14]; glyphs];
+    programs[0] = vec![149, 159, 204, 247, 86, 14];
+    programs[105] = vec![140, 141, 21, 14];
+    programs[166] = vec![142, 143, 21, 14];
+    programs[172] = vec![144, 145, 21, 14];
+    for format in [1u8, 2] {
+        let mut charset = vec![format];
+        for &(first, n) in &ranges {
+            charset.extend(u16::try_from(first).expect("SID").to_be_bytes());
+            if format == 1 {
+                charset.push(u8::try_from(n).expect("n"));
+            } else {
+                charset.extend(u16::try_from(n).expect("n").to_be_bytes());
+            }
+        }
+        let bytes = font_charset(&programs, &[], &[], &[], &charset);
+        assert_eq!(
+            decode_font(&bytes, 0),
+            Ok(vec![
+                Command::Move(p(1, 2)),
+                Command::Close,
+                Command::Move(p(13, 24)),
+                Command::Close
+            ])
+        );
+        // `a` (SID 66) is absent.
+        let mut missing = programs.clone();
+        missing[0] = vec![149, 159, 204, 236, 14];
+        let bytes = font_charset(&missing, &[], &[], &[], &charset);
+        assert_eq!(decode_font(&bytes, 0), Err(FontError::GlyphIndex));
+    }
+    // Format 0: SID 34 at glyphs 1 and 3; the lowest glyph wins.
+    let programs = [
+        vec![149, 159, 204, 247, 86, 14],
+        vec![140, 141, 21, 14],
+        vec![142, 143, 21, 14],
+        vec![144, 145, 21, 14],
+    ];
+    let charset = [0, 0, 34, 0, 125, 0, 34];
+    assert_eq!(
+        decode_font(&font_charset(&programs, &[], &[], &[], &charset), 0),
+        Ok(vec![
+            Command::Move(p(1, 2)),
+            Command::Close,
+            Command::Move(p(13, 24)),
+            Command::Close
+        ])
+    );
+}
+
+/// Issue #482: 65,534 one-glyph ranges; the old O(G × R) lookup does not
+/// finish in test time.
+#[test]
+fn cff_composite_components_resolve_in_one_charset_pass() {
+    let glyphs = usize::from(u16::MAX);
+    let mut programs = vec![vec![14]; glyphs];
+    programs[0] = vec![149, 159, 204, 247, 86, 14];
+    // Glyph `g` has SID `65535 - g`: `A` (34) and `grave` (125) sit last.
+    programs[glyphs - 34] = vec![140, 141, 21, 14];
+    programs[glyphs - 125] = vec![142, 143, 21, 14];
+    let mut charset = vec![1];
+    for glyph in 1..glyphs {
+        charset.extend(u16::try_from(glyphs - glyph).expect("SID").to_be_bytes());
+        charset.push(0);
+    }
+    let bytes = font_charset(&programs, &[], &[], &[], &charset);
+    assert_eq!(
+        decode_font(&bytes, 0),
+        Ok(vec![
+            Command::Move(p(1, 2)),
+            Command::Close,
+            Command::Move(p(13, 24)),
+            Command::Close
+        ])
+    );
+}
+
+/// Issue #484: a CFF decoder holds 48 operands, a CFF2 decoder 513.
+#[test]
+fn cff_decoder_state_is_sized_by_format() {
+    assert!(
+        MACHINE_BYTES[0] <= 1024,
+        "CFF state {} bytes",
+        MACHINE_BYTES[0]
+    );
+    assert_eq!(
+        MACHINE_BYTES[1] - MACHINE_BYTES[0],
+        (513 - 48) * core::mem::size_of::<Fixed>()
+    );
+}
+
+/// Issue #484: operand limits at 48 for CFF and 513 for CFF2, in
+/// charstrings and in dictionaries.
+#[test]
+fn cff_operand_limits_follow_the_format() {
+    // rmoveto 0 0, `n` zero operands, rlineto, endchar.
+    let lines = |n: usize| {
+        let mut program = vec![139, 139, 21];
+        program.extend(vec![139; n]);
+        program.extend([5, 14]);
+        program
+    };
+    assert_eq!(decode(&lines(48)).map(|c| c.len()), Ok(26));
+    assert_eq!(decode(&lines(49)), Err(FontError::LimitExceeded));
+    // Operator 0 ignores its operands in a CFF DICT.
+    let mut top = vec![139; 48];
+    top.push(0);
+    assert!(Cff::parse_table(&font_extra(&[vec![14]], &[], &[], &top), false, 1000).is_ok());
+    top.insert(0, 139);
+    assert_eq!(
+        Cff::parse_table(&font_extra(&[vec![14]], &[], &[], &top), false, 1000).err(),
+        Some(FontError::LimitExceeded)
+    );
+    // CFF2 clears the stack at an unrecognized operator (2) and at DICT
+    // operator 0.
+    let select = [0, 0];
+    for (n, ok) in [(513, true), (514, false)] {
+        let mut program = vec![139; n];
+        program.push(2);
+        let bytes = cff2_font(&[program], &[vec![]], &select);
+        let cff = Cff::parse_table(&bytes, true, 1000).expect("CFF2");
+        let mut out = [Command::Close; 4];
+        let result = cff.outline(0, &mut out);
+        assert_eq!(
+            result,
+            if ok {
+                Ok(0)
+            } else {
+                Err(FontError::LimitExceeded)
+            }
+        );
+        let mut fd = vec![139; n];
+        fd.push(0);
+        let bytes = cff2_font(&[vec![]], &[fd], &select);
+        assert_eq!(
+            Cff::parse_table(&bytes, true, 1000).err(),
+            if ok {
+                None
+            } else {
+                Some(FontError::LimitExceeded)
+            }
         );
     }
 }

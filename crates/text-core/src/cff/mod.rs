@@ -15,7 +15,14 @@ use crate::{
 use blend::{Blend, Store};
 use dict::Dict;
 pub use index::Index;
+#[cfg(test)]
+pub(crate) use type2::MACHINE_BYTES;
 pub use type2::{Command, Position};
+
+/// CFF operand stack depth, Adobe #5177, Appendix B, PDF page 33.
+const CFF_STACK: usize = 48;
+/// CFF2 operand stack depth, `docs/microsoft/cff2.html:1038`.
+const CFF2_STACK: usize = 513;
 
 /// A borrowed CFF/CFF2 font with validated indices and dictionary references.
 #[derive(Clone, Copy, Debug)]
@@ -183,24 +190,23 @@ impl<'a> Cff<'a> {
                 } else {
                     (usize::from(read::u16(data, 1)?), 3, 3)
                 };
-                let mut selected = 0;
-                for i in 0..count {
-                    let at = add(header, mul(i, stride)?)?;
+                // `validate_select` proves `first` strictly increasing from 0.
+                let at = |i: usize| add(header, mul(i, stride)?);
+                let after = read::lower_bound(count, |i| {
+                    let at = at(i)?;
                     let first = if wide {
                         read::offset(read::u32(data, at)?)?
                     } else {
                         usize::from(read::u16(data, at)?)
                     };
-                    if first > glyph {
-                        break;
-                    }
-                    selected = if wide {
-                        usize::from(read::u16(data, add(at, 4)?)?)
-                    } else {
-                        usize::from(read::u8(data, add(at, 2)?)?)
-                    };
-                }
-                Ok(selected)
+                    Ok(first <= glyph)
+                })?;
+                let at = at(read::sub(after, 1)?)?;
+                Ok(if wide {
+                    usize::from(read::u16(data, add(at, 4)?)?)
+                } else {
+                    usize::from(read::u8(data, add(at, 2)?)?)
+                })
             }
             _ => Err(FontError::UnsupportedFormat),
         }
@@ -396,54 +402,53 @@ impl<'a> Cff<'a> {
         if sid == 0 {
             return Err(FontError::InvalidTable);
         }
-        for id in 1..self.chars.len() {
-            if self.sid(id)? == sid {
-                return u16::try_from(id).map_err(|_| FontError::GlyphIndex);
-            }
-        }
-        Err(FontError::GlyphIndex)
+        let id = self.glyph(sid)?.ok_or(FontError::GlyphIndex)?;
+        u16::try_from(id).map_err(|_| FontError::GlyphIndex)
     }
 
-    fn sid(&self, id: usize) -> Result<u16, FontError> {
-        match self.top.charset {
-            0 => u16::try_from(id).map_err(|_| FontError::GlyphIndex),
-            1 => charset::EXPERT
-                .get(id)
-                .copied()
-                .ok_or(FontError::GlyphIndex),
-            2 => charset::EXPERT_SUBSET
-                .get(id)
-                .copied()
-                .ok_or(FontError::GlyphIndex),
+    /// Lowest glyph id above 0 with `sid`; O(R), O(G) for format 0 and
+    /// charsets 1 and 2, O(1) for charset 0.
+    fn glyph(&self, sid: u16) -> Result<Option<usize>, FontError> {
+        let count = self.chars.len();
+        let table: &[u16] = match self.top.charset {
+            0 => return Ok(Some(usize::from(sid)).filter(|id| *id < count)),
+            1 => &charset::EXPERT,
+            2 => &charset::EXPERT_SUBSET,
             start => {
                 let data = read::tail(self.data, start)?;
                 let format = read::u8(data, 0)?;
                 if format == 0 {
-                    return read::u16(data, add(1, mul(read::sub(id, 1)?, 2)?)?);
+                    for id in 1..count {
+                        if read::u16(data, add(1, mul(read::sub(id, 1)?, 2)?)?)? == sid {
+                            return Ok(Some(id));
+                        }
+                    }
+                    return Ok(None);
                 }
                 let mut glyph = 1;
                 let mut at = 1;
-                loop {
+                while glyph < count {
                     let first = read::u16(data, at)?;
                     let n = if format == 1 {
-                        usize::from(read::u8(data, add(at, 2)?)?)
+                        u16::from(read::u8(data, add(at, 2)?)?)
                     } else {
-                        usize::from(read::u16(data, add(at, 2)?)?)
+                        read::u16(data, add(at, 2)?)?
                     };
-                    let end = add(glyph, add(n, 1)?)?;
-                    if id < end {
-                        return first
-                            .checked_add(
-                                u16::try_from(read::sub(id, glyph)?)
-                                    .map_err(|_| FontError::Overflow)?,
-                            )
-                            .ok_or(FontError::Overflow);
+                    if let Some(offset) = sid.checked_sub(first)
+                        && offset <= n
+                    {
+                        return add(glyph, usize::from(offset)).map(Some);
                     }
-                    glyph = end;
+                    glyph = add(glyph, add(usize::from(n), 1)?)?;
                     at = add(at, if format == 1 { 3 } else { 4 })?;
                 }
+                return Ok(None);
             }
-        }
+        };
+        Ok(table
+            .get(1..count)
+            .and_then(|sids| sids.iter().position(|s| *s == sid))
+            .map(|i| i.saturating_add(1)))
     }
 
     fn transform(&self, p: Position, fd: Option<[Fixed; 6]>) -> Result<Position, FontError> {
