@@ -1146,6 +1146,8 @@ Size: L.
 190. The name written after `DEFAULT`, which stands for its own letters
      and for a number where it is `true` or `false`. Built, which D-485
      records.
+191. The statements a connection over a file the client may only read
+     refuses. Built, which D-486 records.
 
 ### Done when
 

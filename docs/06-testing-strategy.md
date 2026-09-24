@@ -7532,3 +7532,12 @@ for the same statements.
 - `DEFAULT hi`, which is the two letters, and the same name in double
   quotes, in brackets, in back quotes and in single quotes.
 
+### 6.6.338 A file the client may only read (`db-sqlite`)
+
+Document 16 step Q8.
+
+- An `INSERT`, a `DELETE` and a `CREATE TABLE` over such a file, each
+  refused, with the file unchanged after them.
+- `PRAGMA query_only`, which answers nought.
+- A temp table written over such a file, which the temp schema holds.
+

@@ -1095,6 +1095,11 @@ struct Session {
     /// One writer per path a connection opened, which is what two
     /// connections over one path share.
     held: BTreeMap<String, Writer>,
+    /// The paths the client may only read, which `file attributes NAME
+    /// -readonly 1` and a mode of `-permissions` that lets the owner not
+    /// write name: every connection over such a path refuses a statement
+    /// that would write a page of the file.
+    readonly: BTreeSet<String>,
     /// The bytes the machine wrote for a path and the image its writer
     /// answered then, kept where the two differ. Writing a database out
     /// again drops the bytes past the pages its header names and writes
@@ -1232,6 +1237,7 @@ impl Session {
             over: std::env::temp_dir().join(format!("audhsos-suite-{file}")),
             file: file.to_owned(),
             held: BTreeMap::new(),
+            readonly: BTreeSet::new(),
             raw: BTreeMap::new(),
             beside: BTreeMap::new(),
             connections: BTreeMap::new(),
@@ -1347,6 +1353,11 @@ impl Session {
             // The tester opens a file of the machine, so the bytes the
             // session holds are written there first, and read back when
             // it closes the channel.
+            // `file attributes NAME -readonly` and `-permissions` of
+            // `research/sqlite/test/tester.tcl`: whether the client may
+            // only read the file, and minus one for a name the harness
+            // holds no file under.
+            "permissions" => Ok(vec![self.permissions(first, second).to_string()]),
             "flush" => Ok(vec![self.flushed(first).to_string()]),
             "take" => Ok(vec![self.taken(first).to_string()]),
             // `crashsql` and `crash_on_write` of
@@ -1551,6 +1562,71 @@ impl Session {
     ///
     /// The answer is whether the file was written. Writing costs O(n) in
     /// its bytes.
+    /// Whether the client may only read the file `name`, and where
+    /// `told` holds a number, that the file is held that way from now on.
+    ///
+    /// The answer is one for a file the client may only read, nought for
+    /// one it may write, and minus one for a name the harness holds no
+    /// file under, which is what makes the tester's own `file attributes`
+    /// answer for every other name.
+    fn permissions(&mut self, name: &str, told: &str) -> i64 {
+        let path = simplified(name);
+        // A journal or a log stands beside a database the harness holds,
+        // and the harness answers for it while the database is there
+        // whether the file beside it holds bytes now or not.
+        let (base, beside) = named_beside(&path);
+        let held = match beside {
+            Some(_) => self.bytes_of(base).is_some(),
+            None => self.bytes_of(&path).is_some(),
+        };
+        if !held {
+            return -1;
+        }
+        if told.is_empty() {
+            return i64::from(self.readonly.contains(&path));
+        }
+        if told == "0" {
+            self.readonly.remove(&path);
+            return 0;
+        }
+        self.readonly.insert(path.clone());
+        self.only_reading(&path);
+        1
+    }
+
+    /// Refuses a statement on a connection whose database carries a
+    /// journal the client may only read.
+    ///
+    /// `unixOpen` of `research/sqlite/src/os_unix.c` answers
+    /// `SQLITE_CANTOPEN` for such a journal, and `sqlite3PagerSharedLock`
+    /// reads the database only once the journal is played back, so the
+    /// database cannot be read at all.
+    ///
+    /// # Errors
+    ///
+    /// The words `unable to open database file`.
+    fn cannot_open(&self, name: &str) -> Result<(), String> {
+        let Some(path) = self.connections.get(name) else {
+            return Ok(());
+        };
+        if !self.readonly.contains(&format!("{path}-journal")) {
+            return Ok(());
+        }
+        refused_as("SQLITE_CANTOPEN", "14");
+        Err(String::from("unable to open database file"))
+    }
+
+    /// The writer of `path` told that the client may only read the file,
+    /// where the harness holds the path that way.
+    fn only_reading(&mut self, path: &str) {
+        if !self.readonly.contains(path) {
+            return;
+        }
+        if let Some(writer) = self.held.get_mut(path) {
+            writer.only_reading();
+        }
+    }
+
     fn flushed(&self, name: &str) -> usize {
         let Some(bytes) = self.bytes_of(name) else {
             return 0;
@@ -1634,6 +1710,7 @@ impl Session {
         let image = writer.written();
         self.held.insert(name.to_owned(), writer);
         self.machined(name, bytes, image);
+        self.only_reading(name);
         Ok(vec![written.len().to_string()])
     }
 
@@ -2209,6 +2286,7 @@ impl Session {
             }
             self.held.insert(path.to_owned(), writer);
         }
+        self.only_reading(path);
         self.connections.insert(name.to_owned(), path.to_owned());
         self.nulls.insert(name.to_owned(), String::new());
         // A connection that is opened again counts from nought and was
@@ -3193,6 +3271,7 @@ impl Session {
     /// for: the database with the log and the journal beside it, or one
     /// of those two alone, which leaves the database where it is.
     fn removed(&mut self, name: &str) -> Vec<String> {
+        self.readonly.remove(name);
         if self.held.remove(name).is_some() {
             self.raw.remove(name);
             return Vec::new();
@@ -3234,6 +3313,7 @@ impl Session {
         } else {
             self.raw.remove(path);
         }
+        self.only_reading(path);
         Ok(Vec::new())
     }
 
@@ -3247,6 +3327,7 @@ impl Session {
     ///
     /// The message the engine refused the statement with.
     fn of_sql(&mut self, verb: &str, name: &str, sql: &str) -> Result<Vec<String>, String> {
+        self.cannot_open(name)?;
         let sql = if verb.starts_with("exec") {
             escaped(sql)
         } else {

@@ -571,6 +571,12 @@ Size: S.
     the writer of its path has written nothing since, so a file the
     tester built by hand keeps the bytes past the pages its header names
     and the count that header carries, which D-479 records.
+74. `file attributes NAME -readonly` and `file attributes NAME
+    -permissions` say whether the client may only read a file and answer
+    what the harness holds, and `file writable NAME` answers out of the
+    same, which D-486 records. A connection whose database carries a
+    journal the client may only read is refused `unable to open database
+    file`, which D-487 records.
 
 ### Produces
 

@@ -597,6 +597,11 @@ struct HeldFile {
     /// of its own is under one whatever the pragma says, which
     /// `sqlite3PagerLockingMode` reads `pPager->tempFile` for.
     exclusive: bool,
+    /// Whether the client may only read the file, which
+    /// `sqlite3PagerOpen` of `research/sqlite/src/pager.c` reads
+    /// `readOnly` for: every statement that would write a page of it is
+    /// refused `attempt to write a readonly database`.
+    reading: bool,
 }
 
 /// Which of the five kinds of checkpoint a caller asks for, which
@@ -1075,6 +1080,7 @@ impl Writer {
                 began: None,
                 did: Vec::new(),
                 exclusive: false,
+                reading: false,
                 header: Header {
                     page_size,
                     write_version: 1,
@@ -1228,6 +1234,7 @@ impl Writer {
                 began: None,
                 did: Vec::new(),
                 exclusive: false,
+                reading: false,
             },
             called: Called {
                 name: b"main".to_vec(),
@@ -1517,6 +1524,15 @@ impl Writer {
     /// carries them itself.
     pub const fn counts_as(&mut self, counted: crate::func::Counted) {
         self.counted = counted;
+    }
+
+    /// The client may only read the file this connection writes, which
+    /// `sqlite3PagerOpen` reads the permissions of the file for: every
+    /// statement that would write a page of it is refused `attempt to
+    /// write a readonly database`, and a database the connection holds of
+    /// its own is written as before.
+    pub const fn only_reading(&mut self) {
+        self.held.reading = true;
     }
 
     /// The file the statements so far have made. In write-ahead logging
@@ -3927,9 +3943,10 @@ impl Writer {
     }
 
     /// Whether this connection may write no page of the file, which
-    /// `PRAGMA query_only` says.
+    /// `PRAGMA query_only` says and which a file the client may only read
+    /// holds whatever the pragma says.
     fn reads_only(&self) -> bool {
-        self.told(b"query_only") != 0
+        self.held.reading || self.told(b"query_only") != 0
     }
 
     /// One statement run against the database the connection writes.

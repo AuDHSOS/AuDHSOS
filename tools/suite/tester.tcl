@@ -1074,7 +1074,45 @@ proc file {command args} {
   if {$command eq "exists" || $command eq "isfile"} {
     if {[lindex [harness_send exists $name] 0]} { return 1 }
   }
+  # `file attributes NAME -readonly 1` and `file attributes NAME
+  # -permissions MODE` say the client may only read the file, which the
+  # harness holds per path, and the two reads answer out of it.
+  if {$command eq "attributes" && [llength $args] >= 2} {
+    set which [lindex $args 1]
+    set value [lindex $args 2]
+    if {$which eq "-readonly" && $value ne ""} {
+      if {[lindex [harness_send permissions $name $value] 0] >= 0} { return {} }
+    }
+    if {$which eq "-permissions" && $value ne ""} {
+      set only [expr {[harness_writable $value] ? 0 : 1}]
+      if {[lindex [harness_send permissions $name $only] 0] >= 0} { return {} }
+    }
+    if {$which eq "-permissions" && $value eq ""} {
+      set held [lindex [harness_send permissions $name] 0]
+      if {$held == 0} { return 0644 }
+      if {$held == 1} { return 0444 }
+    }
+    if {$which eq "-readonly" && $value eq ""} {
+      set held [lindex [harness_send permissions $name] 0]
+      if {$held >= 0} { return $held }
+    }
+  }
+  if {$command eq "writable"} {
+    set held [lindex [harness_send permissions $name] 0]
+    if {$held >= 0} { return [expr {$held ? 0 : 1}] }
+  }
   return [uplevel 1 [list ::tcl_file $command {*}$args]]
+}
+
+# Whether a mode of `file attributes -permissions` lets the owner write:
+# a run of octal digits whose owner digit carries the write bit, or the
+# nine letters of `ls` with `w` in the owner's place.
+proc harness_writable {mode} {
+  if {[regexp {^[0-7]+$} $mode]} {
+    set owner [string index $mode [expr {[string length $mode] - 3}]]
+    return [expr {($owner & 2) != 0}]
+  }
+  return [string match {?w*} $mode]
 }
 
 # `exec [info nameofexec] SCRIPT` starts another `testfixture` and runs

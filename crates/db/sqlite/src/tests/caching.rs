@@ -367,3 +367,45 @@ fn what_a_connection_under_query_only_refuses() {
         alloc::vec![alloc::vec![Value::Int(4)]]
     );
 }
+
+/// A connection over a file the client may only read refuses every
+/// statement that would write a page of it, and writes a database of its
+/// own as before.
+#[test]
+fn what_a_connection_over_a_file_it_may_only_read_refuses() {
+    let mut writer = spelled();
+    let was = writer.written();
+    writer.only_reading();
+    for sql in [
+        b"INSERT INTO t VALUES('d')".as_slice(),
+        b"DELETE FROM t",
+        b"CREATE TABLE u(y)",
+    ] {
+        assert_eq!(
+            writer.run(sql).unwrap_err().message(),
+            "attempt to write a readonly database",
+            "{}",
+            alloc::string::String::from_utf8_lossy(sql)
+        );
+    }
+    assert_eq!(writer.written(), was);
+    // The pragma answers what the connection was told and not what the
+    // file allows, which `SQLITE_QueryOnly` of `sqlite3Pragma` holds.
+    assert_eq!(
+        writer.run(b"PRAGMA query_only").unwrap(),
+        alloc::vec![alloc::vec![Value::Int(0)]]
+    );
+    // The temp schema is a database of the connection's own, so the
+    // permissions of the file the client holds say nothing about it.
+    writer.run(b"CREATE TEMP TABLE v(y)").unwrap();
+    writer.run(b"INSERT INTO v VALUES(1)").unwrap();
+    let temp = writer.attached_written(b"temp").expect("the temp schema");
+    assert_eq!(
+        Database::open(&temp)
+            .unwrap()
+            .query(b"SELECT count(*) FROM v")
+            .unwrap()
+            .rows,
+        alloc::vec![alloc::vec![Value::Int(1)]]
+    );
+}
