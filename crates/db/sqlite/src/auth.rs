@@ -201,6 +201,15 @@ pub(crate) struct Authorizer<'a> {
     /// value they had, and which is `aXRef[j] = -1` of
     /// `research/sqlite/src/update.c:514`.
     unwritten: Vec<Vec<u8>>,
+    /// The innermost trigger the reading stands in, which is the sixth
+    /// argument every action of its body carries.
+    inner: Vec<u8>,
+    /// The rows `OLD` and `NEW` a statement of that body reads, which
+    /// stand for the row the trigger fired over.
+    fired: Vec<Reading>,
+    /// The triggers the reading stands in, which a body that writes the
+    /// table its own trigger is on would otherwise be read without end.
+    walking: Vec<Vec<u8>>,
 }
 
 /// What the reading of one statement came to.
@@ -220,6 +229,9 @@ impl<'a> Authorizer<'a> {
             database,
             ignored: Vec::new(),
             unwritten: Vec::new(),
+            inner: Vec::new(),
+            fired: Vec::new(),
+            walking: Vec::new(),
         }
     }
 
@@ -254,7 +266,7 @@ impl<'a> Authorizer<'a> {
             first,
             second,
             schema,
-            inner: b"",
+            inner: &self.inner,
         };
         match (self.asking)(&asked) {
             Answer::Deny => Err(Error::Denied),
@@ -301,6 +313,7 @@ impl Error {
 }
 
 /// One table a statement reads rows out of.
+#[derive(Clone)]
 struct Reading {
     /// The name in the schema.
     name: Vec<u8>,
@@ -404,7 +417,7 @@ impl Authorizer<'_> {
     /// says it holds. A source that is not a table of the schema is left
     /// out, because a column of it is no read of a file.
     fn reading_of(&self, arena: &Arena, from: Range, sql: &[u8]) -> Vec<Reading> {
-        let mut out = Vec::new();
+        let mut out = self.fired.clone();
         for source in arena.sources(from) {
             let crate::ast::SourceKind::Table { schema, name, .. } = source.kind else {
                 continue;
@@ -413,10 +426,7 @@ impl Authorizer<'_> {
             let Some((table, _)) = self.database.table(&named) else {
                 continue;
             };
-            let key = match table.rowid_alias.and_then(|at| table.columns.get(at)) {
-                Some(column) => column.name.clone(),
-                None => b"ROWID".to_vec(),
-            };
+            let key = key_named(table);
             out.push(Reading {
                 name: table.name.clone(),
                 known: match source.alias {
@@ -437,6 +447,94 @@ impl Authorizer<'_> {
             });
         }
         out
+    }
+
+    /// The rows `OLD` and `NEW` a statement of a trigger's body reads,
+    /// which stand for the row the trigger fired over.
+    ///
+    /// The two are no table of the statement, so no read of the empty
+    /// name names them.
+    fn fired_rows(&self, table: &[u8]) -> Vec<Reading> {
+        self.database
+            .table(table)
+            .into_iter()
+            .flat_map(|(held, _)| {
+                [b"old".as_slice(), b"new"].map(|known| Reading {
+                    name: held.name.clone(),
+                    known: known.to_vec(),
+                    schema: b"main".to_vec(),
+                    columns: held
+                        .columns
+                        .iter()
+                        .map(|column| column.name.clone())
+                        .collect(),
+                    key: key_named(held),
+                    used: true,
+                })
+            })
+            .collect()
+    }
+
+    /// The actions of the body of every trigger of `table` for `event`,
+    /// each asked for under the name of that trigger.
+    ///
+    /// `sqlite3CodeRowTrigger` of `research/sqlite/src/trigger.c:1468`
+    /// walks the triggers the table carries in the order
+    /// `sqlite3TriggerList` holds them, which is the one made last
+    /// first, whatever time each runs at. A trigger whose body writes
+    /// the table it is on carries itself, so a trigger already being
+    /// read is passed over.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] names what the function refused.
+    fn fired(&mut self, table: &[u8], event: crate::ast::TriggerEvent) -> Result<(), Error> {
+        let triggers: Vec<crate::db::Trigger> = self
+            .database
+            .triggers_over(table, event)
+            .into_iter()
+            .cloned()
+            .collect();
+        for trigger in &triggers {
+            if self.walking.contains(&trigger.name) {
+                continue;
+            }
+            self.walking.push(trigger.name.clone());
+            let rows = self.fired_rows(table);
+            let inner = core::mem::replace(&mut self.inner, trigger.name.clone());
+            let held = core::mem::replace(&mut self.fired, rows);
+            let answered = self.body(&trigger.arena, trigger.written.body, &trigger.sql);
+            self.fired = held;
+            self.inner = inner;
+            self.walking.pop();
+            answered?;
+        }
+        Ok(())
+    }
+
+    /// The actions of every statement of one trigger's body.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] names what the function refused.
+    fn body(&mut self, arena: &Arena, body: Range, sql: &[u8]) -> Result<(), Error> {
+        for step in arena.steps(body).to_vec() {
+            match step {
+                crate::ast::TriggerStep::Insert(statement) => {
+                    self.change(arena, crate::ast::Change::Insert(statement), sql)?;
+                }
+                crate::ast::TriggerStep::Update(statement) => {
+                    self.change(arena, crate::ast::Change::Update(statement), sql)?;
+                }
+                crate::ast::TriggerStep::Delete(statement) => {
+                    self.change(arena, crate::ast::Change::Delete(statement), sql)?;
+                }
+                crate::ast::TriggerStep::Select(select) => {
+                    self.select(arena, select, sql)?;
+                }
+            }
+        }
+        Ok(())
     }
 
     /// One name a statement reads, asked for against the tables of its
@@ -572,7 +670,7 @@ impl Authorizer<'_> {
             first: table,
             second: column,
             schema,
-            inner: b"",
+            inner: &self.inner,
         };
         match (self.asking)(&asked) {
             Answer::Deny => {
@@ -998,6 +1096,7 @@ impl Authorizer<'_> {
                         self.select(arena, statement.select, sql)?;
                     }
                 }
+                self.fired(&name, crate::ast::TriggerEvent::Insert)?;
                 Ok(answered)
             }
             crate::ast::Change::Delete(statement) => {
@@ -1010,6 +1109,7 @@ impl Authorizer<'_> {
                 // whole-table shortcut, which this crate has none of.
                 let answered = self.ask(Action::Delete, &name, b"", &schema)?;
                 self.read_change(arena, statement.name, statement.filter, sql)?;
+                self.fired(&name, crate::ast::TriggerEvent::Delete)?;
                 Ok(answered)
             }
             crate::ast::Change::Update(statement) => {
@@ -1017,14 +1117,21 @@ impl Authorizer<'_> {
                     Self::schema_word(statement.schema, self.temping(statement.schema, sql), sql);
                 let name = dequote(statement.name.text(sql));
                 let mut answered = Answer::Ok;
+                let mut reading = self.reading_change(statement.name, sql);
                 for set in arena.sets(statement.sets).to_vec() {
+                    // `sqlite3Update` resolves the value the column is
+                    // written with before it asks about that column.
+                    self.read_expr(arena, &mut reading, set.value, sql)?;
                     let named = dequote(set.column.text(sql));
                     if self.ask(Action::Update, &name, &named, &schema)? == Answer::Ignore {
                         self.unwritten.push(named);
                         answered = Answer::Ignore;
                     }
                 }
-                self.read_change(arena, statement.name, statement.filter, sql)?;
+                if let Some(filter) = statement.filter {
+                    self.read_expr(arena, &mut reading, filter, sql)?;
+                }
+                self.fired(&name, crate::ast::TriggerEvent::Update)?;
                 Ok(answered)
             }
         }
@@ -1042,15 +1149,20 @@ impl Authorizer<'_> {
         let Some(filter) = filter else {
             return Ok(Answer::Ok);
         };
+        let mut reading = self.reading_change(table, sql);
+        self.read_expr(arena, &mut reading, filter, sql)
+    }
+
+    /// The one table a statement that writes names, and the rows a
+    /// trigger's body reads beside it.
+    fn reading_change(&self, table: Span, sql: &[u8]) -> Vec<Reading> {
         let named = dequote(table.text(sql));
+        let mut out = self.fired.clone();
         let Some((held, _)) = self.database.table(&named) else {
-            return Ok(Answer::Ok);
+            return out;
         };
-        let key = match held.rowid_alias.and_then(|at| held.columns.get(at)) {
-            Some(column) => column.name.clone(),
-            None => b"ROWID".to_vec(),
-        };
-        let mut reading = alloc::vec![Reading {
+        let key = key_named(held);
+        out.push(Reading {
             name: held.name.clone(),
             known: named,
             schema: b"main".to_vec(),
@@ -1061,11 +1173,22 @@ impl Authorizer<'_> {
                 .collect(),
             key,
             used: false,
-        }];
+        });
+        out
+    }
+
+    /// The reads of one expression, asked for against `reading`.
+    fn read_expr(
+        &mut self,
+        arena: &Arena,
+        reading: &mut [Reading],
+        id: ExprId,
+        sql: &[u8],
+    ) -> Result<Answer, Error> {
         let mut out = Vec::new();
-        named_under(arena, filter, &mut out);
+        named_under(arena, id, &mut out);
         for named in out {
-            self.read_named(arena, &mut reading, named, sql)?;
+            self.read_named(arena, reading, named, sql)?;
         }
         Ok(Answer::Ok)
     }
@@ -1137,13 +1260,23 @@ impl Authorizer<'_> {
                 first: b"",
                 second: &named,
                 schema: b"",
-                inner: b"",
+                inner: &self.inner,
             };
             if (self.asking)(&asked) == Answer::Deny {
                 return Err(Error::Function(named));
             }
         }
         Ok(Answer::Ok)
+    }
+}
+
+/// The name a bare `rowid` of `table` is asked under: the column the
+/// rowid is another name for, and `ROWID` where the table has none, which
+/// is what `sqlite3AuthRead` of `research/sqlite/src/auth.c:170` writes.
+fn key_named(table: &crate::schema::Table) -> Vec<u8> {
+    match table.rowid_alias.and_then(|at| table.columns.get(at)) {
+        Some(column) => column.name.clone(),
+        None => b"ROWID".to_vec(),
     }
 }
 

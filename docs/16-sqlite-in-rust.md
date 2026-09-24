@@ -1150,6 +1150,9 @@ Size: L.
      refuses. Built, which D-486 records.
 192. The index each `SQLITE_REINDEX` names, and the places a `REINDEX
      <collation>` reads. Built, which D-488 and D-489 record.
+193. The actions of a trigger's body, each under the name of that
+     trigger, and the order an `UPDATE` asks about its values and its
+     columns in. Built, which D-490 and D-491 record.
 
 ### Done when
 
@@ -1159,8 +1162,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 123 508 cases in 843 files, 118 318
-pass, 2823 answer differently, and 2367 name something the engine
+under the `tclsh` of the machine. Of 123 484 cases in 843 files, 118 438
+pass, 2706 answer differently, and 2340 name something the engine
 refuses or a command that needs the C library's internals. The files
 that answer for tens of thousands of rows reach the five-minute
 deadline and are counted with the cases they ran by then. One run over

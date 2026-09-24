@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` asks the authorizer about the statements of a trigger's body,
+  each under the name of that trigger, and an `UPDATE` asks about the value a
+  column is written with before the column. D-490 and D-491 record it.
+  Catalog 6.6.340. `auth.test` goes from 347 cases passing to 350.
+
 - `db-sqlite` asks the authorizer `SQLITE_REINDEX` once per index written
   again, under the name of that index and the schema it stands in, and
   `REINDEX <collation>` reads the key of the row at the end of an entry as a

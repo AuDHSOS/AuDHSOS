@@ -858,19 +858,33 @@ fn what_the_authorizer_of_a_connection_is_asked() {
     what_a_denied_read_of_another_database_answers();
 }
 
-/// One call of [`recording`]: the action, the index or table it names and
-/// the schema it stands in.
+/// One call of [`recording`]: the action and the four arguments after it.
 struct Recorded {
     /// What the statement was about to do.
     action: Action,
     /// The third argument.
     first: Vec<u8>,
+    /// The fourth argument.
+    second: Vec<u8>,
     /// The fifth argument.
     schema: Vec<u8>,
+    /// The sixth argument.
+    inner: Vec<u8>,
 }
 
 /// What every call of [`recording`] was asked.
 static RECORDED: std::sync::Mutex<Vec<Recorded>> = std::sync::Mutex::new(Vec::new());
+
+/// The one test at a time that reads [`RECORDED`], which the tests share
+/// with the function that writes it.
+static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// The lock one test holds while it reads [`RECORDED`].
+fn alone() -> std::sync::MutexGuard<'static, ()> {
+    SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 /// A function that allows every action and writes down what it was asked.
 fn recording(asked: &Asked<'_>) -> Answer {
@@ -878,7 +892,9 @@ fn recording(asked: &Asked<'_>) -> Answer {
         held.push(Recorded {
             action: asked.action,
             first: asked.first.to_vec(),
+            second: asked.second.to_vec(),
             schema: asked.schema.to_vec(),
+            inner: asked.inner.to_vec(),
         });
     }
     Answer::Ok
@@ -902,12 +918,36 @@ fn recorded(action: Action) -> alloc::string::String {
     out
 }
 
+/// Every call of [`recording`], as the word of the action and its four
+/// arguments with a slash between them.
+fn asked_all() -> alloc::string::String {
+    let held = RECORDED.lock().expect("the recorded calls");
+    let mut out = alloc::string::String::new();
+    for one in held.iter() {
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        for text in [
+            one.action.word(),
+            &one.first,
+            &one.second,
+            &one.schema,
+            &one.inner,
+        ] {
+            out.push_str(&alloc::string::String::from_utf8_lossy(text));
+            out.push('/');
+        }
+    }
+    out
+}
+
 /// `REINDEX` asks about every index it writes again under the name of
 /// that index and the schema it stands in, with the index made last
 /// first, and `REINDEX <collation>` writes again every index one place of
 /// whose entries is held in that collation.
 #[test]
 fn which_indexes_a_reindex_asks_about() {
+    let _alone = alone();
     let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
     writer.opens(|_| Some(Vec::new()));
     writer.asks(recording);
@@ -962,5 +1002,85 @@ fn which_indexes_a_reindex_asks_about() {
     clear();
     writer.run(b"REINDEX temp.t4_idx").unwrap();
     assert_eq!(recorded(Action::Reindex), "t4_idx/temp");
+    clear();
+}
+
+/// The statements of a trigger's body are asked for under the name of
+/// that trigger, and an `UPDATE` asks about the value a column is written
+/// with before it asks about the column.
+#[test]
+fn which_actions_the_body_of_a_trigger_is_asked_for() {
+    let _alone = alone();
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.asks(recording);
+    for sql in [
+        b"CREATE TABLE t2(a,b,c)".as_slice(),
+        b"CREATE TABLE tx(a1,a2,b1,b2,c1,c2)",
+        b"INSERT INTO t2 VALUES(1,2,3)",
+        b"CREATE TRIGGER r1 AFTER UPDATE ON t2 BEGIN \
+          INSERT INTO tx VALUES(OLD.a,NEW.a,OLD.b,NEW.b,OLD.c,NEW.c); END",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let clear = || RECORDED.lock().expect("the recorded calls").clear();
+    clear();
+    writer.run(b"UPDATE t2 SET a=a+1").unwrap();
+    assert_eq!(
+        asked_all(),
+        "SQLITE_READ/t2/a/main// SQLITE_UPDATE/t2/a/main// \
+         SQLITE_INSERT/tx//main/r1/ SQLITE_READ/t2/a/main/r1/ SQLITE_READ/t2/a/main/r1/ \
+         SQLITE_READ/t2/b/main/r1/ SQLITE_READ/t2/b/main/r1/ \
+         SQLITE_READ/t2/c/main/r1/ SQLITE_READ/t2/c/main/r1/"
+    );
+    // The triggers of the table are read with the one made last first,
+    // whatever time each runs at.
+    for sql in [
+        b"CREATE TRIGGER r0 BEFORE UPDATE ON t2 BEGIN SELECT OLD.b; END".as_slice(),
+        b"CREATE TRIGGER r2 AFTER UPDATE ON t2 BEGIN SELECT NEW.c; END",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    clear();
+    writer.run(b"UPDATE t2 SET b=1 WHERE c=3").unwrap();
+    assert_eq!(
+        asked_all(),
+        "SQLITE_UPDATE/t2/b/main// SQLITE_READ/t2/c/main// \
+         SQLITE_SELECT////r2/ SQLITE_READ/t2/c/main/r2/ \
+         SQLITE_SELECT////r0/ SQLITE_READ/t2/b/main/r0/ \
+         SQLITE_INSERT/tx//main/r1/ SQLITE_READ/t2/a/main/r1/ SQLITE_READ/t2/a/main/r1/ \
+         SQLITE_READ/t2/b/main/r1/ SQLITE_READ/t2/b/main/r1/ \
+         SQLITE_READ/t2/c/main/r1/ SQLITE_READ/t2/c/main/r1/"
+    );
+    // A trigger whose body writes the table it is on is passed over where
+    // it is already being read, so its body is read once.
+    for sql in [
+        b"DROP TRIGGER r0".as_slice(),
+        b"DROP TRIGGER r1",
+        b"DROP TRIGGER r2",
+        b"CREATE TRIGGER s1 AFTER UPDATE ON t2 BEGIN UPDATE t2 SET c=1; END",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    clear();
+    writer.run(b"UPDATE t2 SET b=2").unwrap();
+    assert_eq!(
+        asked_all(),
+        "SQLITE_UPDATE/t2/b/main// SQLITE_UPDATE/t2/c/main/s1/"
+    );
+    // A body that writes and one that takes rows out are read the same
+    // way.
+    for sql in [
+        b"DROP TRIGGER s1".as_slice(),
+        b"CREATE TRIGGER d1 AFTER DELETE ON t2 BEGIN DELETE FROM tx WHERE a1=OLD.a; END",
+        b"CREATE TRIGGER u1 AFTER DELETE ON t2 BEGIN UPDATE t2 SET b=OLD.b; END",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    clear();
+    writer.run(b"DELETE FROM t2").unwrap();
+    assert_eq!(
+        asked_all(),
+        "SQLITE_DELETE/t2//main// SQLITE_READ/t2/b/main/u1/ SQLITE_UPDATE/t2/b/main/u1/ SQLITE_DELETE/tx//main/d1/ SQLITE_READ/tx/a1/main/d1/ SQLITE_READ/t2/a/main/d1/"
+    );
     clear();
 }

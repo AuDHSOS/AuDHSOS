@@ -2819,6 +2819,23 @@ impl<'a> Database<'a> {
             .collect()
     }
 
+    /// The triggers of `table` that run on `event`, in the order
+    /// `sqlite3TriggerList` holds them: the one made last first,
+    /// whatever time each runs at.
+    pub(crate) fn triggers_over(
+        &self,
+        table: &[u8],
+        event: crate::ast::TriggerEvent,
+    ) -> Vec<&Trigger> {
+        self.triggers
+            .iter()
+            .rev()
+            .filter(|trigger| {
+                trigger.table.eq_ignore_ascii_case(table) && trigger.written.event == event
+            })
+            .collect()
+    }
+
     /// The trigger of `name` this database holds.
     pub(crate) fn trigger(&self, name: &[u8]) -> Option<&Trigger> {
         self.triggers

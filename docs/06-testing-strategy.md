@@ -7553,3 +7553,15 @@ Document 16 step Q8.
   first.
 - `REINDEX temp.<index>`, which asks under `temp`.
 
+### 6.6.340 The actions of a trigger's body (`db-sqlite`)
+
+Document 16 step Q8. Every answer is the one the C library's shell writes
+with `.auth on` for the same statements.
+
+- An `UPDATE` whose `SET` reads a column, which asks about the value
+  before the column it writes.
+- The body of an `AFTER UPDATE` trigger that reads `OLD` and `NEW`, each
+  action under the name of the trigger.
+- Three triggers of one table, two `AFTER` and one `BEFORE`, which are
+  read with the one made last first.
+
