@@ -156,7 +156,6 @@ fn a_list_of_addresses_is_tried_in_the_order_it_is_given() {
             &mut rng,
             &mut send,
             &mut receive,
-            now,
         )
         .expect("a connection");
     assert!(matches!(stack.connecting(), Connecting::Open(_)));
@@ -229,7 +228,6 @@ fn an_empty_list_reaches_nobody_and_a_second_connection_waits() {
     let mut receive = [0u8; 512];
     let mut rng = rng();
     let mut stack: Stack<'_, 4, 2> = leased(&mut outgoing, &mut rng);
-    let now = Instant::from_micros(0);
     assert_eq!(stack.connecting(), Connecting::Idle);
     stack
         .connect_to_any(
@@ -238,7 +236,6 @@ fn an_empty_list_reaches_nobody_and_a_second_connection_waits() {
             &mut rng,
             &mut send,
             &mut receive,
-            now,
         )
         .expect("a connection");
     let mut other_send = [0u8; 512];
@@ -250,7 +247,6 @@ fn an_empty_list_reaches_nobody_and_a_second_connection_waits() {
             &mut rng,
             &mut other_send,
             &mut other_receive,
-            now
         ),
         Err(StackError::Busy)
     );
@@ -274,7 +270,6 @@ fn every_candidate_that_refuses_leaves_the_attempt_failed_and_the_buffers_come_b
             &mut rng,
             &mut send,
             &mut receive,
-            now,
         )
         .expect("a connection");
     let frames = drain(&mut stack, None, now, &mut rng);
@@ -394,9 +389,8 @@ fn a_connection_to_no_address_at_all_is_refused() {
     let mut receive = [0u8; 512];
     let mut rng = rng();
     let mut stack: Stack<'_, 4, 2> = leased(&mut outgoing, &mut rng);
-    let now = Instant::from_micros(0);
     assert_eq!(
-        stack.connect_to_any(&[], Port::new(80), &mut rng, &mut send, &mut receive, now),
+        stack.connect_to_any(&[], Port::new(80), &mut rng, &mut send, &mut receive),
         Err(StackError::Unresolved)
     );
     assert_eq!(stack.connecting(), Connecting::Idle);
@@ -464,7 +458,6 @@ fn a_connection_by_name_waits_for_the_one_being_made() {
             &mut rng,
             &mut send,
             &mut receive,
-            now,
         )
         .expect("a connection");
     let mut other_send = [0u8; 512];

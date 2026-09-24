@@ -895,6 +895,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Changed
 
+- `text-core`: an endchar component resolves its SID in one pass over the
+  charset ranges, O(R) where it was O(G × R) (issue #482). FDSelect formats
+  3 and 4 select by binary search, O(log R) where it was O(R) (issue #483).
+
+- `net-stack`: `Stack::connect_to_any` takes no `Instant`; no call below it
+  read the instant (issue #384).
+
 - `crypto-aead`: GHASH multiplies with three 64-bit carry-less products
   and one fixed reduction, where it ran 128 masked shift-and-reduce steps
   over `u128` per block (issue #46). The hash key and the accumulator are
