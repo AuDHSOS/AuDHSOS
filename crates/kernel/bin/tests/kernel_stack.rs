@@ -179,9 +179,13 @@ fn a_kernel_stack_carries_writes_and_its_guard_page_faults() {
     for page in stack.pages() {
         let first = page.start().as_u64();
         let last = page.last_address().as_u64();
-        testing::write_byte(first, PATTERN);
-        testing::write_byte(last, PATTERN);
-        let (read_first, read_last) = (testing::read_byte(first), testing::read_byte(last));
+        // SAFETY: `is_mapped` confirmed that every page of the stack is
+        // mapped writable, and nothing runs on the stack.
+        let (read_first, read_last) = unsafe {
+            testing::write_byte(first, PATTERN);
+            testing::write_byte(last, PATTERN);
+            (testing::read_byte(first), testing::read_byte(last))
+        };
         if read_first != PATTERN || read_last != PATTERN {
             testing::fail(format_args!(
                 "{first:#x} reads {read_first:#x} and {last:#x} reads {read_last:#x}"
@@ -211,7 +215,11 @@ fn a_kernel_stack_carries_writes_and_its_guard_page_faults() {
     }
 
     testing::set_trap_hook(|report| on_guard_fault(report));
-    testing::write_byte(guard, PATTERN);
+    // SAFETY: the guard page is unmapped, so the write faults and
+    // `on_guard_fault` ends the machine.
+    unsafe {
+        testing::write_byte(guard, PATTERN);
+    }
     testing::fail(format_args!(
         "the write to the guard page {guard:#x} did not fault"
     ));

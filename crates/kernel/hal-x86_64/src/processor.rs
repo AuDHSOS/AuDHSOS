@@ -54,7 +54,7 @@ impl ExclusiveToken for KernelToken {
 /// Descriptor images and APIC handle owned by one processor.
 #[derive(Debug)]
 pub(crate) struct Processor {
-    pub(crate) stack: [u8; 16 * 1024],
+    pub(crate) stack: [u8; crate::descriptors::DOUBLE_FAULT_STACK_LEN],
     pub(crate) tss: [u8; TSS_LEN],
     pub(crate) gdt: [u64; GDT_ENTRIES],
     pub(crate) local: Option<LocalApic>,
@@ -62,7 +62,7 @@ pub(crate) struct Processor {
 impl Processor {
     const fn new() -> Self {
         Self {
-            stack: [0; 16 * 1024],
+            stack: [0; crate::descriptors::DOUBLE_FAULT_STACK_LEN],
             tss: [0; TSS_LEN],
             gdt: [0; GDT_ENTRIES],
             local: None,

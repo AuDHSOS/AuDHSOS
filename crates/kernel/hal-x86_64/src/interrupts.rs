@@ -108,7 +108,7 @@ where
     let local_base = window_for(&mut map, madt.lapic_address)?;
     // SAFETY: the window was just mapped read and write and uncached for
     // the rest of the run, and this is the only value that reaches it.
-    let local = unsafe { LocalApic::new(local_base) };
+    let mut local = unsafe { LocalApic::new(local_base) };
     let mut io: [Option<IoApic>; kernel_acpi::MAX_IO_APICS] =
         [const { None }; kernel_acpi::MAX_IO_APICS];
     for (slot, entry) in io.iter_mut().zip(madt.io_apics.iter().flatten()) {
@@ -124,12 +124,20 @@ where
             pic::disable();
         }
     }
-    IDENTIFIERS[0].store(u32::from(local.id()), Ordering::Relaxed);
+    // The unit decodes its register window only once enabled, so `id` is
+    // read after this (issue #105).
+    // SAFETY: the caller promises that the descriptor table carries a
+    // handler for the spurious vector.
+    unsafe {
+        local.enable(vectors::SPURIOUS);
+    }
+    let id = local.id();
+    IDENTIFIERS[0].store(u32::from(id), Ordering::Relaxed);
     let mut next = 1usize;
     for cpu in madt.processors.iter().flatten() {
         if cpu.enabled
             && cpu.apic_id < 255
-            && cpu.apic_id != u32::from(local.id())
+            && cpu.apic_id != u32::from(id)
             && next < IDENTIFIERS.len()
         {
             crate::processor::slot(&IDENTIFIERS, next).store(cpu.apic_id, Ordering::Relaxed);
@@ -142,11 +150,6 @@ where
         crate::processor::install_local();
     }
     let mut apics = Apics::new(local, io, madt);
-    // SAFETY: the caller promises that the descriptor table carries a
-    // handler for the spurious vector.
-    unsafe {
-        apics.local_mut().enable(vectors::SPURIOUS);
-    }
     apics.mask_all();
     CONTROLLER.init(apics).map_err(|_| ApicError::AlreadyUp)
 }

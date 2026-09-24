@@ -954,6 +954,27 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `kernel-hal-x86_64` audit findings (issues #87, #92, #95, #98, #103,
+  #105, #108, #110):
+  - #87: `testing::read_byte` and `testing::write_byte` are `unsafe fn` with
+    a `# Safety` section; the test images call them in `unsafe` blocks.
+  - #92: the crate builds with `--no-default-features` and with each of
+    `debug-uart` and `test-exit` alone. `xtask lint` runs clippy on these
+    three feature sets, listed in `policy::FEATURE_SETS`.
+  - #95: section 4.5 of document 4 lists the `cpuid`, `rdseed` site and the
+    application processor startup trampoline.
+  - #98: `kernel_acpi::find_table` skips a table the window does not reach
+    or whose header does not parse; `find_madt` and `find_mcfg` use it.
+  - #103: the interrupt descriptor table is a `Preset` in `.bss`, filled in
+    place. A second `install` returns `AlreadyInstalled` before it touches
+    the global descriptor table or the task state segment.
+  - #105: `bring_up` enables the local APIC before it reads the identifier;
+    a QEMU smoke test compares both with a message interrupt's address.
+  - #108: `Ports::new` and `DeviceAccess::new` are `unsafe fn`; `Ports` has
+    a private field and no `Default`.
+  - #110: the doc comment of `descriptors::address_of` names what it returns.
+  - D-194 raises the unsafe budgets to 179 and 49.
+
 - `text-core` shaping work (issues #485, #488, #490, #497): the
   `LayoutTable::apply` calls of one `layout` or `measure` call share one
   `shape::Budget` of 64 million operations; a hostile font multiplied the

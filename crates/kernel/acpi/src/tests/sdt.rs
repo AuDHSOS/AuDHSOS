@@ -10,7 +10,7 @@ use kernel_types::PhysAddr;
 use kernel_types::phys::MAX_PHYS_ADDR;
 
 use crate::error::AcpiError;
-use crate::sdt::{RootTable, SDT_HEADER_LEN, SdtHeader, announced_length};
+use crate::sdt::{RootTable, SDT_HEADER_LEN, SdtHeader, announced_length, find_table};
 use crate::tests::build::{fix_table, rsdt, table, xsdt};
 
 #[test]
@@ -150,4 +150,67 @@ fn the_announced_length_is_read_without_a_check_of_any_kind() {
     let mut broken = header;
     broken[4..8].copy_from_slice(&0xDEAD_BEEF_u32.to_le_bytes());
     assert_eq!(announced_length(&broken), 0xDEAD_BEEF);
+}
+
+/// A machine of tables keyed by address; an address missing from it is
+/// one the window does not reach.
+fn reader<'a>(tables: &'a [(u64, Vec<u8>)]) -> impl FnMut(PhysAddr) -> Result<&'a [u8], ()> {
+    move |address| {
+        tables
+            .iter()
+            .find(|(at, _)| *at == address.as_u64())
+            .map(|(_, bytes)| bytes.as_slice())
+            .ok_or(())
+    }
+}
+
+fn addresses(raw: &[u64]) -> Vec<PhysAddr> {
+    raw.iter().map(|&a| PhysAddr::new(a).unwrap()).collect()
+}
+
+#[test]
+fn the_walk_returns_the_first_table_with_the_signature() {
+    let tables = [
+        (0x1000, table(*b"FACP", 1, &[])),
+        (0x2000, table(*b"APIC", 1, &[1])),
+        (0x3000, table(*b"APIC", 1, &[2])),
+    ];
+    let found = find_table(
+        addresses(&[0x1000, 0x2000, 0x3000]),
+        *b"APIC",
+        reader(&tables),
+    );
+    assert_eq!(found, Some(tables[1].1.as_slice()));
+}
+
+#[test]
+fn the_walk_skips_a_table_with_a_wrong_checksum() {
+    let mut broken = table(*b"FACP", 1, &[]);
+    broken[9] = broken[9].wrapping_add(1);
+    let tables = [(0x1000, broken), (0x2000, table(*b"APIC", 1, &[]))];
+    let found = find_table(addresses(&[0x1000, 0x2000]), *b"APIC", reader(&tables));
+    assert_eq!(found, Some(tables[1].1.as_slice()));
+}
+
+#[test]
+fn the_walk_skips_an_address_the_reader_refuses() {
+    let tables = [(0x2000, table(*b"MCFG", 1, &[]))];
+    let found = find_table(addresses(&[0x9000, 0x2000]), *b"MCFG", reader(&tables));
+    assert_eq!(found, Some(tables[0].1.as_slice()));
+}
+
+#[test]
+fn the_walk_skips_a_broken_table_that_carries_the_signature() {
+    let mut broken = table(*b"APIC", 1, &[1]);
+    broken[9] = broken[9].wrapping_add(1);
+    let tables = [(0x1000, broken), (0x2000, table(*b"APIC", 1, &[2]))];
+    let found = find_table(addresses(&[0x1000, 0x2000]), *b"APIC", reader(&tables));
+    assert_eq!(found, Some(tables[1].1.as_slice()));
+}
+
+#[test]
+fn the_walk_without_the_signature_finds_nothing() {
+    let tables = [(0x1000, table(*b"FACP", 1, &[]))];
+    let found = find_table(addresses(&[0x1000, 0x9000]), *b"APIC", reader(&tables));
+    assert_eq!(found, None);
 }

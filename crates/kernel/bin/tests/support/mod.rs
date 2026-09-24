@@ -1136,7 +1136,10 @@ fn on_syscall() {
         answer(caller, None)
     } else {
         interrupts::with_controller(|apics| {
-            let mut devices = DeviceAccess::new(apics).with_entropy();
+            // SAFETY: `answer` reaches a port only through the `ioport_*`
+            // calls, which check it against the caller's `IoPortRange`
+            // capability first.
+            let mut devices = unsafe { DeviceAccess::new(apics) }.with_entropy();
             answer(caller, Some(&mut devices))
         })
         .unwrap_or(false)

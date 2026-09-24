@@ -148,3 +148,35 @@ fn user_test_programs() -> Vec<(std::path::PathBuf, String)> {
         })
         .collect()
 }
+
+#[test]
+fn every_feature_set_names_a_cross_crate_and_its_declared_features() {
+    use crate::policy::{FEATURE_SETS, Target};
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    for &(name, features) in FEATURE_SETS {
+        let krate = find(name).unwrap_or_else(|| panic!("{name} is not a crate"));
+        assert_ne!(krate.target, Target::Host, "{name} is a host crate");
+        let manifest = fs::read_to_string(root.join(krate.path).join("Cargo.toml")).unwrap();
+        for feature in features.split(',').filter(|feature| !feature.is_empty()) {
+            assert!(
+                manifest.contains(&format!("\n{feature} = ")),
+                "{name} declares no feature {feature}"
+            );
+        }
+    }
+}
+
+#[test]
+fn hal_functions_that_rely_on_a_caller_promise_are_unsafe() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let source = |path: &str| fs::read_to_string(root.join(path)).unwrap();
+    // Issue #87.
+    let testing = source("crates/kernel/hal-x86_64/src/testing.rs");
+    assert!(testing.contains("pub unsafe fn read_byte(address: u64) -> u8"));
+    assert!(testing.contains("pub unsafe fn write_byte(address: u64, value: u8)"));
+    // Issue #108.
+    let ports = source("crates/kernel/hal-x86_64/src/ports.rs");
+    assert!(ports.contains("#[derive(Clone, Copy, Debug)]\npub struct Ports(());"));
+    assert!(ports.contains("pub const unsafe fn new() -> Self"));
+    assert!(ports.contains("pub const unsafe fn new(apics: &'a mut crate::apic::Apics) -> Self"));
+}
