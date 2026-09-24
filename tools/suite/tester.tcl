@@ -1355,6 +1355,13 @@ proc utf16_as_utf8 {text} {
   return [encoding convertfrom unicode $text]
 }
 
+# `sqlite3BitvecBuiltinTest N PROGRAM` of `research/sqlite/src/bitvec.c`:
+# the program run against a bit vector and against a bare array of bits
+# beside it, answering the first bit the two disagree on.
+proc sqlite3BitvecBuiltinTest {size program} {
+  return [lindex [harness_send bitvec $size $program] 0]
+}
+
 # `sqlite3_complete16` of `test1.c:2340`: whether a UTF-16 text ends a
 # statement, which is `sqlite3_complete` over the text as UTF-8.
 proc sqlite3_complete16 {text} {

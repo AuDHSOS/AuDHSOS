@@ -559,6 +559,9 @@ Size: S.
     library would call, which the harness chooses from the encoding of the
     database, and `sqlite3_complete16` reads its text as UTF-8, which
     D-473 records.
+70. `sqlite3BitvecBuiltinTest` runs the program of a case against two
+    arrays of bits and answers the first bit they disagree on, which
+    D-474 records.
 
 ### Produces
 

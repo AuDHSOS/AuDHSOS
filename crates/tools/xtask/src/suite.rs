@@ -1362,6 +1362,11 @@ impl Session {
             ]),
             // `sqlite3_complete` reads the text alone, so the
             // connection the request names says nothing about it.
+            // `sqlite3BitvecBuiltinTest` of
+            // `research/sqlite/src/bitvec.c:400`.
+            "bitvec" => Ok(alloc_one(
+                &bitvec_test(i64::try_from(number_of(first)?).unwrap_or(0), second).to_string(),
+            )),
             "complete" => Ok(vec![
                 usize::from(db_sqlite::token::complete(second.as_bytes())).to_string(),
             ]),
@@ -3897,6 +3902,128 @@ static DEFINED: &[Defined] = &[Defined {
     count: Some(2),
     answer: randstr,
 }];
+
+/// `sqlite3BitvecBuiltinTest` of `research/sqlite/src/bitvec.c:400`: the
+/// program is run against a bit vector and against a bare array of bits
+/// beside it, and the answer is the first bit the two disagree on, or
+/// nought where they agree on every bit.
+///
+/// The words of the program are an operation and its arguments: one sets
+/// a run of bits, two clears one, three sets a bit drawn at random, four
+/// clears one drawn at random, and five sets the bit of the array alone,
+/// which is how a case asks for a disagreement. A word of six or more is
+/// passed over, and nought ends the program.
+///
+/// One run costs O(n) in the bits the program names.
+fn bitvec_test(size: i64, program: &str) -> i64 {
+    let mut held: Vec<i64> = program
+        .split_ascii_whitespace()
+        .filter_map(|word| word.parse::<i64>().ok())
+        .collect();
+    if size <= 0 {
+        return -1;
+    }
+    let width = usize::try_from(size).unwrap_or(0).saturating_add(2);
+    let mut vector = Bits::of(width);
+    let mut beside = Bits::of(width);
+    let mut drawn = 1_u64;
+    let mut at = 0_usize;
+    while let Some(op) = held.get(at).copied().filter(|op| *op != 0) {
+        if op >= 6 {
+            at = at.saturating_add(1);
+            continue;
+        }
+        let (mut bit, mut step) = if matches!(op, 1 | 2 | 5) {
+            let bit = word_at(&held, at.saturating_add(2)).saturating_sub(1);
+            let by = word_at(&held, at.saturating_add(3));
+            put_word(
+                &mut held,
+                at.saturating_add(2),
+                bit.saturating_add(1).saturating_add(by),
+            );
+            (bit, 4)
+        } else {
+            // `sqlite3_randomness` draws the bit, and the two sides of the
+            // comparison are told the same bit, so the draw itself says
+            // nothing about the answer.
+            drawn = drawn
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1);
+            (i64::try_from(drawn >> 33_u32).unwrap_or(0), 2)
+        };
+        let left = word_at(&held, at.saturating_add(1)).saturating_sub(1);
+        put_word(&mut held, at.saturating_add(1), left);
+        if left > 0 {
+            step = 0;
+        }
+        at = at.saturating_add(step);
+        bit = (bit & 0x7fff_ffff).checked_rem(size).unwrap_or(0);
+        let bit = usize::try_from(bit.saturating_add(1)).unwrap_or(0);
+        if op & 1 != 0 {
+            beside.set(bit, true);
+            if op != 5 {
+                vector.set(bit, true);
+            }
+        } else {
+            beside.set(bit, false);
+            vector.set(bit, false);
+        }
+    }
+    for bit in 1..=usize::try_from(size).unwrap_or(0) {
+        if beside.holds(bit) != vector.holds(bit) {
+            return i64::try_from(bit).unwrap_or(0);
+        }
+    }
+    0
+}
+
+/// One word of the program, and nought past its end.
+fn word_at(held: &[i64], at: usize) -> i64 {
+    held.get(at).copied().unwrap_or(0)
+}
+
+/// One word of the program written, where the program holds that many
+/// words.
+fn put_word(held: &mut [i64], at: usize, word: i64) {
+    for slot in held.iter_mut().skip(at).take(1) {
+        *slot = word;
+    }
+}
+
+/// An array of bits, one bit per bit and not one per byte.
+struct Bits {
+    /// The words the bits stand in, sixty-four bits per word.
+    held: Vec<u64>,
+}
+
+impl Bits {
+    /// An array of `width` bits, every one of them nought.
+    fn of(width: usize) -> Self {
+        Bits {
+            held: vec![0; width.saturating_div(64).saturating_add(1)],
+        }
+    }
+
+    /// One bit written.
+    fn set(&mut self, at: usize, held: bool) {
+        let word = at.saturating_div(64);
+        let bit = 1_u64 << u32::try_from(at % 64).unwrap_or(0);
+        for slot in self.held.iter_mut().skip(word).take(1) {
+            if held {
+                *slot |= bit;
+            } else {
+                *slot &= !bit;
+            }
+        }
+    }
+
+    /// Whether one bit is written.
+    fn holds(&self, at: usize) -> bool {
+        let word = at.saturating_div(64);
+        let bit = 1_u64 << u32::try_from(at % 64).unwrap_or(0);
+        self.held.get(word).is_some_and(|slot| slot & bit != 0)
+    }
+}
 
 /// The functions `ext/misc/regexp.c` registers, which
 /// `load_static_extension db regexp` reaches.

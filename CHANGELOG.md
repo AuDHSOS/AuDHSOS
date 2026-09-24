@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The suite harness answers `sqlite3BitvecBuiltinTest`, which runs the
+  program of a case against two arrays of bits and answers the first bit
+  they disagree on. D-474 records it. `bitvec.test` goes from no case
+  passing to 43.
+
 - The suite harness answers `add_test_collate`, `add_test_collate_needed`,
   `add_test_function` and `sqlite3_complete16`, registering the version of
   the collation and of the function the C library would call for the
