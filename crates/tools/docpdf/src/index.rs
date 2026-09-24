@@ -161,15 +161,20 @@ fn clip(text: &str, width: Mils, font: Font, size: Mils) -> String {
         return text.to_owned();
     }
     let mut out = String::new();
+    let mut used: Mils = 0;
+    let ellipsis = font.width_of_str("\u{2026}", size);
     for character in text.chars() {
-        let mut candidate = out.clone();
-        candidate.push(character);
-        candidate.push('\u{2026}');
-        if font.width_of_str(&candidate, size) > width {
+        let character_width = font.width_of_str(character.encode_utf8(&mut [0; 4]), size);
+        if used
+            .saturating_add(character_width)
+            .saturating_add(ellipsis)
+            > width
+        {
             out.push('\u{2026}');
             return out;
         }
         out.push(character);
+        used = used.saturating_add(character_width);
     }
     out
 }
@@ -204,4 +209,21 @@ fn file_name(path: &str) -> String {
     path.rsplit_once('/')
         .map_or(path, |(_, name)| name)
         .to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use doc_pdf::font::Font;
+    use doc_pdf::units::pt;
+
+    use super::clip;
+
+    #[test]
+    fn a_long_title_is_clipped_within_the_column() {
+        let title = "A title with \u{a0} and symbols ".repeat(500);
+        let clipped = clip(&title, pt(230), Font::Regular, pt(8));
+        assert!(clipped.ends_with('\u{2026}'));
+        assert!(Font::Regular.width_of_str(&clipped, pt(8)) <= pt(230));
+        assert!(title.starts_with(clipped.trim_end_matches('\u{2026}')));
+    }
 }
