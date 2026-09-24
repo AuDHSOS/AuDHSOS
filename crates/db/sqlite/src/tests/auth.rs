@@ -857,3 +857,110 @@ fn what_the_authorizer_of_a_connection_is_asked() {
     what_an_attach_is_asked_for();
     what_a_denied_read_of_another_database_answers();
 }
+
+/// One call of [`recording`]: the action, the index or table it names and
+/// the schema it stands in.
+struct Recorded {
+    /// What the statement was about to do.
+    action: Action,
+    /// The third argument.
+    first: Vec<u8>,
+    /// The fifth argument.
+    schema: Vec<u8>,
+}
+
+/// What every call of [`recording`] was asked.
+static RECORDED: std::sync::Mutex<Vec<Recorded>> = std::sync::Mutex::new(Vec::new());
+
+/// A function that allows every action and writes down what it was asked.
+fn recording(asked: &Asked<'_>) -> Answer {
+    if let Ok(mut held) = RECORDED.lock() {
+        held.push(Recorded {
+            action: asked.action,
+            first: asked.first.to_vec(),
+            schema: asked.schema.to_vec(),
+        });
+    }
+    Answer::Ok
+}
+
+/// What [`RECORDED`] holds for one action, as `name/schema` per call.
+fn recorded(action: Action) -> alloc::string::String {
+    let held = RECORDED.lock().expect("the recorded calls");
+    let mut out = alloc::string::String::new();
+    for one in held.iter() {
+        if one.action != action {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(&alloc::string::String::from_utf8_lossy(&one.first));
+        out.push('/');
+        out.push_str(&alloc::string::String::from_utf8_lossy(&one.schema));
+    }
+    out
+}
+
+/// `REINDEX` asks about every index it writes again under the name of
+/// that index and the schema it stands in, with the index made last
+/// first, and `REINDEX <collation>` writes again every index one place of
+/// whose entries is held in that collation.
+#[test]
+fn which_indexes_a_reindex_asks_about() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.opens(|_| Some(Vec::new()));
+    writer.asks(recording);
+    for sql in [
+        b"CREATE TABLE t3(a PRIMARY KEY, b, c)".as_slice(),
+        b"CREATE INDEX t3_idx1 ON t3(c COLLATE BINARY)",
+        b"CREATE INDEX t3_idx2 ON t3(b COLLATE NOCASE)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let clear = || RECORDED.lock().expect("the recorded calls").clear();
+    clear();
+    writer.run(b"REINDEX t3_idx1").unwrap();
+    assert_eq!(recorded(Action::Reindex), "t3_idx1/main");
+    // The key of the row ends every entry of an index over a table that
+    // keeps a rowid, and it is held under `BINARY`, so every index of
+    // such a table is written again.
+    clear();
+    writer.run(b"REINDEX BINARY").unwrap();
+    assert_eq!(
+        recorded(Action::Reindex),
+        "t3_idx2/main t3_idx1/main sqlite_autoindex_t3_1/main"
+    );
+    clear();
+    writer.run(b"REINDEX NOCASE").unwrap();
+    assert_eq!(recorded(Action::Reindex), "t3_idx2/main");
+    // A table names its indexes with the one made last first.
+    clear();
+    writer.run(b"REINDEX t3").unwrap();
+    assert_eq!(
+        recorded(Action::Reindex),
+        "t3_idx2/main t3_idx1/main sqlite_autoindex_t3_1/main"
+    );
+    // An entry of an index over a table that keeps its rows in the key's
+    // own tree ends with the columns of that key, under their own
+    // collations, so `REINDEX NOCASE` writes such an index again.
+    for sql in [
+        b"CREATE TABLE w(a TEXT COLLATE NOCASE PRIMARY KEY, b) WITHOUT ROWID".as_slice(),
+        b"CREATE INDEX wb ON w(b COLLATE BINARY)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    // The `PRIMARY KEY` of such a table is that tree and no index of its
+    // own, so this engine names it in no call where the C library names
+    // `sqlite_autoindex_w_1`.
+    clear();
+    writer.run(b"REINDEX NOCASE").unwrap();
+    assert_eq!(recorded(Action::Reindex), "t3_idx2/main wb/main");
+    // An index of the temp schema stands under that name.
+    writer.run(b"CREATE TEMP TABLE t4(a, b)").unwrap();
+    writer.run(b"CREATE INDEX temp.t4_idx ON t4(b)").unwrap();
+    clear();
+    writer.run(b"REINDEX temp.t4_idx").unwrap();
+    assert_eq!(recorded(Action::Reindex), "t4_idx/temp");
+    clear();
+}

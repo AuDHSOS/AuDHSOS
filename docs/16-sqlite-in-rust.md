@@ -1148,6 +1148,8 @@ Size: L.
      records.
 191. The statements a connection over a file the client may only read
      refuses. Built, which D-486 records.
+192. The index each `SQLITE_REINDEX` names, and the places a `REINDEX
+     <collation>` reads. Built, which D-488 and D-489 record.
 
 ### Done when
 

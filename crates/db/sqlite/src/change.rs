@@ -7496,7 +7496,7 @@ impl Writer {
         root: u32,
         over: &[u8],
     ) -> Result<(), Error> {
-        let (entries, collations, shared) = {
+        let (entries, collations, shared, named) = {
             let bytes = self.image();
             let database = self.reading(&bytes)?;
             // The statement was held to a table that is there before
@@ -7526,13 +7526,16 @@ impl Writer {
             let shared = read
                 .unique
                 .then(|| (read.columns.len(), Self::shown_index(table, &read)));
-            (entries, collations, shared)
+            (entries, collations, shared, read.name)
         };
         self.write_entries(
             entries,
             &collations,
             root,
-            shared.as_ref().map(|(count, named)| (*count, &named[..])),
+            (
+                shared.as_ref().map(|(count, shown)| (*count, &shown[..])),
+                &named,
+            ),
         )
     }
 
@@ -8753,8 +8756,20 @@ impl Writer {
         entries: Vec<Vec<Value>>,
         collations: &[crate::value::Placing],
         root: u32,
-        shared: Option<(usize, &[u8])>,
+        held: (Option<(usize, &[u8])>, &[u8]),
     ) -> Result<(), Error> {
+        let (shared, named) = held;
+        // `sqlite3RefillIndex` of `research/sqlite/src/build.c:3788` asks
+        // the function about the index before it writes an entry, and
+        // writes none where the function passes the index over.
+        let schema = self.called.name.clone();
+        if self
+            .asked(|authorizer| authorizer.reindex(named, &schema))?
+            .answer
+            == crate::auth::Answer::Ignore
+        {
+            return Ok(());
+        }
         // `sqlite3VdbeSorterInit`: the entries are sorted before any is
         // written, so the pages fill in the order the entries run and
         // not in the order the rows do.
@@ -8792,14 +8807,6 @@ impl Writer {
         let named = asked
             .name
             .map(|span| crate::schema::dequote(span.text(sql)));
-        let asking = named.clone().unwrap_or_default();
-        if self
-            .asked(|authorizer| authorizer.reindex(&asking, b"main"))?
-            .answer
-            == crate::auth::Answer::Ignore
-        {
-            return Ok(());
-        }
         // `reindexDatabases` of `research/sqlite/src/build.c:5140` writes
         // the indexes of every database the connection holds again where
         // the statement names no object and where it names a collation;
@@ -8873,7 +8880,10 @@ impl Writer {
                 entries,
                 &collations,
                 root,
-                shared.as_ref().map(|(count, named)| (*count, &named[..])),
+                (
+                    shared.as_ref().map(|(count, named)| (*count, &named[..])),
+                    &index.name,
+                ),
             )?;
         }
         Ok(())
@@ -8910,15 +8920,11 @@ impl Writer {
                 continue;
             }
             for kept in database.indexes(&table.name).iter().rev() {
-                // `REINDEX <collation>` writes again every index one of
-                // whose places is held in that collation.
-                if collation.is_some_and(|wanted| {
-                    !kept
-                        .index
-                        .columns
-                        .iter()
-                        .any(|column| column.collation == wanted)
-                }) {
+                // `collationMatch` of `research/sqlite/src/build.c` reads
+                // every place of the entry, the key of the row at the end
+                // of it among them, so `REINDEX BINARY` writes again every
+                // index of a table that keeps a rowid.
+                if collation.is_some_and(|wanted| !places_in(table, kept.index, wanted)) {
                     continue;
                 }
                 held.push(Rebuilt {
@@ -8930,7 +8936,6 @@ impl Writer {
                 });
             }
         }
-        held.reverse();
         Ok(held)
     }
 
@@ -11760,6 +11765,33 @@ pub(crate) fn collations_of(
             backwards: format >= 4 && column.order == crate::ast::Order::Descending,
         })
         .collect()
+}
+
+/// Whether one place of the entries of `index` is held in `collation`,
+/// which is what `REINDEX <collation>` writes an index again for.
+///
+/// The entry ends with the key of the row it belongs to: one place under
+/// `BINARY` for a table that keeps a rowid, and the columns of the
+/// `PRIMARY KEY` under their own collations for a table that keeps its
+/// rows in the key's own tree.
+fn places_in(
+    table: &Table,
+    index: &crate::schema::Index,
+    collation: crate::value::Collation,
+) -> bool {
+    if index
+        .columns
+        .iter()
+        .any(|column| column.collation == collation)
+    {
+        return true;
+    }
+    if !table.without_rowid {
+        return collation == crate::value::Collation::Binary;
+    }
+    crate::schema::key_collations(table)
+        .iter()
+        .any(|placing| placing.collation == collation)
 }
 
 /// Where one index entry stands against another: column by column

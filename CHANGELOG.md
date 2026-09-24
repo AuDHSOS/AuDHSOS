@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` asks the authorizer `SQLITE_REINDEX` once per index written
+  again, under the name of that index and the schema it stands in, and
+  `REINDEX <collation>` reads the key of the row at the end of an entry as a
+  place held under `BINARY`. D-488 and D-489 record it. Catalog 6.6.339.
+  `auth.test` goes from 340 cases passing to 347.
+
 - `db-sqlite` refuses every statement that would write a page of a file the
   client may only read with `attempt to write a readonly database`, and the
   suite harness holds which paths and which connections those are out of

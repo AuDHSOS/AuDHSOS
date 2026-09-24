@@ -7541,3 +7541,15 @@ Document 16 step Q8.
 - `PRAGMA query_only`, which answers nought.
 - A temp table written over such a file, which the temp schema holds.
 
+### 6.6.339 The indexes a `REINDEX` asks the authorizer about (`db-sqlite`)
+
+Document 16 step Q8.
+
+- `REINDEX <index>`, which asks about that index under `main`.
+- `REINDEX BINARY` over a table that keeps a rowid, which asks about
+  every index of it, and `REINDEX NOCASE`, which asks about the one
+  index a place of whose columns is held that way.
+- `REINDEX <table>`, which asks about its indexes with the one made last
+  first.
+- `REINDEX temp.<index>`, which asks under `temp`.
+
