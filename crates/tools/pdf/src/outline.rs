@@ -47,34 +47,61 @@ pub struct Node {
 ///
 /// The parents are found first, in one pass: a stack holds the open entry
 /// of every level, and an entry hangs under whatever is open above it.
-/// Everything else — the neighbours, the children, the count of what lies
-/// below an entry — is a question about that one table, and is answered by
-/// asking it rather than by writing back into the nodes.
+/// A forward pass links siblings and children. A backward pass counts
+/// descendants. The work is O(n) for n entries.
 #[must_use]
 pub fn tree(entries: &[Entry]) -> Vec<Node> {
     let parents = parents(entries);
-    entries
+    let mut nodes: Vec<Node> = entries
         .iter()
-        .enumerate()
-        .map(|(index, entry)| {
-            let parent = parent_of(&parents, index);
-            let children = children(&parents, index);
-            Node {
-                entry: entry.clone(),
-                parent,
-                previous: (0..index)
-                    .rev()
-                    .find(|before| parent_of(&parents, *before) == parent),
-                next: (index.saturating_add(1)..parents.len())
-                    .find(|after| parent_of(&parents, *after) == parent),
-                first: children.first().copied(),
-                last: children.last().copied(),
-                descendants: (0..parents.len())
-                    .filter(|other| descends_from(&parents, *other, index))
-                    .count(),
-            }
+        .zip(parents.iter().copied())
+        .map(|(entry, parent)| Node {
+            entry: entry.clone(),
+            parent,
+            previous: None,
+            next: None,
+            first: None,
+            last: None,
+            descendants: 0,
         })
-        .collect()
+        .collect();
+    let mut last_root = None;
+    for (index, parent) in parents.iter().copied().enumerate() {
+        let previous = if let Some(parent) = parent {
+            let Some(parent_node) = nodes.get_mut(parent) else {
+                continue;
+            };
+            let previous = parent_node.last;
+            if parent_node.first.is_none() {
+                parent_node.first = Some(index);
+            }
+            parent_node.last = Some(index);
+            previous
+        } else {
+            let previous = last_root;
+            last_root = Some(index);
+            previous
+        };
+        if let Some(node) = nodes.get_mut(index) {
+            node.previous = previous;
+        }
+        if let Some(previous) = previous
+            && let Some(node) = nodes.get_mut(previous)
+        {
+            node.next = Some(index);
+        }
+    }
+    for (index, parent) in parents.iter().copied().enumerate().rev() {
+        if let Some(parent) = parent {
+            let descendants = nodes
+                .get(index)
+                .map_or(0, |node| node.descendants.saturating_add(1));
+            if let Some(parent_node) = nodes.get_mut(parent) {
+                parent_node.descendants = parent_node.descendants.saturating_add(descendants);
+            }
+        }
+    }
+    nodes
 }
 
 /// The parent of every entry, by index.
@@ -89,31 +116,4 @@ fn parents(entries: &[Entry]) -> Vec<Option<usize>> {
         open.push(index);
     }
     parents
-}
-
-/// The parent of one entry.
-fn parent_of(parents: &[Option<usize>], index: usize) -> Option<usize> {
-    parents.get(index).copied().flatten()
-}
-
-/// The entries whose parent is `index`, in order.
-fn children(parents: &[Option<usize>], index: usize) -> Vec<usize> {
-    parents
-        .iter()
-        .enumerate()
-        .filter(|(_, parent)| **parent == Some(index))
-        .map(|(child, _)| child)
-        .collect()
-}
-
-/// Whether `index` lies below `ancestor`, at any depth.
-fn descends_from(parents: &[Option<usize>], index: usize, ancestor: usize) -> bool {
-    let mut walker = parent_of(parents, index);
-    while let Some(node) = walker {
-        if node == ancestor {
-            return true;
-        }
-        walker = parent_of(parents, node);
-    }
-    false
 }
