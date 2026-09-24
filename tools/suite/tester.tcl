@@ -1067,6 +1067,19 @@ proc file {command args} {
   return [uplevel 1 [list ::tcl_file $command {*}$args]]
 }
 
+# `exec [info nameofexec] SCRIPT` starts another `testfixture` and runs
+# the script a case wrote in it. This harness holds one interpreter, so
+# the script runs here over a connection of the harness's own; every
+# other call reaches the machine as it stands.
+if {[info commands ::tcl_exec] eq ""} { rename exec ::tcl_exec }
+proc exec {args} {
+  set held [lsearch -glob $args *.tcl]
+  if {$held > 0 && [lindex $args 0] eq [info nameofexec]} {
+    return [crash_script [lindex $args $held]]
+  }
+  return [::tcl_exec {*}$args]
+}
+
 proc reset_db {} {
   catch { db close }
   forcedelete test.db test.db-journal test.db-wal test.db-shm
@@ -2290,6 +2303,59 @@ proc sqlite3_snprintf_str {size format a b args} {
 # sync and ends the process at the sync the delay names. The runner does
 # the same over the files it holds and leaves them as that process left
 # them.
+# The script a case wrote for a child `testfixture` to run, which
+# `exec [info nameofexec] SCRIPT` starts. The child is this interpreter:
+# the harness opens a connection of its own over the files the session
+# holds, the commands the script calls of the library stand below, and
+# the crash the script asks for is applied when the script ends.
+#
+# The answer is the two values `catch` leaves for the `exec`, so a child
+# that lost power raises as the process it stands for does.
+proc crash_script {path} {
+  set fd [open $path r]
+  set script [read $fd]
+  close $fd
+  harness_send crash open 0 test.db 0
+  set held [expr {[llength [info commands ::db]] > 0}]
+  if {$held} { rename ::db ::crash_parent_db }
+  rename ::sqlite3 ::crash_parent_sqlite3
+  proc ::sqlite3 {name args} { interp alias {} ::$name {} crash_child_db }
+  set rc [catch { uplevel #0 $script } message]
+  rename ::sqlite3 {}
+  rename ::crash_parent_sqlite3 ::sqlite3
+  catch { interp alias {} ::db {} }
+  if {$held} { rename ::crash_parent_db ::db }
+  set answered [harness_send crash close]
+  # A script that raised ends the child with that message, which is what
+  # the process writes to `stderr` before it stops.
+  if {[lindex $answered 0] == 0 && $rc} { return [list 1 $message] }
+  if {[lindex $answered 0]} { error [lindex $answered 1] }
+  return ""
+}
+
+# The connection a child script opens, which answers out of the writer
+# the harness opened for the crash.
+proc crash_child_db {verb args} {
+  switch -- $verb {
+    eval { return [harness_send crash eval [lindex $args 0]] }
+    close { return "" }
+    func { return "" }
+    default { error "this harness has no db $verb in a crash script" }
+  }
+}
+
+# `sqlite3_crash_enable`, `sqlite3_crashparams` and `sqlite3_crash_now`
+# of `research/sqlite/src/test6.c`: the first says the crash layer is in
+# the way, the second how long the machine waits and which file it counts
+# the syncs of, and the third that it loses power now.
+proc sqlite3_crash_enable {args} { return "" }
+proc sqlite3_crashparams {args} {
+  set file [lindex $args end]
+  set delay [lindex $args end-1]
+  return [harness_send crash arm $delay [file tail $file]]
+}
+proc sqlite3_crash_now {args} { return [harness_send crash now] }
+
 proc crashsql {args} {
   set crashdelay 1
   set crashfile ""
@@ -2329,8 +2395,33 @@ proc crash_on_write {args} {
 proc do_faultsim_test {args} {}
 proc do_malloc_test {args} {}
 proc do_ioerr_test {args} {}
-proc faultsim_save_and_close {} {}
-proc faultsim_restore_and_reopen {} { reset_db }
+# `faultsim_save`, `faultsim_restore` and the two procs beside them of
+# `research/sqlite/test/tester.tcl:1650`: the three files of the path are
+# copied aside under `sv_` and copied back, so a case that runs a child
+# over the database it saved finds that database again.
+proc faultsim_save {} {
+  foreach f [list test.db test.db-journal test.db-wal] {
+    forcedelete sv_$f
+    if {[file_exists $f]} { forcecopy $f sv_$f }
+  }
+}
+proc faultsim_restore {} {
+  forcedelete test.db test.db-journal test.db-wal
+  foreach f [list test.db test.db-journal test.db-wal] {
+    if {[file_exists sv_$f]} { forcecopy sv_$f $f }
+  }
+}
+proc faultsim_save_and_close {} {
+  faultsim_save
+  catch { db close }
+  return {}
+}
+proc faultsim_restore_and_reopen {{dbfile test.db}} {
+  catch { db close }
+  faultsim_restore
+  sqlite3 db $dbfile
+  set ::DB [sqlite3_connection_pointer db]
+}
 proc faultsim_delete_and_reopen {args} { reset_db }
 proc faultsim_integrity_check {args} {}
 proc faultsim_test_result {args} {}

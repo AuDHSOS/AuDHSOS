@@ -7,6 +7,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The suite harness runs a script a case writes for a child
+  `testfixture` over a connection of its own, and applies the crash the
+  script asks for when the script ends, where it ran the script in the
+  child process of a `tclsh` that holds none of the harness's commands
+  before. `faultsim_save` and `faultsim_restore` copy the three files of
+  the path aside and back. D-458 records it. `walcrash4.test` goes from
+  100 cases passing to 201, which is every case of the file.
+
 - `db-sqlite` answers a checkpoint through `Writer::checkpointed`, which
   takes one of the five kinds `sqlite3_wal_checkpoint_v2` names and one
   database or every database the connection holds, and refuses a

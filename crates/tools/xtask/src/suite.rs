@@ -645,6 +645,34 @@ struct Crashing {
     log: Vec<u8>,
 }
 
+/// A child process a crash runs its statements in: the three files of the
+/// path as it found them, the connection its script runs over,
+/// everything that connection has done, and where the machine loses
+/// power.
+struct Crashed {
+    /// The path the child opened.
+    path: String,
+    /// The files as the child found them, which the crash writes part of.
+    files: Crashing,
+    /// The connection the statements of the script run on.
+    writer: Writer,
+    /// Everything the statements have done so far.
+    did: Vec<Does>,
+    /// Whether the machine counts the writes of every file rather than
+    /// the syncs of one, which `crash_on_write` says.
+    counts_writes: bool,
+    /// Which sync of that file the machine loses power at, nought where
+    /// it loses power at none.
+    delay: usize,
+    /// The file whose syncs the machine counts.
+    onto: Onto,
+    /// The seed the crash chooses its torn write by.
+    seed: usize,
+    /// Whether the script said the machine loses power now, which
+    /// `sqlite3_crash_now` says.
+    now: bool,
+}
+
 impl Crashing {
     /// The files as the session holds them.
     fn new(files: (Vec<u8>, Vec<u8>, Vec<u8>)) -> Self {
@@ -966,6 +994,25 @@ fn simplified(path: &str) -> String {
     if absolute { format!("/{held}") } else { held }
 }
 
+/// The path of the file a crash counts on, which is the database itself
+/// where the name carries the tail of a journal or of a log.
+fn pathed(named: &str) -> &str {
+    named
+        .strip_suffix("-wal")
+        .or_else(|| named.strip_suffix("-journal"))
+        .unwrap_or(named)
+}
+
+/// Which of the three files a crash counts the syncs of, read off the
+/// name it counts on.
+fn onto_named(named: &str) -> Onto {
+    match named.rsplit_once('-').map(|(_, tail)| tail) {
+        Some("wal") => Onto::Log,
+        Some("journal") => Onto::Journal,
+        _ => Onto::Main,
+    }
+}
+
 /// The file one thing a commit does reaches.
 const fn onto_of(held: &Does) -> Onto {
     match held {
@@ -1054,6 +1101,10 @@ struct Session {
     /// because the harness holds one writer per path and a temp schema
     /// belongs to a connection.
     tempers: BTreeMap<String, String>,
+    /// The child a crash opened, whose script the tester runs one
+    /// statement at a time and whose crash is applied when the script
+    /// ends.
+    crashing: Option<Crashed>,
     /// The directory the interpreter runs in, which is where a file the
     /// session holds is written when the tester opens it as a file of
     /// the machine.
@@ -1124,6 +1175,7 @@ impl Session {
         Session {
             temps: BTreeMap::new(),
             tempers: BTreeMap::new(),
+            crashing: None,
             over: std::env::temp_dir().join(format!("audhsos-suite-{file}")),
             file: file.to_owned(),
             held: BTreeMap::new(),
@@ -1755,30 +1807,28 @@ impl Session {
     /// statements ran to their end.
     fn crashed(&mut self, args: &[String]) -> Result<Vec<String>, String> {
         let kind = args.first().map_or("", String::as_str);
-        let delay = number_of(args.get(1).map_or("", String::as_str))?;
-        let named = args.get(2).map_or("", String::as_str);
-        let seed = number_of(args.get(3).map_or("0", String::as_str))?;
-        let sql = args.get(4).map_or("", String::as_str);
-        let path = named
-            .strip_suffix("-wal")
-            .or_else(|| named.strip_suffix("-journal"))
-            .unwrap_or(named);
-        let onto = match named.rsplit_once('-').map(|(_, tail)| tail) {
-            Some("wal") => Onto::Log,
-            Some("journal") => Onto::Journal,
-            _ => Onto::Main,
-        };
-        let mut files = Crashing::new(self.files_of(path));
-        let mut writer = files.opened()?;
-        writer.defines(DEFINED);
-        writer.groups(GROUPED);
-        // `crashsql` of `research/sqlite/test/tester.tcl` holds the cache
-        // of the child to ten pages, so the transaction writes pages into
-        // the file before it commits.
-        writer.caching(10);
-        ticked(&mut writer, self.clock);
-        let mut did: Vec<Does> = Vec::new();
-        for statement in statements(sql) {
+        // A script the tester runs one statement at a time opens the
+        // child, evaluates statements on it, arms the crash again where
+        // the script says so, says the machine loses power now, reads
+        // whether the child holds a transaction, and ends the child.
+        match kind {
+            "open" => return self.crash_open(args, false),
+            "eval" => return self.crash_eval(args.get(1).map_or("", String::as_str)),
+            "arm" => return self.crash_arm(args),
+            "now" => {
+                let child = self.crash_child()?;
+                child.now = true;
+                return Ok(Vec::new());
+            }
+            "autocommit" => {
+                let held = self.crash_child()?.writer.began();
+                return Ok(alloc_one(if held { "0" } else { "1" }));
+            }
+            "close" => return self.crash_close(),
+            _ => {}
+        }
+        self.crash_open(args, kind == "write")?;
+        for statement in statements(args.get(4).map_or("", String::as_str)) {
             let text = statement.trim();
             if text.is_empty() {
                 continue;
@@ -1788,22 +1838,119 @@ impl Session {
             if reads(text) {
                 continue;
             }
-            if writer.run(text.as_bytes()).is_err() {
+            if self.crash_eval(text).is_err() {
                 break;
             }
-            did.extend(writer.did());
         }
-        let crashed = if kind == "write" {
-            files.on_write(&did, delay)
+        self.crash_close()
+    }
+
+    /// The child a crash opened.
+    ///
+    /// # Errors
+    ///
+    /// The words for a request that names no child.
+    fn crash_child(&mut self) -> Result<&mut Crashed, String> {
+        self.crashing
+            .as_mut()
+            .ok_or_else(|| "no crash is open".to_owned())
+    }
+
+    /// Opens the child a crash runs its statements in: the three files of
+    /// the path as the child finds them, a connection over them, and
+    /// where the machine loses power.
+    ///
+    /// The arguments are the kind of crash, how long it waits, the file
+    /// it counts on and the seed of its choices. `counts_writes` says the
+    /// machine counts the writes of every file rather than the syncs of
+    /// one, which `crash_on_write` does.
+    fn crash_open(&mut self, args: &[String], counts_writes: bool) -> Result<Vec<String>, String> {
+        let delay = number_of(args.get(1).map_or("0", String::as_str))?;
+        let named = args.get(2).map_or("", String::as_str);
+        let seed = number_of(args.get(3).map_or("0", String::as_str))?;
+        let path = pathed(named);
+        let files = Crashing::new(self.files_of(path));
+        let mut writer = files.opened()?;
+        writer.defines(DEFINED);
+        writer.groups(GROUPED);
+        // `crashsql` of `research/sqlite/test/tester.tcl` holds the cache
+        // of the child to ten pages, so the transaction writes pages into
+        // the file before it commits.
+        writer.caching(10);
+        ticked(&mut writer, self.clock);
+        self.crashing = Some(Crashed {
+            path: path.to_owned(),
+            files,
+            writer,
+            did: Vec::new(),
+            counts_writes,
+            delay,
+            onto: onto_named(named),
+            seed,
+            now: false,
+        });
+        Ok(Vec::new())
+    }
+
+    /// Runs `sql` on the child and answers the values its statements
+    /// answered, which a script of the child reads.
+    fn crash_eval(&mut self, sql: &str) -> Result<Vec<String>, String> {
+        let clock = self.clock;
+        let child = self.crash_child()?;
+        ticked(&mut child.writer, clock);
+        let mut waiting = false;
+        let (out, ran) = ran_each(
+            &mut child.writer,
+            sql,
+            (&[], DEFINED, ""),
+            (false, &mut waiting),
+        );
+        child.did.extend(child.writer.did());
+        ran.map(|()| out)
+    }
+
+    /// Arms the crash of the child again: `sqlite3_crashparams` names how
+    /// long it waits and the file it counts on, and a wait of nought is
+    /// a machine that loses power at no sync at all.
+    fn crash_arm(&mut self, args: &[String]) -> Result<Vec<String>, String> {
+        let delay = number_of(args.get(1).map_or("0", String::as_str))?;
+        let named = args.get(2).map_or("", String::as_str).to_owned();
+        let child = self.crash_child()?;
+        child.delay = delay;
+        child.onto = onto_named(&named);
+        Ok(Vec::new())
+    }
+
+    /// Ends the child: the machine loses power where the script said so
+    /// or where the wait names a sync the child reached, the session
+    /// opens the files the child left, and the answer is the two values
+    /// `catch` leaves.
+    fn crash_close(&mut self) -> Result<Vec<String>, String> {
+        let mut child = self
+            .crashing
+            .take()
+            .ok_or_else(|| "no crash is open".to_owned())?;
+        let crashed = if child.delay == 0 {
+            // A child that loses power at no sync writes every byte its
+            // statements wrote, which a machine that loses power after
+            // the last of them has on the disk already.
+            for held in &child.did {
+                child.files.does(held);
+            }
+            child.now
+        } else if child.counts_writes {
+            child.files.on_write(&child.did, child.delay)
         } else {
-            files.on_sync(&did, delay, onto, seed)
+            child
+                .files
+                .on_sync(&child.did, child.delay, child.onto, child.seed)
         };
-        let recovered = files.recovered()?;
-        self.held.insert(path.to_owned(), recovered);
+        let recovered = child.files.recovered()?;
+        self.held.insert(child.path.clone(), recovered);
         if !crashed {
             return Ok(vec!["0".to_owned(), String::new()]);
         }
-        let message = if kind == "write" {
+        let message = if child.counts_writes {
             "child killed: SIGABRT"
         } else {
             "child process exited abnormally"

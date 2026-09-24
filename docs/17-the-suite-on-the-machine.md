@@ -538,6 +538,13 @@ Size: S.
 63. `sqlite3_wal_checkpoint` and `sqlite3_wal_checkpoint_v2` answer out
     of [`Writer::checkpointed`], each writing the message
     `sqlite3_errmsg` answers, which D-457 records.
+64. A script a case writes for a child `testfixture` runs in this
+    interpreter over a connection the harness opens for the crash, and
+    the crash the script asks for is applied when the script ends, which
+    D-458 records.
+65. `faultsim_save` and `faultsim_restore` copy the three files of the
+    path aside and copy them back, so a case that runs a child over the
+    database it saved finds that database, which D-458 records.
 
 ### Produces
 
