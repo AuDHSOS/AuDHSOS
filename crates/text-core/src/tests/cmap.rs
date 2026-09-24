@@ -259,6 +259,29 @@ fn cmap_header_aliases_order_and_unsupported_encodings_are_rejected() {
 }
 
 #[test]
+fn cmap_records_order_by_language_within_a_pair() {
+    // Issue #480: equal (platform, encoding) pairs order by subtable language.
+    let lang = |mut table: Vec<u8>, at: usize, value: u16| {
+        p16(&mut table, at, value);
+        table
+    };
+    let ok = wrap(&[(1, 0, zero()), (1, 0, lang(zero(), 4, 1)), (3, 1, four())]);
+    assert_eq!(Cmap::parse(&ok, 500).map(Cmap::format), Ok(4));
+    let wide = wrap(&[(0, 4, groups(12)), (0, 4, lang(groups(12), 10, 1))]);
+    assert_eq!(Cmap::parse(&wide, 500).map(Cmap::format), Ok(12));
+    for tables in [
+        vec![(1, 0, lang(zero(), 4, 1)), (1, 0, zero()), (3, 1, four())],
+        vec![(1, 0, zero()), (1, 0, zero()), (3, 1, four())],
+        vec![(0, 4, lang(groups(12), 10, 1)), (0, 4, groups(12))],
+    ] {
+        assert_eq!(
+            Cmap::parse(&wrap(&tables), 500).err(),
+            Some(FontError::TableOrder)
+        );
+    }
+}
+
+#[test]
 fn cmap_four_malformed_segments_offsets_and_sentinel_are_rejected() {
     for (at, v) in [
         (6, 0),
