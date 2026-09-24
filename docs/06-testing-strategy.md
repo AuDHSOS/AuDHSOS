@@ -7522,3 +7522,13 @@ for the same statements.
 - A table of three unique keys the last of which says `REPLACE`, which
   refuses the row under the first.
 
+### 6.6.337 The name after `DEFAULT` (`db-sqlite`)
+
+Document 16 step Q8. Every answer is the one the C library's shell writes
+for the same statements.
+
+- `DEFAULT true` and `DEFAULT false`, which are the numbers one and
+  nought, with the type each answers.
+- `DEFAULT hi`, which is the two letters, and the same name in double
+  quotes, in brackets, in back quotes and in single quotes.
+

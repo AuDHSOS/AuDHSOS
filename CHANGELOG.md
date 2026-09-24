@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` reads a name written after `DEFAULT` as its own letters, and
+  the names `true` and `false` as one and nought, where the name lost its
+  first and its last letter. D-485 records it. Catalog 6.6.337.
+  `insert.test` goes from 73 cases passing to 78 and `istrue.test` from 49
+  to 51.
+
 - `db-sqlite` holds every key a `REPLACE` answered against the table again
   once the deletion it made has run, because a trigger of that deletion may
   have written the key back. D-483 records it. Catalog 6.6.336.

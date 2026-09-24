@@ -1002,8 +1002,18 @@ fn hex_literal(text: &[u8]) -> (i64, Outcome) {
 }
 
 /// A quoted string as its bytes, with the doubled quotes folded.
+///
+/// A text that opens with no quote is its own bytes, which
+/// `sqlite3Dequote` of `research/sqlite/src/util.c` leaves alone: the
+/// name after `DEFAULT` is read as a string, and `DEFAULT hi` stands for
+/// the two letters and not for nothing.
 fn unquote(text: &[u8]) -> Vec<u8> {
-    let quote = text.first().copied().unwrap_or(b'\'');
+    let open = text.first().copied().unwrap_or(b'\'');
+    let quote = match open {
+        b'\'' | b'"' | b'`' => open,
+        b'[' => b']',
+        _ => return text.to_vec(),
+    };
     let inner = text
         .get(1..text.len().saturating_sub(1))
         .unwrap_or_default();
@@ -2006,7 +2016,7 @@ fn in_list(left: &Answer, list: &[Answer], negated: bool, default: Collation) ->
 
 /// Whether a name written without quotes is one of the two SQLite
 /// reads as a number rather than as a column.
-const fn truth_of(text: &[u8]) -> Option<bool> {
+pub(crate) const fn truth_of(text: &[u8]) -> Option<bool> {
     if text.eq_ignore_ascii_case(b"true") {
         return Some(true);
     }

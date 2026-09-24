@@ -1143,6 +1143,9 @@ Size: L.
 189. The keys a `REPLACE` is held to again once its deletion has run, and
      the order the keys of a table are held against a row in. Built,
      which D-483 and D-484 record.
+190. The name written after `DEFAULT`, which stands for its own letters
+     and for a number where it is `true` or `false`. Built, which D-485
+     records.
 
 ### Done when
 

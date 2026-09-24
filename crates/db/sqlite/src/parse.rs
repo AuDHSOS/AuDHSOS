@@ -2078,12 +2078,27 @@ impl<'a> Parser<'a> {
             Kind::Keyword(keyword) if keyword.can_be_name() => Literal::Text(span),
             _ => return Err(self.error(Some(token), Expected::Expression)),
         };
+        // `ccons ::= DEFAULT scantok id` of
+        // `research/sqlite/src/parse.y:400` hands the name to
+        // `sqlite3ExprIdToTrueFalse`, which reads `true` and `false` as
+        // one and nought. A default reads no row, so the name answers
+        // the number the way a bare name does anywhere.
+        let named =
+            matches!(token.kind, Kind::Id) && crate::eval::truth_of(span.text(self.sql)).is_some();
         self.bump();
         let text = Span {
             start: from,
             len: span.start.saturating_add(span.len).saturating_sub(from),
         };
-        let value = self.literal(literal)?;
+        let value = if named {
+            self.node(Node::Column {
+                schema: None,
+                table: None,
+                column: span,
+            })?
+        } else {
+            self.literal(literal)?
+        };
         if negative {
             return Ok((self.unary(UnaryOp::Negate, value)?, text));
         }

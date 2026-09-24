@@ -564,3 +564,27 @@ fn which_order_the_keys_of_a_table_are_held_against_a_row_in() {
     );
     assert_eq!(rows(&writer, "SELECT x FROM u1"), ["1"]);
 }
+
+#[test]
+fn what_a_name_after_default_stands_for() {
+    let mut writer = connection();
+    for sql in [
+        // `sqlite3Dequote` leaves a name that opens with no quote alone,
+        // and `sqlite3ExprIdToTrueFalse` reads `true` and `false` as
+        // numbers.
+        "CREATE TABLE t(a DEFAULT true, b DEFAULT false, c DEFAULT hi, \
+         d DEFAULT \"quoted\", e DEFAULT [bracket], f DEFAULT 'text', \
+         g DEFAULT `tick`)",
+        "INSERT INTO t DEFAULT VALUES",
+    ] {
+        writer.run(sql.as_bytes()).unwrap();
+    }
+    assert_eq!(
+        rows(&writer, "SELECT a, b, c, d, e, f, g FROM t"),
+        ["1", "0", "hi", "quoted", "bracket", "text", "tick"]
+    );
+    assert_eq!(
+        rows(&writer, "SELECT typeof(a), typeof(b), typeof(c) FROM t"),
+        ["integer", "integer", "text"]
+    );
+}
