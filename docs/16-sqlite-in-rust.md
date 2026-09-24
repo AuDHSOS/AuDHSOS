@@ -1099,6 +1099,9 @@ Size: L.
 172. The journal a `VACUUM` commits, which holds every page of the file
      the vacuum found at the page size that file had. Built, which D-456
      records.
+173. The checkpoint the C API takes, which names one of five kinds and
+     one database or every database the connection holds. Built, which
+     D-457 records.
 
 ### Done when
 

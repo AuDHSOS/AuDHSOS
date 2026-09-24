@@ -30,7 +30,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use db_sqlite::change::{Does, Onto, Writer};
+use db_sqlite::change::{Checkpointing, Does, Onto, Writer};
 use db_sqlite::db::Database;
 use db_sqlite::func::Counted;
 use db_sqlite::func::Defined;
@@ -1307,9 +1307,8 @@ impl Session {
             // `sqlite3_prepare`, the commands that read a statement it
             // answered, and the three that read what it is.
             "prepare" | "autocommit" | "step" | "finalize" | "reset" | "clear_binds" | "bind"
-            | "column" | "stmt" | "next_stmt" | "readonly" | "busy" | "isexplain" | "expired" => {
-                self.of_statement(verb, args)
-            }
+            | "column" | "stmt" | "next_stmt" | "readonly" | "busy" | "isexplain" | "expired"
+            | "checkpoint" => self.of_statement(verb, args),
             // `sqlite3_errcode` and `sqlite3_extended_errcode`.
             "errcode" => Ok(alloc_one(&last_code(first))),
             "normalize" => Ok(alloc_one(&normalized(first))),
@@ -2109,6 +2108,7 @@ impl Session {
         match verb {
             "prepare" => Ok(self.prepare(first, second, third == "1")),
             "autocommit" => self.autocommit(first),
+            "checkpoint" => self.checkpointed(args),
             "step" => self.step(first),
             "finalize" => Ok(self.finalize(first)),
             "reset" => Ok(self.reset_statement(first, false)),
@@ -2274,6 +2274,41 @@ impl Session {
             .get(&path)
             .ok_or_else(|| format!("no such database: {path}"))?;
         Ok(alloc_one(if writer.began() { "0" } else { "1" }))
+    }
+
+    /// `sqlite3_wal_checkpoint_v2` of `research/sqlite/src/test1.c:7685`:
+    /// the pages the log of the database `name` names are written into
+    /// that file, or the pages of every database of the connection where
+    /// the call names none, and the three values the C API writes.
+    ///
+    /// The arguments are the connection, the word of the mode and the
+    /// name of the database, which is empty where the call names none.
+    fn checkpointed(&mut self, args: &[String]) -> Result<Vec<String>, String> {
+        let connection = args.first().map_or("", String::as_str);
+        let word = args.get(1).map_or("", String::as_str);
+        let named = args.get(2).map_or("", String::as_str);
+        let mode = match word {
+            "noop" => Checkpointing::Noop,
+            "full" => Checkpointing::Full,
+            "restart" => Checkpointing::Restart,
+            "truncate" => Checkpointing::Truncate,
+            _ => Checkpointing::Passive,
+        };
+        let path = self
+            .connections
+            .get(connection)
+            .cloned()
+            .ok_or_else(|| format!("no such connection: {connection}"))?;
+        let writer = self
+            .held
+            .get_mut(&path)
+            .ok_or_else(|| format!("no such database: {path}"))?;
+        let schema = named.as_bytes().to_vec();
+        let answered = writer
+            .checkpointed(mode, (!named.is_empty()).then_some(schema).as_deref())
+            .map_err(|error| refusal(&error))?;
+        stood();
+        Ok(answered.iter().map(|value| listed(value, "")).collect())
     }
 
     /// What one statement of `connection` answers, with the names of its

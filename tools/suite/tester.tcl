@@ -2027,6 +2027,38 @@ proc sqlite3_expanded_sql {stmt} { return [lindex [harness_send stmt $stmt expan
 proc sqlite3_errcode {db} { return [lindex [harness_send errcode primary] 0] }
 proc sqlite3_extended_errcode {db} { return [lindex [harness_send errcode extended] 0] }
 proc sqlite3_get_autocommit {db} { return [lindex [harness_send autocommit $db] 0] }
+
+# `sqlite3_wal_checkpoint DB ?NAME?` and
+# `sqlite3_wal_checkpoint_v2 DB MODE ?NAME?` of
+# `research/sqlite/src/test1.c:7685`: the pages the log of the database
+# NAME names are written into that file, or the pages of every database
+# of the connection where the call names none. The first answers the code
+# the C API answered, the second the three values it wrote, and both set
+# the message `sqlite3_errmsg` answers.
+#
+# `sqlite3_wal_checkpoint_v2` writes `unknown database: NAME` where the
+# pragma writes `unknown database NAME`, so the name is written again
+# here.
+proc harness_checkpoint {db mode name} {
+  set ::harness_error ""
+  if {[catch { harness_send checkpoint $db $mode $name } out] == 0} { return $out }
+  if {[string match "unknown database*" $out]} {
+    set ::harness_error "unknown database: $name"
+  } else {
+    set ::harness_error $out
+  }
+  return ""
+}
+proc sqlite3_wal_checkpoint {db {name ""}} {
+  harness_checkpoint $db passive $name
+  if {$::harness_error eq ""} { return SQLITE_OK }
+  return [sqlite3_errcode $db]
+}
+proc sqlite3_wal_checkpoint_v2 {db mode {name ""}} {
+  set out [harness_checkpoint $db $mode $name]
+  if {$::harness_error eq ""} { return $out }
+  error "[sqlite3_errcode $db] - $::harness_error"
+}
 # `sqlite3_system_errno` of `research/sqlite/src/main.c`: what the
 # machine answered the last open of a file with.
 proc sqlite3_system_errno {db} { return [lindex [harness_send system_errno $db] 0] }

@@ -7,6 +7,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` answers a checkpoint through `Writer::checkpointed`, which
+  takes one of the five kinds `sqlite3_wal_checkpoint_v2` names and one
+  database or every database the connection holds, and refuses a
+  checkpoint of a database that carries a transaction `database table is
+  locked`. D-457 records it. Catalog 6.6.321. `wal.test` goes from 372
+  cases passing to 389, `e_walckpt.test` from 1 to 4 and
+  `walckptnoop.test` from 1 to 2.
+
 - `db-sqlite` writes back the pages the frames of the log hold and no
   other page of the file where a checkpoint runs, and writes nothing where
   every frame has reached the file already. D-453 records it. Catalog

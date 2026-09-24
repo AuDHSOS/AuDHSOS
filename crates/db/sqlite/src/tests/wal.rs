@@ -276,3 +276,81 @@ fn a_checkpoint_writes_back_the_pages_the_log_holds() {
     writer.run(b"PRAGMA wal_checkpoint").unwrap();
     assert_eq!(super::journal::shown_did(&writer.did()), "");
 }
+
+#[test]
+fn what_a_checkpoint_of_each_kind_answers() {
+    let mut writer = crate::change::Writer::new(1024, 0, crate::header::Encoding::Utf8).unwrap();
+    writer.run(b"PRAGMA journal_mode=wal").unwrap();
+    writer.run(b"CREATE TABLE t(a)").unwrap();
+    writer.run(b"INSERT INTO t VALUES(1)").unwrap();
+    // A checkpoint written `NOOP` writes no frame back, so it answers the
+    // frames the log holds and none written back.
+    let noop = writer
+        .checkpointed(crate::change::Checkpointing::Noop, None)
+        .unwrap();
+    assert_eq!(noop.first(), Some(&Value::Int(0)));
+    assert_ne!(noop.get(1), Some(&Value::Int(0)));
+    assert_eq!(noop.get(2), Some(&Value::Int(0)));
+    // Every other kind writes them back, and the count it answers is the
+    // frames it wrote.
+    let full = writer.run(b"PRAGMA wal_checkpoint(FULL)").unwrap();
+    assert_eq!(full.first().map(|row| row[2].clone()), noop.get(1).cloned());
+    // A `NOOP` after a checkpoint that wrote every frame back answers
+    // those frames as written back.
+    let after = writer
+        .checkpointed(crate::change::Checkpointing::Noop, None)
+        .unwrap();
+    assert_eq!(after.get(1), after.get(2));
+    assert_eq!(after.get(1), noop.get(1));
+    // A checkpoint written `RESTART` begins the log again, and one
+    // written `TRUNCATE` answers no frame at all.
+    writer.run(b"INSERT INTO t VALUES(2)").unwrap();
+    let restart = writer.run(b"PRAGMA wal_checkpoint(RESTART)").unwrap();
+    assert_ne!(
+        restart.first().map(|row| row[1].clone()),
+        Some(Value::Int(0))
+    );
+    writer.run(b"INSERT INTO t VALUES(3)").unwrap();
+    let truncate = writer.run(b"PRAGMA wal_checkpoint(TRUNCATE)").unwrap();
+    assert_eq!(
+        truncate.first().map(|row| row[1].clone()),
+        Some(Value::Int(0))
+    );
+}
+
+#[test]
+fn what_a_checkpoint_of_a_database_the_connection_holds_no_log_for_answers() {
+    let mut writer = crate::change::Writer::new(1024, 0, crate::header::Encoding::Utf8).unwrap();
+    let none = alloc::vec![Value::Int(0), Value::Int(-1), Value::Int(-1)];
+    // A file that is not logging holds no frame, which the C library
+    // says with minus one rather than nought.
+    assert_eq!(
+        writer.checkpointed(crate::change::Checkpointing::Passive, Some(b"main")),
+        Ok(none.clone())
+    );
+    // Every connection holds the temp schema whether it has written a
+    // table there or not, and a database the connection holds of its own
+    // carries no log.
+    assert_eq!(
+        writer.checkpointed(crate::change::Checkpointing::Passive, Some(b"temp")),
+        Ok(none.clone())
+    );
+    writer.run(b"CREATE TEMP TABLE t(a)").unwrap();
+    assert_eq!(
+        writer.checkpointed(crate::change::Checkpointing::Passive, Some(b"temp")),
+        Ok(none)
+    );
+    // A schema the connection holds no database under is refused.
+    assert_eq!(
+        writer
+            .checkpointed(crate::change::Checkpointing::Passive, Some(b"aux"))
+            .map_err(|error| error.message()),
+        Err(alloc::string::String::from("unknown database aux"))
+    );
+    // `sqlite3BtreeCheckpoint` refuses a checkpoint of a database that
+    // carries a transaction.
+    writer.run(b"BEGIN").unwrap();
+    let refused = writer.run(b"PRAGMA wal_checkpoint").unwrap_err();
+    assert_eq!(refused.message(), "database table is locked");
+    assert_eq!(refused.code().name, b"SQLITE_LOCKED");
+}

@@ -7334,3 +7334,16 @@ Document 16 step Q8.
   holds one record per page of the file the vacuum found, each as wide as
   that file's page size, and playing it back over the file the vacuum
   wrote answers the file it found.
+
+### 6.6.321 What a checkpoint of each kind answers (`db-sqlite`)
+
+Document 16 step Q8.
+
+- The five kinds of checkpoint over a log of frames: `NOOP` writes none of
+  them back, `FULL` and `RESTART` write them all, and `TRUNCATE` answers
+  no frame.
+- A checkpoint of a database that carries no log, of the temp schema with
+  and without a table in it, of a schema the connection holds no database
+  under, and of a database the connection holds a transaction on.
+- A checkpoint that names no schema over a connection with an attached
+  database in logging mode: both files hold the tables afterwards.

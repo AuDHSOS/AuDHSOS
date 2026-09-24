@@ -595,6 +595,45 @@ struct HeldFile {
     exclusive: bool,
 }
 
+/// Which of the five kinds of checkpoint a caller asks for, which
+/// `SQLITE_CHECKPOINT_PASSIVE` and its four fellows of
+/// `research/sqlite/src/sqlite.h.in:10318` name and
+/// `sqlite3_wal_checkpoint_v2` takes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Checkpointing {
+    /// Writes no frame back and answers what the log holds.
+    Noop,
+    /// Writes back what the log holds and waits on no reader.
+    Passive,
+    /// The same, and waits for every reader of the log.
+    Full,
+    /// The same, and the log begins again.
+    Restart,
+    /// The same, and the file of the log is cut to nothing.
+    Truncate,
+}
+
+impl Checkpointing {
+    /// The kind the word after `PRAGMA wal_checkpoint =` names, which is
+    /// `PASSIVE` for a word `sqlite3Pragma` of
+    /// `research/sqlite/src/pragma.c:1663` reads as none of the three it
+    /// holds. The pragma names no `NOOP`, which the C API alone takes.
+    #[must_use]
+    pub fn of_word(word: Option<&[u8]>) -> Self {
+        let named = |held: &[u8]| word.is_some_and(|text| text.eq_ignore_ascii_case(held));
+        if named(b"truncate") {
+            return Checkpointing::Truncate;
+        }
+        if named(b"restart") {
+            return Checkpointing::Restart;
+        }
+        if named(b"full") {
+            return Checkpointing::Full;
+        }
+        Checkpointing::Passive
+    }
+}
+
 /// Which file of a database one write of a commit reaches.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Onto {
@@ -2955,32 +2994,129 @@ impl Writer {
         self.held.restarting = false;
     }
 
+    /// The pages the log of every database the connection holds written
+    /// into their files, or of the one `schema` names, and the three
+    /// values `sqlite3_wal_checkpoint_v2` answers for the first of them.
+    ///
+    /// `sqlite3Checkpoint` of `research/sqlite/src/main.c:2195` hands the
+    /// counts to the first database it walks and nothing to the ones
+    /// after it, so the values are the ones the database this connection
+    /// writes answered. Writing the files costs O(n) in their pages.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NoSchema`] for a schema the connection holds no database
+    /// under, and [`Error::LockedTable`] where the connection holds a
+    /// transaction, which `sqlite3BtreeCheckpoint` of
+    /// `research/sqlite/src/btree.c:11510` refuses for a database that
+    /// carries one.
+    pub fn checkpointed(
+        &mut self,
+        mode: Checkpointing,
+        schema: Option<&[u8]>,
+    ) -> Result<Vec<Value>, Error> {
+        if let Some(name) = schema {
+            // A database the connection holds of its own carries no log,
+            // and every connection holds the temp schema whether it has
+            // written a table there or not, which `sqlite3Checkpoint`
+            // walks as the second database of the list.
+            if name.eq_ignore_ascii_case(b"temp")
+                && !self.attached.iter().any(|held| named_as(held, name))
+            {
+                return Ok(alloc::vec![Value::Int(0), Value::Int(-1), Value::Int(-1)]);
+            }
+            let at = self.named_at(name)?;
+            return self.checkpoint_at(at, mode);
+        }
+        let answered = self.checkpoint_at(None, mode)?;
+        for at in 0..self.attached.len() {
+            self.checkpoint_at(Some(at), mode)?;
+        }
+        Ok(answered)
+    }
+
+    /// The pages the log of the database the connection writes written
+    /// into its file, and the three values the checkpoint answers.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::LockedTable`] where the connection holds a transaction.
+    fn checkpoint_one(&mut self, mode: Checkpointing) -> Result<Vec<Value>, Error> {
+        if self.held.began.is_some() {
+            return Err(Error::LockedTable);
+        }
+        Ok(self.checkpoint(mode))
+    }
+
+    /// Which database of the list `name` names, and nothing where it
+    /// names the one the connection writes.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NoSchema`] for a name the connection holds no database
+    /// under.
+    fn named_at(&self, name: &[u8]) -> Result<Option<usize>, Error> {
+        if name.eq_ignore_ascii_case(b"main") {
+            return Ok(None);
+        }
+        self.attached
+            .iter()
+            .position(|held| named_as(held, name))
+            .map(Some)
+            .ok_or_else(|| Error::NoSchema(name.to_vec()))
+    }
+
+    /// One checkpoint over the database at `at` of the list, and over the
+    /// one the connection writes where `at` names none.
+    fn checkpoint_at(
+        &mut self,
+        at: Option<usize>,
+        mode: Checkpointing,
+    ) -> Result<Vec<Value>, Error> {
+        let Some(at) = at else {
+            return self.checkpoint_one(mode);
+        };
+        self.switch(at);
+        let answered = self.checkpoint_one(mode);
+        self.switch(at);
+        answered
+    }
+
     /// `PRAGMA wal_checkpoint`: the pages the log holds are written into
-    /// the database file, and the three columns
+    /// the database file, and the three values
     /// `sqlite3_wal_checkpoint_v2` answers say so.
     ///
-    /// The first column is nought, because one connection writes here
-    /// and no other holds the log back. The second and the third are how
-    /// many frames the log holds, and both are nought for `TRUNCATE`,
-    /// which leaves a log of no frame. `RESTART` and `TRUNCATE` begin
-    /// the log again at once; every other mode leaves the frames where
-    /// they are and the commit after the checkpoint begins the log
-    /// again, which is `walRestartLog`. Writing the file costs O(n) in
-    /// its pages.
-    fn checkpoint(&mut self, how: Option<&[u8]>) -> Vec<Vec<Value>> {
-        let named = |word: &[u8]| how.is_some_and(|text| text.eq_ignore_ascii_case(word));
+    /// The first value is nought, because one connection writes here
+    /// and no other holds the log back. The second is how many frames
+    /// the log holds and the third how many of them have reached the
+    /// file, which is nought for `TRUNCATE`, which leaves a log of no
+    /// frame. `RESTART` and `TRUNCATE` begin the log again at once;
+    /// every other mode leaves the frames where they are and the commit
+    /// after the checkpoint begins the log again, which is
+    /// `walRestartLog`. Writing the file costs O(n) in its pages.
+    fn checkpoint(&mut self, mode: Checkpointing) -> Vec<Value> {
         let Some(mut log) = self.held.log.take() else {
             // A file that is not logging holds no frame, which the C
             // library says with minus one rather than nought.
-            return alloc::vec![alloc::vec![Value::Int(0), Value::Int(-1), Value::Int(-1)]];
+            return alloc::vec![Value::Int(0), Value::Int(-1), Value::Int(-1)];
         };
         let frames = i64::try_from(log.frames()).unwrap_or(i64::MAX);
+        // `sqlite3WalCheckpoint` of `research/sqlite/src/wal.c` answers
+        // the frames of the log and the ones a checkpoint has written
+        // back for a checkpoint written `NOOP`, which writes none of
+        // them.
+        if mode == Checkpointing::Noop {
+            let written = if self.held.restarting { frames } else { 0 };
+            self.held.log = Some(log);
+            return alloc::vec![Value::Int(0), Value::Int(frames), Value::Int(written)];
+        }
+        let named = |word: Checkpointing| mode == word;
         // The pages the frames hold are read before the log is begun
         // again, because `walCheckpoint` writes them back and
         // `walRestartHdr` runs after it.
         let held = log.holds();
-        let truncating = named(b"truncate");
-        let restarting = truncating || named(b"restart");
+        let truncating = named(Checkpointing::Truncate);
+        let restarting = truncating || named(Checkpointing::Restart);
         // `walCheckpoint` of `research/sqlite/src/wal.c:2276` writes
         // nothing where every frame of the log has reached the file
         // already, which `pInfo->nBackfill < pWal->hdr.mxFrame` reads:
@@ -3011,11 +3147,7 @@ impl Writer {
             self.held.did.push(Does::Sync(Onto::Log));
         }
         let counted = if truncating { 0 } else { frames };
-        alloc::vec![alloc::vec![
-            Value::Int(0),
-            Value::Int(counted),
-            Value::Int(counted)
-        ]]
+        alloc::vec![Value::Int(0), Value::Int(counted), Value::Int(counted)]
     }
 
     /// `VACUUM`: the database is made again from nothing, with every
@@ -4650,8 +4782,15 @@ impl Writer {
             return Ok(listed);
         }
         if setting == crate::pragma::Setting::WalCheckpoint {
-            let how = asked.value.map(|value| value.text(sql));
-            return Ok(self.checkpoint(how));
+            let how = Checkpointing::of_word(asked.value.map(|value| value.text(sql)));
+            // The statement already writes the database its schema
+            // named, so a pragma that names one checkpoints the database
+            // the connection writes and a pragma that names none
+            // checkpoints every database the connection holds.
+            if asked.schema.is_some() {
+                return Ok(alloc::vec![self.checkpoint_one(how)?]);
+            }
+            return Ok(alloc::vec![self.checkpointed(how, None)?]);
         }
         if setting == crate::pragma::Setting::IncrementalVacuum {
             let most = asked_steps(asked.value.map(|value| value.text(sql)));

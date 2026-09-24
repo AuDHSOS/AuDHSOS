@@ -1136,3 +1136,35 @@ fn what_a_journal_a_database_an_attach_added_keeps() {
     );
     assert!(writer.attached_logs().is_empty());
 }
+
+#[test]
+fn what_a_checkpoint_that_names_no_schema_writes_back() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.opens(opening);
+    writer.logging((1, 2));
+    writer.run(b"ATTACH 'one.db' AS a0").unwrap();
+    writer.run(b"PRAGMA a0.journal_mode=WAL").unwrap();
+    writer.run(b"CREATE TABLE t0(x)").unwrap();
+    writer.run(b"CREATE TABLE a0.t1(x)").unwrap();
+    // A checkpoint that names no schema writes the log of every database
+    // the connection holds back into its file, and answers the values of
+    // the database the connection writes.
+    let answered = writer.run(b"PRAGMA wal_checkpoint").unwrap();
+    let row = answered.first().cloned().unwrap_or_default();
+    assert_eq!(row.first(), Some(&Value::Int(0)));
+    assert_ne!(row.get(1), Some(&Value::Int(0)));
+    let held = writer.attached_logs();
+    let (file, bytes) = held.first().cloned().unwrap_or_default();
+    assert_eq!(file, b"one.db");
+    // The log of the attached database holds its frames still, which a
+    // checkpoint that writes them back leaves as they are.
+    assert!(bytes.len() > 32, "the log stands: {}", bytes.len());
+    let image = writer.attached_written(b"a0").unwrap_or_default();
+    assert!(
+        crate::db::Database::open(&image)
+            .unwrap()
+            .tables()
+            .any(|table| table.name == b"t1"),
+        "the file of the attached database holds the table"
+    );
+}

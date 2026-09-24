@@ -280,6 +280,9 @@ pub enum Error {
     Reserved(Vec<u8>),
     /// A statement that names a schema this connection does not hold.
     NoSchema(Vec<u8>),
+    /// A checkpoint of a database the connection holds a transaction on,
+    /// which `sqlite3BtreeCheckpoint` refuses `SQLITE_LOCKED` for.
+    LockedTable,
     /// A `DETACH` of a name the connection holds no database under.
     NoDatabase(Vec<u8>),
     /// A `DETACH` of `main` or of `temp`, which no statement takes away.
@@ -750,6 +753,7 @@ impl Error {
             Error::NotModifiable(name) => {
                 alloc::format!("table {} may not be modified", shown(name))
             }
+            Error::LockedTable => alloc::string::String::from(errstr(6)),
             Error::Schema(schema::Error::UnsetDefault(name)) => {
                 alloc::format!("default value of column [{}] is not constant", shown(name))
             }
@@ -936,6 +940,7 @@ impl Error {
             Error::Eval(eval::Error::Raised(..)) => Code::broke(1811, b"SQLITE_CONSTRAINT_TRIGGER"),
             Error::Constraint | Error::HeldConstraint(_) => Code::plain(19, b"SQLITE_CONSTRAINT"),
             Error::Auth(_) => Code::plain(23, b"SQLITE_AUTH"),
+            Error::LockedTable => Code::plain(6, b"SQLITE_LOCKED"),
             Error::Mismatch => Code::plain(20, b"SQLITE_MISMATCH"),
             Error::Image(crate::error::Error::Full) => Code::plain(13, b"SQLITE_FULL"),
             Error::Image(

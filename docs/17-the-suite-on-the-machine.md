@@ -535,6 +535,9 @@ Size: S.
 62. `memorymanage` is among the options this harness does not carry, so
     a file that reads it runs the cases a build of the C library without
     `SQLITE_ENABLE_MEMORY_MANAGEMENT` runs, which D-455 records.
+63. `sqlite3_wal_checkpoint` and `sqlite3_wal_checkpoint_v2` answer out
+    of [`Writer::checkpointed`], each writing the message
+    `sqlite3_errmsg` answers, which D-457 records.
 
 ### Produces
 
