@@ -13,3 +13,4 @@ pub use metrics::{Hvar, Mvar};
 pub use store::{DeltaMap, ItemStore};
 mod instance;
 pub use instance::Instance;
+pub(crate) use instance::Tables;
