@@ -211,3 +211,57 @@ fn a_row_that_points_at_no_row_under_a_key_held_at_once_counts_nothing() {
     }
     assert_eq!(shown(&writer, b"SELECT count(*) FROM c"), "0|");
 }
+
+/// `PRAGMA defer_foreign_keys` is off again once the transaction ends,
+/// whether a `COMMIT` or a `ROLLBACK` ended it and whether the statement
+/// that ran under it was one of its own.
+#[test]
+fn what_deferring_every_key_holds_once_the_transaction_ends() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"PRAGMA foreign_keys=ON".as_slice(),
+        b"CREATE TABLE one(x PRIMARY KEY)",
+        b"CREATE TABLE two(y REFERENCES one(x))",
+        b"INSERT INTO one VALUES(1)",
+    ] {
+        writer.run(sql).expect("a statement the writer takes");
+    }
+    let deferring = |writer: &mut Writer| -> i64 {
+        writer
+            .run(b"PRAGMA defer_foreign_keys")
+            .unwrap()
+            .first()
+            .and_then(|row| row.first())
+            .map_or(-1, crate::value::Value::to_integer)
+    };
+    // A statement of its own commits at its end, so the key is held
+    // there whatever the pragma says, and the rollback of the statement
+    // leaves the pragma off.
+    writer.run(b"PRAGMA defer_foreign_keys=ON").unwrap();
+    assert_eq!(
+        writer
+            .run(b"INSERT INTO two VALUES(2)")
+            .unwrap_err()
+            .message(),
+        "FOREIGN KEY constraint failed"
+    );
+    assert_eq!(deferring(&mut writer), 0);
+    // A statement that writes nothing the pragma holds leaves it off as
+    // well, because it commits at its end.
+    writer.run(b"PRAGMA defer_foreign_keys=ON").unwrap();
+    writer.run(b"INSERT INTO one VALUES(2)").unwrap();
+    assert_eq!(deferring(&mut writer), 0);
+    for ending in [b"COMMIT".as_slice(), b"ROLLBACK"] {
+        writer.run(b"BEGIN").unwrap();
+        writer.run(b"PRAGMA defer_foreign_keys=ON").unwrap();
+        assert_eq!(deferring(&mut writer), 1);
+        writer.run(b"DELETE FROM two").unwrap();
+        writer.run(ending).unwrap();
+        assert_eq!(
+            deferring(&mut writer),
+            0,
+            "{}",
+            alloc::string::String::from_utf8_lossy(ending)
+        );
+    }
+}

@@ -3887,6 +3887,26 @@ impl Writer {
         if let Ok(asked) = crate::parse::pragma(sql) {
             return self.pragma(&asked, sql);
         }
+        let answered = self.ran_writing(sql);
+        // `PRAGMA defer_foreign_keys` is off again once the statement of
+        // its own commits or rolls back, which `sqlite3VdbeHalt` of
+        // `research/sqlite/src/vdbeaux.c:3434` and `sqlite3RollbackAll` of
+        // `research/sqlite/src/main.c:1532` both write back.
+        if self.held.began.is_none() {
+            self.defers_nothing();
+        }
+        answered
+    }
+
+    /// One statement that writes, run against the database the
+    /// connection writes, with the transaction of the statement opened
+    /// before it and committed after it where the connection holds none
+    /// of its own.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] names what the statement refuses.
+    fn ran_writing(&mut self, sql: &[u8]) -> Result<Vec<Vec<Value>>, Error> {
         // A statement inside a transaction writes on what the
         // statements before it wrote, so the pages keep what they held
         // when the `BEGIN` ran and not when this statement began.
@@ -4396,6 +4416,7 @@ impl Writer {
     ///
     /// [`Error`] names what one of the commits refused.
     fn committed(&mut self) -> Result<(), Error> {
+        self.defers_nothing();
         for held in Self::files_mut(&mut self.held, &mut self.attached) {
             // Every database the connection holds joined the
             // transaction, so each carries the header it began under.
@@ -4485,6 +4506,7 @@ impl Writer {
     /// Every database the connection holds back where its transaction
     /// began, which is what a `ROLLBACK` writes.
     fn rolled_back(&mut self) {
+        self.defers_nothing();
         for held in Self::files_mut(&mut self.held, &mut self.attached) {
             let was = held.began.take().unwrap_or(held.header);
             put_back(held);
@@ -4507,6 +4529,20 @@ impl Writer {
     /// it now has, and the commit leaves a journal or a frame.
     fn commit(&mut self, was: &Header) -> Result<(), Error> {
         commit_file(&mut self.held, was)
+    }
+
+    /// `PRAGMA defer_foreign_keys` is off once the transaction ends,
+    /// which `sqlite3VdbeHalt` of `research/sqlite/src/vdbeaux.c:3434`
+    /// writes back on a commit and `sqlite3RollbackAll` of
+    /// `research/sqlite/src/main.c:1532` on a rollback.
+    fn defers_nothing(&mut self) {
+        let at = crate::pragma::HELD
+            .iter()
+            .position(|keeps| keeps.name == b"defer_foreign_keys")
+            .unwrap_or(usize::MAX);
+        for slot in self.kept.iter_mut().skip(at).take(1) {
+            *slot = Some(0);
+        }
     }
 }
 

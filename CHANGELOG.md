@@ -351,6 +351,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` leaves `PRAGMA defer_foreign_keys` off once the transaction
+  ends, where it stayed on and left every key of the connection deferred
+  for good. D-469 records it. Catalog 6.6.329. `fkey6.test` goes from 18
+  cases passing to 21.
+
 - `db-sqlite` refuses a `CREATE UNIQUE INDEX` and a `REINDEX` over rows
   two of which share the columns of the index with `UNIQUE constraint
   failed`, where it wrote the index and left the file holding two entries

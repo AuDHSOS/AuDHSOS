@@ -1120,6 +1120,8 @@ Size: L.
      write a page or a word of the header. Built, which D-467 records.
 180. The refusal a unique index written over rows that share its columns
      carries. Built, which D-468 records.
+181. The transaction `PRAGMA defer_foreign_keys` holds for, which is the
+     one it was set in. Built, which D-469 records.
 
 ### Done when
 

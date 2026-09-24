@@ -7428,3 +7428,14 @@ Document 16 step Q8.
 - A partial index whose `WHERE` holds the rows that share no key, and a
   non-unique index over the same columns, both written.
 - A `REINDEX` over both.
+
+### 6.6.329 What deferring every key holds (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A statement of its own under the pragma, which holds the key at its end
+  and leaves the pragma off.
+- A statement that writes nothing the pragma holds, which leaves it off as
+  well.
+- The pragma set inside a transaction and read back, then a `COMMIT` and a
+  `ROLLBACK`, each of which leaves it off.
