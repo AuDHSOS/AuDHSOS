@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Manuel Baesler and contributors
 
-use super::{checksum, code, fields, property, range, records, source, unicode_data, variant};
+use super::{
+    checksum, code, compositions, fields, property, range, records, source, unicode_data, variant,
+};
 
 #[test]
 fn ucd_ranges_defaults_and_malformed_records() {
@@ -65,4 +67,29 @@ fn source_version_and_headerless_file_fingerprint_are_checked() {
     assert!(source(&path, "UnicodeData.txt", &mut hashes).is_err());
     assert!(source(&path, "absent", &mut hashes).is_err());
     std::fs::remove_dir_all(&path).expect("cleanup");
+}
+#[test]
+fn compositions_drop_full_composition_exclusions() {
+    let decompositions = [
+        (0xc0, vec![0x41, 0x300]),
+        (0x212b, vec![0xc5]),
+        (0x344, vec![0x308, 0x301]),
+        (0xf73, vec![0xf71, 0xf72]),
+        (0x958, vec![0x915, 0x93c]),
+        (0xfb2a, vec![0x5e9, 0x5c1]),
+    ];
+    let combining = [
+        (0x300, 0x301, "230".to_owned()),
+        (0x308, 0x308, "230".to_owned()),
+        (0x344, 0x344, "230".to_owned()),
+        (0xf71, 0xf71, "129".to_owned()),
+    ];
+    let exclusions = "# header\n0958 # DEVANAGARI LETTER QA\nFB2A..FB2A\n";
+    assert_eq!(
+        compositions(&decompositions, &combining, exclusions).expect("pairs"),
+        [(0x41, 0x300, 0xc0)]
+    );
+    let shared = [(0xc0, vec![0x41, 0x300]), (0xc1, vec![0x41, 0x300])];
+    assert!(compositions(&shared, &combining, "").is_err());
+    assert!(compositions(&decompositions, &combining, "XYZ\n").is_err());
 }

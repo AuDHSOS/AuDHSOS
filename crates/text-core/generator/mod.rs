@@ -38,6 +38,7 @@ pub(crate) struct Model {
     pub mirrors: Vec<(u32, u32)>,
     pub brackets: Vec<(u32, u32, String)>,
     pub decompositions: Vec<(u32, Vec<u32>)>,
+    pub compositions: Vec<(u32, u32, u32)>,
     pub checksums: Vec<(String, u64)>,
 }
 fn checksum(bytes: &[u8]) -> u64 {
@@ -231,6 +232,49 @@ fn unicode_data(unicode: &str) -> Result<UnicodeData> {
     })
 }
 
+/// Canonical pairs sorted by (first, second), without `Full_Composition_Exclusion`
+/// of UAX #15: the listed composites, singletons, and non-starter decompositions.
+fn compositions(
+    decompositions: &[(u32, Vec<u32>)],
+    combining: &[Record],
+    exclusions: &str,
+) -> Result<Vec<(u32, u32, u32)>> {
+    let mut excluded = BTreeSet::new();
+    for line in exclusions.lines() {
+        let f = fields(line);
+        if !f[0].is_empty() {
+            let (a, b) = range(f[0])?;
+            excluded.extend(a..=b);
+        }
+    }
+    let starter = |code: u32| {
+        combining
+            .partition_point(|(a, _, _)| *a <= code)
+            .checked_sub(1)
+            .and_then(|i| combining.get(i))
+            .filter(|(_, b, _)| code <= *b)
+            .is_none_or(|(_, _, ccc)| ccc == "0")
+    };
+    let mut pairs = Vec::new();
+    for (code, parts) in decompositions {
+        if let [first, second] = parts[..]
+            && !excluded.contains(code)
+            && starter(*code)
+            && starter(first)
+        {
+            pairs.push((first, second, *code));
+        }
+    }
+    pairs.sort_unstable();
+    if pairs
+        .windows(2)
+        .any(|w| (w[0].0, w[0].1) == (w[1].0, w[1].1))
+    {
+        return Err("two primary composites share one canonical pair".into());
+    }
+    Ok(pairs)
+}
+
 const SOURCES: &[(&str, &str, &str, &str)] = &[
     (
         "auxiliary/GraphemeBreakProperty.txt",
@@ -355,6 +399,11 @@ pub(crate) fn load(root: &Path) -> Result<Model> {
         combining,
         decompositions,
     } = unicode_data(&source(root, "UnicodeData.txt", &mut hashes)?)?;
+    let compositions = compositions(
+        &decompositions,
+        &combining,
+        &source(root, "CompositionExclusions.txt", &mut hashes)?,
+    )?;
     let properties = properties(root, &mut hashes, &categories, &combining, &bidi_aliases)?;
     let data = source(root, "ScriptExtensions.txt", &mut hashes)?;
     let mut extensions = Vec::new();
@@ -400,6 +449,7 @@ pub(crate) fn load(root: &Path) -> Result<Model> {
         mirrors,
         brackets,
         decompositions,
+        compositions,
         checksums: hashes,
     })
 }
@@ -458,6 +508,17 @@ pub(crate) fn generate(model: &Model) -> Result<String> {
                 .map(|n| literal(*n))
                 .collect::<Vec<_>>()
                 .join(", ")
+        )?;
+    }
+    writeln!(out, "];")?;
+    writeln!(out, "pub(super) static COMPOSITIONS: &[(u32,u32,u32)] = &[")?;
+    for (first, second, code) in &model.compositions {
+        writeln!(
+            out,
+            "    ({}, {}, {}),",
+            literal(*first),
+            literal(*second),
+            literal(*code)
         )?;
     }
     writeln!(out, "];")?;

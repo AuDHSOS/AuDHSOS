@@ -83,6 +83,10 @@ fn unicode_generation_is_byte_identical_and_properties_match_all_code_points() {
     for (code, sequence) in model.decompositions {
         assert_eq!(u::canonical_decomposition(code), sequence);
     }
+    assert_eq!(model.compositions.len(), 961);
+    for (first, second, code) in model.compositions {
+        assert_eq!(u::composition(first, second, |_| true), Some(code));
+    }
     assert_eq!(u::VERSION, "18.0.0");
 }
 #[expect(
@@ -130,6 +134,24 @@ fn unicode_defaults_ranges_and_auxiliary_mappings() {
     assert!(u::script_extensions(0x30fc).contains(&u::Script::Hiragana));
     assert!(u::script_extensions(0x30fc).contains(&u::Script::Katakana));
     assert!(u::script_extensions(0x41).is_empty());
+}
+
+#[test]
+fn composition_honors_uax15_exclusions() {
+    assert_eq!(u::composition(0x65, 0x301, |_| true), Some(0xe9));
+    assert_eq!(u::composition(0x65, 0x301, |_| false), None);
+    assert_eq!(u::composition(0xe9, 0x301, |_| true), None);
+    // Listed: U+FB2A, U+0958. Singleton: U+212B. Non-starter: U+0344, U+0F73.
+    assert_eq!(u::canonical_decomposition(0xfb2a), &[0x5e9, 0x5c1]);
+    assert_eq!(u::composition(0x5e9, 0x5c1, |_| true), None);
+    assert_eq!(u::canonical_decomposition(0x958), &[0x915, 0x93c]);
+    assert_eq!(u::composition(0x915, 0x93c, |_| true), None);
+    assert_eq!(u::canonical_decomposition(0x212b), &[0xc5]);
+    assert_eq!(u::composition(0x41, 0x30a, |_| true), Some(0xc5));
+    assert_eq!(u::canonical_decomposition(0x344), &[0x308, 0x301]);
+    assert_eq!(u::composition(0x308, 0x301, |_| true), None);
+    assert_eq!(u::canonical_decomposition(0xf73), &[0xf71, 0xf72]);
+    assert_eq!(u::composition(0xf71, 0xf72, |_| true), None);
 }
 
 #[expect(clippy::as_conversions, reason = "Script has repr(u16)")]

@@ -78,16 +78,16 @@ pub fn canonical_decomposition(code: u32) -> &'static [u32] {
         .map_or(&[], |row| row.1)
 }
 
+/// Primary composite of a canonical pair, O(log C); UAX #15 exclusions are absent from the table.
 pub(crate) fn composition(
     first: u32,
     second: u32,
-    mut covered: impl FnMut(u32) -> bool,
+    covered: impl FnOnce(u32) -> bool,
 ) -> Option<u32> {
-    generated::DECOMPOSITIONS.iter().find_map(|(code, parts)| {
-        if *parts == [first, second] && covered(*code) {
-            Some(*code)
-        } else {
-            None
-        }
-    })
+    generated::COMPOSITIONS
+        .binary_search_by_key(&(first, second), |row| (row.0, row.1))
+        .ok()
+        .and_then(|i| generated::COMPOSITIONS.get(i))
+        .map(|row| row.2)
+        .filter(|code| covered(*code))
 }
