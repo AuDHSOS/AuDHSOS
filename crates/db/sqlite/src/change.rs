@@ -2601,6 +2601,35 @@ impl Writer {
         Ok(())
     }
 
+    /// Raises where the statement names something the schema may not
+    /// hold, read before the name it writes is read.
+    ///
+    /// # Errors
+    ///
+    /// Whatever an index over the name refuses, [`crate::eval::Error`]
+    /// for a window function among the terms of an index, and
+    /// [`Error::ViewVariable`] for a view whose statement holds a bound
+    /// parameter.
+    fn definable(
+        &self,
+        over: &[u8],
+        arena: &Arena,
+        definition: Definition,
+        sql: &[u8],
+    ) -> Result<(), Error> {
+        if let Definition::Index(index) = definition {
+            self.indexable(over)?;
+            windowless(arena, &index, sql)?;
+        }
+        // `sqlite3CreateView` of `research/sqlite/src/build.c:3009`
+        // refuses a statement that holds a bound parameter before it reads
+        // the name, a view having no caller to bind one against.
+        if matches!(definition, Definition::View(_)) && crate::token::holds_variable(sql) {
+            return Err(Error::ViewVariable);
+        }
+        Ok(())
+    }
+
     /// The row a `RETURNING` answers for one row the statement wrote,
     /// which is `sqlite3AddReturning` over the row as it stands.
     ///
@@ -3863,13 +3892,17 @@ impl Writer {
         Ok(self.attached.iter().position(|one| named_as(one, &named)))
     }
 
-    /// One statement run against the database the connection writes.
     /// Whether this connection may write no page of the file, which
     /// `PRAGMA query_only` says.
     fn reads_only(&self) -> bool {
         self.told(b"query_only") != 0
     }
 
+    /// One statement run against the database the connection writes.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] names what the statement refuses.
     fn ran_held(&mut self, sql: &[u8]) -> Result<Vec<Vec<Value>>, Error> {
         // A text of comments alone holds no statement, so it writes no
         // byte and raises no counter of the header.
@@ -6839,10 +6872,14 @@ impl Writer {
                 self.switch(held);
             }
             let answered = self.stepped(step, arena, sql, row);
+            let named = self.called.name.clone();
             if let Some(held) = at {
                 self.switch(held);
             }
-            answered?;
+            // A statement of a body reads a bare name under the database
+            // that holds the trigger, so the refusal names where the name
+            // was looked for.
+            answered.map_err(|error| crate::db::named_under(error, &named))?;
         }
         Ok(())
     }
@@ -7039,10 +7076,7 @@ impl Writer {
                 )
             }
         };
-        if let Definition::Index(index) = definition {
-            self.indexable(&over)?;
-            windowless(arena, &index, sql)?;
-        }
+        self.definable(&over, arena, definition, sql)?;
         if self.may_name((&name, written_name), already, &definition)? {
             return Ok(());
         }

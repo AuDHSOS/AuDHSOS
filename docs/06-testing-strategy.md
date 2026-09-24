@@ -7439,3 +7439,18 @@ Document 16 step Q8.
   well.
 - The pragma set inside a transaction and read back, then a `COMMIT` and a
   `ROLLBACK`, each of which leaves it off.
+
+### 6.6.330 Which database a body names a table under (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A view and a trigger over a table that was dropped, each refused with
+  `main` in front of the name.
+- A view whose body wrote `aux.` in front of the name, which keeps it.
+
+### 6.6.331 A view whose statement holds a parameter (`db-sqlite`)
+
+Document 16 step Q8.
+
+- `?`, `?1` and `:one` in the `WHERE` of a view, each refused.
+- The schema after them, which holds no view of that name.

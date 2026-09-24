@@ -137,3 +137,75 @@ fn what_a_drop_of_the_other_kind_is_refused_with() {
         "no such index: v1"
     );
 }
+
+/// The body of a view and the body of a trigger each read a bare name
+/// under the database that holds them, so a name no database of theirs
+/// holds is refused with that database in front of it; a name the body
+/// wrote a database in front of keeps the one it wrote.
+#[test]
+fn which_database_a_body_that_names_no_table_is_refused_under() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.opens(beside);
+    for sql in [
+        b"ATTACH 'two.db' AS aux".as_slice(),
+        b"CREATE TABLE t1(x)",
+        b"CREATE TABLE gone(y)",
+        b"CREATE VIEW v1 AS SELECT * FROM gone",
+        b"CREATE VIEW v2 AS SELECT * FROM aux.gone",
+        b"CREATE TRIGGER r1 AFTER INSERT ON t1 BEGIN INSERT INTO gone VALUES(1); END",
+        b"DROP TABLE gone",
+    ] {
+        writer.run(sql).expect("a statement the writer takes");
+    }
+    let image = writer.written();
+    let database = Database::open(&image).expect("a database");
+    assert_eq!(
+        database.query(b"SELECT * FROM v1").unwrap_err().message(),
+        "no such table: main.gone"
+    );
+    assert_eq!(
+        database.query(b"SELECT * FROM v2").unwrap_err().message(),
+        "no such table: aux.gone"
+    );
+    assert_eq!(
+        writer
+            .run(b"INSERT INTO t1 VALUES(1)")
+            .unwrap_err()
+            .message(),
+        "no such table: main.gone"
+    );
+}
+
+/// The file the `ATTACH` of that test names.
+fn beside(file: &[u8]) -> Option<alloc::vec::Vec<u8>> {
+    (file == b"two.db").then(|| Writer::new(1024, 0, Encoding::Utf8).unwrap().written())
+}
+
+/// `sqlite3CreateView` refuses a statement that holds a bound parameter
+/// before it reads the name, so a second statement under the same name is
+/// refused the same way and no view stands.
+#[test]
+fn what_a_view_whose_statement_holds_a_parameter_is_refused_with() {
+    let mut writer = writing();
+    for sql in [
+        b"CREATE VIEW v12 AS SELECT x FROM t1 WHERE y=?".as_slice(),
+        b"CREATE VIEW v12(a) AS SELECT x FROM t1 WHERE y=?1",
+        b"CREATE VIEW v12 AS SELECT x FROM t1 WHERE y=:one",
+    ] {
+        assert_eq!(
+            writer.run(sql).unwrap_err().message(),
+            "parameters are not allowed in views",
+            "{}",
+            alloc::string::String::from_utf8_lossy(sql)
+        );
+    }
+    let image = writer.written();
+    let database = Database::open(&image).expect("a database");
+    assert_eq!(
+        database
+            .query(b"SELECT count(*) FROM sqlite_schema WHERE name='v12'")
+            .unwrap()
+            .rows,
+        alloc::vec![alloc::vec![Value::Int(0)]]
+    );
+}

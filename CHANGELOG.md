@@ -351,6 +351,16 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` refuses a name no database of a view's or a trigger's own
+  holds with that database in front of it, where the refusal carried the
+  bare name. D-470 records it. Catalog 6.6.330. `alterlegacy.test` goes
+  from 43 cases passing to 46.
+
+- `db-sqlite` refuses a `CREATE VIEW` whose statement holds a bound
+  parameter with `parameters are not allowed in views`, where it wrote the
+  view. D-471 records it. Catalog 6.6.331. `view.test` goes from 86 cases
+  passing to 89.
+
 - `db-sqlite` leaves `PRAGMA defer_foreign_keys` off once the transaction
   ends, where it stayed on and left every key of the connection deferred
   for good. D-469 records it. Catalog 6.6.329. `fkey6.test` goes from 18

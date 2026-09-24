@@ -1122,6 +1122,10 @@ Size: L.
      carries. Built, which D-468 records.
 181. The transaction `PRAGMA defer_foreign_keys` holds for, which is the
      one it was set in. Built, which D-469 records.
+182. The database the body of a view and the body of a trigger name a
+     table under. Built, which D-470 records.
+183. The refusal a `CREATE VIEW` whose statement holds a bound parameter
+     carries. Built, which D-471 records.
 
 ### Done when
 
@@ -1131,12 +1135,12 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 118 450 cases in 847 files, 107 885
-pass, 3527 answer differently, and 7038 name something the engine
+under the `tclsh` of the machine. Of 124 642 cases in 843 files, 118 066
+pass, 2830 answer differently, and 3746 name something the engine
 refuses or a command that needs the C library's internals. The files
-that answer for tens of thousands of rows reach the three-minute
+that answer for tens of thousands of rows reach the five-minute
 deadline and are counted with the cases they ran by then. One run over
-two jobs takes 47 minutes.
+six jobs takes 55 minutes.
 Depends on: Q7, Q8. Recorded in D-201, D-212, D-213, D-220, D-222,
 D-223 and D-224.
 Size: M.

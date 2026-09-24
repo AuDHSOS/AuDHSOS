@@ -206,6 +206,9 @@ pub enum Error {
     Rightward,
     /// A trigger that carries a variable.
     TriggerVariable,
+    /// A `CREATE VIEW` whose statement holds a bound parameter, which no
+    /// caller of a view binds.
+    ViewVariable,
     /// A write of a trigger's body that names a schema.
     QualifiedInTrigger,
     /// An `UPDATE` or a `DELETE` of a trigger's body that names an
@@ -758,6 +761,9 @@ impl Error {
             }
             Error::LockedTable => alloc::string::String::from(errstr(6)),
             Error::ReadOnlyDatabase => alloc::string::String::from(errstr(8)),
+            Error::ViewVariable => {
+                alloc::string::String::from("parameters are not allowed in views")
+            }
             Error::Schema(schema::Error::UnsetDefault(name)) => {
                 alloc::format!("default value of column [{}] is not constant", shown(name))
             }
@@ -2060,6 +2066,30 @@ fn table_named(schema: Option<Span>, name: Span, sql: &[u8]) -> Named {
     Named { name, shown }
 }
 
+/// The refusal with the database in front of the name it carries, which
+/// `sqlite3LocateTable` of `research/sqlite/src/build.c:343` writes for a
+/// statement of the schema: the body of a view and of a trigger each
+/// read a bare name under the database that holds them, so `no such
+/// table: main.t2` names where the name was looked for.
+pub(crate) fn named_under(error: Error, schema: &[u8]) -> Error {
+    match error {
+        Error::NoTable(name) => Error::NoTable(under_named(schema, &name)),
+        held => held,
+    }
+}
+
+/// The name with the database in front of it, and the name as it stands
+/// where it carries a database already.
+fn under_named(schema: &[u8], name: &[u8]) -> Vec<u8> {
+    if name.contains(&b'.') {
+        return name.to_vec();
+    }
+    let mut out = schema.to_vec();
+    out.push(b'.');
+    out.extend_from_slice(name);
+    out
+}
+
 /// One name a statement wrote for a table: the name itself, and the name
 /// with the schema in front of it where the statement wrote one, which is
 /// what `no such table:` writes.
@@ -2836,7 +2866,12 @@ impl<'a> Database<'a> {
             outer: None,
             views: scope.views.saturating_add(1),
         };
-        let mut answered = self.statement(&view.arena, view.select, &view.sql, inner)?;
+        // The body of a view reads a bare name under the database that
+        // holds the view, which `sqlite3FixSrcList` of
+        // `research/sqlite/src/attach.c:500` writes into every name of it.
+        let mut answered = self
+            .statement(&view.arena, view.select, &view.sql, inner)
+            .map_err(|error| named_under(error, &self.named_place(view.place)))?;
         // `sqlite3ViewGetColumnNames` refuses a column list of another
         // width than the statement answers.
         let written = view.columns.len();
