@@ -39,7 +39,7 @@ fn full_u64_range_produces_distinct_values() {
 fn range_shrinks_toward_the_value_nearest_zero() {
     let mut rng = Rng::from_seed(6);
     let tree = range(50u32..=100).generate(&mut rng);
-    let firsts: Vec<u32> = tree.shrinks().iter().map(|t| *t.value()).collect();
+    let firsts: Vec<u32> = tree.shrinks().map(|t| *t.value()).collect();
     if *tree.value() > 50 {
         assert_eq!(firsts.first(), Some(&50));
         assert!(firsts.iter().all(|&c| c < *tree.value() && c >= 50));
@@ -123,7 +123,7 @@ fn one_of_shrinks_toward_the_first_entry_and_true_toward_false() {
     }
     let boolean = bool().generate(&mut rng);
     if *boolean.value() {
-        assert_eq!(boolean.shrinks().first().map(|t| *t.value()), Some(false));
+        assert_eq!(boolean.shrinks().next().map(|t| *t.value()), Some(false));
     }
 }
 
@@ -132,7 +132,7 @@ fn option_shrinks_to_none_first() {
     let mut rng = Rng::from_seed(19);
     let tree = option(range(1u8..=9)).generate(&mut rng);
     if tree.value().is_some() {
-        assert_eq!(tree.shrinks().first().map(|t| *t.value()), Some(None));
+        assert_eq!(tree.shrinks().next().map(|t| *t.value()), Some(None));
     }
 }
 

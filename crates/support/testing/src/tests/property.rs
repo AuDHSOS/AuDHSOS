@@ -3,8 +3,12 @@
 
 //! Tests of `crate::property`.
 
-use crate::generators::{range, vec};
+use crate::generators::{Generator, range, vec};
 use crate::property::{Config, check, check_with, parse_seed, seed_for, seed_from_name};
+use crate::rng::Rng;
+use crate::tree::{Tree, sequence};
+use std::cell::Cell;
+use std::rc::Rc;
 
 fn config(seed: Option<u64>) -> Config {
     Config {
@@ -106,6 +110,45 @@ fn budget_exhausted_while_candidates_pass_stops_inside_the_candidate_loop() {
     .unwrap_err();
     assert_eq!(failure.shrink_steps, 1);
     assert_eq!(failure.shrunk, failure.original);
+}
+
+#[test]
+fn runner_stops_generating_candidates_at_the_step_limit() {
+    struct FixedVec(Rc<Cell<usize>>);
+
+    impl Generator for FixedVec {
+        type Value = Vec<u8>;
+
+        fn generate(&self, _rng: &mut Rng) -> Tree<Self::Value> {
+            let calls = Rc::clone(&self.0);
+            sequence(
+                (1..=4)
+                    .map(|value| {
+                        let calls = Rc::clone(&calls);
+                        Tree::new(value, move || {
+                            calls.set(calls.get() + 1);
+                            std::iter::once(Tree::leaf(0))
+                        })
+                    })
+                    .collect(),
+                0,
+            )
+        }
+    }
+
+    let calls = Rc::new(Cell::new(0));
+    let config = Config {
+        cases: 1,
+        seed: Some(1),
+        max_shrink_steps: 1,
+    };
+    let failure = check_with(&config, "lazy_vector", &FixedVec(Rc::clone(&calls)), |_| {
+        Err("always".to_owned())
+    })
+    .unwrap_err();
+    assert_eq!(failure.shrink_steps, 1);
+    assert_eq!(failure.shrunk, "[3, 4]");
+    assert_eq!(calls.get(), 0);
 }
 
 #[test]
