@@ -965,6 +965,10 @@ pub struct Writer {
     /// What the statement running now does beyond refusing the row
     /// where it breaks a constraint.
     refusing: Refusing,
+    /// What the statement that fired the trigger running now said a row
+    /// sharing a key with one the table holds does, which holds every
+    /// statement of the body where the statement said anything.
+    firing: Conflict,
     /// The functions the application defined on this connection.
     defined: &'static [crate::func::Defined],
     /// The aggregates the application defined on this connection.
@@ -1094,6 +1098,7 @@ impl Writer {
             writing: 0,
             deferred: 0,
             refusing: Refusing::Abort,
+            firing: Conflict::Unspecified,
             defined: &[],
             grouped: &[],
             collating: &[],
@@ -1225,6 +1230,7 @@ impl Writer {
             writing: 0,
             deferred: 0,
             refusing: Refusing::Abort,
+            firing: Conflict::Unspecified,
             defined: &[],
             grouped: &[],
             collating: &[],
@@ -6910,6 +6916,18 @@ impl Writer {
         self.holding_at(named, sql)
     }
 
+    /// What one statement of a trigger's body does where a row shares a
+    /// key with one the table holds: what the statement that fired the
+    /// trigger said where it said anything, and what the step itself
+    /// said otherwise, which is `pParse->eOrconf` of
+    /// `research/sqlite/src/trigger.c:1137`.
+    const fn stepping(&self, written: Conflict) -> Conflict {
+        match self.firing {
+            Conflict::Unspecified => written,
+            firing => firing,
+        }
+    }
+
     /// Runs one statement of a trigger's body against the database the
     /// connection writes.
     fn stepped(
@@ -6920,11 +6938,13 @@ impl Writer {
         row: &Fired<'_>,
     ) -> Result<(), Error> {
         match *step {
-            crate::ast::TriggerStep::Insert(statement) => {
+            crate::ast::TriggerStep::Insert(mut statement) => {
+                statement.conflict = self.stepping(statement.conflict);
                 let changed = self.insert(arena, &statement, sql, Some(row))?;
                 self.counts_step(changed);
             }
-            crate::ast::TriggerStep::Update(statement) => {
+            crate::ast::TriggerStep::Update(mut statement) => {
+                statement.conflict = self.stepping(statement.conflict);
                 let changed = self.update(arena, &statement, sql, Some(row))?;
                 self.counts_step(changed);
             }
@@ -8884,7 +8904,25 @@ impl Writer {
 
     /// `INSERT`: the rows the statement answers, each put in the tree
     /// of the table it names and in every index over that table.
+    ///
+    /// A trigger of the table runs under what this statement said a row
+    /// sharing a key does, which `sqlite3Insert` passes to
+    /// `sqlite3CodeRowTrigger` of `research/sqlite/src/insert.c:1495`.
     fn insert(
+        &mut self,
+        arena: &Arena,
+        statement: &crate::ast::Insert,
+        sql: &[u8],
+        outer: Option<&dyn crate::eval::Row>,
+    ) -> Result<i64, Error> {
+        let held = core::mem::replace(&mut self.firing, statement.conflict);
+        let answered = self.inserted(arena, statement, sql, outer);
+        self.firing = held;
+        answered
+    }
+
+    /// `INSERT` once the trigger policy stands.
+    fn inserted(
         &mut self,
         arena: &Arena,
         statement: &crate::ast::Insert,
@@ -10390,7 +10428,26 @@ impl Writer {
     /// The keys are found first and the rows are taken out after, which
     /// is what `sqlite3DeleteFrom` does with its `RowSet`: a tree
     /// changes under a walk of it.
+    ///
+    /// A trigger of the table runs under what its own statements said,
+    /// since `sqlite3DeleteFrom` passes `OE_Default` to
+    /// `sqlite3GenerateRowDelete` of
+    /// `research/sqlite/src/delete.c:651`.
     fn delete(
+        &mut self,
+        arena: &Arena,
+        statement: &crate::ast::Delete,
+        sql: &[u8],
+        outer: Option<&dyn crate::eval::Row>,
+    ) -> Result<i64, Error> {
+        let held = core::mem::replace(&mut self.firing, Conflict::Unspecified);
+        let answered = self.deleted(arena, statement, sql, outer);
+        self.firing = held;
+        answered
+    }
+
+    /// `DELETE` once the trigger policy stands.
+    fn deleted(
         &mut self,
         arena: &Arena,
         statement: &crate::ast::Delete,
@@ -10620,7 +10677,25 @@ impl Writer {
 
     /// `UPDATE`: the rows the statement changes, each written again in
     /// the tree of the table and in every index over that table.
+    ///
+    /// A trigger of the table runs under what this statement said a row
+    /// sharing a key does, which `sqlite3Update` passes to
+    /// `sqlite3CodeRowTrigger` of `research/sqlite/src/update.c:984`.
     fn update(
+        &mut self,
+        arena: &Arena,
+        statement: &crate::ast::Update,
+        sql: &[u8],
+        outer: Option<&dyn crate::eval::Row>,
+    ) -> Result<i64, Error> {
+        let held = core::mem::replace(&mut self.firing, statement.conflict);
+        let answered = self.updated(arena, statement, sql, outer);
+        self.firing = held;
+        answered
+    }
+
+    /// `UPDATE` once the trigger policy stands.
+    fn updated(
         &mut self,
         arena: &Arena,
         statement: &crate::ast::Update,

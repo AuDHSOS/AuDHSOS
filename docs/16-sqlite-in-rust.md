@@ -1131,6 +1131,9 @@ Size: L.
      Built, which D-472 records.
 185. The lock `PRAGMA lock_status` answers for a database whose
      transaction has written. Built, which D-477 records.
+186. The conflict policy a statement of a trigger's body runs under,
+     which the statement that fired the trigger sets where it said
+     anything. Built, which D-478 records.
 
 ### Done when
 

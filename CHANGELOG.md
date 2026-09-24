@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` runs a statement of a trigger's body under what the statement
+  that fired the trigger said a row sharing a key does, where the step's own
+  `ON CONFLICT` clause stood in every case. D-478 records it. Catalog
+  6.6.333. `trigger2.test` goes from 96 cases passing to 110 and
+  `without_rowid4.test` from 89 to 103.
+
 - The suite harness answers `sqlite_rename_table`, which
   `SQLITE_TESTCTRL_INTERNAL_FUNCTIONS` turns on for one connection and off
   again. D-476 records it. `fkey2.test` goes from 1175 cases passing to

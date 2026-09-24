@@ -374,3 +374,101 @@ fn a_key_a_statement_wrote_is_held_against_the_rows_the_table_holds() {
         "UNIQUE constraint failed: u.a"
     );
 }
+
+#[test]
+fn what_a_statement_of_a_trigger_does_where_the_statement_that_fired_it_said_anything() {
+    let mut writer = connection();
+    for sql in [
+        "CREATE TABLE tbl(a PRIMARY KEY, b, c)",
+        "CREATE TRIGGER ai_tbl AFTER INSERT ON tbl BEGIN \
+         INSERT OR IGNORE INTO tbl VALUES(new.a, 0, 0); END",
+        "INSERT INTO tbl VALUES(1,2,3)",
+    ] {
+        writer.run(sql.as_bytes()).unwrap();
+    }
+    // A statement that said nothing leaves the `OR IGNORE` of the body
+    // standing, so the row the body writes is passed over.
+    assert_eq!(rows(&writer, "SELECT a, b, c FROM tbl"), ["1", "2", "3"]);
+    // `OR ABORT` holds the body to itself and undoes the row the
+    // statement wrote.
+    assert_eq!(
+        refusal(&mut writer, &["INSERT OR ABORT INTO tbl VALUES(2,2,3)"]),
+        "UNIQUE constraint failed: tbl.a"
+    );
+    assert_eq!(rows(&writer, "SELECT a, b, c FROM tbl"), ["1", "2", "3"]);
+    // `OR FAIL` keeps the row the statement wrote.
+    assert_eq!(
+        refusal(&mut writer, &["INSERT OR FAIL INTO tbl VALUES(2,2,3)"]),
+        "UNIQUE constraint failed: tbl.a"
+    );
+    assert_eq!(
+        rows(&writer, "SELECT a, b, c FROM tbl"),
+        ["1", "2", "3", "2", "2", "3"]
+    );
+    // `OR REPLACE` lets the body write over the row the statement wrote.
+    writer
+        .run(b"INSERT OR REPLACE INTO tbl VALUES(2,2,3)")
+        .unwrap();
+    assert_eq!(
+        rows(&writer, "SELECT a, b, c FROM tbl"),
+        ["1", "2", "3", "2", "0", "0"]
+    );
+}
+
+#[test]
+fn what_a_statement_of_a_trigger_an_update_fired_does_where_the_update_said_anything() {
+    let mut writer = connection();
+    for sql in [
+        "CREATE TABLE tbl(a PRIMARY KEY, b, c)",
+        "INSERT INTO tbl VALUES(4,2,3)",
+        "INSERT INTO tbl VALUES(6,3,4)",
+        "CREATE TRIGGER au_tbl AFTER UPDATE ON tbl BEGIN \
+         UPDATE OR IGNORE tbl SET a = new.a, c = 10; END",
+        "UPDATE tbl SET a = 1 WHERE a = 4",
+    ] {
+        writer.run(sql.as_bytes()).unwrap();
+    }
+    assert_eq!(
+        rows(&writer, "SELECT a, b, c FROM tbl"),
+        ["1", "2", "10", "6", "3", "4"]
+    );
+    assert_eq!(
+        refusal(&mut writer, &["UPDATE OR ABORT tbl SET a = 4 WHERE a = 1"]),
+        "UNIQUE constraint failed: tbl.a"
+    );
+    assert_eq!(
+        rows(&writer, "SELECT a, b, c FROM tbl"),
+        ["1", "2", "10", "6", "3", "4"]
+    );
+    assert_eq!(
+        refusal(&mut writer, &["UPDATE OR FAIL tbl SET a = 4 WHERE a = 1"]),
+        "UNIQUE constraint failed: tbl.a"
+    );
+    assert_eq!(
+        rows(&writer, "SELECT a, b, c FROM tbl"),
+        ["4", "2", "10", "6", "3", "4"]
+    );
+    writer
+        .run(b"UPDATE OR REPLACE tbl SET a = 1 WHERE a = 4")
+        .unwrap();
+    assert_eq!(rows(&writer, "SELECT a, b, c FROM tbl"), ["1", "3", "10"]);
+}
+
+#[test]
+fn what_a_statement_of_a_trigger_a_delete_fired_does() {
+    let mut writer = connection();
+    for sql in [
+        "CREATE TABLE tbl(a PRIMARY KEY, b)",
+        "CREATE TABLE log(a PRIMARY KEY)",
+        "INSERT INTO log VALUES(1)",
+        "CREATE TRIGGER ad AFTER DELETE ON tbl BEGIN \
+         INSERT OR IGNORE INTO log VALUES(1); END",
+        "INSERT INTO tbl VALUES(1,1)",
+        // A `DELETE` says nothing, which `sqlite3DeleteFrom` passes as
+        // `OE_Default`, so the `OR IGNORE` of the body stands.
+        "DELETE FROM tbl",
+    ] {
+        writer.run(sql.as_bytes()).unwrap();
+    }
+    assert_eq!(rows(&writer, "SELECT count(*) FROM log"), ["1"]);
+}

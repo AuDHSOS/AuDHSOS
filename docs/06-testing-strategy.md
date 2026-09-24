@@ -7472,3 +7472,17 @@ with `ext/misc/decimal.c` linked in.
 - The powers of two, and the powers past twenty thousand either way.
 - The values a binary64 number spells, the smallest one among them, and
   the numbers that are none.
+
+### 6.6.333 The conflict policy a trigger's body runs under (`db-sqlite`)
+
+Document 16 step Q8. Every answer is the one the C library's shell writes
+for the same statements.
+
+- An `AFTER INSERT` body that writes the table with `OR IGNORE`, fired by
+  a statement that said nothing, by `OR ABORT`, by `OR FAIL` and by
+  `OR REPLACE`, with the rows the table holds after each.
+- An `AFTER UPDATE` body that writes the table with `OR IGNORE`, fired by
+  the same four statements.
+- An `AFTER DELETE` body that writes another table with `OR IGNORE`,
+  which keeps its `IGNORE` because a `DELETE` says nothing.
+
