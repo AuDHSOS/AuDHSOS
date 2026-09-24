@@ -58,6 +58,38 @@ fn a_body_brings_its_own_length() {
 }
 
 #[test]
+fn an_empty_post_declares_zero_content_length() {
+    let request = Request {
+        method: Method::Post,
+        target: "/submit",
+        host: "example.com",
+        headers: &[],
+        body: &[],
+    };
+    let bytes = written(&request).expect("a request");
+    assert_eq!(
+        core::str::from_utf8(&bytes).expect("text"),
+        "POST /submit HTTP/1.1\r\nHost: example.com\r\nContent-Length: 0\r\n\r\n"
+    );
+}
+
+#[test]
+fn an_empty_head_omits_content_length() {
+    let request = Request {
+        method: Method::Head,
+        target: "/",
+        host: "example.com",
+        headers: &[],
+        body: &[],
+    };
+    let bytes = written(&request).expect("a request");
+    assert_eq!(
+        core::str::from_utf8(&bytes).expect("text"),
+        "HEAD / HTTP/1.1\r\nHost: example.com\r\n\r\n"
+    );
+}
+
+#[test]
 fn a_long_body_counts_its_bytes_right() {
     let body = vec![b'x'; 1234];
     let request = Request {
@@ -129,6 +161,16 @@ fn a_target_that_is_not_an_origin_form_path_is_refused() {
         "http://example.com/",
         "/with space",
         "/with\rreturn",
+        "/page#top",
+        "/quote\"here",
+        "/back\\slash",
+        "/bracket<here>",
+        "/caret^here",
+        "/tick`here",
+        "/brace{here}",
+        "/pipe|here",
+        "/broken%",
+        "/broken%GG",
         "",
     ] {
         let request = Request::get(target, "example.com");
@@ -137,13 +179,35 @@ fn a_target_that_is_not_an_origin_form_path_is_refused() {
 }
 
 #[test]
-fn a_host_that_is_not_a_value_is_refused() {
-    for host in ["", "ex\r\nample.com", " example.com"] {
+fn an_origin_form_target_accepts_its_reserved_characters() {
+    written(&Request::get("/a%20b/@user?x=1&y=2", "example.com")).expect("a request");
+}
+
+#[test]
+fn a_host_with_invalid_uri_characters_is_refused() {
+    for host in [
+        "",
+        "ex\r\nample.com",
+        " example.com",
+        "example.com evil",
+        "example.com\tevil",
+        "user@example.com",
+        "example.com/path",
+        "example.com?query",
+        "example%GG.com",
+    ] {
         assert_eq!(
             written(&Request::get("/", host)),
             Err(HttpError::HeaderValue)
         );
     }
+}
+
+#[test]
+fn a_host_accepts_a_port_and_an_ipv6_literal() {
+    written(&Request::get("/", "example.com:8080")).expect("a port");
+    written(&Request::get("/", "[::1]:8080")).expect("an IPv6 literal");
+    written(&Request::get("/", "exa%6dple.com")).expect("a percent escape");
 }
 
 #[test]

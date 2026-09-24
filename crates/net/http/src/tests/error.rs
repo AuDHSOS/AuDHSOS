@@ -45,7 +45,7 @@ fn every_error_reads_as_a_sentence() {
         (HttpError::HeaderName, "the header name is not a token"),
         (
             HttpError::HeaderValue,
-            "the header value carries a control character",
+            "the header value or host is invalid",
         ),
         (
             HttpError::Target,
@@ -61,15 +61,15 @@ fn every_error_reads_as_a_sentence() {
         ),
         (
             HttpError::TransferEncoding,
-            "the transfer encoding is not chunked and last",
+            "the transfer encoding is not chunked alone",
         ),
         (
             HttpError::ChunkSize,
-            "the chunk size is not a hexadecimal number",
+            "the chunk size line is invalid or too long",
         ),
         (
             HttpError::Chunk,
-            "the chunk does not end where it said it would",
+            "the chunk framing or trailer line is invalid",
         ),
         (
             HttpError::Truncated,

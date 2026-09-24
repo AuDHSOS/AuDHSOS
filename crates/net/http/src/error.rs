@@ -41,8 +41,7 @@ pub enum HttpError {
     /// A header name that is not a token: RFC 9110, section 5.6.2 gives
     /// the bytes a name may be made of, and this is not one of them.
     HeaderName,
-    /// A header value carrying a control character other than the
-    /// horizontal tab.
+    /// A header value carrying an invalid byte or an invalid `Host` value.
     HeaderValue,
     /// A request target carrying a byte a target may not have.
     Target,
@@ -53,13 +52,14 @@ pub enum HttpError {
     ConflictingFraming,
     /// A `Content-Length` that is not a number, or two that disagree.
     ContentLength,
-    /// A `Transfer-Encoding` other than `chunked`, or one with `chunked`
-    /// anywhere but last.
+    /// A `Transfer-Encoding` other than one field containing `chunked`
+    /// alone.
     TransferEncoding,
-    /// A chunk size that is not hexadecimal, or a size line longer than
-    /// this decoder reads.
+    /// A chunk size that is not hexadecimal, or a chunk-size line longer
+    /// than this decoder reads.
     ChunkSize,
-    /// A chunk that is not followed by the two bytes that end it.
+    /// A chunk that is not followed by its ending bytes, or an overlong
+    /// line after chunk data or in the trailer.
     Chunk,
     /// The connection closed in the middle of a message that had said how
     /// long it was.
@@ -94,17 +94,17 @@ impl fmt::Display for HttpError {
             HttpError::Version => f.write_str("the status line names no version this client reads"),
             HttpError::Status => f.write_str("the status code is not three digits"),
             HttpError::HeaderName => f.write_str("the header name is not a token"),
-            HttpError::HeaderValue => f.write_str("the header value carries a control character"),
+            HttpError::HeaderValue => f.write_str("the header value or host is invalid"),
             HttpError::Target => f.write_str("the request target carries a byte it may not"),
             HttpError::ConflictingFraming => {
                 f.write_str("a message with a length and a transfer encoding has two lengths")
             }
             HttpError::ContentLength => f.write_str("the content length is not one number"),
             HttpError::TransferEncoding => {
-                f.write_str("the transfer encoding is not chunked and last")
+                f.write_str("the transfer encoding is not chunked alone")
             }
-            HttpError::ChunkSize => f.write_str("the chunk size is not a hexadecimal number"),
-            HttpError::Chunk => f.write_str("the chunk does not end where it said it would"),
+            HttpError::ChunkSize => f.write_str("the chunk size line is invalid or too long"),
+            HttpError::Chunk => f.write_str("the chunk framing or trailer line is invalid"),
             HttpError::Truncated => f.write_str("the connection closed inside the message"),
         }
     }
