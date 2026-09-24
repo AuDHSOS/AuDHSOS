@@ -164,6 +164,29 @@ fn point_matching_and_use_my_metrics() {
 }
 
 #[test]
+fn use_my_metrics_keeps_untransformed_component_phantoms() {
+    // Issue #479: scale 0.5 and offset (5, 10) leave the component metrics unchanged.
+    let bytes = font(&[simple(), component(0, 0x020a, &[5, 10, 0x20, 0])], false);
+    let face = Font::parse(&bytes).expect("font");
+    let glyf = Glyf::parse(&face).expect("glyf");
+    let mut points = [Point::default(); 10];
+    let mut contours = [0; 10];
+    let child = glyf
+        .outline(0, &mut points, &mut contours)
+        .expect("child")
+        .phantoms;
+    let composite = glyf
+        .outline(1, &mut points, &mut contours)
+        .expect("composite")
+        .phantoms;
+    assert_eq!(composite, child);
+    assert_eq!(
+        composite[1].x.checked_sub(composite[0].x).expect("advance"),
+        Fixed::from_i32(500)
+    );
+}
+
+#[test]
 fn cycles_depth_and_component_bounds() {
     assert_eq!(
         decode(&font(&[component(0, 2, &[0, 0])], false), 0),

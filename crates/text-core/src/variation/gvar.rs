@@ -335,8 +335,11 @@ fn tuple_scalar(
             }
         } else if current == Fixed::ZERO || (current < Fixed::ZERO) != (peak < Fixed::ZERO) {
             Fixed::ZERO
-        } else if current.bits().unsigned_abs() >= peak.bits().unsigned_abs() {
+        } else if current == peak {
             Fixed::ONE
+        } else if current.bits().unsigned_abs() > peak.bits().unsigned_abs() {
+            // Implicit region ends at the peak: docs/microsoft/otvaroverview.html:1171.
+            Fixed::ZERO
         } else {
             current.checked_div(peak)?
         };

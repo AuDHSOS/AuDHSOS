@@ -383,8 +383,7 @@ impl<'a> Glyf<'a> {
             let b = cursor.argument(flags)?;
             let matrix = Matrix::read(&mut cursor, flags)?;
             let child_start = output.point_count;
-            let mut child_phantoms =
-                self.decode(id, add(glyph.1, 1)?, output, instance, workspace)?;
+            let child_phantoms = self.decode(id, add(glyph.1, 1)?, output, instance, workspace)?;
             let (x, y) = if flags & 2 != 0 {
                 let mut p = Point::new(Fixed::from_i32(a), Fixed::from_i32(b), true);
                 if instance.is_some() {
@@ -417,9 +416,7 @@ impl<'a> Glyf<'a> {
             {
                 *p = matrix.apply(*p)?.translate(x, y)?;
             }
-            for p in &mut child_phantoms {
-                *p = matrix.apply(*p)?.translate(x, y)?;
-            }
+            // USE_MY_METRICS copies untransformed metrics: docs/microsoft/glyf.html:1043.
             if flags & 0x200 != 0 {
                 phantoms = child_phantoms;
             }

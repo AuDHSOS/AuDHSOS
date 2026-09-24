@@ -42,15 +42,18 @@ impl<'a> Cmap<'a> {
             let platform = read::u16(record, 0)?;
             let encoding = read::u16(record, 2)?;
             let pair = (platform, encoding);
-            if previous.is_some_and(|p| p >= pair) {
-                return Err(FontError::TableOrder);
-            }
-            previous = Some(pair);
             let start = offset(read::u32(record, 4)?)?;
             if start < end {
                 return Err(FontError::Overlap);
             }
             let table = read::tail(data, start)?;
+            // Order key is (platform, encoding, language): docs/microsoft/cmap.html:810.
+            if let Some((p, t)) = previous
+                && (p > pair || (p == pair && language(t)? >= language(table)?))
+            {
+                return Err(FontError::TableOrder);
+            }
+            previous = Some((pair, table));
             let format = read::u16(table, 0)?;
             if platform == 0 && encoding == 5 {
                 if format != 14 {
@@ -109,6 +112,16 @@ impl<'a> Cmap<'a> {
             .lookup(u32::from(character), u32::from(selector), self.primary)
             .ok()
             .flatten()
+    }
+}
+
+/// Subtable language field; format 14 has none.
+fn language(table: &[u8]) -> Result<u32, FontError> {
+    match read::u16(table, 0)? {
+        0 | 2 | 4 | 6 => Ok(u32::from(read::u16(table, 4)?)),
+        8 | 10 | 12 | 13 => read::u32(table, 8),
+        14 => Ok(0),
+        _ => Err(FontError::UnsupportedFormat),
     }
 }
 

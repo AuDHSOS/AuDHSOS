@@ -238,6 +238,27 @@ fn gvar_sparse_iup_shared_and_intermediate_tuples() {
 }
 
 #[test]
+fn gvar_implicit_region_ends_at_peak() {
+    // Issue #478: coordinates beyond a non-intermediate peak yield no delta.
+    for (shared, peak, coord, x) in [
+        (false, 8192, 8192, 120),
+        (false, 8192, 16384, 100),
+        (true, 8192, 16384, 100),
+        (false, -8192, -16384, 100),
+        (false, -8192, -8192, 120),
+        (false, -8192, -4096, 110),
+    ] {
+        let d = gvar(&[2, 1, 0, 2, 1, 0, 20, 0x81], peak, false, shared);
+        let g = Gvar::parse(&d, 1, 1).expect("gvar");
+        let mut points = points();
+        let mut work = [VariationPoint::default(); 7];
+        g.apply(0, &[Fixed::from_2_14(coord)], &mut points, &[2], &mut work)
+            .expect("apply");
+        assert_eq!(points[2].x, Fixed::from_i32(x), "peak {peak} coord {coord}");
+    }
+}
+
+#[test]
 fn gvar_malformed_packed_runs_and_offsets() {
     let d = gvar(&[2, 1, 0, 2, 1, 0, 20, 0x81], 16384, false, false);
     for end in 0..d.len() {

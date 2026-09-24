@@ -475,7 +475,8 @@ lengths and four phantom points; an error invalidates the output buffers.
 Traversal permits 32 active glyphs and 1024 component visits per outline.
 The decoder rejects cycles before recursion and checks every output write.
 Absent component-offset flags select unscaled offsets. Multiple USE_MY_METRICS
-components select the last component, as required by existing DejaVu glyphs. Grid-fitting flags
+components select the last component, as required by existing DejaVu glyphs.
+USE_MY_METRICS copies the untransformed component phantom points. Grid-fitting flags
 and bytecode remain rasterizer inputs; this decoder retains fractional
 coordinates. Optional vhea/vmtx supply vertical phantom metrics; absent
 vertical metrics use the selected line ascender and descender. Work is
