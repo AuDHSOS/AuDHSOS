@@ -38,6 +38,18 @@ pub enum Encoding {
 }
 
 impl Encoding {
+    /// The byte order `SQLITE_UTF16NATIVE` of
+    /// `research/sqlite/src/sqliteInt.h:1010` names, which is the byte
+    /// order of the machine the crate is built for.
+    #[cfg(target_endian = "little")]
+    pub const NATIVE: Self = Encoding::Utf16Le;
+
+    /// The byte order `SQLITE_UTF16NATIVE` of
+    /// `research/sqlite/src/sqliteInt.h:1010` names, which is the byte
+    /// order of the machine the crate is built for.
+    #[cfg(target_endian = "big")]
+    pub const NATIVE: Self = Encoding::Utf16Be;
+
     /// The code the header holds for this encoding.
     #[must_use]
     pub const fn code(self) -> u32 {

@@ -7358,3 +7358,14 @@ Document 16 step Q8.
 - An `ON CONFLICT` clause over an index whose place holds an expression,
   over a partial index, over an index that holds more than one key per
   row, and over the key of a table under the collation it is held in.
+
+### 6.6.323 The names `PRAGMA encoding` holds (`db-sqlite`)
+
+Document 16 step Q8.
+
+- Every one of the eight names `encnames` holds, each written in the case
+  the table writes it and in another case, with a quoted name where it
+  carries a dash.
+- `UTF-16` and `UTF16` answer the byte order of the machine.
+- A name the table does not hold: `U-TF8`, refused with `unsupported
+  encoding: U-TF8`.

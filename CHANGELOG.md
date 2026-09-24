@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` reads `PRAGMA encoding = 'UTF-16'` and `PRAGMA encoding =
+  UTF16`, which name the byte order of the machine, where it refused both.
+  D-463 records it. Catalog 6.6.323. `enc2.test` goes from 57 cases
+  passing to 62 and `update.test` from 131 to 133.
+
 - The suite harness answers `sqlite3_backup` and the `backup` and
   `restore` methods of a connection, which copy a database the session
   holds into another. D-461 records it. `backup_ioerr.test` goes from 2
@@ -327,6 +332,10 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   from 34 to 49 and `skipscan1.test` from 18 to 30.
 
 ### Fixed
+
+- `db-sqlite` refuses `PRAGMA encoding = 'U-TF8'` with `unsupported
+  encoding: U-TF8`, where it read the name with every dash taken out of it
+  and wrote UTF-8. D-463 records it.
 
 - The suite harness cuts the report of a case that answered differently
   to the first 300 characters of each value, so a case that answered a

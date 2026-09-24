@@ -376,3 +376,35 @@ fn what_hex_answers_over_a_database_of_no_schema() {
         alloc::vec![alloc::vec![Value::Text(b"0061".to_vec())]]
     );
 }
+
+/// Every name `encnames` of `research/sqlite/src/pragma.c:2249` holds,
+/// where `UTF-16` and `UTF16` name the byte order of the machine and a
+/// name the table does not hold is refused. A name is quoted where it
+/// carries a dash, which the parser reads as an operator.
+#[test]
+fn what_the_encoding_pragma_names() {
+    let named: [(&[u8], Encoding); 8] = [
+        (b"UTF8", Encoding::Utf8),
+        (b"'utf-8'", Encoding::Utf8),
+        (b"'UTF-16le'", Encoding::Utf16Le),
+        (b"UTF16LE", Encoding::Utf16Le),
+        (b"'UTF-16be'", Encoding::Utf16Be),
+        (b"utf16be", Encoding::Utf16Be),
+        (b"'UTF-16'", Encoding::NATIVE),
+        (b"'utf16'", Encoding::NATIVE),
+    ];
+    for (name, encoding) in named {
+        let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+        let sql = [b"PRAGMA encoding = ".as_slice(), name].concat();
+        writer.run(&sql).expect("a written encoding");
+        assert_eq!(writer.encoding(), encoding);
+    }
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    assert_eq!(
+        writer
+            .run(b"PRAGMA encoding = 'U-TF8'")
+            .unwrap_err()
+            .message(),
+        "unsupported encoding: U-TF8"
+    );
+}

@@ -1105,6 +1105,8 @@ Size: L.
 174. The index an `ON CONFLICT` clause names, which may hold a place over
      an expression and an entry for some rows alone. Built, which D-459
      records.
+175. The eight names `PRAGMA encoding` holds, two of which name the byte
+     order of the machine. Built, which D-463 records.
 
 ### Done when
 

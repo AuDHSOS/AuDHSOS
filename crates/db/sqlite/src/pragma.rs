@@ -788,19 +788,17 @@ pub fn header_word(text: &[u8]) -> u32 {
     i32::try_from(held).unwrap_or(0).cast_unsigned()
 }
 
-/// The encoding a `PRAGMA encoding` names, with the quotes and the
-/// dashes it may be written with taken off.
+/// The encoding a `PRAGMA encoding` names, read against `encnames` of
+/// `research/sqlite/src/pragma.c:2249` with the quotes taken off, where
+/// `UTF-16` and `UTF16` name [`Encoding::NATIVE`].
 #[must_use]
 pub fn encoding_of(text: &[u8]) -> Option<Encoding> {
-    let text: Vec<u8> = crate::schema::dequote(text)
-        .iter()
-        .filter(|byte| **byte != b'-')
-        .map(u8::to_ascii_lowercase)
-        .collect();
+    let text = crate::schema::dequote(text).to_ascii_lowercase();
     match text.as_slice() {
-        b"utf8" => Some(Encoding::Utf8),
-        b"utf16le" => Some(Encoding::Utf16Le),
-        b"utf16be" => Some(Encoding::Utf16Be),
+        b"utf8" | b"utf-8" => Some(Encoding::Utf8),
+        b"utf-16le" | b"utf16le" => Some(Encoding::Utf16Le),
+        b"utf-16be" | b"utf16be" => Some(Encoding::Utf16Be),
+        b"utf-16" | b"utf16" => Some(Encoding::NATIVE),
         _ => None,
     }
 }
