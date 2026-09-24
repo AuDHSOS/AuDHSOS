@@ -1100,6 +1100,11 @@ struct Session {
     /// write name: every connection over such a path refuses a statement
     /// that would write a page of the file.
     readonly: BTreeSet<String>,
+    /// The connections `sqlite3 NAME FILE -readonly 1` opened, which
+    /// `SQLITE_OPEN_READONLY` of `sqlite3_open_v2` names: such a
+    /// connection refuses a statement that would write a page of the file
+    /// and another connection over the same path writes it.
+    readers: BTreeSet<String>,
     /// The bytes the machine wrote for a path and the image its writer
     /// answered then, kept where the two differ. Writing a database out
     /// again drops the bytes past the pages its header names and writes
@@ -1238,6 +1243,7 @@ impl Session {
             file: file.to_owned(),
             held: BTreeMap::new(),
             readonly: BTreeSet::new(),
+            readers: BTreeSet::new(),
             raw: BTreeMap::new(),
             beside: BTreeMap::new(),
             connections: BTreeMap::new(),
@@ -1330,7 +1336,14 @@ impl Session {
         // given its own before the request is answered.
         self.tempering(verb, first);
         match verb {
-            "open" => Ok(self.open(first, second, args.get(2).map_or("", String::as_str))),
+            "open" => Ok(self.open(
+                first,
+                second,
+                (
+                    args.get(2).map_or("", String::as_str),
+                    args.get(3).map_or("", String::as_str),
+                ),
+            )),
             // `sqlite3_config_uri` of `research/sqlite/src/main.c:707`,
             // which every connection opened after it reads a file name
             // that begins `file:` as a URI for.
@@ -1589,8 +1602,7 @@ impl Session {
             self.readonly.remove(&path);
             return 0;
         }
-        self.readonly.insert(path.clone());
-        self.only_reading(&path);
+        self.readonly.insert(path);
         1
     }
 
@@ -1614,17 +1626,6 @@ impl Session {
         }
         refused_as("SQLITE_CANTOPEN", "14");
         Err(String::from("unable to open database file"))
-    }
-
-    /// The writer of `path` told that the client may only read the file,
-    /// where the harness holds the path that way.
-    fn only_reading(&mut self, path: &str) {
-        if !self.readonly.contains(path) {
-            return;
-        }
-        if let Some(writer) = self.held.get_mut(path) {
-            writer.only_reading();
-        }
     }
 
     fn flushed(&self, name: &str) -> usize {
@@ -1710,7 +1711,6 @@ impl Session {
         let image = writer.written();
         self.held.insert(name.to_owned(), writer);
         self.machined(name, bytes, image);
-        self.only_reading(name);
         Ok(vec![written.len().to_string()])
     }
 
@@ -2226,9 +2226,18 @@ impl Session {
     /// `research/sqlite/src/btree.c:2170` makes fresh for every
     /// connection and no other connection reads, so the harness holds
     /// one under a name no file has.
-    fn open(&mut self, name: &str, path: &str, flag: &str) -> Vec<String> {
+    fn open(&mut self, name: &str, path: &str, flags: (&str, &str)) -> Vec<String> {
+        let (flag, only) = flags;
         let under = configured();
         let uri = self.uri || flag == "1";
+        // `sqlite3 NAME FILE -readonly 1` opens the file with
+        // `SQLITE_OPEN_READONLY`, and a connection opened again without
+        // the option writes it.
+        if only == "1" {
+            self.readers.insert(name.to_owned());
+        } else {
+            self.readers.remove(name);
+        }
         let named = match db_sqlite::uri::named(path.as_bytes(), uri) {
             Ok(named) => named,
             Err(refusal) => {
@@ -2286,7 +2295,6 @@ impl Session {
             }
             self.held.insert(path.to_owned(), writer);
         }
-        self.only_reading(path);
         self.connections.insert(name.to_owned(), path.to_owned());
         self.nulls.insert(name.to_owned(), String::new());
         // A connection that is opened again counts from nought and was
@@ -3313,7 +3321,6 @@ impl Session {
         } else {
             self.raw.remove(path);
         }
-        self.only_reading(path);
         Ok(Vec::new())
     }
 
@@ -3436,6 +3443,9 @@ impl Session {
         let outside = self.owners.get(&path).is_some_and(|held| held != name);
         let uri = self.uris.get(name).copied().unwrap_or(false);
         let limits = self.limits.get(name).copied().unwrap_or_default();
+        // The client may only read the file where its permissions say so
+        // or where this connection was opened that way.
+        let reading = self.readonly.contains(&path) || self.readers.contains(name);
         let writer = self
             .held
             .get_mut(&path)
@@ -3459,6 +3469,7 @@ impl Session {
         writer.in_zone(zoned);
         writer.reads_uri(uri);
         writer.limited(limits);
+        writer.only_reading(reading);
         let mut waiting = self.waiting.contains(name);
         let (out, ran) = ran_each(
             writer,

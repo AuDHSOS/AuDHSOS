@@ -375,7 +375,7 @@ fn what_a_connection_under_query_only_refuses() {
 fn what_a_connection_over_a_file_it_may_only_read_refuses() {
     let mut writer = spelled();
     let was = writer.written();
-    writer.only_reading();
+    writer.only_reading(true);
     for sql in [
         b"INSERT INTO t VALUES('d')".as_slice(),
         b"DELETE FROM t",

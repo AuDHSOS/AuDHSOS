@@ -555,6 +555,7 @@ proc sqlite3 {args} {
   set count [llength $rest]
   set file ""
   set uri 0
+  set only 0
   for {set i 0} {$i < $count} {incr i} {
     set word [lindex $rest $i]
     if {[string index $word 0] ne "-"} {
@@ -564,11 +565,13 @@ proc sqlite3 {args} {
     }
     if {$i == $count-1} { sqlite_usage }
     if {$word eq "-uri"} { set uri [lindex $rest [expr {$i+1}]] }
+    if {$word eq "-readonly"} { set only [lindex $rest [expr {$i+1}]] }
     incr i
   }
   if {$file eq ""} { set file ":memory:" }
   set uri [expr {[string is boolean -strict $uri] && $uri ? 1 : 0}]
-  set ::harness_error [lindex [harness_send open $name $file $uri] 0]
+  set only [expr {[string is boolean -strict $only] && $only ? 1 : 0}]
+  set ::harness_error [lindex [harness_send open $name $file $uri $only] 0]
   # `sqlite3_open_v2` of `tclsqlite.c:3820` answers the message the open
   # was refused with and names no command, which is what a URI this
   # library refuses raises here.

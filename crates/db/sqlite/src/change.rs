@@ -1531,8 +1531,8 @@ impl Writer {
     /// statement that would write a page of it is refused `attempt to
     /// write a readonly database`, and a database the connection holds of
     /// its own is written as before.
-    pub const fn only_reading(&mut self) {
-        self.held.reading = true;
+    pub const fn only_reading(&mut self, only: bool) {
+        self.held.reading = only;
     }
 
     /// The file the statements so far have made. In write-ahead logging

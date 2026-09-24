@@ -9,10 +9,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 - `db-sqlite` refuses every statement that would write a page of a file the
   client may only read with `attempt to write a readonly database`, and the
-  suite harness holds which paths those are out of `file attributes`. D-486
-  and D-487 record it. Catalog 6.6.338. `delete.test` goes from 55 cases
-  passing to 60, `temptable.test` from 56 to 60, `tkt3457.test` from 2 to 4
-  and `readonly.test` from 2 to 4.
+  suite harness holds which paths and which connections those are out of
+  `file attributes` and `sqlite3 NAME FILE -readonly 1`. D-486 and D-487
+  record it. Catalog 6.6.338. `delete.test` goes from 55 cases passing to
+  60, `temptable.test` from 56 to 60, `misc7.test` from 12 to 14,
+  `tkt3457.test` from 2 to 4, `readonly.test` from 2 to 4, `openv2.test`
+  from 2 to 4, `rowallock.test` from 3 to 4 and `tkt4018.test` from 3 to 4.
 
 - `db-sqlite` reads a name written after `DEFAULT` as its own letters, and
   the names `true` and `false` as one and nought, where the name lost its

@@ -573,10 +573,11 @@ Size: S.
     and the count that header carries, which D-479 records.
 74. `file attributes NAME -readonly` and `file attributes NAME
     -permissions` say whether the client may only read a file and answer
-    what the harness holds, and `file writable NAME` answers out of the
-    same, which D-486 records. A connection whose database carries a
-    journal the client may only read is refused `unable to open database
-    file`, which D-487 records.
+    what the harness holds, `file writable NAME` answers out of the same,
+    and `sqlite3 NAME FILE -readonly 1` opens one connection that way,
+    which D-486 records. A connection whose database carries a journal the
+    client may only read is refused `unable to open database file`, which
+    D-487 records.
 
 ### Produces
 
