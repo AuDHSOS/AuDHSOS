@@ -7369,3 +7369,17 @@ Document 16 step Q8.
 - `UTF-16` and `UTF16` answer the byte order of the machine.
 - A name the table does not hold: `U-TF8`, refused with `unsupported
   encoding: U-TF8`.
+
+### 6.6.324 `DROP COLUMN` over the rows of the table (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A table that keeps its rows in the key's own tree: the statement
+  written again, the rows, and the integrity check.
+- A table that holds a column the row computes for itself, `VIRTUAL` and
+  `STORED`, with a rowid and with the rows in the key's own tree: the
+  column before the computed column dropped, then the column after it.
+- The computed column itself dropped, which leaves every other value
+  where it stands.
+- A table whose key names a column, with that column before and after the
+  one that goes out: the record holds nothing under it.

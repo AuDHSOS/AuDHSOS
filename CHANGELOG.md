@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` writes the rows of an `ALTER TABLE ... DROP COLUMN` over a
+  table that keeps its rows in the key's own tree, where it refused the
+  statement. D-464 records it. Catalog 6.6.324. `alterdropcol.test` goes
+  from 74 cases passing to 94 and `alterdropcol2.test` from 17 to 21.
+
 - `db-sqlite` reads `PRAGMA encoding = 'UTF-16'` and `PRAGMA encoding =
   UTF16`, which name the byte order of the machine, where it refused both.
   D-463 records it. Catalog 6.6.323. `enc2.test` goes from 57 cases
@@ -332,6 +337,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   from 34 to 49 and `skipscan1.test` from 18 to 30.
 
 ### Fixed
+
+- `db-sqlite` writes the record of a row an `ALTER TABLE ... DROP COLUMN`
+  rewrites from the places the table holds after the drop, where it wrote
+  the value of a `VIRTUAL` column into the record and read the rowid into
+  the column that names it. D-464 records it.
 
 - `db-sqlite` refuses `PRAGMA encoding = 'U-TF8'` with `unsupported
   encoding: U-TF8`, where it read the name with every dash taken out of it

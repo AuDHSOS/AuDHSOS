@@ -1107,6 +1107,10 @@ Size: L.
      records.
 175. The eight names `PRAGMA encoding` holds, two of which name the byte
      order of the machine. Built, which D-463 records.
+176. The rows an `ALTER TABLE ... DROP COLUMN` writes again over a table
+     that keeps its rows in the key's own tree and over a table that
+     holds a column the row computes for itself. Built, which D-464
+     records.
 
 ### Done when
 

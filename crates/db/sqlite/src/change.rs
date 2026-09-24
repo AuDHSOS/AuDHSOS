@@ -2461,14 +2461,21 @@ impl Writer {
         if let Some(shown) = names_column(&text, &column) {
             return Err(after_drop(b"table", &name, &shown));
         }
-        let affinities: Vec<Affinity> = table
+        // `sqlite3AlterDropColumn` of `research/sqlite/src/alter.c:2321`
+        // writes the rows again only where the column is not
+        // `COLFLAG_VIRTUAL`, because a column the row computes for
+        // itself stands in no row.
+        let computed = table
             .columns
-            .iter()
-            .enumerate()
-            .filter(|(place, _)| *place != at)
-            .map(|(_, held)| held.affinity)
-            .collect();
-        let rows = database.rows_of(&name)?;
+            .get(at)
+            .is_some_and(|column| column.generated == crate::schema::Generated::Virtual);
+        let keyed = table.without_rowid;
+        let alias = table.rowid_alias;
+        let rows = if computed {
+            Vec::new()
+        } else {
+            database.held_rows_of(&name)?
+        };
         let schema_rowid = self.row_of(&name)?.ok_or(Error::NoTable(Vec::new()))?;
         drop(database);
         let value = |bytes: &[u8]| Value::Text(bytes.to_vec());
@@ -2486,20 +2493,78 @@ impl Writer {
         );
         let schema = crate::image::SCHEMA_ROOT;
         crate::tree::update(&mut self.held.pages, schema, schema_rowid, &row)?;
-        // `sqlite3AlterDropColumn` writes every row again with the
-        // value of that column left out.
+        self.rows_without(&name, root, at, (rows, keyed, alias))?;
+        self.reads_without(&name, &column)?;
+        self.held.header.schema_cookie = self.held.header.schema_cookie.saturating_add(1);
+        Ok(())
+    }
+
+    /// Every row of a table written again with the value of one column
+    /// left out, which is the loop `sqlite3AlterDropColumn` of
+    /// `research/sqlite/src/alter.c:2321` writes.
+    ///
+    /// Writing one row costs O(log n) and the table costs O(n log n).
+    /// No index over the table names the column that went out, which
+    /// `sqlite3AlterDropColumn` refuses before it reaches here, so no
+    /// entry of one is written again.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NoTable`] where the schema no longer holds the table,
+    /// and whatever writing the tree refuses.
+    fn rows_without(
+        &mut self,
+        name: &[u8],
+        root: u32,
+        at: usize,
+        held: (Vec<crate::db::Reading>, bool, Option<usize>),
+    ) -> Result<(), Error> {
+        let (rows, keyed, alias) = held;
+        if rows.is_empty() {
+            return Ok(());
+        }
+        // The table as the schema now holds it says where each value of
+        // a row stands in the record.
+        let table = {
+            let bytes = self.image();
+            let database = self.reading(&bytes)?;
+            let (table, _) = database.table(name).ok_or(Error::NoTable(Vec::new()))?;
+            table.clone()
+        };
+        let affinities = ordered_affinities(&table);
+        let collations = crate::schema::key_collations(&table);
+        // A table that keeps its rows in the key's own tree holds a
+        // record of another width once the column is gone, so the tree
+        // takes each row again where the walk left it.
+        if keyed {
+            crate::tree::clear_tree(&mut self.held.pages, root, Kind::LeafIndex)?;
+        }
         for (key, values) in rows {
-            let held: Vec<Value> = values
+            let mut held: Vec<Value> = values
                 .into_iter()
                 .enumerate()
                 .filter(|(place, _)| *place != at)
                 .map(|(_, value)| value)
                 .collect();
-            let record = crate::record::write_in(&held, &affinities, 4, self.held.header.encoding);
-            crate::tree::update(&mut self.held.pages, root, key, &record)?;
+            // The key of the row carries the rowid and the record holds
+            // nothing under the column that names it, which
+            // `sqlite3GenerateRowRecord` writes as `OP_Null`.
+            for slot in held.iter_mut().skip(alias_without(alias, at)).take(1) {
+                *slot = Value::Null;
+            }
+            let record = crate::record::write_in(
+                &ordered(&table, &held),
+                &affinities,
+                4,
+                self.held.header.encoding,
+            );
+            if keyed {
+                let order = ordering(&collations, self.held.header.encoding);
+                crate::tree::insert_entry(&mut self.held.pages, root, &record, &key, order, false)?;
+                continue;
+            }
+            crate::tree::update(&mut self.held.pages, root, keyed_rowid(&key), &record)?;
         }
-        self.reads_without(&name, &column)?;
-        self.held.header.schema_cookie = self.held.header.schema_cookie.saturating_add(1);
         Ok(())
     }
 
@@ -11283,6 +11348,17 @@ struct Points {
 /// has no rowid for a name to answer.
 fn keyed_rowid(key: &[Value]) -> i64 {
     key.first().map_or(0, Value::to_integer)
+}
+
+/// Where the column that names the rowid stands once the column at `at`
+/// went out, and a place no row holds where the table has no such
+/// column.
+const fn alias_without(alias: Option<usize>, at: usize) -> usize {
+    match alias {
+        Some(place) if place > at => place.saturating_sub(1),
+        Some(place) => place,
+        None => usize::MAX,
+    }
 }
 
 /// The largest root page a file holds once the root at `largest` is given

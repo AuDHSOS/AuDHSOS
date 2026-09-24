@@ -32,6 +32,7 @@ mod db;
 mod deferred;
 mod defined;
 mod definition;
+mod dropcol;
 mod dropcons;
 mod error;
 mod eval;
