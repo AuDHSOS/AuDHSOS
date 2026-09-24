@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The suite harness answers `add_test_collate`, `add_test_collate_needed`,
+  `add_test_function` and `sqlite3_complete16`, registering the version of
+  the collation and of the function the C library would call for the
+  encoding of the database. D-473 records it. `enc2.test` goes from 62
+  cases passing to 87.
+
 - `db-sqlite` holds the decimal arithmetic of `ext/misc/decimal.c` as the
   module `decimal`, and the suite harness adds the nine functions and the
   collation `load_static_extension db decimal` registers. D-472 records

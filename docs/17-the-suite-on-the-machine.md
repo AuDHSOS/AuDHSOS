@@ -554,6 +554,11 @@ Size: S.
 68. The report of a case that answered differently carries the first 300
     characters of each value, so a case that answered a long value does
     not stop the run of its file until the deadline, which D-462 records.
+69. `add_test_collate`, `add_test_collate_needed` and `add_test_function`
+    register the version of the collation and of the function the C
+    library would call, which the harness chooses from the encoding of the
+    database, and `sqlite3_complete16` reads its text as UTF-8, which
+    D-473 records.
 
 ### Produces
 

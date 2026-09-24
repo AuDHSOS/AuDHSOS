@@ -1376,6 +1376,12 @@ impl Session {
                 self.told(verb, first, second);
                 Ok(Vec::new())
             }
+            // `sqlite3_create_collation` with no function deletes the
+            // collation of that name.
+            "uncollate" => {
+                self.uncollates(first, second);
+                Ok(Vec::new())
+            }
             "null" => {
                 self.nulls.insert(first.to_owned(), second.to_owned());
                 Ok(Vec::new())
@@ -2208,6 +2214,19 @@ impl Session {
             name: Box::leak(name.as_bytes().to_vec().into_boxed_slice()),
             by: asked,
         });
+        *held = Box::leak(collating.into_boxed_slice());
+    }
+
+    /// Takes the collation of that name off the connection, which
+    /// `sqlite3_create_collation` with no comparison function does.
+    fn uncollates(&mut self, connection: &str, name: &str) {
+        self.stamped(connection);
+        let held = self.collations.entry(connection.to_owned()).or_default();
+        let collating: Vec<Collating> = held
+            .iter()
+            .filter(|one| one.name != name.as_bytes())
+            .copied()
+            .collect();
         *held = Box::leak(collating.into_boxed_slice());
     }
 

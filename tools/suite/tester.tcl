@@ -1334,8 +1334,7 @@ foreach cmd {
   tcl_variable_type
   sqlite3_db_filename
   vfs_unlink_test vfs_shared_errors
-  add_alignment_test_collations add_test_collate add_test_function
-  add_test_utf16bin_collate
+  add_alignment_test_collations add_test_utf16bin_collate
   sqlite3_snapshot_get sqlite3_snapshot_open sqlite3_snapshot_free
   sqlite3_wal_autocheckpoint
 } {
@@ -1345,6 +1344,81 @@ foreach cmd {
 # What a file sets and reads back, which this engine answers the same
 # way for every setting: the value it was given.
 proc sqlite3_db_config {args} { return [lindex $args 2] }
+
+# The UTF-8 text a UTF-16 text spells, with the two noughts that end one
+# taken off, which is what `utf8` of `test/enc2.test` writes.
+proc utf16_as_utf8 {text} {
+  binary scan $text \c* vals
+  if {[lindex $vals end]==0 && [lindex $vals end-1]==0} {
+    set text [binary format \c* [lrange $vals 0 end-2]]
+  }
+  return [encoding convertfrom unicode $text]
+}
+
+# `sqlite3_complete16` of `test1.c:2340`: whether a UTF-16 text ends a
+# statement, which is `sqlite3_complete` over the text as UTF-8.
+proc sqlite3_complete16 {text} {
+  return [lindex [harness_send complete {} [utf16_as_utf8 $text]] 0]
+}
+
+# Which version of a collation or a function the library calls where one
+# version per encoding was registered, as `sqlite3GetCollSeq` and
+# `matchQuality` of `research/sqlite/src/callback.c` read it: the version
+# of the encoding the database holds, and the version of UTF-16BE, of
+# UTF-16LE and of UTF-8 in that order where that one is missing, which is
+# the order `synthCollSeq` of `research/sqlite/src/callback.c:52` reads.
+#
+# Nothing where every version was deleted.
+proc encoding_version {held utf8 utf16le utf16be} {
+  switch -exact -- $held {
+    UTF-8    { if {$utf8}    { return UTF-8 } }
+    UTF-16le { if {$utf16le} { return UTF-16LE } }
+    UTF-16be { if {$utf16be} { return UTF-16BE } }
+  }
+  if {$utf16be} { return UTF-16BE }
+  if {$utf16le} { return UTF-16LE }
+  if {$utf8} { return UTF-8 }
+  return ""
+}
+
+# `add_test_collate DB UTF8 UTF16LE UTF16BE` of `test1.c:3329` registers
+# the collation `test_collate` for the encodings the three booleans name
+# and deletes the versions they do not, and the collation calls the TCL
+# proc `test_collate` with the encoding of the version the library chose.
+#
+# This engine holds one collation per name, so the harness chooses the
+# version here and registers that one alone.
+proc add_test_collate {name utf8 utf16le utf16be} {
+  set chosen [encoding_version [$name one {PRAGMA encoding}] \
+              $utf8 $utf16le $utf16be]
+  if {$chosen eq ""} {
+    unset -nocomplain ::collations(test_collate)
+    return [harness_send uncollate $name test_collate]
+  }
+  set ::collations(test_collate) [list test_collate $chosen]
+  return [harness_send collate $name test_collate]
+}
+
+# `add_test_collate_needed DB` of `test1.c:3460` registers the callback
+# `sqlite3_collation_needed16`, which registers the collation
+# `test_collate` for the encoding of the database the first time a
+# statement names it. The harness registers that version at once, which
+# leaves the same collation on the connection.
+proc add_test_collate_needed {name} {
+  set ::sqlite_last_needed_collation test_collate
+  return [add_test_collate $name 1 1 1]
+}
+
+# `add_test_function DB UTF8 UTF16LE UTF16BE` of `test1.c:3620` registers
+# the function `test_function` for the encodings the three booleans name,
+# and the function calls the TCL proc `test_function` with the encoding of
+# the version the library chose.
+proc add_test_function {name utf8 utf16le utf16be} {
+  set chosen [encoding_version [$name one {PRAGMA encoding}] \
+              $utf8 $utf16le $utf16be]
+  set ::functions(test_function) [list test_function $chosen]
+  return [harness_send function $name test_function]
+}
 
 # `verify_ex_errcode` of the suite's own tester: one case that holds the
 # extended code of the last refusal against the name of a code.
