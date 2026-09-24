@@ -36,6 +36,17 @@ fn text_of(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
+fn page_streams(bytes: &[u8]) -> Vec<String> {
+    text_of(bytes)
+        .split("\nstream\n")
+        .skip(1)
+        .filter_map(|part| {
+            part.split_once("\nendstream")
+                .map(|(stream, _)| stream.to_owned())
+        })
+        .collect()
+}
+
 #[test]
 fn a_document_becomes_a_pdf() {
     let (bytes, pages) = markdown("# An Example\n\nOne paragraph.\n");
@@ -101,6 +112,56 @@ fn a_table_reaches_the_page() {
     let content = text_of(&bytes);
     assert!(content.contains("(Object) Tj"));
     assert!(content.contains("(answering) Tj"));
+}
+
+#[test]
+fn a_tall_table_row_continues_under_repeated_headers() {
+    let words: Vec<String> = (0..1200).map(|index| format!("word{index:04}")).collect();
+    let input = format!(
+        "# An Example\n\n| Name | Text |\n| --- | --- |\n| Long | {} |\n| After | end |\n",
+        words.join(" ")
+    );
+    let (bytes, pages) = markdown(&input);
+    let streams = page_streams(&bytes);
+    assert_eq!(streams.len(), pages);
+    assert!(pages >= 3, "the long row used only {pages} page(s)");
+    assert!(streams[0].contains("word0000"));
+    assert!(streams.iter().skip(1).any(|page| page.contains("word1199")));
+    assert_eq!(
+        streams
+            .iter()
+            .filter(|page| page.contains("(Text) Tj"))
+            .count(),
+        pages
+    );
+    assert_eq!(
+        streams
+            .iter()
+            .filter(|page| page.contains("(After) Tj"))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn a_long_code_line_keeps_every_character() {
+    let line = "x".repeat(10000);
+    let input = format!("# An Example\n\n```\n{line}\n```\n");
+    let (bytes, pages) = markdown(&input);
+    assert!(pages > 1);
+    let streams = page_streams(&bytes);
+    let written: usize = streams
+        .iter()
+        .flat_map(|page| page.lines())
+        .filter(|line| line.starts_with('(') && (line.ends_with(" Tj") || line.ends_with(")'")))
+        .filter_map(|line| {
+            line.split_once(')')
+                .map(|(text, _)| text.trim_start_matches('('))
+        })
+        .filter(|text| text.bytes().all(|byte| byte == b'x'))
+        .map(str::len)
+        .sum();
+    assert_eq!(written, line.len());
 }
 
 #[test]

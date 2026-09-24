@@ -102,6 +102,9 @@ impl<C: DebugConsole, E: TestExit> Harness<C, E> {
     /// Opens the line of a test, for an image that runs its tests itself
     /// instead of handing a list to [`Harness::run`].
     pub fn begin(&mut self, name: &str) {
+        if self.running {
+            protocol::failed(&mut self.console, format_args!("begun again"));
+        }
         protocol::start(&mut self.console, name);
         self.running = true;
     }

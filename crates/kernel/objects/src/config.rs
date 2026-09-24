@@ -15,9 +15,9 @@
 /// Number of processes the machine holds.
 pub const PROCESSES: usize = 64;
 
-/// Number of threads the machine holds. Every thread costs five frames of
-/// the kernel reserve: four for its kernel stack and one for its IPC
-/// buffer (D-57).
+/// Number of threads the machine holds. Every thread costs nine frames of
+/// the kernel reserve: eight for its kernel stack and one for its IPC
+/// buffer (D-73).
 pub const THREADS: usize = 256;
 
 /// Number of memory objects the machine holds.

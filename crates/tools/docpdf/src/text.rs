@@ -49,6 +49,11 @@ impl Style {
     pub(crate) fn width(&self, text: &str) -> Mils {
         self.font.width_of_str(text, self.size)
     }
+
+    /// The width of one character.
+    pub(crate) fn char_width(&self, character: char) -> Mils {
+        self.width(character.encode_utf8(&mut [0; 4]))
+    }
 }
 
 /// A word, a space, or a break the author asked for.
@@ -160,7 +165,7 @@ fn push_inlines(content: &[Inline], style: &Style, out: &mut Vec<Token>) {
 fn push_words(text: &str, style: &Style, out: &mut Vec<Token>) {
     let mut word = String::new();
     for character in text.chars() {
-        if character.is_whitespace() {
+        if character.is_ascii_whitespace() {
             if !word.is_empty() {
                 out.push(Token::Word {
                     text: std::mem::take(&mut word),
@@ -250,13 +255,15 @@ fn split(text: &str, style: &Style, measure: Mils) -> Vec<String> {
     }
     let mut parts = Vec::new();
     let mut part = String::new();
+    let mut width: Mils = 0;
     for character in text.chars() {
-        let mut candidate = part.clone();
-        candidate.push(character);
-        if !part.is_empty() && style.width(&candidate) > measure {
+        let character_width = style.char_width(character);
+        if !part.is_empty() && width.saturating_add(character_width) > measure {
             parts.push(std::mem::take(&mut part));
+            width = 0;
         }
         part.push(character);
+        width = width.saturating_add(character_width);
     }
     if !part.is_empty() {
         parts.push(part);

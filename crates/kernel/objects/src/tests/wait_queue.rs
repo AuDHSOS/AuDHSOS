@@ -6,7 +6,7 @@
 use audhsos_abi::Error;
 use kernel_types::{PhysAddr, PhysFrame};
 
-use crate::object::{ProcessId, Thread, ThreadId};
+use crate::object::{EndpointId, ProcessId, Queue, Thread, ThreadId, Wait};
 use crate::pool::{ObjectId, Pool};
 use crate::wait_queue::WaitQueue;
 
@@ -183,6 +183,52 @@ fn a_thread_that_already_waits_is_refused_a_second_place() {
         Err(Error::InvalidState)
     );
     assert_eq!(queue.len(), 2);
+}
+
+#[test]
+fn a_sole_waiter_cannot_enter_another_queue() {
+    let mut threads = Threads::new();
+    let mut first = WaitQueue::EMPTY;
+    let mut second = WaitQueue::EMPTY;
+    let waiter = spawn(&mut threads, 3);
+    let other = spawn(&mut threads, 3);
+    first.enqueue(&mut threads, waiter).unwrap();
+    let endpoint: EndpointId = ObjectId::new(0, 1);
+    threads.get_mut(waiter).unwrap().wait = Wait::Endpoint {
+        endpoint,
+        queue: Queue::Senders,
+        badge: 0,
+        kernel_message: false,
+    };
+
+    assert_eq!(
+        second.enqueue(&mut threads, waiter),
+        Err(Error::InvalidState)
+    );
+    assert_eq!(
+        second.requeue(&mut threads, waiter),
+        Err(Error::InvalidState)
+    );
+    second.enqueue(&mut threads, other).unwrap();
+    assert_eq!(first.dequeue_front(&mut threads), Some(waiter));
+    assert_eq!(first, WaitQueue::EMPTY);
+    assert_eq!(order(&second, &threads), vec![other]);
+}
+
+#[test]
+fn a_stale_head_is_cleared_before_the_queue_is_reused() {
+    let mut threads = Threads::new();
+    let mut queue = WaitQueue::EMPTY;
+    let stale = spawn(&mut threads, 3);
+    let next = spawn(&mut threads, 3);
+    queue.enqueue(&mut threads, stale).unwrap();
+    assert!(threads.force_release(stale));
+
+    assert_eq!(queue.dequeue_front(&mut threads), None);
+    assert_eq!(queue, WaitQueue::EMPTY);
+    queue.enqueue(&mut threads, next).unwrap();
+    assert_eq!(queue.dequeue_front(&mut threads), Some(next));
+    assert_eq!(queue, WaitQueue::EMPTY);
 }
 
 #[test]

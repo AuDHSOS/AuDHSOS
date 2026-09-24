@@ -13,23 +13,24 @@ use std::rc::Rc;
 /// A generated value with lazily computed shrink candidates.
 pub struct Tree<T> {
     value: T,
-    shrinks: Rc<dyn Fn() -> Vec<Tree<T>>>,
+    shrinks: Rc<dyn Fn() -> Box<dyn Iterator<Item = Tree<T>>>>,
 }
 
 impl<T: Clone + 'static> Tree<T> {
     /// A value without shrink candidates.
     pub fn leaf(value: T) -> Self {
-        Tree {
-            value,
-            shrinks: Rc::new(Vec::new),
-        }
+        Tree::new(value, std::iter::empty)
     }
 
     /// A value whose candidates are produced by `shrinks` on demand.
-    pub fn new(value: T, shrinks: impl Fn() -> Vec<Tree<T>> + 'static) -> Self {
+    pub fn new<I>(value: T, shrinks: impl Fn() -> I + 'static) -> Self
+    where
+        I: IntoIterator<Item = Tree<T>>,
+        I::IntoIter: 'static,
+    {
         Tree {
             value,
-            shrinks: Rc::new(shrinks),
+            shrinks: Rc::new(move || Box::new(shrinks().into_iter())),
         }
     }
 
@@ -44,8 +45,7 @@ impl<T: Clone + 'static> Tree<T> {
     }
 
     /// The shrink candidates, smallest first.
-    #[must_use]
-    pub fn shrinks(&self) -> Vec<Tree<T>> {
+    pub fn shrinks(&self) -> Box<dyn Iterator<Item = Tree<T>>> {
         (self.shrinks)()
     }
 
@@ -54,10 +54,8 @@ impl<T: Clone + 'static> Tree<T> {
         let value = f(self.value.clone());
         let shrinks = self.shrinks;
         Tree::new(value, move || {
-            shrinks()
-                .into_iter()
-                .map(|child| child.map(Rc::clone(&f)))
-                .collect()
+            let f = Rc::clone(&f);
+            shrinks().map(move |child| child.map(Rc::clone(&f)))
         })
     }
 
@@ -69,10 +67,8 @@ impl<T: Clone + 'static> Tree<T> {
         }
         let shrinks = self.shrinks;
         Some(Tree::new(self.value, move || {
-            shrinks()
-                .into_iter()
-                .filter_map(|child| child.filter(Rc::clone(&keep)))
-                .collect()
+            let keep = Rc::clone(&keep);
+            shrinks().filter_map(move |child| child.filter(Rc::clone(&keep)))
         }))
     }
 }
@@ -100,9 +96,14 @@ impl<T: fmt::Debug> fmt::Debug for Tree<T> {
 pub fn zip<A: Clone + 'static, B: Clone + 'static>(left: Tree<A>, right: Tree<B>) -> Tree<(A, B)> {
     let value = (left.value().clone(), right.value().clone());
     Tree::new(value, move || {
-        let from_left = left.shrinks().into_iter().map(|l| zip(l, right.clone()));
-        let from_right = right.shrinks().into_iter().map(|r| zip(left.clone(), r));
-        from_left.chain(from_right).collect()
+        let left_for_left = left.clone();
+        let right_for_left = right.clone();
+        let left_for_right = left.clone();
+        let from_left = left_for_left
+            .shrinks()
+            .map(move |l| zip(l, right_for_left.clone()));
+        let from_right = right.shrinks().map(move |r| zip(left_for_right.clone(), r));
+        from_left.chain(from_right)
     })
 }
 
@@ -111,25 +112,30 @@ pub fn zip<A: Clone + 'static, B: Clone + 'static>(left: Tree<A>, right: Tree<B>
 /// single elements in place.
 #[must_use]
 pub fn sequence<T: Clone + 'static>(elements: Vec<Tree<T>>, min_len: usize) -> Tree<Vec<T>> {
+    let elements = Rc::new(elements);
     let value: Vec<T> = elements.iter().map(|e| e.value().clone()).collect();
     Tree::new(value, move || {
-        let mut candidates = Vec::new();
         let len = elements.len();
-        let mut chunk = len / 2;
-        while chunk >= 1 {
-            if len.saturating_sub(chunk) >= min_len {
-                let mut start = 0usize;
-                while start.saturating_add(chunk) <= len {
-                    let mut remaining = elements.clone();
-                    remaining.drain(start..start.saturating_add(chunk));
-                    candidates.push(sequence(remaining, min_len));
-                    start = start.saturating_add(chunk);
-                }
-            }
-            chunk /= 2;
-        }
-        for (index, element) in elements.iter().enumerate() {
-            for child in element.shrinks() {
+        let for_chunks = Rc::clone(&elements);
+        let chunks =
+            std::iter::successors(Some(len / 2), |&chunk| (chunk > 1).then_some(chunk / 2))
+                .take_while(|&chunk| chunk > 0)
+                .filter(move |&chunk| len.saturating_sub(chunk) >= min_len)
+                .flat_map(move |chunk| {
+                    let elements = Rc::clone(&for_chunks);
+                    (0..=len.saturating_sub(chunk))
+                        .step_by(chunk)
+                        .map(move |start| {
+                            let mut remaining = elements.as_ref().clone();
+                            remaining.drain(start..start.saturating_add(chunk));
+                            sequence(remaining, min_len)
+                        })
+                });
+        let for_elements = Rc::clone(&elements);
+        let children = (0..len).flat_map(move |index| {
+            let elements = Rc::clone(&for_elements);
+            let shrinks = elements.get(index).map(Tree::shrinks);
+            shrinks.into_iter().flatten().map(move |child| {
                 let replaced = elements
                     .iter()
                     .enumerate()
@@ -141,9 +147,9 @@ pub fn sequence<T: Clone + 'static>(elements: Vec<Tree<T>>, min_len: usize) -> T
                         }
                     })
                     .collect();
-                candidates.push(sequence(replaced, min_len));
-            }
-        }
-        candidates
+                sequence(replaced, min_len)
+            })
+        });
+        chunks.chain(children)
     })
 }
