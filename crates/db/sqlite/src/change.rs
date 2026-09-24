@@ -973,6 +973,13 @@ pub struct Writer {
     /// sharing a key with one the table holds does, which holds every
     /// statement of the body where the statement said anything.
     firing: Conflict,
+    /// How many rows a `REPLACE` has taken out for the row the statement
+    /// writes now, which `regTrigCnt` of
+    /// `research/sqlite/src/insert.c:2230` counts: a trigger of the
+    /// deletion or a foreign key of it may write a row that holds a key
+    /// this row carries, so every key a `REPLACE` answered is held
+    /// against the table again where the count is not nought.
+    replacing: u64,
     /// The functions the application defined on this connection.
     defined: &'static [crate::func::Defined],
     /// The aggregates the application defined on this connection.
@@ -1118,6 +1125,7 @@ impl Writer {
             deferred: 0,
             refusing: Refusing::Abort,
             firing: Conflict::Unspecified,
+            replacing: 0,
             defined: &[],
             grouped: &[],
             collating: &[],
@@ -1250,6 +1258,7 @@ impl Writer {
             deferred: 0,
             refusing: Refusing::Abort,
             firing: Conflict::Unspecified,
+            replacing: 0,
             defined: &[],
             grouped: &[],
             collating: &[],
@@ -8415,6 +8424,7 @@ impl Writer {
         let order = ordering(&collations, self.held.header.encoding);
         crate::tree::remove_entry(&mut self.held.pages, root, key, order)?;
         self.fire(&after, &[], &row)?;
+        self.replacing = self.replacing.saturating_add(1);
         Ok(true)
     }
 
@@ -9111,7 +9121,7 @@ impl Writer {
                 new: Some((&named, rowid)),
                 encoding: self.held.header.encoding,
             };
-            match self.conflicted(&into, &named, rowid)? {
+            match self.conflicts(&into, &named, rowid)? {
                 Conflicted::Write => {}
                 Conflicted::Over => continue,
                 Conflicted::Wrote(rows) => {
@@ -9214,6 +9224,7 @@ impl Writer {
         into: &Insertion<'_>,
         named: &[Value],
         rowid: i64,
+        replaced: &mut Vec<usize>,
     ) -> Result<Conflicted, Error> {
         for key in into.order.iter().copied() {
             let Some(index) = key else {
@@ -9256,7 +9267,10 @@ impl Writer {
             match answer {
                 crate::ast::Conflict::Ignore => return Ok(Conflicted::Over),
                 crate::ast::Conflict::Replace
-                    if self.replaced(into.root, into.kept, into.table, &held)? => {}
+                    if self.replaced(into.root, into.kept, into.table, &held)? =>
+                {
+                    replaced.push(index);
+                }
                 _ => {
                     self.refusing(answer);
                     return Err(Error::Unique(Self::shown_key_of(
@@ -9266,6 +9280,80 @@ impl Writer {
             }
         }
         Ok(Conflicted::Write)
+    }
+
+    /// Every key a `REPLACE` answered held against the table again, and
+    /// the key of the table with them, which
+    /// `sqlite3GenerateConstraintChecks` of
+    /// `research/sqlite/src/insert.c:2694` does where a `REPLACE` took a
+    /// row out: a trigger of that deletion or a foreign key of it may
+    /// have written a row holding a key this row carries. The recheck
+    /// refuses the row whatever the statement said, which is the
+    /// `OE_Abort` the copied checks carry.
+    ///
+    /// It looks one key up per index a `REPLACE` answered, which is
+    /// O(log n) each.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unique`] names the key the row shares.
+    fn rechecked(
+        &mut self,
+        into: &Insertion<'_>,
+        named: &[Value],
+        rowid: i64,
+        replaced: &[usize],
+    ) -> Result<(), Error> {
+        if self.replacing == 0 {
+            return Ok(());
+        }
+        if crate::tree::holds(&self.held.pages, into.root, rowid)? {
+            self.refusing(Conflict::Abort);
+            return Err(Error::Unique(Self::shown_column(into.table, into.alias)));
+        }
+        let tail = keyed_as(rowid);
+        for index in replaced.iter().copied() {
+            let found = into
+                .kept
+                .get(index)
+                .map(|one| self.conflicts_at(one, into.table, (named, &tail), None))
+                .transpose()?
+                .flatten();
+            if found.is_some() {
+                self.refusing(Conflict::Abort);
+                return Err(Error::Unique(Self::shown_key_of(
+                    into.table, into.kept, index,
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// The row held against the keys of the table, and held against
+    /// every key a `REPLACE` answered a second time.
+    ///
+    /// The count of deletions belongs to the statement, so a statement of
+    /// a trigger's body counts its own and leaves this one where it was.
+    ///
+    /// # Errors
+    ///
+    /// Whatever a key of the table refuses the row with.
+    fn conflicts(
+        &mut self,
+        into: &Insertion<'_>,
+        named: &[Value],
+        rowid: i64,
+    ) -> Result<Conflicted, Error> {
+        let over = core::mem::replace(&mut self.replacing, 0);
+        let mut replaced = Vec::new();
+        let answered = match self.conflicted(into, named, rowid, &mut replaced) {
+            Ok(Conflicted::Write) => self
+                .rechecked(into, named, rowid, &replaced)
+                .map(|()| Conflicted::Write),
+            other => other,
+        };
+        self.replacing = over;
+        answered
     }
 
     /// What a row that shares the key of the table with one already
@@ -9369,7 +9457,22 @@ impl Writer {
         if !out.contains(&None) {
             out.push(None);
         }
-        out.extend((0..kept.len()).filter(|at| !named.contains(at)).map(Some));
+        // `sqlite3GenerateConstraintChecks` walks `pTab->pIndex`, which
+        // `sqlite3CreateIndex` puts each new index at the head of, so the
+        // index made last is held against the row first, and which
+        // `research/sqlite/src/build.c:4499` then moves every index whose
+        // own clause says `REPLACE` to the end of, so an index that
+        // refuses the row is held against it before one that writes over
+        // a row.
+        let (plain, replacing): (Vec<usize>, Vec<usize>) = (0..kept.len())
+            .rev()
+            .filter(|at| !named.contains(at))
+            .partition(|at| {
+                kept.get(*at)
+                    .is_none_or(|one| one.index.conflict != Conflict::Replace)
+            });
+        out.extend(plain.into_iter().map(Some));
+        out.extend(replacing.into_iter().map(Some));
         Ok(out)
     }
 
@@ -11025,6 +11128,7 @@ impl Writer {
         self.unindex_row(kept, table, &values, &keyed_as(rowid))?;
         crate::tree::remove(&mut self.held.pages, root, rowid)?;
         self.fire(&after, &[], &row)?;
+        self.replacing = self.replacing.saturating_add(1);
         Ok(true)
     }
 

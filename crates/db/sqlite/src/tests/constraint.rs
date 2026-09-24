@@ -472,3 +472,95 @@ fn what_a_statement_of_a_trigger_a_delete_fired_does() {
     }
     assert_eq!(rows(&writer, "SELECT count(*) FROM log"), ["1"]);
 }
+
+#[test]
+fn what_a_replace_whose_deletion_fired_a_trigger_is_held_to() {
+    let mut writer = connection();
+    writer.run(b"PRAGMA recursive_triggers=ON").unwrap();
+    for sql in [
+        "CREATE TABLE t0(c0,c1)",
+        "CREATE UNIQUE INDEX i0 ON t0(c0)",
+        "INSERT INTO t0 VALUES(123,1)",
+        "CREATE TRIGGER tr0 AFTER DELETE ON t0 BEGIN INSERT INTO t0 VALUES(123,2); END",
+    ] {
+        writer.run(sql.as_bytes()).unwrap();
+    }
+    // The deletion the `REPLACE` made fired a trigger that wrote the key
+    // again, so the key is held against the table once more and refuses
+    // the row whatever the statement said.
+    assert_eq!(
+        refusal(&mut writer, &["REPLACE INTO t0 VALUES(123,3)"]),
+        "UNIQUE constraint failed: t0.c0"
+    );
+    assert_eq!(rows(&writer, "SELECT c0, c1 FROM t0"), ["123", "1"]);
+
+    // The key of the table is held against it again as well, which the
+    // trigger of the deletion took.
+    for sql in [
+        "CREATE TABLE t2(aa,bb)",
+        "CREATE UNIQUE INDEX t2bb ON t2(bb)",
+        "CREATE TRIGGER r BEFORE DELETE ON t2 BEGIN INSERT INTO t2(aa,bb) VALUES(99,1); END",
+        "INSERT INTO t2(aa,bb) VALUES(10,20)",
+    ] {
+        writer.run(sql.as_bytes()).unwrap();
+    }
+    assert_eq!(
+        refusal(&mut writer, &["REPLACE INTO t2(aa,bb) VALUES(30,20)"]),
+        "UNIQUE constraint failed: t2.rowid"
+    );
+    assert_eq!(rows(&writer, "SELECT aa, bb FROM t2"), ["10", "20"]);
+
+    // The refusal names the column the key is another name for.
+    for sql in [
+        "CREATE TABLE t3(a INTEGER PRIMARY KEY, b)",
+        "CREATE INDEX t3b ON t3(b)",
+        "INSERT INTO t3 VALUES(1,'one')",
+        "CREATE TRIGGER tr3 AFTER DELETE ON t3 BEGIN INSERT INTO t3 VALUES(1,'three'); END",
+    ] {
+        writer.run(sql.as_bytes()).unwrap();
+    }
+    assert_eq!(
+        refusal(&mut writer, &["REPLACE INTO t3 VALUES(1,'two')"]),
+        "UNIQUE constraint failed: t3.a"
+    );
+    assert_eq!(rows(&writer, "SELECT a, b FROM t3"), ["1", "one"]);
+}
+
+#[test]
+fn which_order_the_keys_of_a_table_are_held_against_a_row_in() {
+    let mut writer = connection();
+    writer.run(b"PRAGMA recursive_triggers=ON").unwrap();
+    for sql in [
+        "CREATE TABLE t1(a, b UNIQUE, c UNIQUE)",
+        "INSERT INTO t1(a,b,c) VALUES(1,1,1),(2,2,2),(3,3,3),(4,4,4)",
+        "CREATE TRIGGER r AFTER DELETE ON t1 WHEN OLD.c<>3 \
+         BEGIN INSERT INTO t1(rowid,a,b,c) VALUES(100,100,100,3); END",
+    ] {
+        writer.run(sql.as_bytes()).unwrap();
+    }
+    // The index made last is held against the row first, so the key `c`
+    // is answered before the key `b` and the row the trigger of the `b`
+    // deletion wrote holds `c` again.
+    assert_eq!(
+        refusal(
+            &mut writer,
+            &["REPLACE INTO t1(rowid,a,b,c) VALUES(200,1,2,3)"]
+        ),
+        "UNIQUE constraint failed: t1.c"
+    );
+    assert_eq!(rows(&writer, "SELECT a FROM t1"), ["1", "2", "3", "4"]);
+
+    // An index whose own clause says `REPLACE` stands at the end of the
+    // list, so the two indexes that refuse the row are answered first.
+    for sql in [
+        "CREATE TABLE u1(x PRIMARY KEY, UNIQUE(x,x), UNIQUE(x,x) ON CONFLICT REPLACE)",
+        "INSERT INTO u1(x) VALUES(1)",
+    ] {
+        writer.run(sql.as_bytes()).unwrap();
+    }
+    assert_eq!(
+        refusal(&mut writer, &["INSERT INTO u1(x) VALUES(1)"]),
+        "UNIQUE constraint failed: u1.x"
+    );
+    assert_eq!(rows(&writer, "SELECT x FROM u1"), ["1"]);
+}

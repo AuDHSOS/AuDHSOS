@@ -7,6 +7,16 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` holds every key a `REPLACE` answered against the table again
+  once the deletion it made has run, because a trigger of that deletion may
+  have written the key back. D-483 records it. Catalog 6.6.336.
+  `insert.test` goes from 63 cases passing to 72.
+
+- `db-sqlite` holds the keys of a table against a row in the order
+  `pTab->pIndex` holds the indexes: the index made last first, and every
+  index whose own clause says `REPLACE` at the end. D-484 records it.
+  `insert.test` goes from 72 cases passing to 73.
+
 - `db-sqlite` runs a trigger of the temp schema for the table of the one
   database its statement named, and holds a statement of a trigger's body to
   the schema the trigger stands in. D-481 records it. Catalog 6.6.335.

@@ -7507,3 +7507,18 @@ Document 16 step Q8.
 - A trigger of the temp schema whose body names that table, which reaches
   the temp table.
 
+### 6.6.336 The keys a `REPLACE` is held to a second time (`db-sqlite`)
+
+Document 16 step Q8. Every answer is the one the C library's shell writes
+for the same statements.
+
+- A `REPLACE` whose deletion fired a trigger that wrote the key again,
+  refused under the index, and the rows the table holds after it.
+- The same where the trigger took the key of the table, refused under
+  `rowid`, and where the table names the key, refused under that column.
+- Two unique indexes over one row where the trigger of the first
+  deletion writes the key of the second, which names the index made
+  last.
+- A table of three unique keys the last of which says `REPLACE`, which
+  refuses the row under the first.
+

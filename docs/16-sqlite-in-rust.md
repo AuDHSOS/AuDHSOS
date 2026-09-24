@@ -1140,6 +1140,9 @@ Size: L.
 188. The database a trigger stands over, and the database a statement of
      its body names its table under. Built, which D-481 and D-482
      record.
+189. The keys a `REPLACE` is held to again once its deletion has run, and
+     the order the keys of a table are held against a row in. Built,
+     which D-483 and D-484 record.
 
 ### Done when
 
