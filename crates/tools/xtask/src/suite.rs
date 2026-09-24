@@ -32,6 +32,7 @@ use std::time::{Duration, Instant};
 
 use db_sqlite::change::{Checkpointing, Does, Onto, Writer};
 use db_sqlite::db::Database;
+use db_sqlite::decimal::Decimal;
 use db_sqlite::func::Counted;
 use db_sqlite::func::Defined;
 use db_sqlite::header::Encoding;
@@ -2253,21 +2254,38 @@ impl Session {
     /// A module this harness holds none of leaves the connection as it
     /// stands, so the functions it carries stay missing.
     fn extension(&mut self, connection: &str, module: &str) {
-        if module != "regexp" {
-            return;
-        }
+        let carried: &[Defined] = match module {
+            "regexp" => EXTENDED,
+            "decimal" => DECIMALS,
+            _ => return,
+        };
         self.stamped(connection);
         let held = self.functions.entry(connection.to_owned()).or_default();
         let mut defined: Vec<Defined> = held
             .iter()
-            .filter(|one| !EXTENDED.iter().any(|carried| carried.name == one.name))
+            .filter(|one| !carried.iter().any(|beside| beside.name == one.name))
             .copied()
             .collect();
         if defined.is_empty() {
             defined.extend_from_slice(DEFINED);
         }
-        defined.extend_from_slice(EXTENDED);
+        defined.extend_from_slice(carried);
         *held = Box::leak(defined.into_boxed_slice());
+        // `sqlite3_decimal_init` registers the collation `decimal` beside
+        // the functions of the module.
+        if module == "decimal" {
+            let held = self.collations.entry(connection.to_owned()).or_default();
+            let mut collating: Vec<Collating> = held
+                .iter()
+                .filter(|one| one.name != b"decimal")
+                .copied()
+                .collect();
+            collating.push(Collating {
+                name: b"decimal",
+                by: decimal_collate,
+            });
+            *held = Box::leak(collating.into_boxed_slice());
+        }
     }
 
     /// `db status (step|sort|autoindex|vmstep)` of `tclsqlite.c:3766`:
@@ -3899,11 +3917,213 @@ fn regexp(
 }
 
 /// The aggregates `testfixture` defines that this harness answers.
-static GROUPED: &[db_sqlite::func::Grouped] = &[db_sqlite::func::Grouped {
-    name: b"md5sum",
-    count: None,
-    answer: md5sum,
-}];
+static GROUPED: &[db_sqlite::func::Grouped] = &[
+    db_sqlite::func::Grouped {
+        name: b"md5sum",
+        count: None,
+        answer: md5sum,
+    },
+    db_sqlite::func::Grouped {
+        name: b"decimal_sum",
+        count: Some(1),
+        answer: decimal_sum,
+    },
+];
+
+/// The nine functions `sqlite3_decimal_init` of
+/// `research/sqlite/ext/misc/decimal.c:920` registers, which
+/// `load_static_extension db decimal` adds to a connection.
+static DECIMALS: &[Defined] = &[
+    Defined {
+        name: b"decimal",
+        count: None,
+        answer: decimal_text,
+    },
+    Defined {
+        name: b"decimal_exp",
+        count: None,
+        answer: decimal_text,
+    },
+    Defined {
+        name: b"decimal_cmp",
+        count: Some(2),
+        answer: decimal_compare,
+    },
+    Defined {
+        name: b"decimal_add",
+        count: Some(2),
+        answer: decimal_arithmetic,
+    },
+    Defined {
+        name: b"decimal_sub",
+        count: Some(2),
+        answer: decimal_arithmetic,
+    },
+    Defined {
+        name: b"decimal_mul",
+        count: Some(2),
+        answer: decimal_arithmetic,
+    },
+    Defined {
+        name: b"decimal_pow2",
+        count: Some(1),
+        answer: decimal_power,
+    },
+];
+
+/// One value read as a decimal, which is `decimal_new` of
+/// `research/sqlite/ext/misc/decimal.c:196`: a text and a whole number
+/// are read as the text they spell, a real number and a blob of eight
+/// bytes as the binary64 number they hold, and every other value as
+/// nothing.
+///
+/// `text` says that the value is read as text whatever it holds, which is
+/// the `bTextOnly` argument every function but `decimal` and
+/// `decimal_exp` passes.
+fn decimal_of(value: Option<&Value>, text: bool) -> Option<Decimal> {
+    match value {
+        Some(Value::Text(held)) => Some(Decimal::of_text(held)),
+        Some(held @ Value::Int(_)) => Some(Decimal::of_text(&held.stringify().unwrap_or_default())),
+        Some(held @ Value::Real(_)) if text => {
+            Some(Decimal::of_text(&held.stringify().unwrap_or_default()))
+        }
+        Some(Value::Real(held)) => db_sqlite::decimal::of_double(*held),
+        Some(Value::Blob(held)) if text => Some(Decimal::of_text(held)),
+        Some(Value::Blob(held)) => held
+            .as_slice()
+            .try_into()
+            .ok()
+            .map(f64::from_be_bytes)
+            .and_then(db_sqlite::decimal::of_double),
+        _ => None,
+    }
+}
+
+/// `decimal(X)`, `decimal(X,N)`, `decimal_exp(X)` and `decimal_exp(X,N)`
+/// of `ext/misc/decimal.c`: the value written as a decimal, rounded to
+/// `N` significant digits where a second argument names one, and in
+/// exponential notation under `decimal_exp`.
+///
+/// It costs what reading and writing the digits costs.
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the shape every function the application defines answers in"
+)]
+fn decimal_text(
+    name: &'static [u8],
+    args: &[Value],
+    _: Option<&Source>,
+) -> Result<Value, db_sqlite::eval::Error> {
+    let Some(mut held) = decimal_of(args.first(), false) else {
+        return Ok(Value::Null);
+    };
+    let count = args.get(1).map_or(0, db_sqlite::value::Value::to_integer);
+    let count = usize::try_from(count).unwrap_or(0);
+    if count > 0 {
+        held.round(count);
+    }
+    Ok(Value::Text(if name == b"decimal_exp" {
+        held.scientific(count)
+    } else {
+        held.text()
+    }))
+}
+
+/// `decimal_cmp(X,Y)`: minus one, nought or one as `X` stands below `Y`,
+/// beside it or above it, and nothing where either holds no number.
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the shape every function the application defines answers in"
+)]
+fn decimal_compare(
+    _: &'static [u8],
+    args: &[Value],
+    _: Option<&Source>,
+) -> Result<Value, db_sqlite::eval::Error> {
+    let (Some(one), Some(other)) = (
+        decimal_of(args.first(), true),
+        decimal_of(args.get(1), true),
+    ) else {
+        return Ok(Value::Null);
+    };
+    Ok(Value::Int(match db_sqlite::decimal::order(&one, &other) {
+        std::cmp::Ordering::Less => -1,
+        std::cmp::Ordering::Equal => 0,
+        std::cmp::Ordering::Greater => 1,
+    }))
+}
+
+/// `decimal_add(X,Y)`, `decimal_sub(X,Y)` and `decimal_mul(X,Y)`: the
+/// sum, the difference and the product of the two values, and nothing
+/// where either holds no number.
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the shape every function the application defines answers in"
+)]
+fn decimal_arithmetic(
+    name: &'static [u8],
+    args: &[Value],
+    _: Option<&Source>,
+) -> Result<Value, db_sqlite::eval::Error> {
+    let (Some(one), Some(other)) = (
+        decimal_of(args.first(), true),
+        decimal_of(args.get(1), true),
+    ) else {
+        return Ok(Value::Null);
+    };
+    let held = match name {
+        b"decimal_mul" => db_sqlite::decimal::multiplied(one, &other),
+        b"decimal_sub" => db_sqlite::decimal::added(one, other.negated()),
+        _ => db_sqlite::decimal::added(one, other),
+    };
+    Ok(Value::Text(held.text()))
+}
+
+/// `decimal_pow2(N)`: two to the power `N` in exponential notation, and
+/// nothing for a value that is no whole number or a power past twenty
+/// thousand either way.
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the shape every function the application defines answers in"
+)]
+fn decimal_power(
+    _: &'static [u8],
+    args: &[Value],
+    _: Option<&Source>,
+) -> Result<Value, db_sqlite::eval::Error> {
+    let Some(Value::Int(power)) = args.first() else {
+        return Ok(Value::Null);
+    };
+    let held = i32::try_from(*power)
+        .ok()
+        .and_then(db_sqlite::decimal::power_of_two);
+    Ok(held.map_or(Value::Null, |held| Value::Text(held.scientific(0))))
+}
+
+/// `decimal_sum(X)`: the sum of the values of the group, which is
+/// `decimalSumStep` of `ext/misc/decimal.c:812` over each row, with a
+/// null argument adding nothing.
+///
+/// It costs O(n) sums of O(m) digits each.
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the shape every function the application defines answers in"
+)]
+fn decimal_sum(_: &'static [u8], rows: &[Vec<Value>]) -> Result<Value, db_sqlite::eval::Error> {
+    let mut held = Decimal::zero();
+    for row in rows {
+        if let Some(value) = decimal_of(row.first(), true) {
+            held = db_sqlite::decimal::added(held, value);
+        }
+    }
+    Ok(Value::Text(held.text()))
+}
+
+/// The collation `decimal`, which orders two texts by the numbers they
+/// spell.
+fn decimal_collate(_: &'static [u8], left: &[u8], right: &[u8]) -> std::cmp::Ordering {
+    db_sqlite::decimal::collate(left, right)
+}
 
 /// `md5sum(X,...)` of `src/test_md5.c`: the digest of the text of every
 /// argument of every row of the group, in the order the rows were

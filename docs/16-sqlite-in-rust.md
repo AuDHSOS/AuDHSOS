@@ -1126,6 +1126,9 @@ Size: L.
      table under. Built, which D-470 records.
 183. The refusal a `CREATE VIEW` whose statement holds a bound parameter
      carries. Built, which D-471 records.
+184. The decimal arithmetic of `ext/misc/decimal.c`, with the nine
+     functions and the collation `load_static_extension db decimal` adds.
+     Built, which D-472 records.
 
 ### Done when
 

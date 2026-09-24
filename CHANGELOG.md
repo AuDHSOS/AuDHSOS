@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` holds the decimal arithmetic of `ext/misc/decimal.c` as the
+  module `decimal`, and the suite harness adds the nine functions and the
+  collation `load_static_extension db decimal` registers. D-472 records
+  it. Catalog 6.6.332. `decimal.test` goes from 4 cases passing to 49,
+  which is every case of the file.
+
 - `db-sqlite` refuses every statement that writes a page or a word of the
   header on a connection under `PRAGMA query_only` with `attempt to write
   a readonly database`, where the pragma was held and read and refused

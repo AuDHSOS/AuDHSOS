@@ -17,6 +17,7 @@ pub mod check;
 pub mod constraint;
 pub mod date;
 pub mod db;
+pub mod decimal;
 pub mod error;
 pub mod eval;
 pub mod format;

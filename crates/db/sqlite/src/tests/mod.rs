@@ -29,6 +29,7 @@ mod counted;
 mod crashing;
 mod date;
 mod db;
+mod decimal;
 mod deferred;
 mod defined;
 mod definition;

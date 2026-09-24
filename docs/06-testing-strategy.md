@@ -7454,3 +7454,21 @@ Document 16 step Q8.
 
 - `?`, `?1` and `:one` in the `WHERE` of a view, each refused.
 - The schema after them, which holds no view of that name.
+
+### 6.6.332 Decimal arithmetic of any precision (`db-sqlite`)
+
+Document 16 step Q8. Every answer is the one the C library's shell writes
+with `ext/misc/decimal.c` linked in.
+
+- The text one value is read from: a sign, leading zeros, a point, an
+  exponent either way, a byte the number is not made of, an exponent past
+  a million, and a text that spells no number.
+- The text one value is written as, and the same in exponential notation.
+- One value rounded to a count of digits, including the counts that carry
+  a digit over every nine and the counts that reach past the digits.
+- The sums, the differences and the products of two values, with the sign
+  of a sum that cancels and of a product by nought.
+- How two values compare, each way and under either sign.
+- The powers of two, and the powers past twenty thousand either way.
+- The values a binary64 number spells, the smallest one among them, and
+  the numbers that are none.
