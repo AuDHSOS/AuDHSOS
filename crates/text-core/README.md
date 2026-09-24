@@ -82,9 +82,11 @@ baseline; the crate reads no `BASE` table.
 path. Results retain fractional advances, visual glyphs, line boxes, grapheme
 carets with affinity, and selection rectangles. `layout_into` and `measure_into`
 use caller-owned `layout::Workspace` and `layout::LayoutBuffers`.
-Input is limited to 65,536 scalars and candidate shaping to one million scalar
-visits. One GSUB or GPOS application spends at most one million operations
-plus 64 per glyph; one layout call spends at most 64 million. Short buffers,
+Input is limited to 65,536 scalars and line shaping to one million scalar
+visits; a wrapped line of w scalars shapes O(w) scalars, plus O(w) per
+break candidate its width estimate misses. One GSUB or GPOS
+application spends at most one million operations plus 64 per glyph; one
+layout call spends at most 64 million. Short buffers,
 malformed fonts, numeric overflow, and work exhaustion return typed errors.
 Failed operations invalidate scratch and output contents.
 Owned wrappers cap each growing buffer at 1,048,576 entries.

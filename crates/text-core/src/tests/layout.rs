@@ -490,11 +490,9 @@ fn layout_gvar_phantoms_arabic_wrap_and_work_limits() {
         layout::measure_into(&set, &style, &huge, None, &mut memory.workspace()),
         Err(TextError::LimitExceeded)
     );
-    let quadratic = "A ".repeat(1100);
-    assert_eq!(
-        layout::measure(&set, &style, &quadratic, Some(Fixed::from_i32(10_000_000))),
-        Err(TextError::LimitExceeded)
-    );
+    // 1,100 candidates on one line cost 1.2 million scalars before #489.
+    let candidates = "A ".repeat(1100);
+    assert!(layout::measure(&set, &style, &candidates, Some(Fixed::from_i32(10_000_000))).is_ok());
 }
 
 #[cfg(feature = "alloc")]
@@ -923,4 +921,122 @@ fn one_layout_shares_one_shaping_budget() {
         layout::measure(&set, &style, &"a\n".repeat(1000), None),
         Err(TextError::Font(crate::FontError::LimitExceeded))
     );
+}
+
+#[cfg(feature = "alloc")]
+fn dejavu_16<'s, 'f>(fonts: &'s [Font<'f>]) -> (FontSet<'s, 'f>, TextStyle) {
+    let set = FontSet {
+        ui: fonts,
+        mono: fonts,
+        generation: 0,
+    };
+    let style = TextStyle {
+        size: Fixed::from_i32(16),
+        ..TextStyle::default()
+    };
+    (set, style)
+}
+
+/// #489: a 65,535-scalar paragraph wraps at 2000 px within linear work.
+#[cfg(feature = "alloc")]
+#[test]
+fn wrapping_charges_linear_work() {
+    let fonts = [Font::parse(include_bytes!("fixtures/DejaVu-shaping.ttf")).unwrap()];
+    let (set, style) = dejavu_16(&fonts);
+    let text = "abcd ".repeat(13_107);
+    let scalars = text.chars().count();
+    let width = Fixed::from_i32(2000);
+    let (measured, _) = layout::measure(&set, &style, &text, Some(width)).unwrap();
+    assert!(measured <= width);
+    let work = layout::probe::WORK.with(core::cell::Cell::get);
+    assert!(work <= 8 * scalars, "work {work}");
+}
+
+/// #489: every soft line end is the last allowed boundary that fits, and
+/// every emergency line end the last grapheme that fits.
+#[cfg(feature = "alloc")]
+#[test]
+fn wrapping_keeps_greedy_line_ends() {
+    let fonts = [Font::parse(include_bytes!("fixtures/DejaVu-shaping.ttf")).unwrap()];
+    let (set, style) = dejavu_16(&fonts);
+    let mut text = String::new();
+    for i in 0..200 {
+        text.push_str(&"abcdefghijkl"[..=(i * 7) % 12]);
+        text.push_str(["  ", " ", " \t\t", " ", "          "][i % 5]);
+        if i == 100 {
+            text.push_str(&"m".repeat(40));
+            text.push(' ');
+        }
+    }
+    // A text-end space is not trimmed.
+    let text = text.trim_end();
+    let width_of = |s: &str| layout::measure(&set, &style, s, None).unwrap().0;
+    for width in [60, 200, 700] {
+        let width = Fixed::from_i32(width);
+        let output = layout::layout(&set, &style, text, Some(width)).unwrap();
+        let lines = output.view().lines;
+        assert!(lines.len() > 1);
+        for line in &lines[..lines.len() - 1] {
+            let next = if matches!(text.as_bytes()[line.end - 1], b' ' | b'\t') {
+                assert!(!line.overflow);
+                text[line.end..]
+                    .find([' ', '\t'])
+                    .map_or(text.len(), |i| line.end + i)
+            } else {
+                assert!(!line.overflow || line.end - line.start == 1);
+                line.end + 1
+            };
+            assert!(width_of(&text[line.start..next]) > width, "{line:?}");
+        }
+        assert_eq!(
+            layout::measure(&set, &style, text, Some(width)),
+            Ok((output.info().width, output.info().height))
+        );
+    }
+    // A space run across the first window end still reaches the break after it.
+    let text = format!("aaaa bbbb{}cccc cccc cccc", " ".repeat(10));
+    let width = width_of("aaaa bbbb");
+    let output = layout::layout(&set, &style, &text, Some(width)).unwrap();
+    let first = output.view().lines[0];
+    assert_eq!(first.start..first.end, 0..19);
+}
+
+/// #494: one layout validates each face once, however many lines use it.
+#[cfg(feature = "alloc")]
+#[test]
+fn layout_validates_each_face_once() {
+    let validations = || layout::probe::VALIDATIONS.with(core::cell::Cell::get);
+    let fonts = [Font::parse(include_bytes!("fixtures/DejaVu-shaping.ttf")).unwrap()];
+    let (set, style) = dejavu_16(&fonts);
+    let text = "a\n".repeat(2000);
+    for width in [None, Some(Fixed::from_i32(100))] {
+        let output = layout::layout(&set, &style, &text, width).unwrap();
+        assert_eq!(output.view().lines.len(), 2001);
+        assert_eq!(validations(), 1);
+    }
+    let chars = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'];
+    let bytes: Vec<_> = chars.iter().map(|c| font_for(&[*c], 1000)).collect();
+    let fonts: Vec<_> = bytes.iter().map(|b| Font::parse(b).unwrap()).collect();
+    let set = FontSet {
+        ui: &fonts,
+        mono: &fonts,
+        generation: 0,
+    };
+    let style = TextStyle::default();
+    let two = "AB\n".repeat(100);
+    let output = layout::layout(&set, &style, &two, None).unwrap();
+    assert_eq!(output.view().runs.iter().map(|r| r.face).max(), Some(1));
+    assert_eq!(validations(), 2);
+    // Ten faces exceed the cache; eviction revalidates and keeps the result.
+    let all: String = chars.iter().collect::<String>().repeat(20);
+    let output = layout::layout(&set, &style, &all, Some(Fixed::from_i32(2000))).unwrap();
+    assert_eq!(output.view().glyphs.len(), 200);
+    assert!(output.view().glyphs.iter().all(|g| g.id != 0));
+    assert!(validations() > 10);
+    let mut sum = Fixed::ZERO;
+    for c in &chars {
+        let (width, _) = layout::measure(&set, &style, &c.to_string(), None).unwrap();
+        sum = sum.checked_add(width).unwrap();
+    }
+    assert_eq!(output.info().width, sum.mul_ratio(20, 1).unwrap());
 }

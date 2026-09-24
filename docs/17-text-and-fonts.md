@@ -737,8 +737,10 @@ cache or mutable font state exists. Glyph expansion and outline scratch may
 grow independently of input length; runs and Unicode scratch are linear in
 input scalars. Output failure invalidates caller storage.
 
-Greedy wrapping tests legal candidates until the first overflow, selects the
-last fitting candidate, and reshapes at the chosen boundary. When no legal
+Greedy wrapping selects the last legal candidate that fits before the first
+that overflows, and reshapes at the chosen boundary. One shaped window per line
+estimates every candidate from its cluster advances; exact shaping checks the
+estimated candidate and its successor. When no legal
 UAX #14 candidate fits, layout unconditionally breaks at the last fitting
 grapheme cluster boundary (D-168). Each nonempty line consumes at least one
 whole cluster; an overlong first cluster remains intact, including every
@@ -777,14 +779,19 @@ Unicode version and two streams of one record layout carry different boundaries
 when their tables differ.
 
 Input is capped at 65,536 Unicode scalars. Each owned growing buffer is capped
-at 1,048,576 entries. No-width layout shapes only mandatory-break candidates.
+at 1,048,576 entries. No-width layout shapes each line once.
 
-Candidate work is O(Σ(Nᵢ + Gᵢ log Gᵢ + Sᵢ)), where Nᵢ counts source
-scalars, Gᵢ shaped glyphs, and Sᵢ bounded font/shaping work. A one-million-scalar
-candidate budget bounds rescanning. Without glyph expansion, greedy rescanning
-and visual sorting take O(C² log C) worst-case time for C input clusters.
+Line work is O(N + G log G + S), where N counts the line's source scalars, G
+its shaped glyphs, and S bounded font/shaping work: the measurement window
+starts at one and a half times the previous line and doubles until it
+overflows, and exact shaping repeats the estimated candidate, its successor,
+and each candidate the estimate misses. A one-million-scalar budget bounds all
+shaping of one layout call. Each face's metric, instance, GDEF and cmap tables
+are validated once per layout call, in a cache of eight faces replaced in
+insertion order; a text that cycles through more than eight faces revalidates
+on every run.
 Break/run searches start at the current line using binary search. Scratch is
-O(input scalars + largest shaped line + largest decoded outline).
+O(input scalars + largest shaped paragraph + largest decoded outline).
 Layout and measure execute the same line
 and cluster geometry path. Limits return typed errors.
 

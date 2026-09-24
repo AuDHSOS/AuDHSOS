@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Manuel Baesler and contributors
 
-use super::{LayoutBuffers, LayoutInfo, LayoutView, MAX_SCALARS, Workspace};
+use super::{LayoutBuffers, LayoutInfo, LayoutView, MAX_SCALARS, Workspace, face::Faces};
 use crate::{
     Fixed, FontSet, TextError, TextStyle, bidi, resolve,
     segment::{self, Break},
@@ -20,7 +20,18 @@ pub(super) struct Context<'a, 's, 'f> {
     pub shaping: Budget,
     pub base: [Fixed; 3],
     pub tab: Fixed,
+    pub faces: Faces<'f>,
 }
+/// Candidate line ends `settle` steps through.
+#[derive(Clone, Copy)]
+enum Positions {
+    /// Allowed boundaries through this byte.
+    Allowed(usize),
+    /// Grapheme boundaries before this byte.
+    Graphemes(usize),
+}
+/// First window of a layout, in scalars.
+const FIRST_WINDOW: usize = 16;
 pub(super) fn add(a: usize, b: usize) -> Result<usize, TextError> {
     a.checked_add(b).ok_or(TextError::Overflow)
 }
@@ -38,6 +49,11 @@ impl<'a, 's, 'f> Context<'a, 's, 'f> {
         workspace: &mut Workspace<'_>,
     ) -> Result<Self, TextError> {
         style.validate()?;
+        #[cfg(test)]
+        {
+            super::probe::VALIDATIONS.with(|v| v.set(0));
+            super::probe::WORK.with(|w| w.set(0));
+        }
         let font = set.chain(style.role).first().ok_or(TextError::NoFont)?;
         let scalars = text.chars().count();
         if scalars > MAX_SCALARS {
@@ -72,6 +88,7 @@ impl<'a, 's, 'f> Context<'a, 's, 'f> {
         } else {
             super::line::advance(
                 font,
+                &mut None,
                 coords,
                 &instance,
                 space,
@@ -94,10 +111,13 @@ impl<'a, 's, 'f> Context<'a, 's, 'f> {
             shaping: Budget::default(),
             base,
             tab,
+            faces: Faces::default(),
         })
     }
     pub(super) fn charge(&mut self, n: usize) -> Result<(), TextError> {
         self.work = add(self.work, n)?;
+        #[cfg(test)]
+        super::probe::WORK.with(|w| w.set(self.work));
         if self.work > 1_000_000 {
             Err(TextError::LimitExceeded)
         } else {
@@ -114,72 +134,249 @@ impl<'a, 's, 'f> Context<'a, 's, 'f> {
                 .next_back()
                 .is_some_and(hard))
     }
+    /// End of the visible text of `start..end`: trailing hard breaks and, at a
+    /// soft end, trailing spaces and tabs excluded.
+    pub(super) fn visible_end(
+        &self,
+        start: usize,
+        end: usize,
+        soft: bool,
+    ) -> Result<usize, TextError> {
+        let content = self
+            .text
+            .get(start..end)
+            .ok_or(TextError::InvalidInput)?
+            .trim_end_matches(hard);
+        let visible = if soft {
+            content.trim_end_matches([' ', '\t'])
+        } else {
+            content
+        };
+        add(start, visible.len())
+    }
+    fn fits(
+        &mut self,
+        workspace: &mut Workspace<'_>,
+        start: usize,
+        end: usize,
+        width: Fixed,
+    ) -> Result<bool, TextError> {
+        let soft = self.soft(end)?;
+        Ok(self
+            .shape(workspace, start, end, soft, Fixed::ZERO, 0)?
+            .width
+            <= width)
+    }
+    /// Allowed, grapheme-aligned line boundaries in `start + 1..=bound`,
+    /// through the first mandatory one.
+    fn allowed<'w>(
+        &'w self,
+        workspace: &'w Workspace<'_>,
+        start: usize,
+        bound: usize,
+    ) -> Result<impl Iterator<Item = (usize, Break)> + 'w, TextError> {
+        let breaks = workspace
+            .breaks
+            .get(..self.breaks)
+            .ok_or(TextError::BufferTooSmall)?;
+        let first = breaks.partition_point(|boundary| boundary.byte <= start);
+        let suffix = self.text.get(start..).ok_or(TextError::InvalidInput)?;
+        let mut graphemes = segment::grapheme_boundaries(suffix).peekable();
+        let mut done = false;
+        Ok(breaks
+            .get(first..)
+            .unwrap_or_default()
+            .iter()
+            .take_while(move |b| b.byte <= bound)
+            .filter(move |b| {
+                b.kind != Break::Prohibited
+                    && b.byte.checked_sub(start).is_some_and(|local| {
+                        while graphemes.next_if(|g| *g < local).is_some() {}
+                        graphemes.peek() == Some(&local)
+                    })
+            })
+            .take_while(move |b| !core::mem::replace(&mut done, b.kind == Break::Mandatory))
+            .map(|b| (b.byte, b.kind)))
+    }
+    /// Grapheme boundaries in `start + 1..stop`.
+    fn graphemes(
+        &self,
+        start: usize,
+        stop: usize,
+    ) -> Result<impl Iterator<Item = usize> + '_, TextError> {
+        let text = self.text.get(start..stop).ok_or(TextError::InvalidInput)?;
+        Ok(segment::grapheme_boundaries(text)
+            .skip(1)
+            .filter_map(move |local| start.checked_add(local))
+            .filter(move |end| *end < stop))
+    }
+    /// Measurement window: the first grapheme boundary at least `scalars`
+    /// scalars after `start`, clamped to the paragraph end; `true` at that end.
+    fn window_end(
+        &self,
+        workspace: &Workspace<'_>,
+        start: usize,
+        scalars: usize,
+    ) -> Result<(usize, bool), TextError> {
+        let suffix = self.text.get(start..).ok_or(TextError::InvalidInput)?;
+        let target = suffix
+            .char_indices()
+            .nth(scalars)
+            .map_or(suffix.len(), |(i, _)| i);
+        let local = segment::grapheme_boundaries(suffix)
+            .find(|b| *b >= target)
+            .unwrap_or(suffix.len());
+        let end = add(start, local)?;
+        if let Some((byte, _)) = self
+            .allowed(workspace, start, end)?
+            .find(|(_, kind)| *kind == Break::Mandatory)
+        {
+            return Ok((byte, true));
+        }
+        Ok((end, end == self.text.len()))
+    }
+    /// Estimated widths of `positions` from the logically sorted cluster boxes
+    /// of the window `start..end`: the last position that fits before the
+    /// first that does not, and the window's visible width.
+    fn estimate(
+        &self,
+        workspace: &Workspace<'_>,
+        start: usize,
+        end: usize,
+        count: usize,
+        positions: impl Iterator<Item = usize>,
+        width: Fixed,
+    ) -> Result<(Option<usize>, Fixed), TextError> {
+        let mut clusters = workspace
+            .line_clusters
+            .get(..count)
+            .ok_or(TextError::BufferTooSmall)?
+            .iter()
+            .peekable();
+        let mut sum = Fixed::ZERO;
+        let mut fit = None;
+        for position in positions {
+            let visible = self.visible_end(start, position, self.soft(position)?)?;
+            while let Some(c) = clusters.next_if(|c| c.end <= visible) {
+                sum = sum.checked_add(c.right.checked_sub(c.left)?)?;
+            }
+            if sum > width {
+                break;
+            }
+            fit = Some(position);
+        }
+        // Trailing spaces at a soft window end make no candidate overflow.
+        let visible = self.visible_end(start, end, self.soft(end)?)?;
+        for c in clusters.take_while(|c| c.end <= visible) {
+            sum = sum.checked_add(c.right.checked_sub(c.left)?)?;
+        }
+        Ok((fit, sum))
+    }
+    /// From the estimated `end`, step to the last position that fits exactly
+    /// and whose successor does not; `None` if no earlier position fits.
+    fn settle(
+        &mut self,
+        workspace: &mut Workspace<'_>,
+        start: usize,
+        mut end: usize,
+        width: Fixed,
+        positions: Positions,
+    ) -> Result<Option<usize>, TextError> {
+        let mut back = false;
+        while !self.fits(workspace, start, end, width)? {
+            let previous = match positions {
+                Positions::Allowed(bound) => self
+                    .allowed(workspace, start, bound)?
+                    .map(|(byte, _)| byte)
+                    .take_while(|byte| *byte < end)
+                    .last(),
+                Positions::Graphemes(stop) => {
+                    self.graphemes(start, stop)?.take_while(|g| *g < end).last()
+                }
+            };
+            let Some(previous) = previous else {
+                return Ok(None);
+            };
+            end = previous;
+            back = true;
+        }
+        if back {
+            return Ok(Some(end));
+        }
+        loop {
+            let next = match positions {
+                Positions::Allowed(bound) => self
+                    .allowed(workspace, start, bound)?
+                    .map(|(byte, _)| byte)
+                    .find(|byte| *byte > end),
+                Positions::Graphemes(stop) => self.graphemes(start, stop)?.find(|g| *g > end),
+            };
+            match next {
+                Some(next) if self.fits(workspace, start, next, width)? => end = next,
+                _ => break,
+            }
+        }
+        Ok(Some(end))
+    }
+    /// Greedy line end after `start`.
+    ///
+    /// One shaped window per line estimates every candidate from its cluster
+    /// advances; exact shaping checks the estimated candidate, its successor,
+    /// and each candidate the estimate misses, O(w) each for w scalars.
+    /// `scalars` is the first window's length; it doubles until the window
+    /// overflows or reaches the paragraph end.
     fn choose(
         &mut self,
         workspace: &mut Workspace<'_>,
         start: usize,
         width: Option<Fixed>,
+        scalars: usize,
     ) -> Result<usize, TextError> {
-        let mut best = None;
-        let first = workspace
-            .breaks
-            .get(..self.breaks)
-            .ok_or(TextError::BufferTooSmall)?
-            .partition_point(|boundary| boundary.byte <= start);
-        for i in first..self.breaks {
-            let boundary = *workspace.breaks.get(i).ok_or(TextError::BufferTooSmall)?;
-            if boundary.byte <= start || boundary.kind == Break::Prohibited {
-                continue;
+        let Some(width) = width else {
+            return self
+                .allowed(workspace, start, self.text.len())?
+                .find(|(_, kind)| *kind == Break::Mandatory)
+                .map(|(byte, _)| byte)
+                .ok_or(TextError::InvalidInput);
+        };
+        let mut scalars = scalars.max(1);
+        let (end, count, fit) = loop {
+            let (end, complete) = self.window_end(workspace, start, scalars)?;
+            let count = self
+                .shape(workspace, start, end, false, Fixed::ZERO, 0)?
+                .cluster_count;
+            workspace
+                .line_clusters
+                .get_mut(..count)
+                .ok_or(TextError::BufferTooSmall)?
+                .sort_unstable_by_key(|c| c.start);
+            let candidates = self.allowed(workspace, start, end)?.map(|(byte, _)| byte);
+            let (fit, total) = self.estimate(workspace, start, end, count, candidates, width)?;
+            if complete || total > width {
+                break (end, count, fit);
             }
-            if width.is_none() && boundary.kind != Break::Mandatory {
-                continue;
-            }
-            let suffix = self.text.get(start..).ok_or(TextError::InvalidInput)?;
-            let local = boundary
-                .byte
-                .checked_sub(start)
-                .ok_or(TextError::InvalidInput)?;
-            if !segment::grapheme_boundaries(suffix)
-                .take_while(|byte| *byte <= local)
-                .any(|byte| byte == local)
-            {
-                continue;
-            }
-            let candidate = self.shape(
-                workspace,
-                start,
-                boundary.byte,
-                self.soft(boundary.byte)?,
-                Fixed::ZERO,
-                0,
-            )?;
-            if width.is_none_or(|width| candidate.width <= width) {
-                best = Some(boundary.byte);
-                if boundary.kind == Break::Mandatory {
-                    return Ok(boundary.byte);
-                }
-            } else {
-                if let Some(best) = best {
-                    return Ok(best);
-                }
-                let text = self
-                    .text
-                    .get(start..boundary.byte)
-                    .ok_or(TextError::InvalidInput)?;
-                let mut previous = None;
-                for local in segment::grapheme_boundaries(text).skip(1) {
-                    let end = add(start, local)?;
-                    let candidate =
-                        self.shape(workspace, start, end, self.soft(end)?, Fixed::ZERO, 0)?;
-                    if width.is_some_and(|width| candidate.width > width) {
-                        return Ok(previous.unwrap_or(end));
-                    }
-                    previous = Some(end);
-                }
-                return Ok(boundary.byte);
-            }
+            scalars = scalars.checked_mul(2).ok_or(TextError::Overflow)?;
+        };
+        let first = self
+            .allowed(workspace, start, end)?
+            .next()
+            .map(|(byte, _)| byte);
+        let stop = first.unwrap_or(end);
+        let graphemes = self.graphemes(start, stop)?;
+        let (grapheme, _) = self.estimate(workspace, start, end, count, graphemes, width)?;
+        if let Some(seed) = fit.or(first)
+            && let Some(end) =
+                self.settle(workspace, start, seed, width, Positions::Allowed(end))?
+        {
+            return Ok(end);
         }
-        best.ok_or(TextError::InvalidInput)
+        let fallback = self.graphemes(start, stop)?.next().unwrap_or(stop);
+        Ok(match grapheme {
+            Some(seed) => self
+                .settle(workspace, start, seed, width, Positions::Graphemes(stop))?
+                .unwrap_or(fallback),
+            None => fallback,
+        })
     }
     fn execute(
         &mut self,
@@ -201,12 +398,13 @@ impl<'a, 's, 'f> Context<'a, 's, 'f> {
             return Ok(info);
         }
         let mut start = 0;
+        let mut window = FIRST_WINDOW;
         let trailing = self.text.chars().next_back().is_some_and(hard);
         loop {
             let end = if start == self.text.len() {
                 start
             } else {
-                self.choose(workspace, start, width)?
+                self.choose(workspace, start, width, window)?
             };
             let mut line = self.shape(
                 workspace,
@@ -250,6 +448,16 @@ impl<'a, 's, 'f> Context<'a, 's, 'f> {
             if end == self.text.len() && (start == end || !trailing) {
                 break;
             }
+            // Next window: 1.5 × this line's scalars + 2.
+            let scalars = self
+                .text
+                .get(start..end)
+                .ok_or(TextError::InvalidInput)?
+                .chars()
+                .count();
+            window = scalars
+                .saturating_add(scalars.div_ceil(2))
+                .saturating_add(2);
             start = end;
         }
         Ok(info)
