@@ -7,6 +7,17 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` runs a trigger of the temp schema for the table of the one
+  database its statement named, and holds a statement of a trigger's body to
+  the schema the trigger stands in. D-481 records it. Catalog 6.6.335.
+  `trigger1.test` goes from 67 cases passing to 81.
+
+- `db-sqlite` writes the table of the database the connection writes and
+  refuses a name that database holds no table of with `no such table`, where
+  the statement wrote the tree of whichever database held the name. D-482
+  records it. `trigger1.test` goes from 81 cases passing to 87, `alter.test`
+  from 103 to 107 and `altertab.test` from 89 to 92.
+
 - The suite harness answers a read of a file with the bytes the machine
   wrote for it while the writer of its path has written nothing since, so a
   file the tester built by hand keeps the bytes past the pages its header

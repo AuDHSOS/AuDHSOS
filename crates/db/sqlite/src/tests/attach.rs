@@ -1195,3 +1195,108 @@ fn what_a_checkpoint_that_names_no_schema_writes_back() {
         "the file of the attached database holds the table"
     );
 }
+
+/// A trigger of the temp schema runs for the table of the one database
+/// its statement named, and a statement of its body names a table the way
+/// a statement outside a trigger does.
+#[test]
+fn which_table_a_trigger_of_the_temp_schema_stands_over() {
+    let mut writer = opened();
+    writer.run(b"ATTACH ':memory:' AS aux").unwrap();
+    for sql in [
+        b"CREATE TABLE main.t4(a,b,c)".as_slice(),
+        b"CREATE TEMP TABLE t4(a,b,c)",
+        b"CREATE TABLE aux.t4(a,b,c)",
+        b"CREATE TABLE log(db,a,b,c)",
+        b"CREATE TEMP TRIGGER g1 AFTER INSERT ON main.t4 \
+          BEGIN INSERT INTO log VALUES('main',new.a,new.b,new.c); END",
+        b"CREATE TEMP TRIGGER g2 AFTER INSERT ON temp.t4 \
+          BEGIN INSERT INTO log VALUES('temp',new.a,new.b,new.c); END",
+        b"CREATE TEMP TRIGGER g3 AFTER INSERT ON aux.t4 \
+          BEGIN INSERT INTO log VALUES('aux',new.a,new.b,new.c); END",
+        b"INSERT INTO main.t4 VALUES(1,2,3)",
+        b"INSERT INTO temp.t4 VALUES(4,5,6)",
+        b"INSERT INTO aux.t4 VALUES(7,8,9)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let held = writer.written();
+    let database = crate::db::Database::open(&held).unwrap();
+    let rows = database.query(b"SELECT db, a, b, c FROM log").unwrap().rows;
+    let shown: Vec<Vec<u8>> = rows
+        .iter()
+        .flatten()
+        .map(|value| value.text().unwrap_or_default())
+        .collect();
+    assert_eq!(
+        shown,
+        [
+            b"main".to_vec(),
+            b"1".to_vec(),
+            b"2".to_vec(),
+            b"3".to_vec(),
+            b"temp".to_vec(),
+            b"4".to_vec(),
+            b"5".to_vec(),
+            b"6".to_vec(),
+            b"aux".to_vec(),
+            b"7".to_vec(),
+            b"8".to_vec(),
+            b"9".to_vec(),
+        ]
+    );
+}
+
+/// A statement of a trigger's body names a table under the schema the
+/// trigger stands in, so a trigger of `main` reaches no table of the temp
+/// schema and a trigger of the temp schema reaches the temp table first.
+#[test]
+fn which_database_a_statement_of_a_body_names_its_table_under() {
+    let mut writer = opened();
+    for sql in [
+        b"CREATE TABLE t1(a,b)".as_slice(),
+        b"CREATE TEMP TABLE t2(x,y)",
+        b"CREATE TRIGGER r1 AFTER INSERT ON t1 BEGIN INSERT INTO t2 VALUES(new.a,new.b); END",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    assert_eq!(
+        writer
+            .run(b"INSERT INTO t1 VALUES(1,2)")
+            .unwrap_err()
+            .message(),
+        "no such table: main.t2"
+    );
+    // An `UPDATE` and a `DELETE` of a body name their table the same way.
+    for sql in [
+        b"CREATE TRIGGER u1 AFTER UPDATE ON t1 BEGIN UPDATE t2 SET x=1; END".as_slice(),
+        b"CREATE TRIGGER d1 AFTER DELETE ON t1 BEGIN DELETE FROM t2; END",
+        b"DROP TRIGGER r1",
+        b"INSERT INTO t1 VALUES(5,6)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    for sql in [b"UPDATE t1 SET b=3".as_slice(), b"DELETE FROM t1"] {
+        assert_eq!(
+            writer.run(sql).unwrap_err().message(),
+            "no such table: main.t2",
+            "{}",
+            alloc::string::String::from_utf8_lossy(sql)
+        );
+    }
+    for sql in [
+        b"DROP TRIGGER u1".as_slice(),
+        b"DROP TRIGGER d1",
+        b"CREATE TEMP TRIGGER r1 AFTER INSERT ON t1 BEGIN INSERT INTO t2 VALUES(new.a,new.b); END",
+        b"INSERT INTO t1 VALUES(3,4)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let temp = writer.attached_written(b"temp").expect("the temp schema");
+    let rows = crate::db::Database::open(&temp)
+        .unwrap()
+        .query(b"SELECT x, y FROM t2")
+        .unwrap()
+        .rows;
+    assert_eq!(rows, alloc::vec![alloc::vec![Value::Int(3), Value::Int(4)]]);
+}

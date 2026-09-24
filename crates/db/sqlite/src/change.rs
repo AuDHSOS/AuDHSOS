@@ -29,6 +29,10 @@ use crate::wal::Log;
 /// and so for every build with `SQLITE_POWERSAFE_OVERWRITE`.
 const SECTOR: u32 = 512;
 
+/// Which database of the connection the temp schema is, which
+/// `db->aDb[1]` of `research/sqlite/src/sqliteInt.h` holds it at.
+const TEMP_PLACE: usize = 1;
+
 /// What `sqlite3AlterFinishAddColumn` refuses to add: a column that is
 /// `PRIMARY KEY` or `UNIQUE`, because the index over it would hold the
 /// rows the table already has, and one that may not be nothing and
@@ -984,6 +988,21 @@ pub struct Writer {
     /// itself, which is what `sqlite3CheckObjectName` lets name a table
     /// SQLite keeps for itself.
     making_own: bool,
+}
+
+/// One trigger a statement fires: the trigger itself, and whether it
+/// stands in the temp schema.
+///
+/// A trigger of the temp schema is fixed to no database, which
+/// `sqlite3FixInit` of `research/sqlite/src/attach.c:547` leaves alone
+/// where `bTemp` is one, so a statement of its body names its table the
+/// temp schema first and then the databases in turn. Every other trigger
+/// writes the database it stands in.
+struct Firing {
+    /// The trigger.
+    trigger: crate::db::Trigger,
+    /// Whether it stands in the temp schema.
+    temp: bool,
 }
 
 /// One open savepoint: its name, and the file as it stood when the
@@ -5812,14 +5831,101 @@ impl Writer {
         over: &[u8],
         event: crate::ast::TriggerEvent,
         time: crate::ast::TriggerTime,
-    ) -> Result<Vec<crate::db::Trigger>, Error> {
+    ) -> Result<Vec<Firing>, Error> {
         let bytes = self.image();
-        let database = self.reading(&bytes)?;
+        let temp = self.called.place == TEMP_PLACE;
+        let mut held = Vec::new();
+        for trigger in self.reading(&bytes)?.triggers_on(over, event, time) {
+            // A trigger of the temp schema stands over the table of the
+            // one database its statement named; `sqlite3FixInit` holds
+            // every other trigger to the schema it stands in, so the name
+            // alone names its table.
+            if temp && self.over_place(trigger)? != Some(TEMP_PLACE) {
+                continue;
+            }
+            held.push(Firing {
+                trigger: trigger.clone(),
+                temp,
+            });
+        }
+        // `sqlite3TriggerList` of `research/sqlite/src/trigger.c:50` puts
+        // the triggers of the temp schema whose table stands in this
+        // database in front of the ones the database itself holds.
+        let mut out = self.temp_triggers(over, event, time)?;
+        out.extend(held);
+        Ok(out)
+    }
+
+    /// The triggers of the temp schema over the table `over` of the
+    /// database the connection writes.
+    ///
+    /// None where the connection writes the temp schema itself, whose
+    /// triggers [`Writer::triggers_for`] already read, which is the test
+    /// `pTrig->pTabSchema != pTmpSchema` of
+    /// `research/sqlite/src/trigger.c:64`.
+    ///
+    /// Reading the temp schema costs O(p) in its pages per statement.
+    ///
+    /// # Errors
+    ///
+    /// Whatever reading the schemas refuses.
+    fn temp_triggers(
+        &self,
+        over: &[u8],
+        event: crate::ast::TriggerEvent,
+        time: crate::ast::TriggerTime,
+    ) -> Result<Vec<Firing>, Error> {
+        if self.called.place == TEMP_PLACE {
+            return Ok(Vec::new());
+        }
+        let Some(held) = self.attached.iter().find(|held| named_as(held, b"temp")) else {
+            return Ok(Vec::new());
+        };
+        let bytes = read_image(&held.held);
+        let mut out = Vec::new();
+        for trigger in self.reading(&bytes)?.triggers_on(over, event, time) {
+            if self.over_place(trigger)? == Some(self.called.place) {
+                out.push(Firing {
+                    trigger: trigger.clone(),
+                    temp: true,
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// Which database of the connection holds the table one trigger is
+    /// on, which is `pTrig->pTabSchema` of
+    /// `research/sqlite/src/trigger.c:61`: the database the statement
+    /// named in front of the table, and the database that holds the name
+    /// where the statement named none.
+    ///
+    /// # Errors
+    ///
+    /// Whatever reading the schemas refuses.
+    fn over_place(&self, trigger: &crate::db::Trigger) -> Result<Option<usize>, Error> {
+        if let Some(span) = trigger.written.table_schema {
+            return Ok(self.place_of(&crate::schema::dequote(span.text(&trigger.sql))));
+        }
+        let bytes = self.images();
+        let database = self.reading_beside(&bytes)?.writing(false);
+        // A trigger over a table no database holds stands over no
+        // database, so no statement runs it.
         Ok(database
-            .triggers_on(over, event, time)
-            .into_iter()
-            .cloned()
-            .collect())
+            .holding(&trigger.table)
+            .and_then(|named| self.place_of(&named)))
+    }
+
+    /// The place of the database of `name`, which `PRAGMA database_list`
+    /// answers in front of the name.
+    fn place_of(&self, name: &[u8]) -> Option<usize> {
+        if self.called.name.eq_ignore_ascii_case(name) {
+            return Some(self.called.place);
+        }
+        self.attached
+            .iter()
+            .find(|held| held.called.name.eq_ignore_ascii_case(name))
+            .map(|held| held.called.place)
     }
 
     /// Runs every trigger of `triggers` over one row, which is
@@ -5838,11 +5944,12 @@ impl Writer {
     /// whatever a statement of a body refuses.
     fn fire(
         &mut self,
-        triggers: &[crate::db::Trigger],
+        triggers: &[Firing],
         written: &[Vec<u8>],
         row: &Fired<'_>,
     ) -> Result<bool, Error> {
-        for trigger in triggers {
+        for firing in triggers {
+            let trigger = &firing.trigger;
             if !writes_one(&trigger.arena, &trigger.written, &trigger.sql, written) {
                 continue;
             }
@@ -5863,7 +5970,7 @@ impl Writer {
             // body, so a row the body writes is one the statement that
             // fired the trigger does not answer.
             let held = self.counted.rowid;
-            let ran = self.body(trigger, row);
+            let ran = self.body(firing, row);
             self.counted.rowid = held;
             self.running.pop();
             match ran {
@@ -6794,10 +6901,7 @@ impl Writer {
     /// the triggers of a `DELETE` where `PRAGMA recursive_triggers` is
     /// on and none where it is off, because the row is written out from
     /// inside an `INSERT`.
-    fn deleting(
-        &self,
-        name: &[u8],
-    ) -> Result<(Vec<crate::db::Trigger>, Vec<crate::db::Trigger>), Error> {
+    fn deleting(&self, name: &[u8]) -> Result<(Vec<Firing>, Vec<Firing>), Error> {
         if !self.recursive() {
             return Ok((Vec::new(), Vec::new()));
         }
@@ -6855,18 +6959,15 @@ impl Writer {
         self.kept_truth(b"recursive_triggers")
     }
 
-    /// Runs the statements of one trigger's body.
-    ///
-    /// A trigger of the temp schema is fixed to no database, which
-    /// `sqlite3FixInit` of `research/sqlite/src/attach.c:547` leaves
-    /// alone where `bTemp` is one, so a statement of its body names its
-    /// table the way a statement outside a trigger does: the temp
-    /// schema first and then the databases in turn. Every other trigger
-    /// writes the database it stands in.
-    fn body(&mut self, trigger: &crate::db::Trigger, row: &Fired<'_>) -> Result<(), Error> {
+    /// Runs the statements of one trigger's body: a trigger of the temp
+    /// schema names a table the way a statement outside a trigger does,
+    /// and every other trigger writes the database it stands in, which
+    /// [`Firing`] holds the reason for.
+    fn body(&mut self, firing: &Firing, row: &Fired<'_>) -> Result<(), Error> {
+        let trigger = &firing.trigger;
         let arena = &trigger.arena;
         let sql = &trigger.sql;
-        let loose = self.called.name.eq_ignore_ascii_case(b"temp");
+        let loose = firing.temp;
         for step in arena.steps(trigger.written.body) {
             let at = if loose {
                 self.stepping_at(step, sql)?
@@ -7436,7 +7537,7 @@ impl Writer {
             .seeded(self.random.word())
             .counting(self.counted);
         let (table, root) = database
-            .table(name)
+            .table_held(name)
             .ok_or_else(|| Error::NoTable(name.to_vec()))?;
         let kept = kept_indexes(&database, name);
         let places = places(table, &named)?;
@@ -7501,7 +7602,7 @@ impl Writer {
     /// nought less one where the statement named none.
     fn fired_early(
         &mut self,
-        before: &[crate::db::Trigger],
+        before: &[Firing],
         table: &Table,
         named: &[Value],
         alias: Option<usize>,
@@ -7536,11 +7637,7 @@ impl Writer {
     ///
     /// [`Error::ViewWrite`] where the view carries no `INSTEAD OF`
     /// trigger of that event.
-    fn instead_of(
-        &self,
-        name: &[u8],
-        event: TriggerEvent,
-    ) -> Result<Vec<crate::db::Trigger>, Error> {
+    fn instead_of(&self, name: &[u8], event: TriggerEvent) -> Result<Vec<Firing>, Error> {
         let triggers = self.triggers_for(name, event, TriggerTime::InsteadOf)?;
         if triggers.is_empty() {
             return Err(Error::ViewWrite(name.to_vec()));
@@ -7867,7 +7964,9 @@ impl Writer {
             let database = self.reading_beside(&bytes)?.counting(self.counted);
             // The table was found before this ran, so the refusal
             // carries no name to write into a message.
-            let (table, root) = database.table(name).ok_or(Error::NoTable(Vec::new()))?;
+            let (table, root) = database
+                .table_held(name)
+                .ok_or(Error::NoTable(Vec::new()))?;
             let kept = kept_indexes(&database, name);
             let mut rows = Vec::new();
             for values in database.keyed_rows_of(name)? {
@@ -8384,7 +8483,9 @@ impl Writer {
         let database = self.reading_beside(&bytes)?.counting(self.counted);
         // The table was found before this ran, so the refusal carries
         // no name to write into a message.
-        let (table, root) = database.table(name).ok_or(Error::NoTable(Vec::new()))?;
+        let (table, root) = database
+            .table_held(name)
+            .ok_or(Error::NoTable(Vec::new()))?;
         let kept = kept_indexes(&database, name);
         let places: Vec<usize> = sets
             .iter()
@@ -10468,7 +10569,7 @@ impl Writer {
             let bytes = self.images();
             let database = self.reading_beside(&bytes)?.counting(self.counted);
             let (table, root) = database
-                .table(&name)
+                .table_held(&name)
                 .ok_or_else(|| Error::NoTable(name.clone()))?;
             let kept = kept_indexes(&database, &name);
             let rows = database.rows_of(&name)?;
@@ -10579,7 +10680,7 @@ impl Writer {
         let bytes = self.images();
         let database = self.reading_beside(&bytes)?.counting(self.counted);
         let (table, root) = database
-            .table(name)
+            .table_held(name)
             .ok_or_else(|| Error::NoTable(name.to_vec()))?;
         let kept = kept_indexes(&database, name);
         let places: Vec<Option<usize>> = sets

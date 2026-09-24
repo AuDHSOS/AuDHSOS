@@ -1137,6 +1137,9 @@ Size: L.
 187. The order `PRAGMA integrity_check` writes the problems of one row
      in, and the key a unique index holds a place that may not be
      nothing to. Built, which D-480 records.
+188. The database a trigger stands over, and the database a statement of
+     its body names its table under. Built, which D-481 and D-482
+     record.
 
 ### Done when
 

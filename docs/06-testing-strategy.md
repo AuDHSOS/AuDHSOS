@@ -7496,3 +7496,14 @@ Document 16 step Q8.
 - Two entries of a unique index under one key, with the problem of the
   row they belong to before the problem of the row no entry holds.
 
+### 6.6.335 The database a trigger stands over (`db-sqlite`)
+
+Document 16 step Q8.
+
+- Three triggers of the temp schema over the table `t4` of `main`, of
+  `temp` and of `aux`, with the one row each insert writes into the log.
+- A trigger of `main` whose body names a table only the temp schema
+  holds, refused `no such table: main.t2`.
+- A trigger of the temp schema whose body names that table, which reaches
+  the temp table.
+

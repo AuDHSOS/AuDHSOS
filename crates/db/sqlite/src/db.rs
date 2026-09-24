@@ -3138,6 +3138,24 @@ impl<'a> Database<'a> {
         self.find(name).map(|stored| (&stored.table, stored.root))
     }
 
+    /// The table of `name` the database the statement writes holds, with
+    /// the page its tree begins on.
+    ///
+    /// `sqlite3FixSrcList` of `research/sqlite/src/attach.c:571` holds a
+    /// statement to one database, so a table another database holds under
+    /// that name is no table of the statement and the tree of this file
+    /// holds no such rows.
+    #[must_use]
+    pub fn table_held(&self, name: &[u8]) -> Option<(&Table, u32)> {
+        // `sqlite3FindTable` of `research/sqlite/src/build.c:386` reads
+        // `sqlite_temp_schema` out of the temp schema whatever database
+        // the statement writes, and every other name out of the database
+        // the statement writes.
+        let place = self.temp.filter(|_| temp_named(name)).unwrap_or(0);
+        self.find_in(place, name)
+            .map(|stored| (&stored.table, stored.root))
+    }
+
     /// The index of `name`, with the page its tree begins on.
     #[must_use]
     pub fn index(&self, name: &[u8]) -> Option<(&schema::Index, u32)> {
