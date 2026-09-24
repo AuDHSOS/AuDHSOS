@@ -7395,3 +7395,13 @@ Document 16 step Q8.
 - An `ATTACH` of `:memory:` beside an `ATTACH` of a name of no bytes: a
   pragma that names no schema leaves the first at `memory` and sets the
   second.
+
+### 6.6.326 Which databases a `REINDEX` writes (`db-sqlite`)
+
+Document 16 step Q8.
+
+- One collation name under two comparisons, with an index over it in
+  `main` and in an attached database.
+- `REINDEX schema.name`, which writes the named database alone.
+- `REINDEX` with no name and `REINDEX <collation>`, each of which writes
+  both.

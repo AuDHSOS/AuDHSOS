@@ -1113,6 +1113,9 @@ Size: L.
      records.
 177. The journal mode of a database that stands in memory alone, which is
      `memory` for every mode but `off`. Built, which D-465 records.
+178. The databases a `REINDEX` writes the indexes of, which is every one
+     the connection holds where the statement names no schema. Built,
+     which D-466 records.
 
 ### Done when
 

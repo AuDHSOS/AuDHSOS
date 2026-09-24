@@ -197,3 +197,83 @@ fn a_collate_on_a_number_leaves_it_counting_the_columns() {
         "1st ORDER BY term out of range - should be between 1 and 1"
     );
 }
+
+/// Compares by the length of the value and then by its bytes.
+fn by_length(_name: &'static [u8], left: &[u8], right: &[u8]) -> core::cmp::Ordering {
+    left.len().cmp(&right.len()).then_with(|| left.cmp(right))
+}
+
+/// Compares by the bytes of the value alone.
+fn by_value(_name: &'static [u8], left: &[u8], right: &[u8]) -> core::cmp::Ordering {
+    left.cmp(right)
+}
+
+/// One name under the first comparison.
+static LENGTHWISE: &[Collating] = &[Collating {
+    name: b"SORTER",
+    by: by_length,
+}];
+
+/// The same name under the second.
+static VALUEWISE: &[Collating] = &[Collating {
+    name: b"SORTER",
+    by: by_value,
+}];
+
+/// The file the `ATTACH` of the reindex test names.
+fn attaching(file: &[u8]) -> Option<Vec<u8>> {
+    (file == b"two.db").then(|| Writer::new(1024, 0, Encoding::Utf8).unwrap().written())
+}
+
+/// The order the index of one database holds, as a reader told the
+/// second comparison answers it out of that index.
+fn ordered(writer: &Writer, name: Option<&[u8]>) -> Vec<Vec<u8>> {
+    let image = match name {
+        None => writer.written(),
+        Some(name) => writer.attached_written(name).expect("a database beside"),
+    };
+    let database = Database::open_collating(&image, VALUEWISE).expect("a database");
+    texts(&database, b"SELECT x FROM t1 ORDER BY x COLLATE SORTER")
+}
+
+/// `REINDEX` with no name written after it writes the indexes of every
+/// database the connection holds again, a name under a schema writes the
+/// indexes of that database alone, and a collation writes every index
+/// held in it whatever database holds the index.
+#[test]
+fn which_databases_a_reindex_writes_the_indexes_of() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.opens(attaching);
+    writer.collates(LENGTHWISE);
+    for sql in [
+        b"ATTACH 'two.db' AS aux".as_slice(),
+        b"CREATE TABLE t1(x)",
+        b"CREATE INDEX i1 ON t1(x COLLATE SORTER)",
+        b"INSERT INTO t1 VALUES('aaa'),('bb'),('c')",
+        b"CREATE TABLE aux.t1(x)",
+        b"CREATE INDEX aux.i1 ON t1(x COLLATE SORTER)",
+        b"INSERT INTO aux.t1 VALUES('aaa'),('bb'),('c')",
+    ] {
+        writer.run(sql).expect("a statement the writer takes");
+    }
+    let held = None;
+    let beside = Some(b"aux".as_slice());
+    let length: Vec<Vec<u8>> = alloc::vec![b"c".to_vec(), b"bb".to_vec(), b"aaa".to_vec()];
+    let value: Vec<Vec<u8>> = alloc::vec![b"aaa".to_vec(), b"bb".to_vec(), b"c".to_vec()];
+    assert_eq!(ordered(&writer, held), length);
+    assert_eq!(ordered(&writer, beside), length);
+    // The connection is told the second comparison under the same name,
+    // and the entries of an index stand in the order the first wrote
+    // them until a `REINDEX` writes them again.
+    writer.collates(VALUEWISE);
+    writer.run(b"REINDEX aux.t1").unwrap();
+    assert_eq!(ordered(&writer, held), length);
+    assert_eq!(ordered(&writer, beside), value);
+    writer.run(b"REINDEX").unwrap();
+    assert_eq!(ordered(&writer, held), value);
+    assert_eq!(ordered(&writer, beside), value);
+    writer.collates(LENGTHWISE);
+    writer.run(b"REINDEX SORTER").unwrap();
+    assert_eq!(ordered(&writer, held), length);
+    assert_eq!(ordered(&writer, beside), length);
+}

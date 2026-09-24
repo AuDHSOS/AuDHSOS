@@ -3697,9 +3697,16 @@ impl Writer {
                 Ok((_, definition)) => defined_under(definition),
                 Err(_) => match crate::parse::change(sql) {
                     Ok((_, change)) => changed_under(change),
-                    // A statement neither reading takes is one that
-                    // writes no database of its own, which a `SELECT` is.
-                    Err(_) => Names::made(None, None, false),
+                    Err(_) => match crate::parse::reindex(sql) {
+                        // `sqlite3Reindex` reads the schema of a `REINDEX`
+                        // with `sqlite3TwoPartName`, so the statement
+                        // writes the database it named.
+                        Ok(asked) => Names::made(asked.schema, None, false),
+                        // A statement neither reading takes is one that
+                        // writes no database of its own, which a `SELECT`
+                        // is.
+                        Err(_) => Names::made(None, None, false),
+                    },
                 },
             },
         };
@@ -8533,8 +8540,7 @@ impl Writer {
         let named = asked
             .name
             .map(|span| crate::schema::dequote(span.text(sql)));
-        let held = self.reindexed(named.as_deref())?;
-        let asking = named.unwrap_or_default();
+        let asking = named.clone().unwrap_or_default();
         if self
             .asked(|authorizer| authorizer.reindex(&asking, b"main"))?
             .answer
@@ -8542,6 +8548,38 @@ impl Writer {
         {
             return Ok(());
         }
+        // `reindexDatabases` of `research/sqlite/src/build.c:5140` writes
+        // the indexes of every database the connection holds again where
+        // the statement names no object and where it names a collation;
+        // a name under a schema names one database, which the statement
+        // already writes.
+        let every = asked.schema.is_none()
+            && named
+                .as_deref()
+                .is_none_or(|name| crate::value::collation_of(name, self.collating).is_some());
+        self.reindex_held(named.as_deref())?;
+        if every {
+            for at in 0..self.attached.len() {
+                self.switch(at);
+                let answered = self.reindex_held(named.as_deref());
+                self.switch(at);
+                answered?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The indexes of the database the connection writes written again,
+    /// which is one run of the loop `sqlite3Reindex` writes.
+    ///
+    /// Writing one index again costs what its rows cost to read and
+    /// O(n log n) to order.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NoTable`] for a name no object of the database carries.
+    fn reindex_held(&mut self, named: Option<&[u8]>) -> Result<(), Error> {
+        let held = self.reindexed(named)?;
         for Rebuilt {
             index,
             root,

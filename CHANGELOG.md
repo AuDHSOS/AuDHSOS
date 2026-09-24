@@ -345,6 +345,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` writes the indexes of every database the connection holds
+  again for a `REINDEX` that names no object and for one that names a
+  collation, and writes the database a schema names for `REINDEX
+  schema.name`, where all three wrote the indexes of `main` alone. D-466
+  records it. Catalog 6.6.326. `e_reindex.test` goes from 91 cases passing
+  to 106.
+
 - `db-sqlite` writes the record of a row an `ALTER TABLE ... DROP COLUMN`
   rewrites from the places the table holds after the drop, where it wrote
   the value of a `VIRTUAL` column into the record and read the rowid into
