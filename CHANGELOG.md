@@ -299,6 +299,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- The suite harness answers `ifcapable memorymanage` with false, because
+  this engine has no `sqlite3_release_memory` to write a dirty page out of
+  a cache on demand. D-455 records it. `crash5.test` stops before its
+  first case as it does in a build of the C library without the option,
+  so the census loses the 2881 cases of the file, of which 961 were
+  refused.
+
 - The suite harness takes a file away at once where the writer disposes of
   one, so a machine that loses power after a commit finds no journal of
   the transaction before it. D-454 records it. `walcrash.test` goes from

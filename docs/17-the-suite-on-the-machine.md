@@ -532,6 +532,9 @@ Size: S.
     `research/sqlite/src/test6.c:661` does, so a machine that loses power
     after a commit finds no journal of the transaction before it, which
     D-454 records.
+62. `memorymanage` is among the options this harness does not carry, so
+    a file that reads it runs the cases a build of the C library without
+    `SQLITE_ENABLE_MEMORY_MANAGEMENT` runs, which D-455 records.
 
 ### Produces
 

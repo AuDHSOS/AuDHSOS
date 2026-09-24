@@ -271,7 +271,7 @@ const LOOPING: usize = 5000;
 
 /// The capabilities an `ifcapable` may name that this engine does not
 /// have. Every other name is answered as held.
-const MISSING: [&str; 19] = [
+const MISSING: [&str; 20] = [
     "vtab",
     "fts1",
     "fts2",
@@ -295,6 +295,11 @@ const MISSING: [&str; 19] = [
     // none of.
     "direct_read",
     "threadsafe2",
+    // `SQLITE_ENABLE_MEMORY_MANAGEMENT` gives the library
+    // `sqlite3_release_memory`, which writes a dirty page out of a cache
+    // on demand. This engine writes a page out where the cache it is
+    // held to is full and on no other call.
+    "memorymanage",
 ];
 
 /// Runs every file of the suite, or the one `only` names, and answers
