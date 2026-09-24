@@ -1909,3 +1909,171 @@ impl Arena {
         self.ctes.get(start..end).unwrap_or_default()
     }
 }
+
+/// How two expressions compare, which is what `sqlite3ExprCompare` of
+/// `research/sqlite/src/expr.c:6157` answers: the same expression, the
+/// same but for a collation one side names, or another expression.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Alike {
+    /// The same expression.
+    Same,
+    /// The same but for a collation one side names and the other does
+    /// not.
+    Collated,
+    /// Another expression.
+    Other,
+}
+
+/// How the expression at `id` of one tree compares with the one at `at`
+/// of another, each named by its tree, the place in it and the text it
+/// points into.
+///
+/// A node that names a statement of its own compares as another
+/// expression, because a statement is a tree this does not walk.
+/// Comparing costs O(n) in the nodes of the smaller expression.
+#[must_use]
+pub fn alike(one: (&Arena, ExprId, &[u8]), other: (&Arena, ExprId, &[u8])) -> Alike {
+    let (held, id, text) = one;
+    let (beside, at, sql) = other;
+    // A place no tree holds stands for no expression, which two of them
+    // compare the same for.
+    let node = held.node(id).unwrap_or(Node::Literal(Literal::Null));
+    let against = beside.node(at).unwrap_or(Node::Literal(Literal::Null));
+    // A `COLLATE` one side writes and the other does not leaves the
+    // expressions the same but for that collation, which
+    // `sqlite3ExprCompare` answers one for.
+    if let Node::Collate { value, .. } = node
+        && !matches!(against, Node::Collate { .. })
+    {
+        return collated(alike((held, value, text), other));
+    }
+    if let Node::Collate { value, .. } = against
+        && !matches!(node, Node::Collate { .. })
+    {
+        return collated(alike(one, (beside, value, sql)));
+    }
+    // A node that names a statement of its own, a window or a `RAISE`
+    // carries what this does not read, so it answers no shape and two
+    // such nodes are other expressions whatever their children are.
+    let (Some(one), Some(other)) = (shaped(&node, text), shaped(&against, sql)) else {
+        return Alike::Other;
+    };
+    if one != other {
+        return Alike::Other;
+    }
+    let mut ones = Vec::new();
+    held.under(node, |id| ones.push(id));
+    let mut others = Vec::new();
+    beside.under(against, |at| others.push(at));
+    if ones.len() != others.len() {
+        return Alike::Other;
+    }
+    let mut answer = Alike::Same;
+    for (id, at) in ones.into_iter().zip(others) {
+        match alike((held, id, text), (beside, at, sql)) {
+            Alike::Other => return Alike::Other,
+            Alike::Collated => answer = Alike::Collated,
+            Alike::Same => {}
+        }
+    }
+    answer
+}
+
+/// The same comparison with a collation one side named, which is the
+/// same expression at best.
+const fn collated(held: Alike) -> Alike {
+    match held {
+        Alike::Other => Alike::Other,
+        Alike::Same | Alike::Collated => Alike::Collated,
+    }
+}
+
+/// The kind of one node and the text it carries, with no expression
+/// under it: two nodes answer the same where they differ in their
+/// children alone.
+///
+/// A name is read without its quotes and without its case, which is how
+/// SQLite compares one. A node that names a statement of its own, a
+/// window or a `RAISE` answers no shape at all, because this reads
+/// neither. Building the answer costs O(n) in the bytes the node names.
+fn shaped(node: &Node, sql: &[u8]) -> Option<Vec<u8>> {
+    let named = |span: Span| {
+        let mut held = crate::schema::dequote(span.text(sql));
+        held.make_ascii_lowercase();
+        held
+    };
+    let mut out = Vec::new();
+    let mut tag = |word: &str| out.extend_from_slice(word.as_bytes());
+    match *node {
+        Node::Literal(literal) => {
+            tag("literal ");
+            match literal {
+                Literal::Null => tag("null"),
+                Literal::CurrentTime(which) => out.extend_from_slice(match which {
+                    CurrentTime::Time => b"time",
+                    CurrentTime::Date => b"date",
+                    CurrentTime::Timestamp => b"timestamp",
+                }),
+                Literal::Integer(span) | Literal::Float(span) => {
+                    out.extend_from_slice(span.text(sql));
+                }
+                Literal::Text(span) | Literal::Blob(span) => out.extend_from_slice(&named(span)),
+            }
+        }
+        Node::Column {
+            schema,
+            table,
+            column,
+        } => {
+            tag("column ");
+            for span in schema.into_iter().chain(table) {
+                out.extend_from_slice(&named(span));
+                out.push(b'.');
+            }
+            out.extend_from_slice(&named(column));
+        }
+        Node::Variable(span) => {
+            tag("variable ");
+            out.extend_from_slice(span.text(sql));
+        }
+        Node::Unary { op, .. } => out.extend_from_slice(alloc::format!("unary {op:?}").as_bytes()),
+        Node::Binary { op, .. } => {
+            out.extend_from_slice(alloc::format!("binary {op:?}").as_bytes());
+        }
+        Node::Between { negated, .. } => {
+            out.extend_from_slice(alloc::format!("between {negated}").as_bytes());
+        }
+        Node::InList { negated, .. } => {
+            out.extend_from_slice(alloc::format!("in list {negated}").as_bytes());
+        }
+        Node::Like { op, negated, .. } => {
+            out.extend_from_slice(alloc::format!("like {op:?} {negated}").as_bytes());
+        }
+        Node::Cast { ty, .. } => {
+            tag("cast ");
+            out.extend_from_slice(&named(ty));
+        }
+        Node::Collate { name, .. } => {
+            tag("collate ");
+            out.extend_from_slice(&named(name));
+        }
+        Node::Call {
+            name,
+            distinct,
+            star,
+            ..
+        } => {
+            out.extend_from_slice(alloc::format!("call {distinct} {star} ").as_bytes());
+            out.extend_from_slice(&named(name));
+        }
+        Node::Case { .. } => tag("case"),
+        Node::Row(_) => tag("row"),
+        Node::Subquery(_)
+        | Node::Exists(_)
+        | Node::InSelect { .. }
+        | Node::InTable { .. }
+        | Node::Raise { .. }
+        | Node::Over { .. } => return None,
+    }
+    Some(out)
+}

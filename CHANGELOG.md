@@ -7,6 +7,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` reads an `ON CONFLICT` clause that names an index whose
+  places hold expressions, and one that names a partial index by writing
+  its `WHERE` again, where it refused both; an index that holds more than
+  one key per row is named by no clause. D-459 records it. Catalog
+  6.6.322. `upsert4.test` goes from 97 cases passing to 110 and
+  `upsert1.test` from 27 to 29.
+
 - The suite harness runs a script a case writes for a child
   `testfixture` over a connection of its own, and applies the crash the
   script asks for when the script ends, where it ran the script in the

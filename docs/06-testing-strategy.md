@@ -7347,3 +7347,14 @@ Document 16 step Q8.
   under, and of a database the connection holds a transaction on.
 - A checkpoint that names no schema over a connection with an attached
   database in logging mode: both files hold the tables afterwards.
+
+### 6.6.322 What an `ON CONFLICT` clause names (`db-sqlite`)
+
+Document 16 step Q8.
+
+- Two expressions of two trees compared: the same expression of every
+  kind a place of an index may hold, another expression of each kind, a
+  collation one side writes, and a node that names a statement.
+- An `ON CONFLICT` clause over an index whose place holds an expression,
+  over a partial index, over an index that holds more than one key per
+  row, and over the key of a table under the collation it is held in.

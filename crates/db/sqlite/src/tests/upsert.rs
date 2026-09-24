@@ -761,3 +761,219 @@ fn a_clause_over_a_table_with_no_rowid_answers_what_it_wrote() {
         alloc::vec![alloc::vec![Value::Text(b"x".to_vec()), Value::Int(2)]]
     );
 }
+
+/// How two expressions written as `sql` compare, each parsed into a tree
+/// of its own so that the comparison reads two trees.
+fn compared(one: &[u8], other: &[u8]) -> crate::ast::Alike {
+    let (held, id) = crate::parse::expression(one).unwrap();
+    let (beside, at) = crate::parse::expression(other).unwrap();
+    crate::ast::alike((&held, id, one), (&beside, at, other))
+}
+
+#[test]
+fn what_two_expressions_of_two_trees_compare_as() {
+    use crate::ast::Alike;
+    // The same expression of every kind a place of an index may hold.
+    for text in [
+        "x",
+        "t.x",
+        "main.t.x",
+        "17",
+        "1.5",
+        "'one'",
+        "x'00'",
+        "NULL",
+        "CURRENT_DATE",
+        "CURRENT_TIMESTAMP",
+        "?1",
+        "-x",
+        "x + 1",
+        "x BETWEEN 1 AND 2",
+        "x NOT BETWEEN 1 AND 2",
+        "x IN (1, 2)",
+        "x NOT IN (1, 2)",
+        "x LIKE 'a%'",
+        "x GLOB 'a*' ",
+        "x NOT LIKE 'a%' ESCAPE '\\'",
+        "CAST(x AS INTEGER)",
+        "x COLLATE nocase",
+        "abs(x)",
+        "count(DISTINCT x)",
+        "count(*)",
+        "CASE x WHEN 1 THEN 2 ELSE 3 END",
+        "CASE WHEN x THEN 2 END",
+        "(x, 1)",
+        "max(x) FILTER (WHERE x > 0)",
+    ] {
+        assert_eq!(
+            compared(text.as_bytes(), text.as_bytes()),
+            Alike::Same,
+            "{text}"
+        );
+    }
+    // A name is read without its quotes and without its case.
+    assert_eq!(compared(b"\"X\"", b"x"), Alike::Same);
+    // Another expression of the same kind.
+    for (one, other) in [
+        ("x", "y"),
+        ("t.x", "u.x"),
+        ("17", "18"),
+        ("1.5", "1.6"),
+        ("'one'", "'two'"),
+        ("x'00'", "x'01'"),
+        ("NULL", "CURRENT_DATE"),
+        ("CURRENT_DATE", "CURRENT_TIME"),
+        ("?1", "?2"),
+        ("-x", "+x"),
+        ("x + 1", "x - 1"),
+        ("x BETWEEN 1 AND 2", "x NOT BETWEEN 1 AND 2"),
+        ("x IN (1, 2)", "x NOT IN (1, 2)"),
+        ("x LIKE 'a%'", "x GLOB 'a%'"),
+        ("CAST(x AS INTEGER)", "CAST(x AS TEXT)"),
+        ("x COLLATE nocase", "x COLLATE rtrim"),
+        ("abs(x)", "length(x)"),
+        ("count(DISTINCT x)", "count(x)"),
+        ("count(*)", "count(x)"),
+        ("abs(x)", "abs(x, 1)"),
+        ("CASE x WHEN 1 THEN 2 END", "CASE WHEN 1 THEN 2 END"),
+        ("(x, 1)", "x"),
+        ("x", "(SELECT 1)"),
+        ("(SELECT 1)", "x"),
+        ("(SELECT 1)", "(SELECT 1)"),
+        ("EXISTS(SELECT 1)", "EXISTS(SELECT 1)"),
+        ("x IN (SELECT 1)", "x IN (SELECT 1)"),
+        ("x IN t", "x IN t"),
+        ("max(x) OVER ()", "max(x) OVER ()"),
+    ] {
+        assert_eq!(
+            compared(one.as_bytes(), other.as_bytes()),
+            Alike::Other,
+            "{one} against {other}"
+        );
+    }
+    // A `COLLATE` one side writes and the other does not leaves the
+    // expressions the same but for that collation, whichever side writes
+    // it.
+    assert_eq!(compared(b"x COLLATE nocase", b"x"), Alike::Collated);
+    assert_eq!(compared(b"x", b"x COLLATE nocase"), Alike::Collated);
+    assert_eq!(compared(b"x COLLATE nocase", b"y"), Alike::Other);
+    assert_eq!(compared(b"y", b"x COLLATE nocase"), Alike::Other);
+    // A collation one side writes under the node answers the same.
+    assert_eq!(
+        compared(b"x + (y COLLATE nocase)", b"x + y"),
+        Alike::Collated
+    );
+    assert_eq!(compared(b"x + (y COLLATE nocase)", b"x + z"), Alike::Other);
+}
+
+#[test]
+fn what_an_on_conflict_clause_that_names_an_expression_or_a_partial_index_writes() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer
+        .run(b"CREATE TABLE abc(a INTEGER PRIMARY KEY, x, y)")
+        .unwrap();
+    writer
+        .run(b"CREATE UNIQUE INDEX abc1 ON abc(('x' || x) COLLATE nocase)")
+        .unwrap();
+    writer
+        .run(b"INSERT INTO abc VALUES(1, 'one', 'two')")
+        .unwrap();
+    // A clause names a place over an expression by writing that
+    // expression again, under the collation the place is held in or
+    // under none.
+    for clause in [
+        "ON CONFLICT ('x' || x) DO NOTHING",
+        "ON CONFLICT (('x' || x) COLLATE nocase) DO NOTHING",
+    ] {
+        let mut sql = alloc::string::String::from("INSERT INTO abc VALUES(2, 'one', NULL) ");
+        sql.push_str(clause);
+        writer.run(sql.as_bytes()).unwrap();
+    }
+    // A clause that writes another collation, or another expression,
+    // names no index of the table.
+    for clause in [
+        "ON CONFLICT (('x' || x) COLLATE binary) DO NOTHING",
+        "ON CONFLICT (x || 'x') DO NOTHING",
+        "ON CONFLICT (x) DO NOTHING",
+    ] {
+        let mut sql = alloc::string::String::from("INSERT INTO abc VALUES(2, 'one', NULL) ");
+        sql.push_str(clause);
+        assert_eq!(
+            writer.run(sql.as_bytes()).map_err(|error| error.message()),
+            Err(alloc::string::String::from(
+                "ON CONFLICT clause does not match any PRIMARY KEY or UNIQUE constraint"
+            )),
+            "{clause}"
+        );
+    }
+    let rows = Database::open(&writer.written())
+        .unwrap()
+        .query(b"SELECT count(*) FROM abc")
+        .unwrap();
+    assert_eq!(rows.rows, [[Value::Int(1)]]);
+    // A partial index is named by a clause that writes its `WHERE`
+    // again, and a clause that writes none names no partial index.
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer
+        .run(b"CREATE TABLE t(a INTEGER PRIMARY KEY, x, y)")
+        .unwrap();
+    writer
+        .run(b"CREATE UNIQUE INDEX t1 ON t(x) WHERE y>0")
+        .unwrap();
+    writer.run(b"INSERT INTO t VALUES(1, 'one', 1)").unwrap();
+    writer
+        .run(b"INSERT INTO t VALUES(2, 'one', 10) ON CONFLICT(x) WHERE y>0 DO NOTHING")
+        .unwrap();
+    for clause in [
+        "ON CONFLICT(x) DO NOTHING",
+        "ON CONFLICT(x) WHERE y>=0 DO NOTHING",
+    ] {
+        let mut sql = alloc::string::String::from("INSERT INTO t VALUES(2, 'one', 10) ");
+        sql.push_str(clause);
+        assert_eq!(
+            writer.run(sql.as_bytes()).map_err(|error| error.message()),
+            Err(alloc::string::String::from(
+                "ON CONFLICT clause does not match any PRIMARY KEY or UNIQUE constraint"
+            )),
+            "{clause}"
+        );
+    }
+    // An index that holds more than one key per row is named by no
+    // clause at all.
+    writer.run(b"CREATE INDEX t2 ON t(y)").unwrap();
+    assert_eq!(
+        writer
+            .run(b"INSERT INTO t VALUES(3, 'two', 1) ON CONFLICT(y) DO NOTHING")
+            .map_err(|error| error.message()),
+        Err(alloc::string::String::from(
+            "ON CONFLICT clause does not match any PRIMARY KEY or UNIQUE constraint"
+        ))
+    );
+}
+
+#[test]
+fn what_an_on_conflict_clause_that_writes_a_collation_on_the_key_names() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer
+        .run(b"CREATE TABLE t(a TEXT COLLATE nocase, b, PRIMARY KEY(a)) WITHOUT ROWID")
+        .unwrap();
+    writer.run(b"INSERT INTO t VALUES('x', 1)").unwrap();
+    // A clause that writes the collation the key is held in names that
+    // key, and one that writes another names no key of the table.
+    writer
+        .run(b"INSERT INTO t VALUES('X', 2) ON CONFLICT(a COLLATE nocase) DO NOTHING")
+        .unwrap();
+    assert_eq!(
+        writer
+            .run(b"INSERT INTO t VALUES('X', 2) ON CONFLICT(a COLLATE binary) DO NOTHING")
+            .map_err(|error| error.message()),
+        Err(alloc::string::String::from(
+            "ON CONFLICT clause does not match any PRIMARY KEY or UNIQUE constraint"
+        ))
+    );
+    let rows = Database::open(&writer.written())
+        .unwrap()
+        .query(b"SELECT b FROM t")
+        .unwrap();
+    assert_eq!(rows.rows, [[Value::Int(1)]]);
+}

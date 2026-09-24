@@ -1102,6 +1102,9 @@ Size: L.
 173. The checkpoint the C API takes, which names one of five kinds and
      one database or every database the connection holds. Built, which
      D-457 records.
+174. The index an `ON CONFLICT` clause names, which may hold a place over
+     an expression and an entry for some rows alone. Built, which D-459
+     records.
 
 ### Done when
 

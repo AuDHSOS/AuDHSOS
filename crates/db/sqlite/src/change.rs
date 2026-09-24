@@ -7796,9 +7796,13 @@ impl Writer {
                     continue;
                 }
                 let columns = Self::key_column(into.table, None);
-                if let Some(clause) =
-                    upsert_of(into.arena, into.sql, into.upserts, &columns, into.collating)
-                {
+                if let Some(clause) = upsert_of(
+                    into.arena,
+                    into.sql,
+                    into.upserts,
+                    &Conflicting::Key(&columns),
+                    into.collating,
+                ) {
                     return Ok(Conflicted::Wrote(
                         self.upsert_keyed(into, clause, named, key)?,
                     ));
@@ -7824,10 +7828,16 @@ impl Writer {
             let Some(held) = found else {
                 continue;
             };
-            let columns = Self::key_columns(into.table, into.kept, index).unwrap_or_default();
-            if let Some(clause) =
-                upsert_of(into.arena, into.sql, into.upserts, &columns, into.collating)
-            {
+            let held_index = into.kept.get(index);
+            if let Some(clause) = held_index.and_then(|one| {
+                upsert_of(
+                    into.arena,
+                    into.sql,
+                    into.upserts,
+                    &Conflicting::Index(into.table, one),
+                    into.collating,
+                )
+            }) {
                 // The entry the row shares a key with ends with the key
                 // of the row it belongs to.
                 return Ok(Conflicted::Wrote(
@@ -8823,10 +8833,16 @@ impl Writer {
             let Some(held) = found else {
                 continue;
             };
-            let columns = Self::key_columns(into.table, into.kept, index).unwrap_or_default();
-            if let Some(clause) =
-                upsert_of(into.arena, into.sql, into.upserts, &columns, into.collating)
-            {
+            let held_index = into.kept.get(index);
+            if let Some(clause) = held_index.and_then(|one| {
+                upsert_of(
+                    into.arena,
+                    into.sql,
+                    into.upserts,
+                    &Conflicting::Index(into.table, one),
+                    into.collating,
+                )
+            }) {
                 // The entry the row shares a key with ends with the key
                 // of the row it belongs to.
                 let other = held.first().map_or(rowid, Value::to_integer);
@@ -8874,7 +8890,13 @@ impl Writer {
             return Ok(None);
         }
         let key = Self::key_column(into.table, into.alias);
-        if let Some(clause) = upsert_of(into.arena, into.sql, into.upserts, &key, into.collating) {
+        if let Some(clause) = upsert_of(
+            into.arena,
+            into.sql,
+            into.upserts,
+            &Conflicting::Key(&key),
+            into.collating,
+        ) {
             let wrote = self.upsert(into, clause, named, (rowid, rowid))?;
             return Ok(Some(Conflicted::Wrote(wrote)));
         }
@@ -8916,14 +8938,20 @@ impl Writer {
             if clause.targets.is_empty() {
                 break;
             }
-            let targets = targets_of(arena, sql, clause, collating).ok_or(Error::NoUpsertKey)?;
-            if names_key(&Self::key_column(table, alias), &targets) {
+            let key = Self::key_column(table, alias);
+            if names_conflict((arena, sql, clause), &Conflicting::Key(&key), collating) {
                 at_key.get_or_insert(named.len());
                 continue;
             }
             let at = (0..kept.len())
                 .find(|at| {
-                    Self::key_columns(table, kept, *at).is_some_and(|key| names_key(&key, &targets))
+                    kept.get(*at).is_some_and(|one| {
+                        names_conflict(
+                            (arena, sql, clause),
+                            &Conflicting::Index(table, one),
+                            collating,
+                        )
+                    })
                 })
                 .ok_or(Error::NoUpsertKey)?;
             // A clause that names a key another clause named already is
@@ -9809,22 +9837,138 @@ fn targets_of(
         .collect()
 }
 
+/// The key a conflict happened on, which an `ON CONFLICT` clause names
+/// or does not.
+enum Conflicting<'a> {
+    /// The key of the table, by its columns and the collation each is
+    /// held in.
+    Key(&'a Keys),
+    /// One index of the table, whose places may hold expressions and
+    /// whose entries may be held to a `WHERE`.
+    Index(&'a Table, &'a Kept),
+}
+
 /// Which `ON CONFLICT` clause a conflict reaches, which is
-/// `sqlite3UpsertOfIndex`: the clause whose columns are the columns of
-/// the index the row shares a key with, or the clause that names no
-/// columns at all.
+/// `sqlite3UpsertOfIndex`: the clause that names the key the row shares,
+/// or the clause that names no columns at all.
 fn upsert_of<'a>(
     arena: &'a Arena,
     sql: &[u8],
     upserts: &'a [crate::ast::Upsert],
-    wanted: &Keys,
+    on: &Conflicting<'_>,
     collating: &[crate::value::Collating],
 ) -> Option<&'a crate::ast::Upsert> {
     upserts.iter().find(|clause| {
-        clause.targets.is_empty()
-            || targets_of(arena, sql, clause, collating)
-                .is_some_and(|targets| names_key(wanted, &targets))
+        clause.targets.is_empty() || names_conflict((arena, sql, clause), on, collating)
     })
+}
+
+/// Whether one `ON CONFLICT` clause names the key a conflict happened
+/// on.
+fn names_conflict(
+    clause: (&Arena, &[u8], &crate::ast::Upsert),
+    on: &Conflicting<'_>,
+    collating: &[crate::value::Collating],
+) -> bool {
+    let (arena, sql, held) = clause;
+    match on {
+        Conflicting::Key(key) => {
+            targets_of(arena, sql, held, collating).is_some_and(|targets| names_key(key, &targets))
+        }
+        Conflicting::Index(table, kept) => names_index(clause, (table, kept), collating),
+    }
+}
+
+/// Whether an `ON CONFLICT` clause names one index, which is
+/// `sqlite3UpsertAnalyzeTarget` of `research/sqlite/src/upsert.c:129`:
+/// the index holds one key per row, the clause names as many terms as
+/// the index holds places, a partial index carries the `WHERE` the
+/// clause writes again, and every place of the index is a term of the
+/// clause.
+///
+/// The `WHERE` of a clause says nothing about an index that holds an
+/// entry for every row, which `pIdx->pPartIdxWhere` reads.
+///
+/// Comparing an index of `k` places costs O(k^2) in the places and O(n)
+/// in the nodes of the expressions they hold.
+fn names_index(
+    clause: (&Arena, &[u8], &crate::ast::Upsert),
+    over: (&Table, &Kept),
+    collating: &[crate::value::Collating],
+) -> bool {
+    let (arena, sql, held) = clause;
+    let (table, kept) = over;
+    if !kept.index.unique {
+        return false;
+    }
+    let terms = arena.orders(held.targets);
+    if terms.len() != kept.index.columns.len() {
+        return false;
+    }
+    if let Some(filter) = kept.index.filter {
+        let Some(over) = held.over else {
+            return false;
+        };
+        if crate::ast::alike((arena, over, sql), (&kept.arena, filter, &kept.sql))
+            != crate::ast::Alike::Same
+        {
+            return false;
+        }
+    }
+    kept.index.columns.iter().all(|keyed| {
+        terms
+            .iter()
+            .any(|term| names_place(keyed, (arena, term.expr, sql), (table, kept), collating))
+    })
+}
+
+/// Whether one term of an `ON CONFLICT` clause names one place of an
+/// index: the place holds the column the term names, or an expression
+/// the term writes again, and a collation the term writes is the one the
+/// place is held in.
+///
+/// A term that writes no collation is held to none, because
+/// `sqlite3ExprCompare` answers one rather than two for a `COLLATE` one
+/// side writes and the other does not.
+fn names_place(
+    keyed: &crate::schema::Keyed,
+    term: (&Arena, crate::ast::ExprId, &[u8]),
+    over: (&Table, &Kept),
+    collating: &[crate::value::Collating],
+) -> bool {
+    let (arena, id, sql) = term;
+    let (table, kept) = over;
+    let (named, written) = crate::schema::collated(arena, id, sql, collating);
+    if written.is_some_and(|held| held != keyed.collation) {
+        return false;
+    }
+    match keyed.of {
+        crate::schema::Of::Place(at) => {
+            let column = table
+                .columns
+                .get(at)
+                .map(|column| column.name.clone())
+                .unwrap_or_default();
+            named.is_some_and(|span| {
+                crate::schema::dequote(span.text(sql)).eq_ignore_ascii_case(&column)
+            })
+        }
+        crate::schema::Of::Term(place) => {
+            crate::ast::alike(
+                (arena, uncollated(arena, id), sql),
+                (&kept.arena, uncollated(&kept.arena, place), &kept.sql),
+            ) != crate::ast::Alike::Other
+        }
+    }
+}
+
+/// The expression without the `COLLATE` written over it, which the
+/// collation is read off on its own.
+fn uncollated(arena: &Arena, id: crate::ast::ExprId) -> crate::ast::ExprId {
+    match arena.node(id) {
+        Some(crate::ast::Node::Collate { value, .. }) => uncollated(arena, value),
+        _ => id,
+    }
 }
 
 /// Whether an `ON CONFLICT` clause names a key, which is
@@ -10707,26 +10851,6 @@ impl Writer {
         // The key of a table is one whole number, which no collation
         // reads.
         alloc::vec![(name, Collation::Binary)]
-    }
-
-    /// The columns the index `at` is over, each with the collation its
-    /// entries are held in.
-    fn key_columns(table: &Table, kept: &[Kept], at: usize) -> Option<Keys> {
-        let held = kept.get(at)?;
-        // An `ON CONFLICT` clause names no index that holds a place
-        // over an expression, and none that holds entries for fewer
-        // rows than the table has.
-        if held.index.filter.is_some() {
-            return None;
-        }
-        held.index
-            .columns
-            .iter()
-            .map(|keyed| {
-                let column = keyed.place().and_then(|at| table.columns.get(at))?;
-                Some((column.name.clone(), keyed.collation))
-            })
-            .collect()
     }
 
     /// The key a message names, as `sqlite3UniqueConstraint` writes it:
