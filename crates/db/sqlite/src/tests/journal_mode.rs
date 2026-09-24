@@ -85,6 +85,57 @@ fn what_journal_mode_the_databases_beside_the_first_are_in() {
     assert_eq!(word(&mut writer, b"PRAGMA one.journal_mode"), "truncate");
 }
 
+/// A database that stands in memory alone answers `memory` for its
+/// journal mode and takes `off` and no other mode, which
+/// `sqlite3PagerSetJournalMode` writes.
+#[test]
+fn what_journal_mode_a_database_that_stands_in_memory_is_in() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.memoried();
+    assert_eq!(word(&mut writer, b"PRAGMA journal_mode"), "memory");
+    for named in [
+        b"PRAGMA journal_mode=delete".as_slice(),
+        b"PRAGMA journal_mode=truncate",
+        b"PRAGMA journal_mode=persist",
+        b"PRAGMA journal_mode=wal",
+        b"PRAGMA journal_mode=memory",
+    ] {
+        assert_eq!(
+            word(&mut writer, named),
+            "memory",
+            "{}",
+            alloc::string::String::from_utf8_lossy(named)
+        );
+    }
+    assert_eq!(word(&mut writer, b"PRAGMA journal_mode=off"), "off");
+    assert_eq!(word(&mut writer, b"PRAGMA journal_mode=delete"), "off");
+    assert_eq!(word(&mut writer, b"PRAGMA journal_mode=memory"), "memory");
+}
+
+/// A database an `ATTACH` holds in memory alone is left at `memory`
+/// where a pragma that names no schema sets every other database, and a
+/// database the `ATTACH` names by no file at all is set with them.
+#[test]
+fn what_journal_mode_a_database_attached_in_memory_is_in() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.opens(opening);
+    writer.run(b"ATTACH ':memory:' AS one").unwrap();
+    writer.run(b"ATTACH '' AS two").unwrap();
+    assert_eq!(word(&mut writer, b"PRAGMA one.journal_mode"), "memory");
+    assert_eq!(word(&mut writer, b"PRAGMA two.journal_mode"), "delete");
+    assert_eq!(
+        word(&mut writer, b"PRAGMA journal_mode=truncate"),
+        "truncate"
+    );
+    assert_eq!(word(&mut writer, b"PRAGMA one.journal_mode"), "memory");
+    assert_eq!(word(&mut writer, b"PRAGMA two.journal_mode"), "truncate");
+    assert_eq!(
+        word(&mut writer, b"PRAGMA one.journal_mode=truncate"),
+        "memory"
+    );
+    assert_eq!(word(&mut writer, b"PRAGMA one.journal_mode=off"), "off");
+}
+
 /// The file the `ATTACH` of these tests names.
 fn opening(file: &[u8]) -> Option<alloc::vec::Vec<u8>> {
     if file != b"one.db" {

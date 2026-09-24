@@ -7383,3 +7383,15 @@ Document 16 step Q8.
   where it stands.
 - A table whose key names a column, with that column before and after the
   one that goes out: the record holds nothing under it.
+
+### 6.6.325 The journal mode of a database in memory (`db-sqlite`)
+
+Document 16 step Q8.
+
+- A connection told its database stands in memory: every mode named in
+  turn, of which `off` is taken and each other leaves `memory`.
+- A database `off` that is named `delete`, which stays `off`, and then
+  `memory`.
+- An `ATTACH` of `:memory:` beside an `ATTACH` of a name of no bytes: a
+  pragma that names no schema leaves the first at `memory` and sets the
+  second.

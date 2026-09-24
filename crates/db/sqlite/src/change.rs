@@ -769,6 +769,10 @@ struct Called {
     /// for `main`, one for the temp schema, and two and up for an
     /// attached database in the order they were attached.
     place: usize,
+    /// Whether the database stands in memory alone, which `:memory:` and
+    /// a URI under `mode=memory` both name and which `MEMDB` of
+    /// `research/sqlite/src/pager.c:7427` reads.
+    memory: bool,
 }
 
 /// One database of a connection beside the one the statement running now
@@ -1066,6 +1070,7 @@ impl Writer {
                 name: b"main".to_vec(),
                 file: Vec::new(),
                 place: 0,
+                memory: false,
             },
             attached: Vec::new(),
             opening: None,
@@ -1196,6 +1201,7 @@ impl Writer {
                 name: b"main".to_vec(),
                 file: Vec::new(),
                 place: 0,
+                memory: false,
             },
             attached: Vec::new(),
             opening: None,
@@ -1433,10 +1439,23 @@ impl Writer {
                 name: b"temp".to_vec(),
                 file: Vec::new(),
                 place: 1,
+                memory: false,
             },
             held,
         });
         Ok(())
+    }
+
+    /// Says that `main` stands in memory alone, which a client names by
+    /// the path `:memory:` or by a URI under `mode=memory`.
+    ///
+    /// `sqlite3BtreeOpen` of `research/sqlite/src/btree.c:2170` holds
+    /// such a database for one connection alone, and
+    /// `sqlite3PagerSetJournalMode` of `research/sqlite/src/pager.c:7427`
+    /// leaves its journal mode at `memory` for every mode but `off`.
+    pub const fn memoried(&mut self) {
+        self.called.memory = true;
+        self.held.mode = Mode::Memory;
     }
 
     /// The encoding the connection keeps its text in, which a reader
@@ -2006,11 +2025,20 @@ impl Writer {
         if named_database(&name) || self.attached.iter().any(|held| named_as(held, &name)) {
             return Err(Error::DatabaseInUse(name));
         }
-        let held = if named.mode == Some(crate::uri::Mode::Memory) {
+        // `sqlite3BtreeOpen` of `research/sqlite/src/btree.c:2170` holds a
+        // database in memory alone for `:memory:` and for a URI under
+        // `mode=memory`, and holds one in a file it makes for a name of
+        // no bytes.
+        let memory =
+            named.mode == Some(crate::uri::Mode::Memory) || file.eq_ignore_ascii_case(b":memory:");
+        let mut held = if memory {
             self.opened_file(b":memory:")?
         } else {
             self.opened_file(&file)?
         };
+        if memory {
+            held.mode = crate::journal::Mode::Memory;
+        }
         if held.header.encoding != self.held.header.encoding {
             return Err(Error::AttachEncoding);
         }
@@ -2032,7 +2060,12 @@ impl Writer {
             .unwrap_or(1)
             .saturating_add(1);
         self.attached.push(Attached {
-            called: Called { name, file, place },
+            called: Called {
+                name,
+                file,
+                place,
+                memory,
+            },
             held,
         });
         Ok(())
@@ -3788,6 +3821,7 @@ impl Writer {
                 name: b"temp".to_vec(),
                 file: Vec::new(),
                 place: 1,
+                memory: false,
             },
             held,
         });
@@ -5180,6 +5214,56 @@ impl Writer {
         mode(self.held.exclusive)
     }
 
+    /// `PRAGMA journal_mode = value`, which answers the mode the
+    /// connection is left in and which no other setting answers a row
+    /// for.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unsupported`] for a file in write-ahead logging, which
+    /// leaves that mode through a checkpoint this crate does not write,
+    /// and for a value that names no mode.
+    fn journal_written(&mut self, text: &[u8], every: bool) -> Result<Vec<Vec<Value>>, Error> {
+        // `sqlite3PragmaJournalMode` leaves the mode as it is where the
+        // connection has a transaction open, so the pragma answers the
+        // mode it did not change.
+        let held = self.held.began.is_some();
+        if crate::pragma::is_log(text) {
+            // `OP_JournalMode` of `research/sqlite/src/vdbe.c:8089` leaves
+            // the mode as it is where the database stands in memory
+            // alone, which holds no log.
+            if !held && !self.called.memory {
+                self.log_mode();
+            }
+        } else {
+            if self.held.log.is_some() {
+                return Err(Error::Unsupported);
+            }
+            let mode = crate::pragma::mode_of(text).ok_or(Error::Unsupported)?;
+            if !held {
+                // A file whose log a close wrote back still says version
+                // two, which `sqlite3PagerSetJournalMode` writes back to
+                // one where the pragma names another mode.
+                self.held.header.write_version = 1;
+                self.held.header.read_version = 1;
+                self.held.mode = moded(self.called.memory, mode, self.held.mode);
+                // `PRAGMA journal_mode = X` with no schema in front of it
+                // sets the mode of every database the connection holds,
+                // which `sqlite3PragmaJournalMode` of
+                // `research/sqlite/src/pragma.c:520` writes to each and
+                // keeps as the connection's own.
+                if every {
+                    for beside in &mut self.attached {
+                        beside.held.mode = moded(beside.called.memory, mode, beside.held.mode);
+                    }
+                }
+            }
+        }
+        Ok(alloc::vec![alloc::vec![Value::Text(
+            self.journalled().to_vec()
+        )]])
+    }
+
     /// `PRAGMA name = value`, with `text` for what is written.
     ///
     /// # Errors
@@ -5285,51 +5369,7 @@ impl Writer {
                 0 => {}
                 which => self.vacuuming(which == 2),
             },
-            crate::pragma::Setting::JournalMode => {
-                // `sqlite3PragmaJournalMode` leaves the mode as it is
-                // where the connection has a transaction open, so the
-                // pragma answers the mode it did not change.
-                let held = self.held.began.is_some();
-                let wanted = crate::pragma::mode_of(text);
-                if crate::pragma::is_log(text) {
-                    if !held {
-                        self.log_mode();
-                    }
-                } else {
-                    // A file in write-ahead logging leaves that mode
-                    // through a checkpoint, which this crate does not
-                    // write.
-                    if self.held.log.is_some() {
-                        return Err(Error::Unsupported);
-                    }
-                    let mode = wanted.ok_or(Error::Unsupported)?;
-                    if !held {
-                        // A file whose log a close wrote back still says
-                        // version two, which `sqlite3PagerSetJournalMode`
-                        // writes back to one where the pragma names
-                        // another mode.
-                        self.held.header.write_version = 1;
-                        self.held.header.read_version = 1;
-                        self.held.mode = mode;
-                        // `PRAGMA journal_mode = X` with no schema in
-                        // front of it sets the mode of every database the
-                        // connection holds, which
-                        // `sqlite3PragmaJournalMode` of
-                        // `research/sqlite/src/pragma.c:520` writes to
-                        // each and keeps as the connection's own.
-                        if every {
-                            for beside in &mut self.attached {
-                                beside.held.mode = mode;
-                            }
-                        }
-                    }
-                }
-                // The mode the connection is left in is the one row
-                // this pragma answers, which no other setting does.
-                return Ok(alloc::vec![alloc::vec![Value::Text(
-                    self.journalled().to_vec()
-                )]]);
-            }
+            crate::pragma::Setting::JournalMode => return self.journal_written(text, every),
             _ => return Err(Error::Unsupported),
         }
         Ok(Vec::new())
@@ -11341,6 +11381,18 @@ struct Points {
     /// affinity and the collation of the column of the parent, not of
     /// the child.
     under: Vec<(Affinity, Collation)>,
+}
+
+/// The journal mode a database is left in, which is the mode the pragma
+/// names except where the database stands in memory alone and the mode
+/// is neither `memory` nor `off`: `sqlite3PagerSetJournalMode` of
+/// `research/sqlite/src/pager.c:7427` leaves such a database in the mode
+/// it was in.
+const fn moded(memory: bool, mode: Mode, was: Mode) -> Mode {
+    if memory && !matches!(mode, Mode::Memory | Mode::Off) {
+        return was;
+    }
+    mode
 }
 
 /// The key of a row as a rowid, which is the one value a table that

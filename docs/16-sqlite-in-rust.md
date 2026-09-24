@@ -1111,6 +1111,8 @@ Size: L.
      that keeps its rows in the key's own tree and over a table that
      holds a column the row computes for itself. Built, which D-464
      records.
+177. The journal mode of a database that stands in memory alone, which is
+     `memory` for every mode but `off`. Built, which D-465 records.
 
 ### Done when
 

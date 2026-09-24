@@ -2129,7 +2129,11 @@ impl Session {
         } else {
             path.as_str()
         };
-        let held = if path.is_empty() || path.eq_ignore_ascii_case(":memory:") {
+        // A database of the connection's own stands in memory alone where
+        // the path names `:memory:`, and stands in a file the library
+        // makes where the path holds no byte.
+        let memory = path.eq_ignore_ascii_case(":memory:");
+        let held = if path.is_empty() || memory {
             self.opened = self.opened.saturating_add(1);
             format!("{path}\0{name}\0{}", self.opened)
         } else {
@@ -2155,6 +2159,9 @@ impl Session {
             writer.defines(DEFINED);
             writer.groups(GROUPED);
             ticked(&mut writer, self.clock);
+            if memory {
+                writer.memoried();
+            }
             if let Some(journal) = under.journal {
                 let mut sql = b"PRAGMA journal_mode=".to_vec();
                 sql.extend_from_slice(journal);

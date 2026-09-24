@@ -7,6 +7,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` answers `memory` for the journal mode of a database that
+  stands in memory alone and takes `off` and no other mode for it, where
+  every mode was taken. `Writer::memoried` says that `main` stands there,
+  and an `ATTACH` reads the path. D-465 records it. Catalog 6.6.325.
+  `jrnlmode.test` goes from 45 cases passing to 76 and `walmode.test` from
+  63 to 67.
+
 - `db-sqlite` writes the rows of an `ALTER TABLE ... DROP COLUMN` over a
   table that keeps its rows in the key's own tree, where it refused the
   statement. D-464 records it. Catalog 6.6.324. `alterdropcol.test` goes
