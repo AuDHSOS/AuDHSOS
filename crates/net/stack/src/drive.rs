@@ -115,7 +115,7 @@ impl<const SOCKETS: usize, const CONNECTIONS: usize> Stack<'_, SOCKETS, CONNECTI
         // The attempt is moved along before the connections are asked,
         // so that a connection this pass opened says its `SYN` in this
         // pass and not in the next one.
-        self.drive_attempt(now, rng)?;
+        self.drive_attempt(rng)?;
         self.drive_connections(now);
         Ok(())
     }

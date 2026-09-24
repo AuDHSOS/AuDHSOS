@@ -155,7 +155,6 @@ impl<'a, const SOCKETS: usize, const CONNECTIONS: usize> Stack<'a, SOCKETS, CONN
         rng: &mut R,
         send: &'a mut [u8],
         receive: &'a mut [u8],
-        now: Instant,
     ) -> Result<(), StackError> {
         if self.attempt.is_some() {
             return Err(StackError::Busy);
@@ -175,7 +174,7 @@ impl<'a, const SOCKETS: usize, const CONNECTIONS: usize> Stack<'a, SOCKETS, CONN
             handle: None,
             resolving: false,
         });
-        self.drive_attempt(now, rng)
+        self.drive_attempt(rng)
     }
 
     /// Resolves `name` and opens a connection to the first of its
@@ -244,11 +243,7 @@ impl<'a, const SOCKETS: usize, const CONNECTIONS: usize> Stack<'a, SOCKETS, CONN
     /// Moves the connection being made along: the next candidate when the
     /// last one did not answer, and the resolver's answers when it has
     /// them.
-    pub(crate) fn drive_attempt<R: Rng + ?Sized>(
-        &mut self,
-        now: Instant,
-        rng: &mut R,
-    ) -> Result<(), StackError> {
+    pub(crate) fn drive_attempt<R: Rng + ?Sized>(&mut self, rng: &mut R) -> Result<(), StackError> {
         if self
             .attempt
             .as_ref()
@@ -267,7 +262,7 @@ impl<'a, const SOCKETS: usize, const CONNECTIONS: usize> Stack<'a, SOCKETS, CONN
             }
         }
         self.retire_dead_candidate()?;
-        self.try_next_candidate(now, rng)
+        self.try_next_candidate(rng)
     }
 
     /// Puts the resolver's answers in the candidate list, in the order of
@@ -318,11 +313,7 @@ impl<'a, const SOCKETS: usize, const CONNECTIONS: usize> Stack<'a, SOCKETS, CONN
 
     /// Opens a connection to the next candidate, when there is one and
     /// nothing is open.
-    fn try_next_candidate<R: Rng + ?Sized>(
-        &mut self,
-        now: Instant,
-        rng: &mut R,
-    ) -> Result<(), StackError> {
+    fn try_next_candidate<R: Rng + ?Sized>(&mut self, rng: &mut R) -> Result<(), StackError> {
         let Some(attempt) = self.attempt.as_mut() else {
             return Ok(());
         };
@@ -339,7 +330,6 @@ impl<'a, const SOCKETS: usize, const CONNECTIONS: usize> Stack<'a, SOCKETS, CONN
             return Ok(());
         };
         let port = attempt.port;
-        let _ = now;
         match self.connect_to(address, port, rng, send, receive) {
             Ok(handle) => {
                 if let Some(attempt) = self.attempt.as_mut() {

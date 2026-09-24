@@ -514,7 +514,8 @@ StandardEncoding and permit one component level. CFF2 DICT/charstring blends
 validate the variation store and evaluate the default instance in T5.
 The caller owns the cubic-command buffer; errors invalidate its contents.
 Parsing is O(INDEX entries + dictionary bytes); outline work is bounded by
-the operation limit. FDSelect lookup is O(range count).
+the operation limit. FDSelect formats 3 and 4 are O(log range count);
+an endchar component lookup is O(charset range count), O(G) for format 0.
 **Done when:** CFF-based Noto Sans CJK host input yields checked glyph contours;
 INDEX offSize/count errors, operand overflow, invalid operators, recursive
 subroutines, stack and depth limits all pass negative tests; report acceptance before continuing.
