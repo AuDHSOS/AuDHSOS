@@ -215,3 +215,17 @@ fn an_image_may_open_and_close_its_own_test_lines() {
     );
     assert_eq!(exit.status(), Some(ExitStatus::Failure));
 }
+
+#[test]
+fn beginning_another_test_closes_the_previous_line_as_failed() {
+    let mut console = RecordingConsole::new();
+    let mut harness = Harness::new(&mut console, RecordingExit::new());
+    harness.begin("a");
+    harness.begin("b");
+    harness.end();
+    assert_eq!(harness.passed(), 1);
+    assert_eq!(
+        console.text(),
+        "[test] a ... FAILED: begun again\n[test] b ... ok\n"
+    );
+}
