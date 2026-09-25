@@ -352,3 +352,45 @@ fn which_clauses_read_a_name_the_statement_answers_under() {
         "no such column: nosuch"
     );
 }
+
+/// A statement no row reaches reads its expressions against a row of
+/// nulls, so a name it writes is refused as the C library refuses one
+/// before the statement runs.
+#[test]
+fn what_a_statement_no_row_reaches_refuses() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t3(a,b)").unwrap();
+    writer.run(b"CREATE TABLE t4(a,b,c)").unwrap();
+    let image = writer.written();
+    let database = Database::open(&image).expect("a database");
+    for (sql, message) in [
+        (
+            b"SELECT nosuch FROM t3".as_slice(),
+            "no such column: nosuch",
+        ),
+        (b"SELECT a FROM t3 WHERE nosuch=1", "no such column: nosuch"),
+        (
+            b"SELECT a FROM t3 ORDER BY -nosuch",
+            "no such column: nosuch",
+        ),
+        (
+            b"SELECT a FROM t3 WHERE a IN (SELECT * FROM t4)",
+            "sub-select returns 3 columns - expected 1",
+        ),
+    ] {
+        assert_eq!(
+            database.query(sql).unwrap_err().message(),
+            message,
+            "{sql:?}"
+        );
+    }
+    // A statement that reads a row resolved every name while it read it,
+    // so the walk reads no row of nulls for one.
+    writer.run(b"INSERT INTO t3 VALUES(1,2)").unwrap();
+    let image = writer.written();
+    let database = Database::open(&image).expect("a database");
+    assert_eq!(
+        database.query(b"SELECT a FROM t3").unwrap().rows,
+        alloc::vec![alloc::vec![crate::value::Value::Int(1)]]
+    );
+}

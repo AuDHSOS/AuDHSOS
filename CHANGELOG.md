@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` reads the expressions of a statement whose walk read no row
+  against a row of nulls, so a name it writes is refused before the statement
+  answers. D-515 records it. Catalog 6.6.361. `capi3.test` goes from 184 cases
+  passing to 192, `capi3c.test` from 169 to 177 and `in.test` from 107 to 111.
+
 - `db-sqlite` answers a null for a bound parameter, and refuses one written in
   a `CHECK`, a computed column, an index expression or the `WHERE` of a partial
   index. D-514 records it. Catalog 6.6.360. `where.test` goes from 246 cases

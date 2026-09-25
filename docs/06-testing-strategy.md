@@ -7778,3 +7778,13 @@ Document 16 step Q8. Every answer is the one the C library's shell writes.
 - Every spelling of a parameter: `?`, `?1`, `:name`, `@name` and
   `$name`.
 - The same expressions holding no parameter, which stand.
+
+### 6.6.361 A statement no row reaches (`db-sqlite`)
+
+Document 16 step Q8. Every answer is the one the C library's shell writes.
+
+- A name no side answers, among the columns the statement answers, in its
+  `WHERE` and in its `ORDER BY`.
+- An `IN` over a statement whose width a `*` stands for, which the count
+  before the statement runs reads no table for.
+- The same statement over a table holding a row, which answers it.

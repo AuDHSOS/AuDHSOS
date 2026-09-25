@@ -214,10 +214,15 @@ fn how_many_columns_a_statement_an_in_looks_in_answers() {
         );
     }
     // A `*` is as wide as the tables it is over, which the count here
-    // reads no table for, so the statement stands.
-    database
-        .query(b"SELECT * FROM t2 WHERE a IN (SELECT * FROM t3)")
-        .expect("a statement the count here says nothing about");
+    // reads no table for, so the width is read where the statement looks
+    // in the rows.
+    assert_eq!(
+        database
+            .query(b"SELECT * FROM t2 WHERE a IN (SELECT * FROM t3)")
+            .unwrap_err()
+            .message(),
+        "sub-select returns 3 columns - expected 1"
+    );
     database
         .query(b"SELECT * FROM t2 WHERE a IN (SELECT a FROM t3)")
         .expect("an answer");

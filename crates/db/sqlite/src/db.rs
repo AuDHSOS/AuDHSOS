@@ -4048,7 +4048,11 @@ impl<'a> Database<'a> {
                 sql,
                 (whole && (keys.is_empty() || held), reach),
             )?;
+            // Whether the walk read a row, which is what resolved the
+            // names of the statement.
+            let mut read = false;
             self.scan(&sides, arena, sql, reach, &mut |cursor: &Cursor<'_>| {
+                read = true;
                 if keep(arena, select.filter, sql, cursor)? {
                     rows.push(sorted(arena, &select, sql, cursor, &keys)?);
                     if stops.is_some_and(|stops| rows.len() >= stops) {
@@ -4057,6 +4061,9 @@ impl<'a> Database<'a> {
                 }
                 Ok(Flow::Go)
             })?;
+            if !read {
+                unread(arena, &select, sql, &sides, reach, self.collation())?;
+            }
         } else {
             let gathering = Grouping {
                 calls: &calls,
@@ -8832,6 +8839,41 @@ fn aggregates(
         .filter(|_| !grouped)
         .map(|call| call.name.clone());
     loose.map_or(Ok(calls), |name| Err(Error::LooseAggregate(name)))
+}
+
+/// Reads every expression of a statement whose walk read no row against
+/// a row of nulls, so a name it writes is refused as
+/// `sqlite3ResolveSelectNames` of `research/sqlite/src/resolve.c:2274`
+/// refuses one before the statement runs.
+///
+/// A statement whose walk read a row resolved every name while it read
+/// it, so only a statement whose walk read none is read here. The values
+/// are dropped and the refusal kept. A statement whose rows a `WHERE`
+/// filtered is left alone, because this reads the expressions rather than
+/// resolving them alone and a `RAISE` of a trigger's body stands in one.
+///
+/// The pass costs O(n) in the expressions of the statement.
+fn unread(
+    arena: &Arena,
+    select: &Select,
+    sql: &[u8],
+    sides: &[Side<'_>],
+    reach: Reach<'_>,
+    collation: Collation,
+) -> Result<(), Error> {
+    let mut cursor = Cursor::new(collation, reach.database.encoding, reach);
+    for side in sides {
+        cursor.held.push(Held::empty(
+            &side.shape,
+            &side.schema,
+            &side.name,
+            &side.using,
+        ));
+    }
+    for root in roots(arena, select) {
+        evaluate_row(arena, root, sql, &cursor)?;
+    }
+    Ok(())
 }
 
 /// Refuses a misplaced aggregate of a statement written inside this one.

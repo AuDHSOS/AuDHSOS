@@ -1199,6 +1199,8 @@ Size: L.
      read. Built, which D-513 records.
 214. What a bound parameter answers, and where the schema refuses one.
      Built, which D-514 records.
+215. The names of a statement whose walk read no row. Built, which D-515
+     records.
 
 ### Done when
 
@@ -1208,8 +1210,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 123 530 cases in 843 files, 118 701
-pass, 2605 answer differently, and 2224 name something the engine
+under the `tclsh` of the machine. Of 123 540 cases in 843 files, 118 737
+pass, 2576 answer differently, and 2227 name something the engine
 refuses or a command that needs the C library's internals. The files
 that answer for tens of thousands of rows reach the five-minute
 deadline and are counted with the cases they ran by then. One run over
