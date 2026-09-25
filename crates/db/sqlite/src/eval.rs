@@ -732,6 +732,19 @@ fn answer(
     }
 }
 
+/// The name `affinity()` answers for one affinity, which
+/// `research/sqlite/src/expr.c:4680` holds the six words of.
+fn named_affinity(affinity: Affinity) -> Vec<u8> {
+    match affinity {
+        Affinity::None => b"none".to_vec(),
+        Affinity::Blob => b"blob".to_vec(),
+        Affinity::Text => b"text".to_vec(),
+        Affinity::Numeric => b"numeric".to_vec(),
+        Affinity::Integer => b"integer".to_vec(),
+        Affinity::Real => b"real".to_vec(),
+    }
+}
+
 /// What a `RAISE` the statement reached says, which is the action it
 /// carries and the message it wrote as text.
 ///
@@ -844,8 +857,14 @@ fn called(
     // Whether each argument carries JSON of its own, which is the
     // subtype `JSON_SUBTYPE` marks a value with.
     let mut carried = Vec::new();
+    // The affinity of the first argument, which `affinity()` answers the
+    // name of.
+    let mut affinity = Affinity::None;
     for id in arena.children(args) {
         let argument = answer(arena, *id, sql, row, deeper)?;
+        if values.is_empty() {
+            affinity = argument.affinity;
+        }
         if inside.is_none() {
             inside = argument.collation;
         }
@@ -859,6 +878,16 @@ fn called(
     // What the row says about the schema, read before the name, because
     // every call is read against the same row.
     let schemed = row.schemed();
+    // `INLINEFUNC_affinity` of `research/sqlite/src/expr.c:4675` answers
+    // the name of the affinity of the expression it is given, which the
+    // walk of that expression carries and no value holds, and which only
+    // a connection the internal functions were turned on for reaches.
+    if values.len() == 1
+        && called.eq_ignore_ascii_case(b"affinity")
+        && row.defined(&called, 1).is_some()
+    {
+        return Ok(Answer::plain(Value::Text(named_affinity(affinity))));
+    }
     // `sqlite3FindFunction` reads the functions the application defined
     // before the ones the library holds.
     if let Some(defined) = row.defined(&called, values.len()) {

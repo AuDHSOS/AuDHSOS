@@ -7713,3 +7713,12 @@ Document 16 step Q8. Every answer is the one the C library's shell writes.
 - A subquery inside the clause that names the row the statement wrote,
   and an `EXISTS` beside it.
 - The same naming `new` and `old`, which are no names of a clause.
+
+### 6.6.355 The name `affinity()` answers (`db-sqlite`)
+
+Document 16 step Q8. Every answer is the one the C library's shell writes.
+
+- One call per declared type a column carries, and one for a column with
+  no declared type.
+- A call on an expression that is no column, which carries no affinity.
+- A call on a connection the name was not defined on, which is refused.

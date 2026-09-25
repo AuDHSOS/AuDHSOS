@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` answers `affinity(X)` with the name of the affinity of the
+  expression `X` is, on a connection the name was defined on. D-509 records it.
+  Catalog 6.6.355. `subquery.test` goes from 57 cases passing to 70 and
+  `returning1.test` from 72 to 75.
+
 - `db-sqlite` reads a statement written inside a `RETURNING` against the file
   as the statement that holds the clause found it. D-508 records it. Catalog
   6.6.354. `returning1.test` goes from 63 cases passing to 72.

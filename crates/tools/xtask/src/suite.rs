@@ -4140,12 +4140,37 @@ static DEFINED: &[Defined] = &[Defined {
 /// `research/sqlite/src/main.c:4290` turns on for one connection and off
 /// again; a statement of any other connection is refused `no such
 /// function`.
-static INTERNAL: &[Defined] = &[Defined {
-    name: b"sqlite_rename_table",
-    count: Some(7),
-    answer: rename_table,
-    safety: Safety::Innocuous,
-}];
+static INTERNAL: &[Defined] = &[
+    Defined {
+        name: b"sqlite_rename_table",
+        count: Some(7),
+        answer: rename_table,
+        safety: Safety::Innocuous,
+    },
+    // `affinity(X)` answers the name of the affinity of the expression
+    // `X` is, which the engine reads off the walk of that expression, so
+    // this stands for the name alone.
+    Defined {
+        name: b"affinity",
+        count: Some(1),
+        answer: nothing,
+        safety: Safety::Innocuous,
+    },
+];
+
+/// A function the engine answers itself, which this stands in the list
+/// for.
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the shape every function the application defines answers in"
+)]
+const fn nothing(
+    _name: &'static [u8],
+    _args: &[Value],
+    _random: Option<&Source>,
+) -> Result<Value, db_sqlite::eval::Error> {
+    Ok(Value::Null)
+}
 
 /// `sqlite_rename_table(DB, TYPE, OBJECT, SQL, OLD, NEW, TEMP)`, which is
 /// `renameTableFunc` of `research/sqlite/src/alter.c:1754`: the statement

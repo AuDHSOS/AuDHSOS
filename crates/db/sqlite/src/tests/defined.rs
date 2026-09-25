@@ -623,3 +623,61 @@ fn what_a_function_a_constraint_and_a_trigger_name_is_refused_with() {
         "unsafe use of unsafely()"
     );
 }
+
+/// `affinity(X)` answers the name of the affinity of the expression `X`
+/// is, which the walk of that expression carries and no value holds, and
+/// which only a connection the name was defined on reaches.
+#[test]
+fn what_the_name_affinity_answers_of_an_expression() {
+    static AFFINITY: &[Defined] = &[Defined {
+        name: b"affinity",
+        count: Some(1),
+        answer: twice,
+        safety: Safety::Innocuous,
+    }];
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer
+        .run(b"CREATE TABLE t(i INT, r REAL, t TEXT, b BLOB, n NUMERIC, a)")
+        .unwrap();
+    writer
+        .run(b"INSERT INTO t VALUES(1,1,'1',x'31',1,1)")
+        .unwrap();
+    let image = writer.written();
+    let named = |sql: &[u8]| -> String {
+        Database::open(&image)
+            .expect("a database")
+            .defining(AFFINITY)
+            .query(sql)
+            .map_or_else(
+                |error| error.message(),
+                |answered| {
+                    let mut out = String::new();
+                    for row in answered.rows {
+                        for value in row {
+                            out.push_str(&String::from_utf8_lossy(
+                                &value.text().unwrap_or_default(),
+                            ));
+                            out.push('|');
+                        }
+                    }
+                    out
+                },
+            )
+    };
+    assert_eq!(
+        named(b"SELECT affinity(i), affinity(r), affinity(t) FROM t"),
+        "integer|real|text|"
+    );
+    assert_eq!(
+        named(b"SELECT affinity(b), affinity(n), affinity(a) FROM t"),
+        "blob|numeric|blob|"
+    );
+    // An expression that is no column carries no affinity of its own.
+    assert_eq!(named(b"SELECT affinity(1+1)"), "none|");
+    // A connection the name was not defined on holds no such function.
+    let held = Database::open(&image).expect("a database");
+    assert_eq!(
+        held.query(b"SELECT affinity(1)").unwrap_err().message(),
+        "no such function: affinity"
+    );
+}
