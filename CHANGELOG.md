@@ -7,6 +7,10 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` compares the answer of an aggregate or of a window function under
+  the `COLLATE` written on an argument of the call. D-512 records it. Catalog
+  6.6.358. `window1.test` goes from 301 cases passing to 306.
+
 - `db-sqlite` holds the row a `RANGE` frame that begins backwards stands on
   whatever the offset does to the term, which the comparison before the
   arithmetic decides. D-511 records it. Catalog 6.6.357. `window1.test` goes

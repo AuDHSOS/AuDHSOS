@@ -309,3 +309,47 @@ fn what_a_reindex_of_a_unique_index_over_rows_that_share_a_key_is_refused_with()
         "UNIQUE constraint failed: t2.x"
     );
 }
+
+/// A `COLLATE` on the argument of an aggregate or of a window function
+/// is the collation the answer of the call is compared under, which is
+/// the path `sqlite3ExprCollSeq` walks into the arguments of a call.
+#[test]
+fn what_a_collate_on_the_argument_of_an_aggregate_compares_under() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer
+        .run(b"CREATE TABLE t6(a INTEGER PRIMARY KEY, b)")
+        .unwrap();
+    writer
+        .run(b"INSERT INTO t6 VALUES(1,'abcd'),(2,'BCDE'),(3,'cdef'),(4,'DEFG')")
+        .unwrap();
+    let image = writer.written();
+    let database = Database::open(&image).expect("a database");
+    // The sort of a term that is no column and no number reads the
+    // collation off the answer, which the call carries out of its
+    // argument and the concatenation out of its left side.
+    assert_eq!(
+        texts(
+            &database,
+            b"SELECT max(b COLLATE nocase)||'' FROM t6 GROUP BY a \
+              ORDER BY max(b COLLATE nocase)||''"
+        ),
+        [b"abcd", b"BCDE", b"cdef", b"DEFG"]
+    );
+    for (sql, answer) in [
+        (
+            b"SELECT max(b COLLATE nocase) = 'ABCD' FROM t6 WHERE a=1".as_slice(),
+            1,
+        ),
+        (b"SELECT max(b) = 'ABCD' FROM t6 WHERE a=1", 0),
+        (
+            b"SELECT max(b COLLATE nocase) OVER () = 'ABCD' FROM t6 WHERE a=1",
+            1,
+        ),
+    ] {
+        assert_eq!(
+            database.query(sql).unwrap().rows,
+            alloc::vec![alloc::vec![crate::value::Value::Int(answer)]],
+            "{sql:?}"
+        );
+    }
+}

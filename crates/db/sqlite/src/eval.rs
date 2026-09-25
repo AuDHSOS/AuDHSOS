@@ -702,7 +702,7 @@ fn answer(
         } => calling(arena, (id, name, args), (filter, ordered), sql, row, deeper),
         Node::Over { name, .. } => row
             .aggregate(id)
-            .map(Answer::plain)
+            .map(|value| answered_under(value, arena, id, sql, row))
             .ok_or_else(|| Error::NoWindow(named_as(name, sql))),
         Node::Like {
             op,
@@ -796,7 +796,7 @@ fn calling(
     let (id, name, args) = held;
     let (filter, ordered) = written;
     match row.aggregate(id) {
-        Some(value) => Ok(Answer::plain(value)),
+        Some(value) => Ok(answered_under(value, arena, id, sql, row)),
         None if filter.is_some() => Err(Error::Filtered(named_as(name, sql))),
         None if !ordered.is_empty() => Err(Error::OrderedCall(named_as(name, sql))),
         None => called(arena, name, args, sql, row, deeper),
@@ -1246,6 +1246,23 @@ fn rows_listed(
         return Ok(Value::Null);
     }
     Ok(Value::Int(i64::from(negated)))
+}
+
+/// What a call an aggregate or a window answered, under the collation a
+/// `COLLATE` of its arguments wrote.
+///
+/// `sqlite3ExprCollSeq` reaches the arguments of a call along a path a
+/// `COLLATE` marked, so `max(c COLLATE nocase)` answers under `nocase`
+/// and a comparison against the answer reads that collation.
+fn answered_under(value: Value, arena: &Arena, id: ExprId, sql: &[u8], row: &dyn Row) -> Answer {
+    let written = written_collation(arena, id, sql, row.collating());
+    Answer {
+        value,
+        json: false,
+        affinity: Affinity::None,
+        collation: written,
+        written: written.is_some(),
+    }
 }
 
 /// The collation written under `id`, which is the `COLLATE` on the

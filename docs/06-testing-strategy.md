@@ -7742,3 +7742,13 @@ Document 16 step Q8. Every answer is the one the C library's shell writes.
   backwards, ascending and descending, and nulls last.
 - The same frame over a term that sorts backwards, which holds no row.
 - A frame counted over a text, which no offset moves.
+
+### 6.6.358 A `COLLATE` on the argument of an aggregate (`db-sqlite`)
+
+Document 16 step Q8. Every answer is the one the C library's shell writes.
+
+- A sort by the concatenation of an aggregate over a `COLLATE`, which is
+  a term that is no column and no number.
+- A comparison against the answer of such an aggregate, and against the
+  answer of the same aggregate carrying no `COLLATE`.
+- The same for a window function.
