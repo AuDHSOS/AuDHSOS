@@ -1533,6 +1533,16 @@ impl Writer {
         self.held.header.encoding
     }
 
+    /// The counter the header of the file carries, which every commit
+    /// raises by one, so a caller that holds one writer per file and
+    /// several connections over it counts the commits of the file by it
+    /// and raises the `data_version` of every connection that did not
+    /// make them.
+    #[must_use]
+    pub const fn counted_commits(&self) -> u32 {
+        self.held.header.change_counter
+    }
+
     /// What the connection has written, which `changes()`,
     /// `total_changes()` and `last_insert_rowid()` answer: a reader
     /// built over this connection's file is told it by

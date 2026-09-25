@@ -7,6 +7,10 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` answers `PRAGMA data_version` per connection, raised by one per
+  commit another connection made to the file. D-503 records it. Catalog
+  6.6.350. `pragma3.test` goes from 10 cases passing to 17.
+
 - `db-sqlite` reads a text a dot follows as a name, and carries the question
   the C library asks after a name written in double quotes into the refusal a
   `DROP COLUMN` writes. D-501 and D-502 record it. Catalog 6.6.349.

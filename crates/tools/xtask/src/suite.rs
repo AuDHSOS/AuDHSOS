@@ -1154,6 +1154,13 @@ struct Session {
     /// which `sqlite3_search_count` counts and `::sqlite_search_count`
     /// answers.
     searched: i64,
+    /// What `PRAGMA data_version` answers for each connection, and the
+    /// count of commits the file had when the connection last read it:
+    /// the value rises by one per commit another connection made, which
+    /// `pPager->iDataVersion` of `research/sqlite/src/pager.c:669` and
+    /// `iBDataVersion` of `research/sqlite/src/btreeInt.h:354` together
+    /// answer.
+    dated: BTreeMap<String, (i64, u32)>,
     /// The temp schema each connection holds, which is a database of its
     /// own that no other connection reads.
     temps: BTreeMap<String, Vec<u8>>,
@@ -1257,6 +1264,7 @@ impl Session {
             sorted: 0,
             synced: (0, 0),
             searched: 0,
+            dated: BTreeMap::new(),
             errno: 0,
             writes: BTreeMap::new(),
             limits: BTreeMap::new(),
@@ -2311,6 +2319,13 @@ impl Session {
         // relies on.
         self.counters.insert(name.to_owned(), Counted::default());
         self.pragmas.insert(name.to_owned(), Kept::default());
+        // `PRAGMA data_version` answers one on a connection that just
+        // opened, whatever the file has had written to it.
+        let commits = self
+            .held
+            .get(path)
+            .map_or(0, db_sqlite::change::Writer::counted_commits);
+        self.dated.insert(name.to_owned(), (1, commits));
         // `sqlite3_create_collation` holds a collation on one
         // connection, so a connection that opens again defines none, and
         // the temp tables of the connection that closed are gone.
@@ -3444,7 +3459,7 @@ impl Session {
             .cloned()
             .ok_or_else(|| format!("no such connection: {name}"))?;
         let counted = self.counters.get(name).copied().unwrap_or_default();
-        let kept = self.pragmas.get(name).cloned().unwrap_or_default();
+        let mut kept = self.pragmas.get(name).cloned().unwrap_or_default();
         let collating = self.collations.get(name).copied().unwrap_or_default();
         let defines = self.defines(name);
         let asks = self.authorizers.contains_key(name);
@@ -3465,6 +3480,14 @@ impl Session {
         // file, so the writer stands at this connection's counters for
         // the statements of this request and answers them back.
         writer.counts_as(counted);
+        // The commits another connection made since this one last read
+        // the file each raise its `data_version` by one.
+        let commits = writer.counted_commits();
+        let dated = self.dated.entry(name.to_owned()).or_insert((1, commits));
+        let held = i64::from(commits.saturating_sub(dated.1));
+        dated.0 = dated.0.saturating_add(held);
+        dated.1 = commits;
+        kept.tells(b"data_version", dated.0);
         writer.kept_as(kept);
         writer.collates(collating);
         writer.defines(defines);
@@ -3496,6 +3519,9 @@ impl Session {
         // `sqlite3OsSync` counts every sync, and counts it twice where
         // `PRAGMA fullfsync` says the file is held on the disk of the
         // machine rather than in the cache of its driver.
+        // The commits this connection made are ones it has seen, so its
+        // own writes raise no `data_version` of its own.
+        let after = writer.counted_commits();
         let did = writer.did();
         let syncs = did
             .iter()
@@ -3526,6 +3552,9 @@ impl Session {
         self.stepped.insert(name.to_owned(), stepped);
         self.counters.insert(name.to_owned(), counted);
         self.pragmas.insert(name.to_owned(), kept);
+        if let Some(held) = self.dated.get_mut(name) {
+            held.1 = after;
+        }
         self.mirror(&path, files, &beside);
         ran?;
         Ok(out)

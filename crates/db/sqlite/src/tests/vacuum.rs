@@ -641,6 +641,36 @@ fn what_the_connection_was_told_for_fullfsync() {
     assert!(!writer.kept().fullfsync());
 }
 
+/// `pragma3-140` of `test/pragma3.test`: a caller that holds one writer
+/// per file and several connections over it counts the commits of the
+/// file and raises the `data_version` of every connection that made none
+/// of them, which a statement of the connection may not set.
+#[test]
+fn what_a_caller_tells_the_connection_for_data_version() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    let opened = writer.counted_commits();
+    assert_eq!(
+        writer.run(b"PRAGMA data_version").unwrap(),
+        alloc::vec![alloc::vec![crate::value::Value::Int(1)]]
+    );
+    // Every commit raises the counter the header carries.
+    writer.run(b"CREATE TABLE t(a)").unwrap();
+    writer.run(b"INSERT INTO t VALUES(1)").unwrap();
+    assert_eq!(writer.counted_commits(), opened.saturating_add(2));
+    // A statement sets the value to nothing, and the caller sets it to
+    // what the commits of the file say.
+    writer.run(b"PRAGMA data_version=1234").unwrap();
+    let mut kept = writer.kept();
+    kept.tells(b"data_version", 3);
+    // A name no pragma is kept under is told nothing.
+    kept.tells(b"no_such_pragma", 7);
+    writer.kept_as(kept);
+    assert_eq!(
+        writer.run(b"PRAGMA data_version").unwrap(),
+        alloc::vec![alloc::vec![crate::value::Value::Int(3)]]
+    );
+}
+
 /// The steps of `incrvacuum3.test`: a file in incremental vacuum that a
 /// transaction writes, vacuums and rolls back stands after every one of
 /// them.

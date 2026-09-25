@@ -7665,3 +7665,12 @@ Document 16 step Q8. Every answer is the one the C library's shell writes.
 - An `ALTER TABLE ... DROP COLUMN` under an index over the dropped
   column written in double quotes, in single quotes, and inside an
   expression.
+### 6.6.350 What a caller tells a connection for `data_version` (`db-sqlite`)
+
+Document 16 step Q8. Every answer is the one the C library's shell writes.
+
+- `PRAGMA data_version` on a connection that just opened, which is one.
+- The counter the header carries after two commits.
+- A statement that sets the pragma, which changes nothing, and a caller
+  that tells the connection a value, which the pragma answers.
+- A name no pragma is kept under, which is told nothing.

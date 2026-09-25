@@ -171,6 +171,23 @@ impl Kept {
             .and_then(|at| self.0.get(at).copied().flatten())
             .is_some_and(|value| value != 0)
     }
+
+    /// The connection told `value` for `name`, whatever a statement may
+    /// set it to.
+    ///
+    /// A caller that holds one writer per file and several connections
+    /// over it raises `data_version` this way, because the value belongs
+    /// to a connection and the commits belong to the file. Reading the
+    /// list costs O(n) in the pragmas it holds.
+    pub fn tells(&mut self, name: &[u8], value: i64) {
+        let Some(at) = HELD.iter().position(|keeps| keeps.name == name) else {
+            return;
+        };
+        self.0.resize(HELD.len(), None);
+        for slot in self.0.iter_mut().skip(at).take(1) {
+            *slot = Some(value);
+        }
+    }
 }
 
 /// The pragmas the connection keeps a value for, which are the ones

@@ -1175,6 +1175,8 @@ Size: L.
 202. The names a statement may write as a text, and the question a name
      written in double quotes carries into every refusal. Built, which
      D-501 and D-502 record.
+203. What `PRAGMA data_version` answers, which rises per commit another
+     connection made. Built, which D-503 records.
 
 ### Done when
 
