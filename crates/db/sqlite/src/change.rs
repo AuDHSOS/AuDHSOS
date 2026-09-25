@@ -14,7 +14,9 @@
 
 use alloc::vec::Vec;
 
-use crate::ast::{Arena, Change, Conflict, Definition, Span, TableBody, TriggerEvent, TriggerTime};
+use crate::ast::{
+    Arena, Change, Conflict, Definition, ExprId, Node, Span, TableBody, TriggerEvent, TriggerTime,
+};
 use crate::db::{Database, Error};
 use crate::header::{Encoding, Header, LIBRARY_VERSION};
 use crate::journal::Mode;
@@ -2701,6 +2703,18 @@ impl Writer {
         if matches!(definition, Definition::View(_)) && crate::token::holds_variable(sql) {
             return Err(Error::ViewVariable);
         }
+        // `sqlite3ExprFunctionUsable` of
+        // `research/sqlite/src/expr.c:1276` holds the expressions a
+        // statement resolves against the table to the functions a schema
+        // may name: a computed column and a `CHECK` of a `CREATE TABLE`,
+        // and the terms and the `WHERE` of a `CREATE INDEX`. A `DEFAULT`
+        // and the statement of a view are resolved where a statement
+        // reads them, so neither is read here.
+        if !self.called.name.eq_ignore_ascii_case(b"temp")
+            && let Some(name) = self.unsafely(arena, &resolved_expressions(arena, definition), sql)
+        {
+            return Err(Error::Eval(crate::eval::Error::UnsafeFunction(name)));
+        }
         // `sqlite3FixSelect` of `research/sqlite/src/attach.c:531` holds
         // every name the statement of a view writes to the database the
         // view stands in, and a view of the temp schema to none.
@@ -3685,6 +3699,7 @@ impl Writer {
             .defining(self.defined)
             .grouping(self.grouped)
             .sensitively(self.truth.sensitive)
+            .trusting(self.trusts_schema())
             .limited(self.limits)
             .named_main(&self.called.name);
         Ok(match self.clock {
@@ -3987,6 +4002,41 @@ impl Writer {
             )),
             None => Ok(()),
         }
+    }
+
+    /// The first function of `ids` that an expression of a schema object
+    /// may not name, and nothing where every name they write stands.
+    ///
+    /// `sqlite3ExprFunctionUsable` of `research/sqlite/src/expr.c:1276`
+    /// refuses a function the application marked `SQLITE_DIRECTONLY`
+    /// whatever the connection says, and one it marked neither way where
+    /// the connection does not trust the schema. Walking costs O(n) in
+    /// the nodes under the expressions.
+    fn unsafely(&self, arena: &Arena, ids: &[ExprId], sql: &[u8]) -> Option<Vec<u8>> {
+        let trusts = self.trusts_schema();
+        let mut names = Vec::new();
+        for id in ids {
+            called_names(arena, *id, sql, &mut names);
+        }
+        names.into_iter().find(|name| {
+            self.defined
+                .iter()
+                .find(|held| held.name.eq_ignore_ascii_case(name))
+                .is_some_and(|held| match held.safety {
+                    crate::func::Safety::Direct => true,
+                    crate::func::Safety::Unsafe => !trusts,
+                    crate::func::Safety::Innocuous => false,
+                })
+        })
+    }
+
+    /// Whether the connection trusts the schema, which `PRAGMA
+    /// trusted_schema` says and which stands on at open: an expression of
+    /// a schema object names a function the application marked neither
+    /// way only where it does.
+    #[must_use]
+    pub fn trusts_schema(&self) -> bool {
+        self.told(b"trusted_schema") != 0
     }
 
     /// Opens the temp schema where `sql` names it, so a statement that
@@ -12596,6 +12646,48 @@ fn holds_temp(sql: &[u8]) -> bool {
         }
     }
     false
+}
+
+/// The expressions a statement that makes an object resolves against the
+/// table, which are the ones held to the functions a schema may name.
+fn resolved_expressions(arena: &Arena, definition: Definition) -> Vec<ExprId> {
+    let mut out = Vec::new();
+    match definition {
+        Definition::Table(_) => {
+            for held in arena.all_column_constraints() {
+                if let crate::ast::ColumnConstraint::Check { value, .. }
+                | crate::ast::ColumnConstraint::Generated { value, .. } = held
+                {
+                    out.push(value);
+                }
+            }
+            for held in arena.all_table_constraints() {
+                if let crate::ast::TableConstraint::Check { value, .. } = held {
+                    out.push(value);
+                }
+            }
+        }
+        Definition::Index(made) => {
+            out.extend(arena.orders(made.columns).iter().map(|term| term.expr));
+            out.extend(made.filter);
+        }
+        _ => {}
+    }
+    out
+}
+
+/// The names of the functions an expression calls, in the order they are
+/// written, answering whether the place names a node at all.
+fn called_names(arena: &Arena, id: ExprId, sql: &[u8], out: &mut Vec<Vec<u8>>) -> bool {
+    arena.node(id).is_some_and(|node| {
+        if let Node::Call { name, .. } | Node::Over { name, .. } = node {
+            out.push(crate::schema::dequote(name.text(sql)));
+        }
+        arena.under(node, |under| {
+            called_names(arena, under, sql, out);
+        });
+        true
+    })
 }
 
 /// The first database the statements of an arena name in front of a table

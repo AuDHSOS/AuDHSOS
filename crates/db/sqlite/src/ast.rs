@@ -1653,6 +1653,18 @@ impl Arena {
         self.nodes.iter().copied()
     }
 
+    /// Every constraint of every column the arena holds, in the order
+    /// they were written.
+    pub fn all_column_constraints(&self) -> impl Iterator<Item = ColumnConstraint> {
+        self.column_constraints.iter().copied()
+    }
+
+    /// Every constraint that follows the columns of a table the arena
+    /// holds, in the order they were written.
+    pub fn all_table_constraints(&self) -> impl Iterator<Item = TableConstraint> {
+        self.table_constraints.iter().copied()
+    }
+
     /// Every clause of a `SET` the arena holds, in the order they were
     /// written.
     pub fn all_sets(&self) -> impl Iterator<Item = Set> {

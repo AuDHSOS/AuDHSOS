@@ -1393,6 +1393,9 @@ struct Scope<'a> {
     /// How many views the statement is being answered inside, which
     /// stops a view that names itself.
     views: u32,
+    /// Whether the statement is one an object of the schema holds, which
+    /// is what `EP_FromDDL` marks the expressions of.
+    schema: bool,
 }
 
 /// How many views deep a statement is answered, which is what
@@ -1982,6 +1985,9 @@ pub struct Database<'a> {
     /// Whether `LIKE` tells the twenty-six letters apart, which
     /// `PRAGMA case_sensitive_like` on the connection that writes sets.
     sensitive: bool,
+    /// Whether the connection trusts the schema, which `PRAGMA
+    /// trusted_schema` says and which stands on at open.
+    trusted: bool,
     /// The limits the connection holds, which `sqlite3_limit` sets and a
     /// value the statement answers is held to.
     limits: Limits,
@@ -2406,6 +2412,7 @@ impl<'a> Database<'a> {
             clock: None,
             zone: None,
             sensitive: false,
+            trusted: true,
             limits: Limits::new(),
             asking: None,
             ignored: core::cell::RefCell::new(Vec::new()),
@@ -2613,6 +2620,15 @@ impl<'a> Database<'a> {
     #[must_use]
     pub const fn sensitively(mut self, sensitive: bool) -> Self {
         self.sensitive = sensitive;
+        self
+    }
+
+    /// The same database, read under what `PRAGMA trusted_schema` says on
+    /// the connection, which stands on at open and which holds an
+    /// expression of a schema object to the functions a schema may name.
+    #[must_use]
+    pub const fn trusting(mut self, trusted: bool) -> Self {
+        self.trusted = trusted;
         self
     }
 
@@ -2887,6 +2903,11 @@ impl<'a> Database<'a> {
             terms: &[],
             outer: None,
             views: scope.views.saturating_add(1),
+            // The statement of a view is one the schema holds, so the
+            // expressions of it are held to the functions a schema may
+            // name; a view of the temp schema is held to none, which
+            // `fixExprCb` reads `bTemp` for.
+            schema: self.temp != Some(view.place),
         };
         // The body of a view reads a bare name under the database that
         // holds the view, which `sqlite3FixSrcList` of
@@ -2934,6 +2955,7 @@ impl<'a> Database<'a> {
             terms: &[],
             outer: None,
             views: 0,
+            schema: false,
         };
         let viewed = self.viewed(None, &Named::bare(name), scope)?;
         let columns: Vec<Vec<u8>> = viewed
@@ -2966,6 +2988,7 @@ impl<'a> Database<'a> {
             terms: &[],
             outer: None,
             views: 0,
+            schema: false,
         };
         let answered = self.statement(arena, id, sql, scope)?;
         let columns = answered
@@ -3017,13 +3040,8 @@ impl<'a> Database<'a> {
         // value it was given, because a statement writes down only the
         // columns computed once and the read of a column computed where
         // it is read refuses on its own.
-        let held = match compute(
-            stored,
-            &mut held,
-            self.encoding,
-            Collation::Binary,
-            self.defined,
-        ) {
+        let schemed = self.schemed(stored.place);
+        let held = match compute(stored, &mut held, self.encoding, Collation::Binary, schemed) {
             Ok(()) => held,
             // A column whose expression refuses the row itself refuses
             // the statement, and one this row cannot answer keeps the
@@ -3342,7 +3360,7 @@ impl<'a> Database<'a> {
                 Some(rowid),
                 self.encoding,
                 self.collation(),
-                self.defined,
+                self.schemed(stored.place),
             )?;
             out.push((rowid, values));
         }
@@ -3395,14 +3413,8 @@ impl<'a> Database<'a> {
         for step in self.walk(stored, (None, None)) {
             let (_, held) = step?;
             read_payload(&image, &held, &mut payload)?;
-            let row = values_of(
-                &payload,
-                stored,
-                None,
-                self.encoding,
-                collation,
-                self.defined,
-            );
+            let held = self.schemed(stored.place);
+            let row = values_of(&payload, stored, None, self.encoding, collation, held);
             out.push(row?);
         }
         Ok(out)
@@ -3431,6 +3443,7 @@ impl<'a> Database<'a> {
             terms: &[],
             outer,
             views: 0,
+            schema: false,
         };
         Ok(self.statement(arena, id, sql, scope)?.answer)
     }
@@ -3452,6 +3465,7 @@ impl<'a> Database<'a> {
             terms: &[],
             outer: None,
             views: 0,
+            schema: false,
         };
         let answered = self.statement(arena, id, sql, scope)?;
         let affinities = answered
@@ -3467,6 +3481,17 @@ impl<'a> Database<'a> {
     /// is `BINARY` over the encoding the file keeps its text in.
     const fn collation(&self) -> Collation {
         binary_of(self.encoding)
+    }
+
+    /// What an expression of an object at that schema place is read
+    /// under: a table of the temp schema holds no expression the
+    /// functions a schema may name are read for.
+    fn schemed(&self, place: usize) -> Schemed {
+        Schemed {
+            defined: self.defined,
+            schema: self.temp != Some(place),
+            trusted: self.trusted,
+        }
     }
 
     /// The table `name` names, with the three names of the schema's own
@@ -3582,6 +3607,7 @@ impl<'a> Database<'a> {
             terms: &[],
             outer: None,
             views: 0,
+            schema: false,
         };
         Ok(self.statement(&arena, root, sql, scope)?.answer)
     }
@@ -3842,6 +3868,7 @@ impl<'a> Database<'a> {
             terms: &held,
             outer: scope.outer,
             views: scope.views,
+            schema: scope.schema,
         };
         if first.compound.is_none() {
             return self.core(arena, id, sql, true, scope);
@@ -4253,6 +4280,7 @@ impl<'a> Database<'a> {
             terms: &[],
             outer: None,
             views: 0,
+            schema: false,
         };
         self.answer(arena, sql, used, scope, row)
     }
@@ -4274,6 +4302,7 @@ impl<'a> Database<'a> {
             terms: &[],
             outer: None,
             views: 0,
+            schema: false,
         };
         self.answer_items(arena, sql, select, scope, row)
     }
@@ -4290,6 +4319,7 @@ impl<'a> Database<'a> {
             terms: scope.terms,
             outer: Some(row),
             views: scope.views,
+            schema: scope.schema,
         };
         match used {
             Used::Exists(select) => {
@@ -4364,6 +4394,7 @@ impl<'a> Database<'a> {
             terms: scope.terms,
             outer: Some(row),
             views: scope.views,
+            schema: scope.schema,
         };
         let answered = self.statement(arena, select, sql, inner)?;
         let first = answered.answer.rows.first();
@@ -4411,6 +4442,7 @@ impl<'a> Database<'a> {
                     terms: &out,
                     outer: scope.outer,
                     views: scope.views,
+                    schema: scope.schema,
                 };
                 match self.term(arena, cte, &name, sql, mine) {
                     Ok(answered) => out.push((name, answered)),
@@ -4575,6 +4607,7 @@ impl<'a> Database<'a> {
                 terms: &terms,
                 outer: scope.outer,
                 views: scope.views,
+                schema: scope.schema,
             };
             for (step, link) in links.iter().enumerate().skip(first) {
                 let answer = self.core(arena, link.id, sql, false, mine)?;
@@ -4821,7 +4854,7 @@ impl<'a> Database<'a> {
             searched: 0,
             encoding: self.encoding,
             collation: self.collation(),
-            defined: self.defined,
+            schemed: self.schemed(stored.place),
             payload: Vec::new(),
         })))
     }
@@ -4847,7 +4880,7 @@ impl<'a> Database<'a> {
             taken: 0,
             encoding: self.encoding,
             collation: self.collation(),
-            defined: self.defined,
+            schemed: self.schemed(stored.place),
             payload: Vec::new(),
         }))
     }
@@ -7794,9 +7827,8 @@ struct Sought<'i, 'f> {
     encoding: Encoding,
     /// What a comparison uses where nothing writes a collation.
     collation: Collation,
-    /// The functions the application defined on the connection, which a
-    /// computed column of the table may name.
-    defined: &'static [crate::func::Defined],
+    /// What an expression of the table is read under.
+    schemed: Schemed,
     /// The buffer one record is read into.
     payload: Vec<u8>,
 }
@@ -7910,7 +7942,7 @@ impl<'i> Sought<'i, '_> {
             Some(row.rowid),
             self.encoding,
             self.collation,
-            self.defined,
+            self.schemed,
         )?;
         Ok(Some((Some(row.rowid), values)))
     }
@@ -7934,9 +7966,8 @@ struct Tree<'i, 'f> {
     encoding: Encoding,
     /// What a comparison uses where nothing writes a collation.
     collation: Collation,
-    /// The functions the application defined on the connection, which a
-    /// computed column of the table may name.
-    defined: &'static [crate::func::Defined],
+    /// What an expression of the table is read under.
+    schemed: Schemed,
     /// The buffer one record is read into.
     payload: Vec<u8>,
 }
@@ -7963,7 +7994,7 @@ impl<'i> Tree<'i, '_> {
             rowid,
             self.encoding,
             self.collation,
-            self.defined,
+            self.schemed,
         )?;
         Ok((rowid, values))
     }
@@ -10052,7 +10083,7 @@ fn values_of(
     rowid: Option<i64>,
     encoding: Encoding,
     collation: Collation,
-    defined: &'static [crate::func::Defined],
+    schemed: Schemed,
 ) -> Result<Vec<Value>, Error> {
     let record = record::Record::parse(payload)?;
     let table = &stored.table;
@@ -10102,7 +10133,7 @@ fn values_of(
         }
         out.push(Some(value));
     }
-    compute(stored, &mut out, encoding, collation, defined)?;
+    compute(stored, &mut out, encoding, collation, schemed)?;
     Ok(out
         .into_iter()
         .map(|value| value.unwrap_or(Value::Null))
@@ -10119,7 +10150,7 @@ fn compute(
     values: &mut [Option<Value>],
     encoding: Encoding,
     collation: Collation,
-    defined: &'static [crate::func::Defined],
+    schemed: Schemed,
 ) -> Result<(), Error> {
     let table = &stored.table;
     let waiting = values.iter().filter(|value| value.is_none()).count();
@@ -10139,7 +10170,7 @@ fn compute(
                 values,
                 encoding,
                 collation,
-                defined,
+                schemed,
             };
             match evaluate_row(&stored.arena, expr, &stored.sql, &row) {
                 Ok(mut value) => {
@@ -10177,6 +10208,21 @@ fn compute(
     Ok(())
 }
 
+/// What an expression an object of the schema holds is read under: the
+/// functions the application defined on the connection, whether the
+/// object stands in the schema rather than in the temp schema, and
+/// whether the connection trusts the schema.
+#[derive(Clone, Copy)]
+struct Schemed {
+    /// The functions the application defined on the connection.
+    defined: &'static [crate::func::Defined],
+    /// Whether the object stands in the schema, which holds its
+    /// expressions to the functions a schema may name.
+    schema: bool,
+    /// Whether the connection trusts the schema.
+    trusted: bool,
+}
+
 /// A row while its computed columns are being filled in: it answers the
 /// columns that are settled and refuses the ones that are not.
 struct Computed<'a> {
@@ -10188,9 +10234,8 @@ struct Computed<'a> {
     encoding: Encoding,
     /// What a comparison uses where nothing writes a collation.
     collation: Collation,
-    /// The functions the application defined on the connection, which a
-    /// computed column may name as the rows a statement reads may.
-    defined: &'static [crate::func::Defined],
+    /// What the expression of the column is read under.
+    schemed: Schemed,
 }
 
 impl eval::Row for Computed<'_> {
@@ -10199,7 +10244,11 @@ impl eval::Row for Computed<'_> {
     }
 
     fn defined(&self, name: &[u8], count: usize) -> Option<crate::func::Defined> {
-        crate::func::defined(self.defined, name, count)
+        crate::func::defined(self.schemed.defined, name, count)
+    }
+
+    fn schemed(&self) -> Option<bool> {
+        self.schemed.schema.then_some(self.schemed.trusted)
     }
 
     fn collation(&self) -> Collation {
@@ -10493,6 +10542,13 @@ impl eval::Row for Cursor<'_> {
             .iter()
             .find(|(call, _)| *call == id)
             .map(|(_, value)| value.clone())
+    }
+
+    fn schemed(&self) -> Option<bool> {
+        self.reach
+            .scope
+            .schema
+            .then_some(self.reach.database.trusted)
     }
 
     fn answered(&self, used: Used) -> Result<Option<Value>, eval::Error> {

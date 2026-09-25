@@ -1167,6 +1167,9 @@ Size: L.
      which is the one the object stands in. Built, which D-497 records.
 199. The functions a computed column reaches, which are the ones the
      application defined on the connection. Built, which D-498 records.
+200. The functions an expression of an object of the schema may name,
+     which `PRAGMA trusted_schema` and the two flags of a function say.
+     Built, which D-499 records.
 
 ### Done when
 

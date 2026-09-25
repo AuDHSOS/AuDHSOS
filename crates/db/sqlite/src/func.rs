@@ -1094,6 +1094,24 @@ pub struct Defined {
     /// What it answers for its name, its arguments and the source of
     /// bytes the connection was given where it draws any.
     pub answer: Answering,
+    /// What a schema object may do with it.
+    pub safety: Safety,
+}
+
+/// What a schema object may do with a function the application defined,
+/// which `SQLITE_INNOCUOUS` and `SQLITE_DIRECTONLY` of
+/// `research/sqlite/src/sqlite.h.in` name.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Safety {
+    /// Neither flag, which `SQLITE_FUNC_UNSAFE` stands for: an
+    /// expression of a schema object names it only where the connection
+    /// trusts the schema.
+    Unsafe,
+    /// `SQLITE_INNOCUOUS`: an expression of a schema object names it
+    /// whether the connection trusts the schema or not.
+    Innocuous,
+    /// `SQLITE_DIRECTONLY`: no expression of a schema object names it.
+    Direct,
 }
 
 /// What a function an application defined answers for its name, its

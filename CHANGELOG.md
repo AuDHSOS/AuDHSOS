@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` holds an expression of an object of the schema to the functions
+  a schema may name, which `PRAGMA trusted_schema` and the `SQLITE_INNOCUOUS`
+  and `SQLITE_DIRECTONLY` flags of a function say. D-499 records it. Catalog
+  6.6.347. `trustschema1.test` goes from 13 cases passing to 27.
+
 - `db-sqlite` reaches the functions the application defined from a column a
   table computes, and carries out the refusal of the column rather than the
   one that stands for a loop. D-498 records it. Catalog 6.6.346.

@@ -35,6 +35,7 @@ use db_sqlite::db::Database;
 use db_sqlite::decimal::Decimal;
 use db_sqlite::func::Counted;
 use db_sqlite::func::Defined;
+use db_sqlite::func::Safety;
 use db_sqlite::header::Encoding;
 use db_sqlite::pragma::Kept;
 use db_sqlite::random::Source;
@@ -1410,7 +1411,8 @@ impl Session {
             // name a proc the engine reaches back over the line, and
             // `load_static_extension` names a module.
             "collate" | "function" | "extension" => {
-                self.told(verb, first, second);
+                let third = args.get(2).map_or("", String::as_str);
+                self.told(verb, first, (second, third));
                 Ok(Vec::new())
             }
             // `SQLITE_TESTCTRL_INTERNAL_FUNCTIONS` turns the functions
@@ -2385,7 +2387,7 @@ impl Session {
     ///
     /// The function takes any number of arguments, which `db function`
     /// of `testfixture` registers as `nArg` at -1.
-    fn functions(&mut self, connection: &str, name: &str) {
+    fn functions(&mut self, connection: &str, name: &str, safety: Safety) {
         self.stamped(connection);
         let held = self.functions.entry(connection.to_owned()).or_default();
         let mut defined: Vec<Defined> = held
@@ -2400,6 +2402,7 @@ impl Session {
             name: Box::leak(name.as_bytes().to_vec().into_boxed_slice()),
             count: None,
             answer: called,
+            safety,
         });
         *held = Box::leak(defined.into_boxed_slice());
     }
@@ -2407,10 +2410,11 @@ impl Session {
     /// The name `sqlite3_create_collation`, `sqlite3_create_function`
     /// or `load_static_extension` adds to the connection, which the
     /// statements of the connection reach from there on.
-    fn told(&mut self, verb: &str, connection: &str, name: &str) {
+    fn told(&mut self, verb: &str, connection: &str, named: (&str, &str)) {
+        let (name, safety) = named;
         match verb {
             "collate" => self.collates(connection, name),
-            "function" => self.functions(connection, name),
+            "function" => self.functions(connection, name, safety_of(safety)),
             _ => self.extension(connection, name),
         }
     }
@@ -3621,6 +3625,7 @@ impl Session {
                     .defining(defines)
                     .grouping(GROUPED)
                     .sensitively(writer.sensitive())
+                    .trusting(writer.trusts_schema())
                     .limited(writer.limits())
                     .encoded(writer.encoding())
                     .journalling(writer.journalled())
@@ -4057,12 +4062,24 @@ fn say(line: &str) {
     let _ = out.flush();
 }
 
+/// What a schema object may do with a function the tester defined, which
+/// is what `-innocuous` and `-directonly` of `db function` name and which
+/// `SQLITE_INNOCUOUS` and `SQLITE_DIRECTONLY` carry into the library.
+fn safety_of(word: &str) -> Safety {
+    match word {
+        "innocuous" => Safety::Innocuous,
+        "direct" => Safety::Direct,
+        _ => Safety::Unsafe,
+    }
+}
+
 /// The functions `testfixture` defines that this harness answers,
 /// which SQLite's own files call in their statements.
 static DEFINED: &[Defined] = &[Defined {
     name: b"randstr",
     count: Some(2),
     answer: randstr,
+    safety: Safety::Innocuous,
 }];
 
 /// The functions the C library keeps for its own use, which
@@ -4074,6 +4091,7 @@ static INTERNAL: &[Defined] = &[Defined {
     name: b"sqlite_rename_table",
     count: Some(7),
     answer: rename_table,
+    safety: Safety::Innocuous,
 }];
 
 /// `sqlite_rename_table(DB, TYPE, OBJECT, SQL, OLD, NEW, TEMP)`, which is
@@ -4232,11 +4250,13 @@ static EXTENDED: &[Defined] = &[
         name: b"regexp",
         count: Some(2),
         answer: regexp,
+        safety: Safety::Innocuous,
     },
     Defined {
         name: b"regexpi",
         count: Some(2),
         answer: regexp,
+        safety: Safety::Innocuous,
     },
 ];
 
@@ -4284,36 +4304,43 @@ static DECIMALS: &[Defined] = &[
         name: b"decimal",
         count: None,
         answer: decimal_text,
+        safety: Safety::Innocuous,
     },
     Defined {
         name: b"decimal_exp",
         count: None,
         answer: decimal_text,
+        safety: Safety::Innocuous,
     },
     Defined {
         name: b"decimal_cmp",
         count: Some(2),
         answer: decimal_compare,
+        safety: Safety::Innocuous,
     },
     Defined {
         name: b"decimal_add",
         count: Some(2),
         answer: decimal_arithmetic,
+        safety: Safety::Innocuous,
     },
     Defined {
         name: b"decimal_sub",
         count: Some(2),
         answer: decimal_arithmetic,
+        safety: Safety::Innocuous,
     },
     Defined {
         name: b"decimal_mul",
         count: Some(2),
         answer: decimal_arithmetic,
+        safety: Safety::Innocuous,
     },
     Defined {
         name: b"decimal_pow2",
         count: Some(1),
         answer: decimal_power,
+        safety: Safety::Innocuous,
     },
 ];
 
@@ -4763,6 +4790,7 @@ fn answered_rows(
         let naming = writer.naming();
         let journalled = writer.journalled();
         let sensitive = writer.sensitive();
+        let trusted = writer.trusts_schema();
         let limits = writer.limits();
         let asks = writer.asking();
         let held = writer.clock();
@@ -4774,6 +4802,7 @@ fn answered_rows(
                     .defining(defines)
                     .grouping(GROUPED)
                     .sensitively(sensitive)
+                    .trusting(trusted)
                     .limited(limits)
                     .encoded(encoding)
                     .journalling(journalled)

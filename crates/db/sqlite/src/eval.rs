@@ -118,6 +118,9 @@ pub enum Error {
     /// What the matcher of `crate::regexp` refuses a pattern for, which
     /// carries its own message.
     Regexp(&'static str),
+    /// A function an expression of a schema object may not name, with
+    /// the name as it was written.
+    UnsafeFunction(Vec<u8>),
     /// What a statement used as a value was refused with, which carries
     /// that refusal: this module reads one row and the reader answers the
     /// statement, so the refusal of the reader stands.
@@ -192,6 +195,10 @@ impl Error {
             Error::Overflow => "integer overflow".to_string(),
             Error::Json(refused) => refused.message(),
             Error::Regexp(why) => (*why).to_string(),
+            Error::UnsafeFunction(name) => alloc::format!(
+                "unsafe use of {}()",
+                alloc::string::String::from_utf8_lossy(name)
+            ),
             // The refusal of a statement used as a value is the refusal
             // the reader wrote, which `sqlite3_errmsg` answers for the
             // statement that holds it.
@@ -346,6 +353,21 @@ pub trait Row {
     /// [`Error::Refused`] carries what the statement was refused with.
     fn answered(&self, _used: Used) -> Result<Option<Value>, Error> {
         Ok(None)
+    }
+
+    /// Whether the connection trusts the schema, where the expression
+    /// stands in an object of the schema, and nothing where a client
+    /// wrote the statement.
+    ///
+    /// `EP_FromDDL` of `research/sqlite/src/sqliteInt.h` marks the
+    /// expressions of an object of the schema: the statement of a view,
+    /// the body of a trigger, and the expression of a computed column, of
+    /// a `CHECK`, of a `DEFAULT` and of an index. An object of the temp
+    /// schema carries no such expression, which `fixExprCb` of
+    /// `research/sqlite/src/attach.c:468` reads `bTemp` for, and `PRAGMA
+    /// trusted_schema` says whether the connection trusts the rest.
+    fn schemed(&self) -> Option<bool> {
+        None
     }
 
     /// The aggregates the application defined on the connection, which
@@ -837,6 +859,20 @@ fn called(
     // `sqlite3FindFunction` reads the functions the application defined
     // before the ones the library holds.
     if let Some(defined) = row.defined(&called, values.len()) {
+        // `sqlite3ExprFunctionUsable` of `research/sqlite/src/expr.c:1276`
+        // holds an expression a schema object carries to the functions a
+        // schema may name: no expression names one the application marked
+        // `SQLITE_DIRECTONLY`, and one it marked neither way is named
+        // only where the connection trusts the schema.
+        if let Some(trusted) = row.schemed()
+            && match defined.safety {
+                crate::func::Safety::Direct => true,
+                crate::func::Safety::Unsafe => !trusted,
+                crate::func::Safety::Innocuous => false,
+            }
+        {
+            return Err(Error::UnsafeFunction(called));
+        }
         return Ok(Answer::plain((defined.answer)(
             defined.name,
             &values,

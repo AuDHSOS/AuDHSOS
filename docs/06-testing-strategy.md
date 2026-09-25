@@ -7627,3 +7627,19 @@ Document 16 step Q8. Every answer is the one the C library's shell writes.
 - The same column read through an index over it, which holds the value.
 - The same over a connection the function was not defined on, which
   answers no such function.
+### 6.6.347 The functions an expression of the schema names (`db-sqlite`)
+
+Document 16 step Q8. Every answer is the one the C library's shell writes.
+
+- A `CHECK` of a column, a `CHECK` of a table, a computed column, a term
+  of an index and the `WHERE` of a partial index, each over a function
+  marked `SQLITE_DIRECTONLY`, which the statement that makes the object
+  is refused for.
+- The same over a function marked neither way, which stands while
+  `PRAGMA trusted_schema` stands on.
+- The same over a function marked `SQLITE_INNOCUOUS`, and the same in an
+  object of the temp schema, each of which stands.
+- A view and a computed column read under each of the two settings, which
+  are resolved where a statement reads them.
+- A statement a client wrote, which names every function the connection
+  holds.

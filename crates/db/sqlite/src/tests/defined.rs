@@ -8,7 +8,7 @@ use alloc::vec::Vec;
 
 use crate::change::Writer;
 use crate::db::Database;
-use crate::func::Defined;
+use crate::func::{Defined, Safety};
 use crate::header::Encoding;
 use crate::random::Source;
 use crate::value::Value;
@@ -68,16 +68,19 @@ static DEFINED: &[Defined] = &[
         name: b"twice",
         count: Some(1),
         answer: twice,
+        safety: Safety::Innocuous,
     },
     Defined {
         name: b"drawn",
         count: Some(0),
         answer: drawn,
+        safety: Safety::Innocuous,
     },
     Defined {
         name: b"joined",
         count: None,
         answer: joined,
+        safety: Safety::Innocuous,
     },
 ];
 
@@ -307,11 +310,13 @@ fn what_regexp_and_match_reach_of_the_functions_the_application_defined() {
             name: b"regexp",
             count: Some(2),
             answer: holds,
+            safety: Safety::Innocuous,
         },
         Defined {
             name: b"match",
             count: Some(2),
             answer: holds,
+            safety: Safety::Innocuous,
         },
     ];
     let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
@@ -420,5 +425,132 @@ fn what_a_computed_column_reaches_of_the_functions_the_application_defined() {
     assert_eq!(
         database.query(b"SELECT a FROM t WHERE b=42").unwrap().rows,
         alloc::vec![alloc::vec![Value::Int(21)]]
+    );
+}
+/// Three functions, one of each safety the application may mark.
+static EDGY: &[Defined] = &[
+    Defined {
+        name: b"innocuous",
+        count: Some(1),
+        answer: twice,
+        safety: Safety::Innocuous,
+    },
+    Defined {
+        name: b"unsafely",
+        count: Some(1),
+        answer: twice,
+        safety: Safety::Unsafe,
+    },
+    Defined {
+        name: b"directly",
+        count: Some(1),
+        answer: twice,
+        safety: Safety::Direct,
+    },
+];
+
+/// The functions an expression of a schema object may name: one the
+/// application marked `SQLITE_DIRECTONLY` is named by none, and one it
+/// marked neither way only where the connection trusts the schema.
+#[test]
+fn what_a_function_an_expression_of_the_schema_names_is_refused_with() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.defines(EDGY);
+    writer.run(b"CREATE TABLE t(a)").unwrap();
+    // A `CHECK`, a computed column, a term of an index and the `WHERE` of
+    // a partial index are each resolved where the object is made, so each
+    // is refused there.
+    for sql in [
+        b"CREATE TABLE u(a, CHECK(directly(a)>0))".as_slice(),
+        b"CREATE TABLE u(a CHECK(directly(a)>0))",
+        b"CREATE TABLE u(a, b AS (directly(a)))",
+        b"CREATE INDEX ta ON t(directly(a))",
+        b"CREATE INDEX ta ON t(a) WHERE directly(a)",
+    ] {
+        assert_eq!(
+            writer.run(sql).unwrap_err().message(),
+            "unsafe use of directly()",
+            "{sql:?}"
+        );
+    }
+    // A function the application marked neither way stands while the
+    // connection trusts the schema, which it does at open.
+    writer
+        .run(b"CREATE TABLE u(a, CHECK(unsafely(a)>0))")
+        .unwrap();
+    writer.run(b"PRAGMA trusted_schema=OFF").unwrap();
+    assert_eq!(
+        writer
+            .run(b"CREATE TABLE w(a, CHECK(unsafely(a)>0))")
+            .unwrap_err()
+            .message(),
+        "unsafe use of unsafely()"
+    );
+    // One the application marked innocuous stands whatever the connection
+    // says, and so does every expression of an object of the temp schema.
+    writer
+        .run(b"CREATE TABLE w(a, CHECK(innocuous(a)>0))")
+        .unwrap();
+    writer
+        .run(b"CREATE TEMP TABLE tw(a, CHECK(directly(a)>0))")
+        .unwrap();
+}
+
+/// The statement of a view and the expression of a computed column are
+/// each resolved where a statement reads them, so the object is made and
+/// the read is refused.
+#[test]
+fn what_a_function_a_view_and_a_computed_column_name_is_refused_with() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.defines(EDGY);
+    writer.run(b"CREATE TABLE t(a)").unwrap();
+    writer.run(b"INSERT INTO t VALUES(21)").unwrap();
+    for sql in [
+        b"CREATE VIEW v AS SELECT directly(a) FROM t".as_slice(),
+        b"CREATE VIEW x AS SELECT unsafely(a) FROM t",
+        b"CREATE TABLE y(a, b AS (unsafely(a)))",
+        b"INSERT INTO y VALUES(21)",
+        // A `CREATE TABLE ... AS SELECT` holds no expression of its own.
+        b"CREATE TABLE z AS SELECT directly(a) FROM t",
+    ] {
+        writer.run(sql).unwrap_or_else(|error| {
+            panic!("{sql:?}: {}", error.message());
+        });
+    }
+    let image = writer.written();
+    let reading = |trusted: bool, sql: &[u8]| {
+        Database::open(&image)
+            .expect("a database")
+            .defining(EDGY)
+            .trusting(trusted)
+            .query(sql)
+            .map(|answered| answered.rows)
+            .map_err(|error| error.message())
+    };
+    assert_eq!(
+        reading(true, b"SELECT * FROM v").unwrap_err(),
+        "unsafe use of directly()"
+    );
+    assert_eq!(
+        reading(true, b"SELECT * FROM x").unwrap(),
+        alloc::vec![alloc::vec![Value::Int(42)]]
+    );
+    assert_eq!(
+        reading(false, b"SELECT * FROM x").unwrap_err(),
+        "unsafe use of unsafely()"
+    );
+    // A statement a client wrote names every function the connection
+    // holds, whatever the connection says about the schema.
+    assert_eq!(
+        reading(false, b"SELECT directly(a) FROM t").unwrap(),
+        alloc::vec![alloc::vec![Value::Int(42)]]
+    );
+    assert_eq!(
+        reading(true, b"SELECT b FROM y").unwrap(),
+        alloc::vec![alloc::vec![Value::Int(42)]]
+    );
+    assert_eq!(
+        reading(false, b"SELECT b FROM y").unwrap_err(),
+        "unsafe use of unsafely()"
     );
 }

@@ -305,7 +305,10 @@ pub static HELD: &[Keeps] = &[
     },
     Keeps {
         name: b"trusted_schema",
-        fallback: 0,
+        // `sqlite3_open` writes `SQLITE_TrustedSchema` into the flags of
+        // every connection, which `research/sqlite/src/main.c:3472`
+        // leaves out only for a build under `SQLITE_TRUSTED_SCHEMA=0`.
+        fallback: 1,
         written: Written::Truth,
         answers: false,
         fixed: false,

@@ -714,9 +714,14 @@ proc sqlite3 {args} {
         set switches [lrange $args 1 end-1]
         set ::returns([lindex $args 0]) ""
         set options {-argcount -deterministic -directonly -innocuous -returntype}
+        # SQLITE_INNOCUOUS and SQLITE_DIRECTONLY, which say what an
+        # expression of a schema object may do with the function.
+        set safety unsafe
         for {set i 0} {$i < [llength $switches]} {incr i} {
           set word [lindex $switches $i]
           set which [first_option $word $options]
+          if {$which eq "-innocuous"} { set safety innocuous }
+          if {$which eq "-directonly"} { set safety direct }
           if {$which ne "-argcount" && $which ne "-returntype"} { continue }
           if {$i == [llength $switches]-1} {
             error "option requires an argument: $word"
@@ -728,7 +733,7 @@ proc sqlite3 {args} {
           }
         }
         set ::functions([lindex $args 0]) [lindex $args end]
-        return [harness_send function %N% [lindex $args 0]]
+        return [harness_send function %N% [lindex $args 0] $safety]
       }
       transaction {
         # A transaction inside another one is a savepoint, and a type is
