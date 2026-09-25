@@ -273,8 +273,12 @@ const LOOPING: usize = 5000;
 
 /// The capabilities an `ifcapable` may name that this engine does not
 /// have. Every other name is answered as held.
-const MISSING: [&str; 21] = [
+const MISSING: [&str; 22] = [
     "vtab",
+    // `SQLITE_DEBUG` writes the program of a statement out as it runs and
+    // gives the library the seven pragmas that turn each listing on. This
+    // engine builds no program, so it holds none of them.
+    "debug",
     "fts1",
     "fts2",
     "fts3",

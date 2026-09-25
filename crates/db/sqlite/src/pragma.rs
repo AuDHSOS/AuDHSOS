@@ -418,13 +418,17 @@ pub fn keeping(at: usize, text: &[u8]) -> Option<i64> {
             b"fast" => Some(2),
             _ => truth(&written).map(i64::from),
         },
-        Some(Written::Syncing) => match written.as_slice() {
-            b"off" => Some(0),
-            b"normal" => Some(1),
-            b"full" => Some(2),
-            b"extra" => Some(3),
-            _ => signed_number(&written),
-        },
+        // `getSafetyLevel` of `research/sqlite/src/pragma.c:72` reads a
+        // number where the first byte is a digit, else one of eight
+        // words, else the level a connection opens under, which is one.
+        Some(Written::Syncing) => Some(match written.as_slice() {
+            b"full" => 2,
+            b"extra" => 3,
+            held => match held.first().filter(|byte| byte.is_ascii_digit()) {
+                Some(_) => signed_number(held).unwrap_or(1),
+                None => i64::from(truth(held).unwrap_or(true)),
+            },
+        }),
         Some(Written::Storing) => match written.as_slice() {
             b"default" => Some(0),
             b"file" => Some(1),
@@ -524,7 +528,13 @@ pub fn of_name(name: &[u8]) -> Option<Setting> {
 /// `sqlite3Pragma` of `research/sqlite/src/pragma.c` looks a name up in:
 /// a name that is in it and that this crate does not write is refused,
 /// and a name that is not in it changes nothing.
-const KNOWN: [&[u8]; 78] = [
+///
+/// `parser_trace`, `sql_trace`, `vdbe_addoptrace`, `vdbe_debug`,
+/// `vdbe_eqp`, `vdbe_listing` and `vdbe_trace` stand in that table under
+/// `SQLITE_DEBUG` alone, which writes the program of a statement out as
+/// it runs; this crate builds no program and holds none of the seven, so
+/// each of them changes nothing.
+const KNOWN: [&[u8]; 71] = [
     b"activate_extensions",
     b"analysis_limit",
     b"application_id",
@@ -572,7 +582,6 @@ const KNOWN: [&[u8]; 78] = [
     b"optimize",
     b"page_count",
     b"page_size",
-    b"parser_trace",
     b"pragma_list",
     b"query_only",
     b"quick_check",
@@ -584,7 +593,6 @@ const KNOWN: [&[u8]; 78] = [
     b"short_column_names",
     b"shrink_memory",
     b"soft_heap_limit",
-    b"sql_trace",
     b"stats",
     b"synchronous",
     b"table_info",
@@ -595,11 +603,6 @@ const KNOWN: [&[u8]; 78] = [
     b"threads",
     b"trusted_schema",
     b"user_version",
-    b"vdbe_addoptrace",
-    b"vdbe_debug",
-    b"vdbe_eqp",
-    b"vdbe_listing",
-    b"vdbe_trace",
     b"wal_autocheckpoint",
     b"wal_checkpoint",
     b"writable_schema",

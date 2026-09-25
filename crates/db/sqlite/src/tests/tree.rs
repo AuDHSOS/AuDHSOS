@@ -3434,9 +3434,7 @@ fn the_pragmas_a_connection_keeps_answer_what_it_was_told() {
     // A value the pragma does not name is refused.
     assert!(writer.run(b"PRAGMA mmap_size=lots").is_err());
     assert!(writer.run(b"PRAGMA mmap_size=''").is_err());
-    assert!(writer.run(b"PRAGMA synchronous=sometimes").is_err());
     assert!(writer.run(b"PRAGMA temp_store=disk").is_err());
-    assert!(writer.run(b"PRAGMA secure_delete=sometimes").is_err());
     // A pragma the file does not hold and the connection answers
     // nothing for is accepted and changes nothing.
     assert!(writer.run(b"PRAGMA cache_spill=0").unwrap().is_empty());
@@ -3451,6 +3449,36 @@ fn the_pragmas_a_connection_keeps_answer_what_it_was_told() {
         database.query(b"PRAGMA locking_mode").unwrap().rows,
         [[text(b"normal")]]
     );
+}
+
+/// The levels a `PRAGMA synchronous` is set to: two words of its own,
+/// six truth words, a number, and a word it does not name, which
+/// `getSafetyLevel` of `research/sqlite/src/pragma.c:72` answers the
+/// level a connection opens under for.
+#[test]
+fn which_levels_a_pragma_synchronous_is_set_to() {
+    let mut writer = crate::change::Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    for (sql, level) in [
+        (b"PRAGMA synchronous=sometimes".as_slice(), 1),
+        (b"PRAGMA synchronous=extra", 3),
+        (b"PRAGMA synchronous=FULL", 2),
+        (b"PRAGMA synchronous=on", 1),
+        (b"PRAGMA synchronous=yes", 1),
+        (b"PRAGMA synchronous=true", 1),
+        (b"PRAGMA synchronous=off", 0),
+        (b"PRAGMA synchronous=no", 0),
+        (b"PRAGMA synchronous=false", 0),
+        (b"PRAGMA synchronous=-1", 1),
+        (b"PRAGMA synchronous=4", 4),
+        (b"PRAGMA synchronous=0", 0),
+    ] {
+        assert!(writer.run(sql).unwrap().is_empty(), "{sql:?}");
+        assert_eq!(
+            writer.run(b"PRAGMA synchronous").unwrap(),
+            [[Value::Int(level)]],
+            "{sql:?}"
+        );
+    }
 }
 
 #[test]

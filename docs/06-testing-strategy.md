@@ -7797,3 +7797,11 @@ of the library.
 
 - `sqlite_version()`, and the same call with a `*` for the arguments.
 - `sqlite_source_id()`, which names the crate.
+
+### 6.6.363 The levels a `PRAGMA synchronous` takes (`db-sqlite`)
+
+Document 16 step Q8. Every answer is the one the C library's shell writes.
+
+- The two words of its own, `full` and `extra`.
+- The six truth words, `on`, `yes`, `true`, `off`, `no` and `false`.
+- A number, a negative number and a word it does not name.

@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` takes every word `PRAGMA synchronous` names a level with, and
+  changes nothing for the seven pragmas a build without `SQLITE_DEBUG` does not
+  hold. D-517 records it. Catalog 6.6.363. `pragma.test` goes from 140 cases
+  passing to 143.
+
 - `db-sqlite` answers `sqlite_version()` with the version of the format it
   writes and `sqlite_source_id()` with the name of the crate in front of it.
   D-516 records it. Catalog 6.6.362. `normalize.test` goes from 62 cases passing
