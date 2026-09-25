@@ -32,9 +32,6 @@ use kernel_hal_x86_64::remote::SharedTlb;
 use kernel_hal_x86_64::window::PhysicalWindow;
 
 use kernel_hal_x86_64::{context, descriptors, entry};
-use kernel_objects::handle_table::HandleList;
-use kernel_objects::object::{Process, Thread};
-use kernel_objects::quota::Quota;
 
 use kernel_types::{PhysFrame, PhysFrameRange, VirtAddr};
 
@@ -75,7 +72,7 @@ pub(crate) fn start(platform: &X86Platform) -> bool {
         with_machine(|machine| {
             let mut tables = window();
             let mut tlb = SharedTlb::new();
-            let mut environment = environment(memory, &mut tables, &mut tlb);
+            let mut environment = environment(memory, &mut tables, &mut tlb, None);
             let grants = Grants {
                 boot_image: image_frames,
                 ram: regions.get(..count).unwrap_or(&[]),
@@ -145,12 +142,11 @@ fn translate(page: kernel_types::Page) -> Option<PhysFrame> {
     let mut tlb = SharedTlb::new();
     with_memory(|memory| {
         let root = memory.root();
-        let mut frames = *memory.frames();
         let mapper = kernel_mm::mapper::Mapper::<'_, X86Entry, _, _, _>::new(
             root,
             &mut tables,
             &mut tlb,
-            &mut frames,
+            memory.frames_mut(),
         );
         mapper.translate(page).map(|(frame, _)| frame)
     })
@@ -161,32 +157,26 @@ fn translate(page: kernel_types::Page) -> Option<PhysFrame> {
 /// thread the kernel switches back into when nothing else can run. Its
 /// context is written by the first switch away from it.
 pub(crate) fn idle_thread(slot: u32) {
-    let Some(root) = with_memory(|memory| memory.root()) else {
-        return;
-    };
-    with_machine(|machine| {
-        if machine.scheduler.idle().is_some() {
-            return;
-        }
-        let Ok(process) = machine.objects.processes.allocate(Process::new(
-            root,
-            HandleList::with_capacity(4),
-            Quota::new(0),
-            Quota::new(0),
-        )) else {
-            return;
-        };
-        let Ok(mut thread) = Thread::new(process, 0, 0, slot, root) else {
-            return;
-        };
-        thread.cpu = machine.scheduler.caller();
-        let Ok(idle) = machine.objects.threads.allocate(thread) else {
-            return;
-        };
-        machine.scheduler.set_idle(idle);
-        // The kernel is that thread: it is what the first switch leaves.
-        machine.scheduler.adopt(idle);
-        record_executing(idle);
+    let mut tables = window();
+    let mut tlb = SharedTlb::new();
+    with_memory(|memory| {
+        let root = memory.root();
+        with_machine(|machine| {
+            if machine.scheduler.idle().is_some() {
+                return;
+            }
+            let mut environment = environment(memory, &mut tables, &mut tlb, None);
+            let Ok(idle) = root::idle(&mut environment, &mut machine.objects, root, slot) else {
+                return;
+            };
+            if let Ok(thread) = machine.objects.threads.get_mut(idle) {
+                thread.cpu = machine.scheduler.caller();
+            }
+            machine.scheduler.set_idle(idle);
+            // The kernel is that thread: it is what the first switch leaves.
+            machine.scheduler.adopt(idle);
+            record_executing(idle);
+        });
     });
 }
 
@@ -238,7 +228,7 @@ pub(crate) fn sweep() {
     let mut tlb = SharedTlb::new();
     with_memory(|memory| {
         with_machine(|machine| {
-            let mut environment = environment(memory, &mut tables, &mut tlb);
+            let mut environment = environment(memory, &mut tables, &mut tlb, None);
             let running = executing();
             let _cleared = reap(
                 &mut machine.objects,
@@ -315,35 +305,41 @@ pub(crate) fn answer(
 /// Delivers the fault of `faulted` to whoever handles it, and answers
 /// whether the caller should switch before it returns.
 ///
-/// A thread whose process names no handler is left stopped; the scheduler
-/// has already taken it off the processor, which is why the caller passes
-/// it to [`run`] as the thread it is standing on.
+/// `None` is a vector with no kind: the thread stops and no handler hears
+/// of it. A stopped thread is off the processor, so the caller passes it to
+/// [`run`] as the thread it is standing on.
+///
+/// The console goes in, in the order of [`answer`], so the line of a fault
+/// nobody handles is written.
 pub(crate) fn deliver_fault(
     faulted: kernel_objects::object::ThreadId,
-    fault: audhsos_abi::Fault,
+    fault: Option<audhsos_abi::Fault>,
 ) -> bool {
     let mut tables = window();
     let mut tlb = SharedTlb::new();
-    with_memory(|memory| {
-        with_machine(|machine| {
-            let Ok(thread) = machine.objects.threads.get(faulted) else {
-                return true;
-            };
-            if thread.state != audhsos_abi::ThreadState::Running {
-                return true;
-            }
-            let mut buffer_window = window();
-            let Some(bytes) = buffer_window.frame_bytes_mut(thread.ipc_buffer) else {
-                return true;
-            };
-            let mut environment = environment(memory, &mut tables, &mut tlb);
-            let mut syscall = kernel_syscall::dispatch::Machine {
-                objects: &mut machine.objects,
-                scheduler: &mut machine.scheduler,
-                environment: &mut environment,
-            };
-            kernel_syscall::fault::deliver(&mut syscall, faulted, fault, bytes).reschedule
+    entry::with_console(|console| {
+        with_memory(|memory| {
+            with_machine(|machine| {
+                let Ok(thread) = machine.objects.threads.get(faulted) else {
+                    return true;
+                };
+                if thread.state != audhsos_abi::ThreadState::Running {
+                    return true;
+                }
+                let mut buffer_window = window();
+                let Some(bytes) = buffer_window.frame_bytes_mut(thread.ipc_buffer) else {
+                    return true;
+                };
+                let mut environment = environment(memory, &mut tables, &mut tlb, Some(console));
+                let mut syscall = kernel_syscall::dispatch::Machine {
+                    objects: &mut machine.objects,
+                    scheduler: &mut machine.scheduler,
+                    environment: &mut environment,
+                };
+                kernel_syscall::fault::take(&mut syscall, faulted, fault, bytes).reschedule
+            })
         })
+        .flatten()
     })
     .flatten()
     .unwrap_or(false)
@@ -418,8 +414,7 @@ fn root_task_bytes(platform: &X86Platform) -> Option<&'static [u8]> {
 /// The frames of the boot image and the free regions of memory.
 fn grants(platform: &X86Platform) -> Option<(PhysFrameRange, heapless::Regions)> {
     let (start, len) = memory::boot_image(platform)?;
-    let frames =
-        PhysFrameRange::new(PhysFrame::containing(start), len.div_ceil(PAGE_SIZE).max(1)).ok()?;
+    let frames = memory::frames_of(start.as_u64(), len)?;
     let free = with_memory(|memory| heapless::Regions::of(memory.free()))?;
     Some((frames, free))
 }
@@ -429,12 +424,13 @@ fn environment<'a>(
     memory: &'a mut KernelMemory,
     tables: &'a mut PhysicalWindow,
     tlb: &'a mut SharedTlb,
+    console: Option<&'a mut SerialConsole>,
 ) -> KernelEnvironment<'a, X86Entry, PhysicalWindow, SharedTlb, SerialConsole, DeviceAccess<'a>> {
     KernelEnvironment::new(
         memory,
         tables,
         tlb,
-        None,
+        console,
         None,
         acpi_pointer(),
         context::prepare_user,

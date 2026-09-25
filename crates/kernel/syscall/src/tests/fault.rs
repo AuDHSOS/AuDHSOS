@@ -7,7 +7,7 @@ use audhsos_abi::ipc_buffer::{Buffer, SIZE, fault_kind_of};
 use audhsos_abi::{Error, Fault, FaultKind, Handle, Rights, Syscall, ThreadState};
 use kernel_objects::object::{AnyObjectId, Endpoint, EndpointId};
 
-use crate::fault::{deliver, is_faulted, stop};
+use crate::fault::{deliver, is_faulted, stop, take};
 use crate::reaper::has_work;
 use crate::tests::double::{Fixture, call, error_of, request, value_of};
 
@@ -564,5 +564,54 @@ fn a_fault_nobody_has_a_reply_slot_for_stops_the_thread() {
         fixture.objects.threads.get(taker).unwrap().state,
         ThreadState::BlockedRecv,
         "and the handler is back in its queue"
+    );
+}
+
+#[test]
+fn a_fault_with_no_kind_stops_the_thread_and_reaches_no_handler() {
+    // Issue 113: vector 1 of a user thread arrived as a general protection
+    // fault at address 0.
+    let mut fixture = Fixture::new();
+    let (_id, handle) = handler(&mut fixture);
+    let own = fixture.process;
+    let taker = fixture.running(own, 4);
+    let mut waiting = [0; SIZE];
+    {
+        let mut writer = audhsos_abi::ipc_buffer::BufferMut::new(&mut waiting);
+        writer.set_syscall_number(u64::from(Syscall::IpcRecv.number()));
+        assert!(writer.set_argument(0, handle.raw()));
+    }
+    fixture.write_buffer(taker, &waiting);
+    crate::dispatch::dispatch(&mut fixture.machine(), taker, &mut waiting);
+
+    let faulted = fixture.thread;
+    let mut buffer = [0; SIZE];
+    let outcome = take(&mut fixture.machine(), faulted, None, &mut buffer);
+
+    assert!(outcome.reschedule);
+    assert!(is_faulted(&fixture.machine(), faulted));
+    assert_eq!(buffer, [0; SIZE], "no message is written");
+    assert_eq!(fixture.objects.threads.get(faulted).unwrap().fault, None);
+    assert_eq!(
+        fixture.objects.threads.get(taker).unwrap().state,
+        ThreadState::BlockedRecv,
+        "the handler receives nothing"
+    );
+}
+
+#[test]
+fn a_fault_with_a_kind_is_delivered_as_deliver_does() {
+    let mut fixture = Fixture::new();
+    let faulted = fixture.thread;
+    let mut buffer = [0; SIZE];
+    take(
+        &mut fixture.machine(),
+        faulted,
+        Some(page_fault()),
+        &mut buffer,
+    );
+    assert_eq!(
+        fixture.objects.threads.get(faulted).unwrap().fault,
+        Some(page_fault())
     );
 }

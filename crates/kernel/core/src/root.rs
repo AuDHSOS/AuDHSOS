@@ -407,3 +407,50 @@ fn memory_object<const NP: usize, const NT: usize, const NM: usize, const NH: us
         Entry::new(AnyObjectId::of(id), ObjectType::MemoryObject.rights_mask()),
     )
 }
+
+/// Builds the kernel process over the address space `root` and its idle
+/// thread on kernel stack `slot`.
+///
+/// The IPC buffer of the idle thread is a zeroed frame of the reserve,
+/// because the paths that write or free a buffer by thread id would
+/// otherwise reach `root`.
+///
+/// # Errors
+///
+/// The errors of the frame reserve and of the pools. A failure gives the
+/// frame and the process back.
+pub fn idle<E: Environment, const NP: usize, const NT: usize, const NM: usize, const NH: usize>(
+    environment: &mut E,
+    objects: &mut Objects<NP, NT, NM, NH>,
+    root: PhysFrame,
+    slot: u32,
+) -> Result<ThreadId, Error> {
+    let buffer = environment.allocate_frame()?;
+    let built = idle_with(objects, root, slot, buffer);
+    if built.is_err() {
+        environment.release_frame(buffer);
+    }
+    built
+}
+
+/// [`idle`] once the buffer frame is in hand.
+fn idle_with<const NP: usize, const NT: usize, const NM: usize, const NH: usize>(
+    objects: &mut Objects<NP, NT, NM, NH>,
+    root: PhysFrame,
+    slot: u32,
+    buffer: PhysFrame,
+) -> Result<ThreadId, Error> {
+    let process = objects.processes.allocate(Process::new(
+        root,
+        HandleList::with_capacity(4),
+        Quota::new(0),
+        Quota::new(0),
+    ))?;
+    let thread = Thread::new(process, 0, 0, slot, buffer)
+        .map_err(|_| Error::InvalidArgument)
+        .and_then(|thread| Ok(objects.threads.allocate(thread)?));
+    if thread.is_err() {
+        objects.processes.force_release(process);
+    }
+    thread
+}

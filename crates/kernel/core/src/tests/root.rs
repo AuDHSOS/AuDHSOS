@@ -15,7 +15,7 @@ use kernel_objects::store::Objects;
 use kernel_syscall::environment::Environment;
 use kernel_types::{PhysFrame, PhysFrameRange};
 
-use crate::root::{Grants, PRIORITY, STACK_PAGES, STACK_TOP, build};
+use crate::root::{Grants, PRIORITY, STACK_PAGES, STACK_TOP, build, idle};
 use crate::syscall::KernelEnvironment;
 
 /// A machine of a handful of slots.
@@ -333,4 +333,58 @@ fn no_frame<A>(
     _buffer: kernel_types::VirtAddr,
 ) -> Option<kernel_types::VirtAddr> {
     stack_top.checked_sub(8)
+}
+
+#[test]
+fn the_idle_thread_has_a_zeroed_buffer_frame_of_its_own() {
+    // Issue 122: the IPC buffer of the idle thread was the kernel root.
+    let mut fixture = Fixture::new();
+    let mut objects = Small::new();
+    let root = fixture.memory.root();
+    let mut tlb = RecordingTlb::new();
+    let mut environment =
+        KernelEnvironment::<X86Entry, _, _, RecordingConsole, RecordingDevices>::new(
+            &mut fixture.memory,
+            &mut fixture.machine.access,
+            &mut tlb,
+            None,
+            None,
+            0,
+            no_frame,
+        );
+    let free = environment.memory.frames().free_count();
+    let id = idle(&mut environment, &mut objects, root, 7).unwrap();
+    let thread = objects.threads.get(id).unwrap();
+    assert_ne!(thread.ipc_buffer, root);
+    assert_eq!(thread.kernel_stack, 7);
+    assert_eq!(environment.memory.frames().free_count(), free - 1);
+    assert_eq!(objects.processes.get(thread.process).unwrap().root, root);
+    let bytes = environment
+        .with_buffer(thread.ipc_buffer, |bytes| {
+            bytes.iter().all(|byte| *byte == 0)
+        })
+        .unwrap();
+    assert!(bytes, "the frame is zeroed");
+}
+
+#[test]
+fn an_idle_thread_that_finds_no_pool_slot_gives_the_frame_and_the_process_back() {
+    let mut fixture = Fixture::new();
+    let mut objects: Objects<4, 0, 32, 256> = Objects::new();
+    let root = fixture.memory.root();
+    let mut tlb = RecordingTlb::new();
+    let mut environment =
+        KernelEnvironment::<X86Entry, _, _, RecordingConsole, RecordingDevices>::new(
+            &mut fixture.memory,
+            &mut fixture.machine.access,
+            &mut tlb,
+            None,
+            None,
+            0,
+            no_frame,
+        );
+    let free = environment.memory.frames().free_count();
+    assert!(idle(&mut environment, &mut objects, root, 7).is_err());
+    assert_eq!(environment.memory.frames().free_count(), free);
+    assert_eq!(objects.processes.ids().count(), 0);
 }

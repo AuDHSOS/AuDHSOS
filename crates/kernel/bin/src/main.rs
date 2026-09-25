@@ -144,7 +144,7 @@ fn take_interrupts(platform: &X86Platform) -> Result<u64, ApicError> {
 }
 
 /// How many ticks the kernel waits for before it reports that the timer
-/// runs. Phase 5 replaces the wait with a scheduler.
+/// runs, which proves the timer before the root task starts.
 const TICKS_BEFORE_HANDOVER: u64 = 3;
 
 /// Waits until `wanted` ticks have arrived, halting between them.
@@ -383,13 +383,8 @@ fn on_trap(report: TrapReport) {
     let Some(faulted) = switching::executing() else {
         entry::fail(b"[trap] a user thread faulted and the kernel holds none\n");
     };
-    let fault = exception.fault().unwrap_or(audhsos_abi::Fault {
-        kind: audhsos_abi::FaultKind::GeneralProtection,
-        address: exception.cr2,
-        instruction_pointer: exception.ip,
-        error_code: exception.error_code,
-    });
-    if task::deliver_fault(faulted, fault) {
+    // A vector with no kind stops the thread with no message (`trap.rs`).
+    if task::deliver_fault(faulted, exception.fault()) {
         task::run(Some(faulted));
     }
 }
