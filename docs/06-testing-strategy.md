@@ -7593,3 +7593,15 @@ Document 16 step Q8. Every answer is the one the C library's shell writes.
   integer.
 - A literal, an operator over literals, a `CAST`, a `COLLATE`, a `CASE`,
   a row, a `BETWEEN` and an `IN` over a list, each of which stands.
+### 6.6.344 The temp schema a statement opens (`db-sqlite`)
+
+Document 16 step Q8. Every answer is the one the C library's shell writes.
+
+- `PRAGMA database_list` before any statement names the temp schema,
+  which names `main` alone.
+- `Writer::opens_temp` over a statement that names no temp schema, which
+  opens none.
+- The same over one that names it, after which `PRAGMA database_list`
+  names two databases and the schema's own table answers no row under
+  each of its three names.
+- A name the temp schema holds no table of, which is no table of it.

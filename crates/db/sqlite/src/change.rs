@@ -3941,6 +3941,30 @@ impl Writer {
         Ok(self.attached.len().saturating_sub(1))
     }
 
+    /// Opens the temp schema where `sql` names it, so a statement that
+    /// only reads the temp schema opens it as one that writes does.
+    ///
+    /// `sqlite3OpenTempDatabase` of `research/sqlite/src/build.c:2830`
+    /// opens the temp schema for every statement that names it, so
+    /// `SELECT * FROM temp.sqlite_master` answers no row where the
+    /// connection holds no temp object and `PRAGMA database_list` names
+    /// the temp schema from then on. A statement the connection writes
+    /// opens it through `writing_at`, and a statement a caller reads
+    /// through this, because a reader is built over the images the
+    /// connection holds.
+    ///
+    /// Reading the statement costs O(n) in its bytes.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] names what the image of the temp schema breaks.
+    pub fn opens_temp(&mut self, sql: &[u8]) -> Result<(), Error> {
+        if holds_temp(sql) {
+            self.temping()?;
+        }
+        Ok(())
+    }
+
     /// Which database of the list holds the name a statement wrote with
     /// no schema in front of it, and nothing where the one the connection
     /// writes holds it or no database of it does.

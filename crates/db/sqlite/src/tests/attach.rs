@@ -1298,3 +1298,49 @@ fn which_database_a_statement_of_a_body_names_its_table_under() {
         .rows;
     assert_eq!(rows, alloc::vec![alloc::vec![Value::Int(3), Value::Int(4)]]);
 }
+
+/// A statement that names the temp schema opens it, so its own table
+/// answers no row where the connection holds no temp object and
+/// `PRAGMA database_list` names the temp schema from then on.
+#[test]
+fn what_a_statement_that_names_the_temp_schema_opens() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a)").unwrap();
+    // A connection that made no temp object holds no temp schema, so
+    // `PRAGMA database_list` names `main` alone.
+    assert!(writer.temp().is_none());
+    assert_eq!(writer.run(b"PRAGMA database_list").unwrap().len(), 1);
+    // A statement that names no temp schema opens none.
+    writer.opens_temp(b"SELECT a FROM t").unwrap();
+    assert!(writer.temp().is_none());
+    writer
+        .opens_temp(b"SELECT * FROM temp.sqlite_master")
+        .unwrap();
+    let temp = writer.temp().expect("the temp schema");
+    assert_eq!(writer.run(b"PRAGMA database_list").unwrap().len(), 2);
+    // The temp schema holds no object, so its own table answers no row.
+    let held = writer.written();
+    let database = crate::db::Database::open(&held)
+        .unwrap()
+        .attaching(b"temp", &temp)
+        .unwrap();
+    for sql in [
+        b"SELECT count(*) FROM temp.sqlite_master".as_slice(),
+        b"SELECT count(*) FROM sqlite_temp_master",
+        b"SELECT count(*) FROM sqlite_temp_schema",
+    ] {
+        assert_eq!(
+            database.query(sql).unwrap().rows,
+            alloc::vec![alloc::vec![crate::value::Value::Int(0)]],
+            "{sql:?}"
+        );
+    }
+    // A name the temp schema holds no table of is no table of it.
+    assert_eq!(
+        database
+            .query(b"SELECT a FROM temp.t")
+            .unwrap_err()
+            .message(),
+        "no such table: temp.t"
+    );
+}

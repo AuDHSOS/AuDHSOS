@@ -4549,6 +4549,12 @@ fn run_one(
     // so the last statement of a run is the one `db status` answers for.
     STEPPED.with(|held| held.set(db_sqlite::db::Stepped::default()));
     if reads(text) {
+        // A statement that names the temp schema opens it, and a reader
+        // is built over the images the connection holds, so the writer
+        // opens it before the reader is built.
+        writer
+            .opens_temp(&sql_bytes(text))
+            .map_err(|error| shape(text, refusal(&error)))?;
         let answered = answered_rows(writer, text, collating, defines, outside)?;
         STEPPED.with(|held| held.set(answered.stepped));
         ANSWERED.with(|held| held.set(answered.rows.len()));

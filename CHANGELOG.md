@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` opens the temp schema for a statement that only reads it, so
+  its own table answers no row where the connection made no temp object.
+  D-496 records it. Catalog 6.6.344. `attach.test` goes from 23 cases
+  passing to 78.
+
 - `db-sqlite` reads an offset after `PRECEDING` or `FOLLOWING` that is no
   constant as nothing, so the window is refused as the C library refuses it.
   D-495 records it. Catalog 6.6.343. `window1.test` goes from 293 cases

@@ -1161,6 +1161,8 @@ Size: L.
 196. The offset of a frame bound that is no constant, which stands for
      nothing and is refused where the window opens. Built, which D-495
      records.
+197. The temp schema a statement that only reads it opens. Built, which
+     D-496 records.
 
 ### Done when
 
@@ -1170,8 +1172,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 123 485 cases in 843 files, 118 464
-pass, 2680 answer differently, and 2341 name something the engine
+under the `tclsh` of the machine. Of 123 555 cases in 843 files, 118 509
+pass, 2696 answer differently, and 2350 name something the engine
 refuses or a command that needs the C library's internals. The files
 that answer for tens of thousands of rows reach the five-minute
 deadline and are counted with the cases they ran by then. One run over
