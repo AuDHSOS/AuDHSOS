@@ -355,6 +355,17 @@ pub trait Row {
         Ok(None)
     }
 
+    /// What the row was refused with while it read a name, which is
+    /// what a name standing for an expression of the statement carries
+    /// out of that expression, and nothing where no name reached a
+    /// refusal.
+    ///
+    /// The refusal is taken off the row, so a name the row answers
+    /// after it carries none.
+    fn refused(&self) -> Option<Error> {
+        None
+    }
+
     /// Whether the connection trusts the schema, where the expression
     /// stands in an object of the schema, and nothing where a client
     /// wrote the statement.
@@ -605,6 +616,65 @@ fn collated(
     inner.written = true;
     Ok(inner)
 }
+/// The value a name reaches on the row, which is `lookupName` of
+/// `research/sqlite/src/resolve.c:377` over the sides the row holds.
+///
+/// # Errors
+///
+/// [`Error::NoColumn`] names what no side answers, [`Error::Ambiguous`]
+/// what more than one answers, and whatever the expression a name stood
+/// for was refused with.
+fn named_value(
+    held: (
+        Option<crate::ast::Span>,
+        Option<crate::ast::Span>,
+        crate::ast::Span,
+    ),
+    sql: &[u8],
+    row: &dyn Row,
+) -> Result<Answer, Error> {
+    let (schema, table, column) = held;
+
+    // A name is matched with its quotes off, which is
+    // `sqlite3Dequote` before `lookupName`.
+    let text = |span: crate::ast::Span| crate::schema::dequote(span.text(sql));
+    let named = column.text(sql);
+    let found = row.column(
+        schema.map(text).as_deref(),
+        table.map(text).as_deref(),
+        &crate::schema::dequote(named),
+    );
+    let Some((value, affinity, collation)) = found else {
+        // A name standing for an expression the statement
+        // answers under carries what that expression was
+        // refused with.
+        if let Some(held) = row.refused() {
+            return Err(held);
+        }
+        if row.ambiguous(
+            schema.map(text).as_deref(),
+            table.map(text).as_deref(),
+            &crate::schema::dequote(named),
+        ) {
+            return Err(Error::Ambiguous(written(schema, table, named, sql)));
+        }
+        // `sqlite3ExprIdToTrueFalse`: a name no table answers
+        // to, written without quotes and without a table in
+        // front of it, is the number one where it is `true` and
+        // nought where it is `false`.
+        let truth = truth_of(named)
+            .filter(|_| table.is_none())
+            .ok_or_else(|| Error::NoColumn(missed(schema, table, named, sql)))?;
+        return Ok(Answer::plain(Value::Int(i64::from(truth))));
+    };
+    Ok(Answer {
+        value,
+        json: false,
+        affinity,
+        collation: Some(collation),
+        written: false,
+    })
+}
 
 fn answer(
     arena: &Arena,
@@ -652,41 +722,7 @@ fn answer(
             schema,
             table,
             column,
-        } => {
-            // A name is matched with its quotes off, which is
-            // `sqlite3Dequote` before `lookupName`.
-            let text = |span: crate::ast::Span| crate::schema::dequote(span.text(sql));
-            let named = column.text(sql);
-            let found = row.column(
-                schema.map(text).as_deref(),
-                table.map(text).as_deref(),
-                &crate::schema::dequote(named),
-            );
-            let Some((value, affinity, collation)) = found else {
-                if row.ambiguous(
-                    schema.map(text).as_deref(),
-                    table.map(text).as_deref(),
-                    &crate::schema::dequote(named),
-                ) {
-                    return Err(Error::Ambiguous(written(schema, table, named, sql)));
-                }
-                // `sqlite3ExprIdToTrueFalse`: a name no table answers
-                // to, written without quotes and without a table in
-                // front of it, is the number one where it is `true` and
-                // nought where it is `false`.
-                let truth = truth_of(named)
-                    .filter(|_| table.is_none())
-                    .ok_or_else(|| Error::NoColumn(missed(schema, table, named, sql)))?;
-                return Ok(Answer::plain(Value::Int(i64::from(truth))));
-            };
-            Ok(Answer {
-                value,
-                json: false,
-                affinity,
-                collation: Some(collation),
-                written: false,
-            })
-        }
+        } => named_value((schema, table, column), sql, row),
         // An aggregate and a window function are both answered once
         // per group or per row before the row is read, so the walk
         // looks the answer up rather than working it out; a window

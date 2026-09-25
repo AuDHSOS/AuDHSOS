@@ -7752,3 +7752,16 @@ Document 16 step Q8. Every answer is the one the C library's shell writes.
 - A comparison against the answer of such an aggregate, and against the
   answer of the same aggregate carrying no `COLLATE`.
 - The same for a window function.
+
+### 6.6.359 A name the statement answers under (`db-sqlite`)
+
+Document 16 step Q8. Every answer is the one the C library's shell writes.
+
+- One clause per place such a name stands in: a `WHERE`, a `GROUP BY`, a
+  `HAVING`, an `ORDER BY` expression, and a statement written inside a
+  `WHERE`.
+- A name a column of a side answers as well, which the side answers.
+- A name of the answer inside the answer, and a name that stands for
+  itself, which are both refused.
+- A name standing for an expression that is refused, in the statement
+  that answers under it and in one written inside that one.

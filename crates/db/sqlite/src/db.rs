@@ -1619,6 +1619,9 @@ struct Reach<'a> {
     sql: &'a [u8],
     /// The `WITH` terms in scope, and the row that encloses this one.
     scope: Scope<'a>,
+    /// What the statement answers, whose names a bare name no side holds
+    /// stands for.
+    columns: crate::ast::Range,
 }
 
 /// Where a side of a `FROM` draws its rows.
@@ -3943,6 +3946,7 @@ impl<'a> Database<'a> {
             arena,
             sql,
             scope,
+            columns: first.columns,
         };
         let cursor = Cursor::new(self.collation(), self.encoding, reach);
         limit(arena, &first, sql, &mut answer.rows, &cursor)?;
@@ -3975,6 +3979,7 @@ impl<'a> Database<'a> {
             arena,
             sql,
             scope,
+            columns: select.columns,
         };
         if !select.values.is_empty() {
             let cursor = Cursor::new(self.collation(), self.encoding, reach);
@@ -4574,6 +4579,7 @@ impl<'a> Database<'a> {
             arena,
             sql,
             scope,
+            columns: head.columns,
         };
         let cursor = Cursor::new(self.collation(), self.encoding, reach);
         let (skip, most) = bounds(arena, &head, sql, &cursor)?;
@@ -5038,6 +5044,8 @@ impl<'a> Database<'a> {
                     encoding: cursor.encoding,
                     aggregates: cursor.aggregates.clone(),
                     reach,
+                    aliasing: core::cell::Cell::new(true),
+                    refusal: core::cell::RefCell::new(None),
                 });
             }
             Ok(Flow::Go)
@@ -5173,6 +5181,8 @@ impl<'a> Database<'a> {
                 encoding: self.encoding,
                 aggregates: answers,
                 reach,
+                aliasing: core::cell::Cell::new(true),
+                refusal: core::cell::RefCell::new(None),
             };
             if keep(arena, select.having, sql, &cursor)? {
                 out.push(cursor);
@@ -9216,6 +9226,9 @@ fn declared_of(arena: &Arena, expr: ExprId, sql: &[u8], sides: &[Side<'_>]) -> V
 }
 
 /// The values one row answers.
+///
+/// The names the statement answers under stand for nothing here, which
+/// is what refuses `SELECT x AS x FROM t`.
 fn project(
     arena: &Arena,
     select: &Select,
@@ -9223,6 +9236,7 @@ fn project(
     cursor: &Cursor<'_>,
 ) -> Result<Vec<Value>, Error> {
     let mut out = Vec::new();
+    cursor.aliasing.set(false);
     for column in arena.results(select.columns) {
         match *column {
             ResultColumn::Star => {
@@ -9257,10 +9271,12 @@ fn project(
                 }
             }
             ResultColumn::Expr { expr, .. } => {
-                out.push(evaluate_row(arena, expr, sql, cursor)?);
+                let value = evaluate_row(arena, expr, sql, cursor);
+                out.push(value.inspect_err(|_| cursor.aliasing.set(true))?);
             }
         }
     }
+    cursor.aliasing.set(true);
     Ok(out)
 }
 
@@ -10561,6 +10577,12 @@ struct Cursor<'a> {
     aggregates: Vec<(ExprId, Value)>,
     /// What a statement written inside an expression is answered by.
     reach: Reach<'a>,
+    /// Whether a bare name no side holds stands for a name the statement
+    /// answers under, which every clause but the answer itself reads.
+    aliasing: core::cell::Cell<bool>,
+    /// What the expression a name stood for was refused with, which the
+    /// walk reads in place of the name it could not answer.
+    refusal: core::cell::RefCell<Option<eval::Error>>,
 }
 
 impl<'a> Cursor<'a> {
@@ -10616,6 +10638,46 @@ impl<'a> Cursor<'a> {
         found
     }
 
+    /// What a bare name no side answers stands for: the expression the
+    /// statement answers under that name.
+    ///
+    /// `lookupName` of `research/sqlite/src/resolve.c:658` matches such
+    /// a name against the names the statement answers under, which is
+    /// what a `WHERE`, a `GROUP BY`, a `HAVING` and an `ORDER BY` read
+    /// an alias of the answer by. The answer itself reads no alias, so
+    /// the expression of the alias is read with none standing for
+    /// anything, and `SELECT x AS x FROM t` is refused.
+    ///
+    /// The lookup costs O(n) in the columns the statement answers and
+    /// the expression it reads costs what that expression does.
+    fn aliased(&self, column: &[u8]) -> Option<(Value, Affinity, Collation)> {
+        let arena = self.reach.arena;
+        let sql = self.reach.sql;
+        let held =
+            arena
+                .results(self.reach.columns)
+                .iter()
+                .find_map(|answered| match *answered {
+                    ResultColumn::Expr {
+                        expr,
+                        alias: Some(alias),
+                        ..
+                    } if dequote(alias.text(sql)).eq_ignore_ascii_case(column) => Some(expr),
+                    _ => None,
+                })?;
+        self.aliasing.set(false);
+        let answered = eval::evaluate_compared(arena, held, sql, self);
+        self.aliasing.set(true);
+        let (value, affinity, collation) = match answered {
+            Ok(answered) => answered,
+            Err(error) => {
+                *self.refusal.borrow_mut() = Some(error);
+                return None;
+            }
+        };
+        Some((value, affinity, collation.unwrap_or(self.collation)))
+    }
+
     /// A cursor that holds no side, which is a statement with no
     /// `FROM` before it reads its one row of nothing.
     const fn new(collation: Collation, encoding: Encoding, reach: Reach<'a>) -> Self {
@@ -10625,6 +10687,8 @@ impl<'a> Cursor<'a> {
             encoding,
             aggregates: Vec::new(),
             reach,
+            aliasing: core::cell::Cell::new(true),
+            refusal: core::cell::RefCell::new(None),
         }
     }
 }
@@ -10688,6 +10752,13 @@ impl eval::Row for Cursor<'_> {
             .then_some(self.reach.database.trusted)
     }
 
+    fn refused(&self) -> Option<eval::Error> {
+        self.refusal
+            .borrow_mut()
+            .take()
+            .or_else(|| self.reach.scope.outer.and_then(eval::Row::refused))
+    }
+
     fn answered(&self, used: Used) -> Result<Option<Value>, eval::Error> {
         let reach = self.reach;
         reach
@@ -10712,8 +10783,19 @@ impl eval::Row for Cursor<'_> {
         table: Option<&[u8]>,
         column: &[u8],
     ) -> Option<(Value, Affinity, Collation)> {
-        let Answering::One(at, value, affinity, collation) = self.answering(schema, table, column)
-        else {
+        self.refusal.borrow_mut().take();
+        let found = self.answering(schema, table, column);
+        // A bare name no side answers stands for a name the statement
+        // answers under, which is read before the enclosing statement.
+        if matches!(found, Answering::Nothing)
+            && schema.is_none()
+            && table.is_none()
+            && self.aliasing.get()
+            && let Some(answered) = self.aliased(column)
+        {
+            return Some(answered);
+        }
+        let Answering::One(at, value, affinity, collation) = found else {
             // A name no side of this statement answers is the enclosing
             // statement's, which is what makes a statement correlated,
             // and a name more than one side answers is a refusal the

@@ -296,3 +296,59 @@ fn where_a_result_column_comes_from() {
         [nowhere.clone(), nowhere]
     );
 }
+
+/// A bare name no side of the `FROM` answers stands for the name the
+/// statement answers a column under, which every clause but the answer
+/// itself reads.
+#[test]
+fn which_clauses_read_a_name_the_statement_answers_under() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t2(a,b)").unwrap();
+    writer.run(b"INSERT INTO t2 VALUES(1,2),(3,4)").unwrap();
+    let image = writer.written();
+    let database = Database::open(&image).expect("a database");
+    let answered = |sql: &[u8]| -> Vec<String> {
+        database
+            .query(sql)
+            .expect("an answer")
+            .rows
+            .iter()
+            .flatten()
+            .map(|value| String::from_utf8_lossy(&value.text().unwrap_or_default()).into_owned())
+            .collect()
+    };
+    assert_eq!(answered(b"SELECT b+1 AS x FROM t2 WHERE x>3"), ["5"]);
+    assert_eq!(answered(b"SELECT b+1 AS x FROM t2 GROUP BY x"), ["3", "5"]);
+    // The names of the other columns of the answer stand for nothing.
+    assert_eq!(
+        answered(b"SELECT b AS y, a AS x FROM t2 WHERE x>1"),
+        ["4", "3"]
+    );
+    assert_eq!(answered(b"SELECT count(*) AS n FROM t2 HAVING n>1"), ["2"]);
+    assert_eq!(answered(b"SELECT b AS x FROM t2 ORDER BY -x"), ["4", "2"]);
+    // A statement written inside a clause reads the name as well, which
+    // it reaches through the row of the statement that holds it.
+    assert_eq!(answered(b"SELECT b AS x FROM t2 WHERE (SELECT x)>3"), ["4"]);
+    // A column of a side answers the name before the answer does.
+    assert!(answered(b"SELECT b AS a FROM t2 WHERE a>3").is_empty());
+    let refused = |sql: &[u8]| database.query(sql).unwrap_err().message();
+    // The answer itself reads no such name, so a name that stands for
+    // itself and a name of another column of the answer are both
+    // refused.
+    assert_eq!(refused(b"SELECT x AS x FROM t2"), "no such column: x");
+    assert_eq!(
+        refused(b"SELECT a AS x, x+1 AS y FROM t2"),
+        "no such column: x"
+    );
+    // The name carries what the expression it stands for was refused
+    // with, whether the name stands in the statement that answers under
+    // it or in one written inside that one.
+    assert_eq!(
+        refused(b"SELECT nosuch AS x FROM t2 WHERE x>0"),
+        "no such column: nosuch"
+    );
+    assert_eq!(
+        refused(b"SELECT nosuch AS x FROM t2 WHERE (SELECT x)>0"),
+        "no such column: nosuch"
+    );
+}

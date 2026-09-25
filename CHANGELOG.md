@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` reads a bare name no side of the `FROM` answers as the name the
+  statement answers a column under, in every clause but the answer itself.
+  D-513 records it. Catalog 6.6.359. `select1.test` goes from 182 cases passing
+  to 186 and `window1.test` from 306 to 309.
+
 - `db-sqlite` compares the answer of an aggregate or of a window function under
   the `COLLATE` written on an argument of the call. D-512 records it. Catalog
   6.6.358. `window1.test` goes from 301 cases passing to 306.
