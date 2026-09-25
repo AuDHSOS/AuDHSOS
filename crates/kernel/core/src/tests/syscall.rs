@@ -274,6 +274,49 @@ fn what_debug_log_writes_reaches_the_console_and_a_build_without_one_drops_it() 
     environment.log(b"nowhere");
 }
 
+#[test]
+fn a_fault_nobody_handles_writes_its_line_through_the_console() {
+    // Issue 114: the fault path built its environment with no console.
+    let (mut machine, mut memory) = kernel_memory();
+    let mut tlb = RecordingTlb::new();
+    let mut console = RecordingConsole::new();
+    let (mut objects, mut scheduler, _) = two_processes(5, 5);
+    let thread = objects.threads.ids().next().unwrap();
+    scheduler.pick_next(&mut objects.threads).unwrap();
+    {
+        let mut environment = KernelEnvironment::<X86Entry, _, _, _, RecordingDevices>::new(
+            &mut memory,
+            &mut machine.access,
+            &mut tlb,
+            Some(&mut console),
+            None,
+            0,
+            no_frame,
+        );
+        let mut syscall = kernel_syscall::dispatch::Machine {
+            objects: &mut objects,
+            scheduler: &mut scheduler,
+            environment: &mut environment,
+        };
+        let fault = audhsos_abi::Fault {
+            kind: audhsos_abi::FaultKind::PageFault,
+            address: 0x1000,
+            instruction_pointer: 0x40_0000,
+            error_code: 0,
+        };
+        let mut buffer = [0_u8; SIZE];
+        let outcome = kernel_syscall::fault::take(&mut syscall, thread, Some(fault), &mut buffer);
+        assert!(outcome.reschedule);
+    }
+    assert!(
+        console
+            .text()
+            .contains("[kernel] a fault reached no handler: PageFault at 0x1000 from 0x400000\n"),
+        "{}",
+        console.text()
+    );
+}
+
 /// A machine with two processes, each with one thread of the priority
 /// given, and the roots of the two address spaces.
 fn two_processes(first: u8, second: u8) -> (Small, Scheduler, [PhysFrame; 2]) {

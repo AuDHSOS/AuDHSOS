@@ -29,7 +29,7 @@ use kernel_types::{Page, PageRange, PhysAddr, PhysFrame, PhysFrameRange, VirtAdd
 use crate::config::KERNEL_REGIONS;
 use crate::memory::{
     Adopted, KernelBacking, MemoryError, adopt, backing_name, boot_image, bring_up, drop_identity,
-    identity_range, report, requested_reserve, reserve, reserve_override,
+    frames_of, identity_range, report, requested_reserve, reserve, reserve_override,
 };
 
 const MIB: u64 = 1024 * 1024;
@@ -378,6 +378,22 @@ fn the_boot_image_is_found_by_its_kind() {
     );
     let without = ScriptedPlatform::new(VirtAddr::new(PHYS_WINDOW_BASE).unwrap());
     assert_eq!(boot_image(&without), None);
+}
+
+#[test]
+fn the_frames_of_an_unaligned_range_round_both_ends_outward() {
+    // Issue 127: the boot image range counted one frame for these bytes.
+    let range = frames_of(0x1800, 0x1000).unwrap();
+    assert_eq!(range.start(), PhysFrame::from_number(1).unwrap());
+    assert_eq!(range.count(), 2);
+    let aligned = frames_of(0x1000, 0x1000).unwrap();
+    assert_eq!(aligned.start(), PhysFrame::from_number(1).unwrap());
+    assert_eq!(aligned.count(), 1);
+    assert_eq!(
+        frames_of(u64::MAX, 1),
+        None,
+        "an end past the address space"
+    );
 }
 
 /// The first bytes of a boot image whose header asks for `bytes`.

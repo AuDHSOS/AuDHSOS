@@ -873,7 +873,8 @@ fn device_ranges(platform: &impl Platform) -> (DeviceRanges, usize) {
 }
 
 /// The frames a byte range covers, its ends rounded outward.
-fn frames_of(start: u64, len: u64) -> Option<PhysFrameRange> {
+#[must_use]
+pub fn frames_of(start: u64, len: u64) -> Option<PhysFrameRange> {
     let end = start.checked_add(len)?;
     let first = start.wrapping_div(PAGE_SIZE);
     let last = end

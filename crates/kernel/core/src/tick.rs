@@ -16,17 +16,10 @@ use audhsos_abi::layout::TICKS_PER_SECOND;
 
 use crate::state::KernelState;
 
-/// Counts one tick and gives the scheduler its turn. Until there are
-/// threads to switch between, that turn is only the count the kernel now
-/// stands at.
+/// Counts one tick and answers the count. The scheduler runs in
+/// `on_timer_tick` of the kernel image (`crates/kernel/bin/src/main.rs`).
 pub const fn on_tick(state: &mut KernelState) -> u64 {
     state.record_tick();
-    schedule(state)
-}
-
-/// What the kernel does once the tick is counted. Phase 5 puts the
-/// scheduler here; until then a tick changes nothing but the count.
-const fn schedule(state: &KernelState) -> u64 {
     state.ticks
 }
 

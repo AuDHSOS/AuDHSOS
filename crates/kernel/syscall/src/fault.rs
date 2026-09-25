@@ -69,6 +69,20 @@ pub fn deliver<
     }
 }
 
+/// Reports `fault` as [`deliver`] does, or stops `thread` with no message
+/// for `None`, which is a vector with no [`audhsos_abi::FaultKind`].
+pub fn take<E: Environment, const NP: usize, const NT: usize, const NM: usize, const NH: usize>(
+    machine: &mut Machine<'_, E, NP, NT, NM, NH>,
+    thread: ThreadId,
+    fault: Option<Fault>,
+    buffer: &mut [u8; SIZE],
+) -> Outcome {
+    match fault {
+        Some(fault) => deliver(machine, thread, fault, buffer),
+        None => stop(machine, thread),
+    }
+}
+
 /// The process of `thread` and the endpoint its faults are reported on.
 fn handler_of<
     E: Environment,
