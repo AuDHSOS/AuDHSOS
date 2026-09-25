@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` reads an offset after `PRECEDING` or `FOLLOWING` that is no
+  constant as nothing, so the window is refused as the C library refuses it.
+  D-495 records it. Catalog 6.6.343. `window1.test` goes from 293 cases
+  passing to 294 and `window6.test` from 60 to 62.
+
 - `db-sqlite` carries the refusal of a statement used as a value out to the
   client, where the refusal stood for nothing, and names the table of a name
   on the right of an `IN` as the statement wrote it. D-494 records it.

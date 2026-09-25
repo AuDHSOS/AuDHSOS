@@ -7583,3 +7583,13 @@ Document 16 step Q8. Every answer is the one the C library's shell writes.
   the statement wrote it.
 - A subquery whose own statement is refused, which carries that refusal
   and its code.
+### 6.6.343 A frame offset that is no constant (`db-sqlite`)
+
+Document 16 step Q8. Every answer is the one the C library's shell writes.
+
+- A column, a call, a `LIKE`, a window function and a statement written
+  as the offset of a `PRECEDING` or a `FOLLOWING`, each refused.
+- The same under a `RANGE` frame, which names a number and not an
+  integer.
+- A literal, an operator over literals, a `CAST`, a `COLLATE`, a `CASE`,
+  a row, a `BETWEEN` and an `IN` over a list, each of which stands.

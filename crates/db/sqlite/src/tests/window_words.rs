@@ -130,3 +130,75 @@ fn what_a_frame_offset_and_a_count_are_refused_with() {
         assert_eq!(refused(&image, sql), message, "{sql:?}");
     }
 }
+/// A frame offset the parser reads no constant in, which stands for
+/// nothing and is refused where the window opens.
+#[test]
+fn what_a_frame_offset_that_is_no_constant_is_refused_with() {
+    let image = written();
+    for (sql, message) in [
+        (
+            b"SELECT sum(a) OVER (ROWS BETWEEN b PRECEDING AND CURRENT ROW) FROM t1".as_slice(),
+            "frame starting offset must be a non-negative integer",
+        ),
+        (
+            b"SELECT sum(a) OVER (ROWS BETWEEN CURRENT ROW AND t1.b FOLLOWING) FROM t1",
+            "frame ending offset must be a non-negative integer",
+        ),
+        (
+            b"SELECT sum(a) OVER (ROWS BETWEEN abs(1) PRECEDING AND CURRENT ROW) FROM t1",
+            "frame starting offset must be a non-negative integer",
+        ),
+        (
+            b"SELECT sum(a) OVER (ROWS BETWEEN (SELECT 1) PRECEDING AND CURRENT ROW) FROM t1",
+            "frame starting offset must be a non-negative integer",
+        ),
+        (
+            b"SELECT sum(a) OVER (ROWS BETWEEN 1 IN (SELECT 1) PRECEDING AND CURRENT ROW) FROM t1",
+            "frame starting offset must be a non-negative integer",
+        ),
+        (
+            b"SELECT sum(a) OVER (ROWS BETWEEN 1 IN t1 PRECEDING AND CURRENT ROW) FROM t1",
+            "frame starting offset must be a non-negative integer",
+        ),
+        (
+            b"SELECT sum(a) OVER (ROWS BETWEEN EXISTS(SELECT 1) PRECEDING AND CURRENT ROW) FROM t1",
+            "frame starting offset must be a non-negative integer",
+        ),
+        (
+            b"SELECT sum(a) OVER (ROWS BETWEEN sum(b) OVER () PRECEDING AND CURRENT ROW) FROM t1",
+            "frame starting offset must be a non-negative integer",
+        ),
+        (
+            b"SELECT sum(a) OVER (ROWS BETWEEN '1' LIKE '1' PRECEDING AND CURRENT ROW) FROM t1",
+            "frame starting offset must be a non-negative integer",
+        ),
+        (
+            b"SELECT sum(a) OVER (ORDER BY b RANGE BETWEEN b PRECEDING AND CURRENT ROW) FROM t1",
+            "frame starting offset must be a non-negative number",
+        ),
+    ] {
+        assert_eq!(refused(&image, sql), message, "{sql:?}");
+    }
+}
+
+/// A frame offset the parser reads a constant in, which stands as it was
+/// written: an operator over literals, a `CASE`, a `CAST` and a
+/// `COLLATE` each hold no name and no call.
+#[test]
+fn what_a_frame_offset_that_is_a_constant_answers() {
+    let image = written();
+    let database = Database::open(&image).expect("a database");
+    for sql in [
+        b"SELECT sum(a) OVER (ROWS BETWEEN 1+1 PRECEDING AND CURRENT ROW) FROM t1".as_slice(),
+        b"SELECT sum(a) OVER (ROWS BETWEEN CAST('1' AS INT) PRECEDING AND CURRENT ROW) FROM t1",
+        b"SELECT sum(a) OVER (ROWS BETWEEN -(-1) PRECEDING AND CURRENT ROW) FROM t1",
+        b"SELECT sum(a) OVER (ROWS BETWEEN CASE WHEN 1 THEN 1 ELSE 2 END PRECEDING \
+          AND CURRENT ROW) FROM t1",
+        b"SELECT sum(a) OVER (ROWS BETWEEN 1 COLLATE BINARY PRECEDING AND CURRENT ROW) FROM t1",
+        b"SELECT sum(a) OVER (ROWS BETWEEN 1 BETWEEN 0 AND 2 PRECEDING AND CURRENT ROW) FROM t1",
+        b"SELECT sum(a) OVER (ROWS BETWEEN 1 IN (1,2) PRECEDING AND CURRENT ROW) FROM t1",
+        b"SELECT sum(a) OVER (ROWS BETWEEN (1,2)=(1,2) PRECEDING AND CURRENT ROW) FROM t1",
+    ] {
+        assert_eq!(database.query(sql).expect("a row").rows.len(), 1, "{sql:?}");
+    }
+}

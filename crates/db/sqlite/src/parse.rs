@@ -2918,11 +2918,26 @@ impl<'a> Parser<'a> {
             return Ok(Bound::CurrentRow);
         }
         let count = self.expression()?;
+        let count = self.offset(count)?;
         if self.eat_keyword(Keyword::Preceding) {
             return Ok(Bound::Preceding(count));
         }
         self.expect_keyword(Keyword::Following, Expected::Bound)?;
         Ok(Bound::Following(count))
+    }
+
+    /// The offset of a `PRECEDING` or a `FOLLOWING`, which stands for
+    /// nothing where the parser reads no constant.
+    ///
+    /// `sqlite3WindowOffsetExpr` of `research/sqlite/src/window.c:1163`
+    /// writes a null in place of such an offset, which the run then
+    /// refuses as no non-negative number, because the offset is read once
+    /// as the window opens and no row stands there to answer a name.
+    fn offset(&mut self, count: ExprId) -> Result<ExprId, Error> {
+        if constant_offset(&self.arena, count) {
+            return Ok(count);
+        }
+        self.node(Node::Literal(Literal::Null))
     }
 
     /// What follows `EXCLUDE`.
@@ -3450,6 +3465,37 @@ const fn is_join_word(keyword: Keyword) -> bool {
             | Keyword::Outer
             | Keyword::Right
     )
+}
+
+/// Whether the parser reads the expression as a constant, which
+/// `sqlite3ExprIsConstant` of `research/sqlite/src/expr.c:2645` answers
+/// with no parsing context: a literal and a bound parameter stand, and a
+/// column, a call, a `LIKE`, a window function, a `RAISE` and a
+/// statement each do not, because no parsing context says which call
+/// answers the same value every time, and `sqlite3ExprFunction` builds a
+/// `LIKE` as a call to `like`.
+///
+/// Walking costs O(n) over the nodes under the expression, whose height
+/// [`MAX_DEPTH`] bounds.
+fn constant_offset(arena: &Arena, id: ExprId) -> bool {
+    arena.node(id).is_none_or(|node| match node {
+        Node::Column { .. }
+        | Node::Call { .. }
+        | Node::Like { .. }
+        | Node::Over { .. }
+        | Node::Raise { .. }
+        | Node::Subquery(_)
+        | Node::Exists(_)
+        | Node::InSelect { .. }
+        | Node::InTable { .. } => false,
+        held => {
+            let mut constant = true;
+            arena.under(held, |child| {
+                constant &= constant_offset(arena, child);
+            });
+            constant
+        }
+    })
 }
 
 /// Whether a token is the word `INDEXED`.
