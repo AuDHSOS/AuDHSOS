@@ -2723,6 +2723,14 @@ impl Writer {
         if matches!(definition, Definition::View(_)) && crate::token::holds_variable(sql) {
             return Err(Error::ViewVariable);
         }
+        // `sqlite3ResolveNotValid` of `research/sqlite/src/resolve.c:927`
+        // refuses a parameter written in an expression the schema holds,
+        // which no caller binds against.
+        for (id, held) in resolved_places(arena, definition) {
+            if holds_parameter(arena, id) {
+                return Err(Error::VariableIn(held));
+            }
+        }
         // `sqlite3ExprFunctionUsable` of
         // `research/sqlite/src/expr.c:1276` holds the expressions a
         // statement resolves against the table to the functions a schema
@@ -12854,6 +12862,67 @@ fn resolved_expressions(arena: &Arena, definition: Definition) -> Vec<ExprId> {
         _ => {}
     }
     out
+}
+
+/// Every expression of a definition the schema resolves, each with the
+/// words naming where it stands.
+///
+/// `notValidImpl` of `research/sqlite/src/resolve.c:907` names four
+/// places: an index expression, a `CHECK`, a computed column and the
+/// `WHERE` of a partial index. A `DEFAULT` and the statement of a view
+/// are resolved elsewhere, so neither stands here.
+fn resolved_places(arena: &Arena, definition: Definition) -> Vec<(ExprId, &'static [u8])> {
+    let mut out = Vec::new();
+    match definition {
+        Definition::Table(_) => {
+            for held in arena.all_column_constraints() {
+                match held {
+                    crate::ast::ColumnConstraint::Check { value, .. } => {
+                        out.push((value, b"CHECK constraints".as_slice()));
+                    }
+                    crate::ast::ColumnConstraint::Generated { value, .. } => {
+                        out.push((value, b"generated columns".as_slice()));
+                    }
+                    _ => {}
+                }
+            }
+            for held in arena.all_table_constraints() {
+                if let crate::ast::TableConstraint::Check { value, .. } = held {
+                    out.push((value, b"CHECK constraints".as_slice()));
+                }
+            }
+        }
+        Definition::Index(made) => {
+            out.extend(
+                arena
+                    .orders(made.columns)
+                    .iter()
+                    .map(|term| (term.expr, b"index expressions".as_slice())),
+            );
+            out.extend(
+                made.filter
+                    .map(|id| (id, b"partial index WHERE clauses".as_slice())),
+            );
+        }
+        _ => {}
+    }
+    out
+}
+
+/// Whether the expression at `id` or one under it is a bound parameter.
+///
+/// The walk is O(n) in the nodes under `id`.
+fn holds_parameter(arena: &Arena, id: ExprId) -> bool {
+    arena.node(id).is_some_and(|node| {
+        if matches!(node, Node::Variable(_)) {
+            return true;
+        }
+        let mut found = false;
+        arena.under(node, |under| {
+            found |= holds_parameter(arena, under);
+        });
+        found
+    })
 }
 
 /// The names of the functions an expression calls, in the order they are

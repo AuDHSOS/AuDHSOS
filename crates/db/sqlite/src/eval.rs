@@ -764,7 +764,10 @@ fn answer(
         // reached it does.
         Node::Raise { action, message } => Err(raised(arena, (action, message), sql, row, deeper)),
         Node::Row(_) => Err(Error::RowValue),
-        Node::Variable(_) => Err(Error::Unsupported),
+        // `OP_Variable` reads the value the caller bound to the
+        // parameter, which is a null where nothing was bound; this crate
+        // takes no bindings, so every parameter stands for a null.
+        Node::Variable(_) => Ok(Answer::plain(Value::Null)),
     }
 }
 

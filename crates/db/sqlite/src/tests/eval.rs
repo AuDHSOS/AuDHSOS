@@ -98,6 +98,17 @@ fn every_expression_answers_what_the_c_library_answers() {
     }
 }
 
+/// What this engine answers an expression with, which a parameter that
+/// no caller bound answers a null for.
+#[test]
+fn what_a_parameter_no_caller_bound_answers() {
+    let (arena, root) = expression(b"?").unwrap();
+    assert_eq!(
+        evaluate(&arena, root, b"?", None).unwrap(),
+        crate::value::Value::Null
+    );
+}
+
 /// What this engine refuses an expression with.
 fn refusal(sql: &str) -> Error {
     let (arena, root) = expression(sql.as_bytes()).unwrap();
@@ -153,7 +164,6 @@ fn what_is_not_written_yet_refuses_rather_than_guessing() {
         Error::MisusedAggregate(b"count".to_vec())
     );
     assert_eq!(refusal("CURRENT_TIME"), Error::Unsupported);
-    assert_eq!(refusal("?"), Error::Unsupported);
     assert_eq!(refusal("(1,2)"), Error::RowValue);
     assert_eq!(refusal("(SELECT 1)"), Error::Unsupported);
     assert_eq!(refusal("EXISTS (SELECT 1)"), Error::Unsupported);

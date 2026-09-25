@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` answers a null for a bound parameter, and refuses one written in
+  a `CHECK`, a computed column, an index expression or the `WHERE` of a partial
+  index. D-514 records it. Catalog 6.6.360. `where.test` goes from 246 cases
+  passing to 264.
+
 - `db-sqlite` reads a bare name no side of the `FROM` answers as the name the
   statement answers a column under, in every clause but the answer itself.
   D-513 records it. Catalog 6.6.359. `select1.test` goes from 182 cases passing

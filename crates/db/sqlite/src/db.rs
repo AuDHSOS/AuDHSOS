@@ -210,6 +210,9 @@ pub enum Error {
     /// A `CREATE VIEW` whose statement holds a bound parameter, which no
     /// caller of a view binds.
     ViewVariable,
+    /// An expression of the schema that holds a bound parameter, named by
+    /// the words for where it stands.
+    VariableIn(&'static [u8]),
     /// A write of a trigger's body that names a schema.
     QualifiedInTrigger,
     /// An `UPDATE` or a `DELETE` of a trigger's body that names an
@@ -772,6 +775,9 @@ impl Error {
             Error::ReadOnlyDatabase => alloc::string::String::from(errstr(8)),
             Error::ViewVariable => {
                 alloc::string::String::from("parameters are not allowed in views")
+            }
+            Error::VariableIn(held) => {
+                alloc::format!("parameters prohibited in {}", shown(held))
             }
             Error::Schema(schema::Error::UnsetDefault(name)) => {
                 alloc::format!("default value of column [{}] is not constant", shown(name))

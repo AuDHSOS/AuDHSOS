@@ -7765,3 +7765,16 @@ Document 16 step Q8. Every answer is the one the C library's shell writes.
   itself, which are both refused.
 - A name standing for an expression that is refused, in the statement
   that answers under it and in one written inside that one.
+
+### 6.6.360 A bound parameter (`db-sqlite`)
+
+Document 16 step Q8. Every answer is the one the C library's shell writes.
+
+- A parameter among the columns a statement answers and in its `WHERE`,
+  which answers a null.
+- One statement per place of the schema that refuses a parameter: a
+  column `CHECK`, a table `CHECK`, a computed column, an index expression
+  and the `WHERE` of a partial index.
+- Every spelling of a parameter: `?`, `?1`, `:name`, `@name` and
+  `$name`.
+- The same expressions holding no parameter, which stand.

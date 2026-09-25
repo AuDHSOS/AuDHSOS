@@ -588,3 +588,60 @@ fn what_a_name_after_default_stands_for() {
         ["integer", "integer", "text"]
     );
 }
+
+/// A bound parameter written in an expression the schema holds is
+/// refused by the words for where it stands, no caller binding one
+/// against an object of the schema.
+#[test]
+fn where_a_bound_parameter_of_the_schema_is_refused() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t1(a,b)").unwrap();
+    for (sql, message) in [
+        (
+            b"CREATE TABLE t2(a CHECK(a>?))".as_slice(),
+            "parameters prohibited in CHECK constraints",
+        ),
+        (
+            b"CREATE TABLE t3(a, b, CHECK(a>:one))",
+            "parameters prohibited in CHECK constraints",
+        ),
+        (
+            b"CREATE TABLE t4(a, b AS (a+?1))",
+            "parameters prohibited in generated columns",
+        ),
+        (
+            b"CREATE INDEX i1 ON t1(a+@two)",
+            "parameters prohibited in index expressions",
+        ),
+        (
+            b"CREATE INDEX i2 ON t1(a) WHERE a>$three",
+            "parameters prohibited in partial index WHERE clauses",
+        ),
+    ] {
+        assert_eq!(writer.run(sql).unwrap_err().message(), message, "{sql:?}");
+    }
+    // An expression of the schema that holds none stands, and so does a
+    // parameter of a statement a caller wrote, which answers a null.
+    for sql in [
+        b"CREATE TABLE t5(a CHECK(a>0), b AS (a+1))".as_slice(),
+        b"CREATE INDEX i3 ON t1(a+1) WHERE a>0",
+        b"INSERT INTO t1 VALUES(1,2)",
+    ] {
+        writer
+            .run(sql)
+            .unwrap_or_else(|error| panic!("{sql:?}: {error:?}"));
+    }
+    let image = writer.written();
+    let database = Database::open(&image).expect("a database");
+    assert_eq!(
+        database
+            .query(b"SELECT ?, a FROM t1 WHERE a>?")
+            .unwrap()
+            .rows,
+        Vec::<Vec<Value>>::new()
+    );
+    assert_eq!(
+        database.query(b"SELECT ?, a FROM t1").unwrap().rows,
+        alloc::vec![alloc::vec![Value::Null, Value::Int(1)]]
+    );
+}
