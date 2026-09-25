@@ -3624,6 +3624,18 @@ impl Session {
         // The column names are the ones the last statement that answers
         // rows carries, which is what `exec_printf_cb` writes for the
         // first row it is given whatever stands after that statement.
+        // A statement that writes names the columns of its `RETURNING`,
+        // which the engine reads out of the statement without running it.
+        let returning = statements(sql)
+            .into_iter()
+            .map(|text| writer.returning_names(&sql_bytes(text.trim())))
+            .rfind(|names| !names.is_empty());
+        if let Some(names) = returning {
+            return Ok(names
+                .iter()
+                .map(|name| String::from_utf8_lossy(name).into_owned())
+                .collect());
+        }
         let Some(last) = statements(sql)
             .into_iter()
             .map(str::trim)

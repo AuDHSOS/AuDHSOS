@@ -145,3 +145,51 @@ fn what_the_parser_reads_of_the_two() {
         assert!(crate::parse::change(sql).is_err(), "{sql:?}");
     }
 }
+
+/// The names a `RETURNING` answers its columns under, which a caller
+/// reads out of the statement without running it, and the `TABLE.*` the
+/// clause takes no name in front of.
+#[test]
+fn what_names_a_returning_answers_its_columns_under() {
+    let mut writer = writer();
+    writer
+        .run(b"CREATE TABLE u(x, y AS (x+1), z AS (x+2) STORED)")
+        .unwrap();
+    let named = |sql: &[u8]| -> alloc::vec::Vec<alloc::string::String> {
+        writer
+            .returning_names(sql)
+            .iter()
+            .map(|name| alloc::string::String::from_utf8_lossy(name).into_owned())
+            .collect()
+    };
+    // A name an `AS` wrote, the name of a column, and the text of every
+    // other expression.
+    assert_eq!(
+        named(b"INSERT INTO t(a) VALUES(1) RETURNING b AS [xyz]"),
+        ["xyz"]
+    );
+    assert_eq!(named(b"INSERT INTO t(a) VALUES(1) RETURNING \"b\""), ["b"]);
+    assert_eq!(
+        named(b"UPDATE t SET b=1 RETURNING \"b\"+\"c\""),
+        ["\"b\"+\"c\""]
+    );
+    // A `*` answers every column of the table that the row holds, so a
+    // column the row computes where it is read is no column of it.
+    assert_eq!(named(b"DELETE FROM t RETURNING *"), ["a", "b", "c"]);
+    assert_eq!(named(b"DELETE FROM u RETURNING *"), ["x", "z"]);
+    // A statement that holds no `RETURNING`, one the parser does not
+    // take, and one over a table the schema does not hold each answer no
+    // name.
+    assert!(named(b"DELETE FROM t").is_empty());
+    assert!(named(b"SELECT 1").is_empty());
+    assert!(named(b"DELETE FROM nope RETURNING *").is_empty());
+    // `sqlite3AddReturning` has one table to answer, so the clause takes
+    // no name in front of a star.
+    assert_eq!(
+        writer
+            .run(b"INSERT INTO t(a) VALUES(1) RETURNING t.*")
+            .unwrap_err()
+            .message(),
+        "RETURNING may not use \"TABLE.*\" wildcards"
+    );
+}

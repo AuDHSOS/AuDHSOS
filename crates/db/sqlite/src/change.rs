@@ -4055,6 +4055,61 @@ impl Writer {
         })
     }
 
+    /// The names the `RETURNING` of `sql` answers its columns under, and
+    /// no name where the statement holds no `RETURNING`.
+    ///
+    /// `sqlite3AddReturning` of `research/sqlite/src/insert.c` names the
+    /// columns of the clause the way a statement's result columns are
+    /// named: the name an `AS` wrote, the name of the column where the
+    /// expression is one, and the text of the expression otherwise. A
+    /// `*` answers every column of the table, which the schema says.
+    ///
+    /// Reading the statement costs what parsing it costs.
+    #[must_use]
+    pub fn returning_names(&self, sql: &[u8]) -> Vec<Vec<u8>> {
+        let Ok((arena, change)) = crate::parse::change(sql) else {
+            return Vec::new();
+        };
+        let (returning, named) = match change {
+            Change::Insert(held) => (held.returning, held.name),
+            Change::Update(held) => (held.returning, held.name),
+            Change::Delete(held) => (held.returning, held.name),
+        };
+        if returning.is_empty() {
+            return Vec::new();
+        }
+        let name = crate::schema::dequote(named.text(sql));
+        let bytes = self.images();
+        let held = self
+            .reading_beside(&bytes)
+            .ok()
+            .and_then(|database| database.table_held(&name).map(|(table, _)| table.clone()));
+        let mut out = Vec::new();
+        for column in arena.results(returning) {
+            match *column {
+                crate::ast::ResultColumn::Star | crate::ast::ResultColumn::TableStar(_) => {
+                    out.extend(held.iter().flat_map(|table| {
+                        table
+                            .columns
+                            .iter()
+                            .filter(|column| column.generated != crate::schema::Generated::Virtual)
+                            .map(|column| column.name.clone())
+                    }));
+                }
+                crate::ast::ResultColumn::Expr { expr, alias, text } => out.push(match alias {
+                    Some(span) => crate::schema::dequote(span.text(sql)),
+                    None => match arena.node(expr) {
+                        Some(Node::Column { column, .. }) => {
+                            crate::schema::dequote(column.text(sql))
+                        }
+                        _ => text.text(sql).to_vec(),
+                    },
+                }),
+            }
+        }
+        out
+    }
+
     /// What an expression is read under where an object of the schema
     /// holds it: `own` says the expression is one of a `CHECK` or a
     /// `DEFAULT` of the table, and every statement of a trigger's body

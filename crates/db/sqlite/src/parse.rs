@@ -95,6 +95,9 @@ pub enum Expected {
     /// Nothing: the table an `UPDATE` changes named again in its
     /// `FROM`, which the span names.
     TargetInFrom,
+    /// Nothing: a `TABLE.*` written in a `RETURNING`, which answers the
+    /// one table of the statement and reads no name in front of the star.
+    ReturningStar,
     /// Nothing: a word after a name of the column list of a `CREATE
     /// VIEW`, which the span names.
     AfterViewColumn,
@@ -1169,7 +1172,24 @@ impl<'a> Parser<'a> {
         if !self.eat_keyword(Keyword::Returning) {
             return Ok(Range::default());
         }
-        self.result_columns()
+        let at = self.peek().map_or(self.sql.len(), |token| token.start);
+        let columns = self.result_columns()?;
+        // `sqlite3AddReturning` of `research/sqlite/src/insert.c` has one
+        // table to answer and no name to read a `t.*` against, so the
+        // clause takes `*` and takes no name in front of it.
+        if self
+            .arena
+            .results(columns)
+            .iter()
+            .any(|column| matches!(column, ResultColumn::TableStar(_)))
+        {
+            return Err(Error {
+                at,
+                len: 0,
+                expected: Expected::ReturningStar,
+            });
+        }
+        Ok(columns)
     }
 
     /// What follows `INSERT OR`.

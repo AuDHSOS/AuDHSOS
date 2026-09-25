@@ -424,6 +424,8 @@ pub enum Error {
     /// The table an `UPDATE` changes named again in its `FROM`, as it
     /// was written there.
     TargetInFrom(Vec<u8>),
+    /// A `TABLE.*` written in a `RETURNING`.
+    ReturningStar,
     /// A table an `ALTER TABLE` left in a state the schema cannot be
     /// read from, with the table, the words for the kind of alter, and
     /// what reading the schema refused.
@@ -812,6 +814,9 @@ impl Error {
             Error::Unrecognized(token) => {
                 alloc::format!("unrecognized token: \"{}\"", shown(token))
             }
+            Error::ReturningStar => {
+                alloc::string::String::from("RETURNING may not use \"TABLE.*\" wildcards")
+            }
             Error::TargetInFrom(name) => alloc::format!(
                 "target object/alias may not appear in FROM clause: {}",
                 shown(name)
@@ -1137,6 +1142,9 @@ impl Error {
         }
         if error.expected == parse::Expected::TargetInFrom {
             return Error::TargetInFrom(held.unwrap_or_default().to_vec());
+        }
+        if error.expected == parse::Expected::ReturningStar {
+            return Error::ReturningStar;
         }
         if error.expected == parse::Expected::AfterViewColumn {
             return Error::AfterViewColumn(held.unwrap_or_default().to_vec());

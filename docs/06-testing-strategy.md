@@ -7695,3 +7695,14 @@ Document 16 step Q8. Every answer is the one the C library's shell writes.
   one under the table's own name, which answers.
 - A `FROM` naming a table under the name the statement knows the table
   by, which the parser refuses.
+### 6.6.353 The names a `RETURNING` answers under (`db-sqlite`)
+
+Document 16 step Q8. Every answer is the one the C library's shell writes.
+
+- A name an `AS` wrote, a column written in double quotes, and an
+  expression of two columns.
+- A `*` over a table of a column computed where it is read, which is no
+  column of the row.
+- A statement that holds no `RETURNING`, one the parser does not take,
+  and one over a table the schema does not hold.
+- A `TABLE.*`, which the clause takes no name in front of.
