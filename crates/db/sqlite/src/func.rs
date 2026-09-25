@@ -153,6 +153,9 @@ pub enum Function {
     /// was built with the option, and `sqlite_compileoption_get(N)`,
     /// which names the option at that place.
     CompileOption(bool),
+    /// `sqlite_version()`, and `sqlite_source_id()` where the flag is
+    /// clear.
+    Version(bool),
     /// `char(...)`.
     Char,
     /// `degrees(X)`.
@@ -289,6 +292,23 @@ pub enum Ieee {
 }
 
 /// The table, which is `aBuiltinFunc` for what is written here.
+/// The three numbers a version number spells, which is the shape
+/// `SQLITE_VERSION` writes `SQLITE_VERSION_NUMBER` in: the major number,
+/// then two numbers of up to three digits each.
+fn version_of(number: u32) -> alloc::vec::Vec<u8> {
+    let major = number / 1_000_000;
+    let minor = (number / 1_000) % 1_000;
+    let patch = number % 1_000;
+    let mut out = alloc::vec::Vec::new();
+    for (at, part) in [major, minor, patch].into_iter().enumerate() {
+        if at > 0 {
+            out.push(b'.');
+        }
+        out.extend(crate::number::unsigned_text(u64::from(part)));
+    }
+    out
+}
+
 const TABLE: &[Entry] = &[
     Entry {
         name: b"abs",
@@ -921,6 +941,18 @@ const TABLE: &[Entry] = &[
         function: Function::CompileOption(true),
     },
     Entry {
+        name: b"sqlite_version",
+        least: 0,
+        most: Some(0),
+        function: Function::Version(true),
+    },
+    Entry {
+        name: b"sqlite_source_id",
+        least: 0,
+        most: Some(0),
+        function: Function::Version(false),
+    },
+    Entry {
         name: b"sqlite_compileoption_get",
         least: 1,
         most: Some(1),
@@ -1286,6 +1318,19 @@ pub fn call(
                 (false, value) => crate::pragma::built_at(value.to_integer())
                     .map_or(Value::Null, |option| Value::Text(option.to_vec())),
             },
+            // `versionFunc` and `sourceidFunc` of
+            // `research/sqlite/src/func.c` answer the version of the
+            // library and the check-in it was built from. This crate
+            // answers the version of the format it writes, which
+            // `crate::header::LIBRARY_VERSION` holds, and names itself
+            // in place of a check-in of the C library.
+            Function::Version(named) => Value::Text(if named {
+                version_of(crate::header::LIBRARY_VERSION)
+            } else {
+                let mut out = b"db-sqlite ".to_vec();
+                out.extend(version_of(crate::header::LIBRARY_VERSION));
+                out
+            }),
             Function::Format => crate::format::format(args)?,
             // `sqlite3_changes`, `sqlite3_total_changes` and
             // `sqlite3_last_insert_rowid`, which the connection carries

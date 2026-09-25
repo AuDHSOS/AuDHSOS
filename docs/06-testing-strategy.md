@@ -7788,3 +7788,12 @@ Document 16 step Q8. Every answer is the one the C library's shell writes.
 - An `IN` over a statement whose width a `*` stands for, which the count
   before the statement runs reads no table for.
 - The same statement over a table holding a row, which answers it.
+
+### 6.6.362 The version of the library (`db-sqlite`)
+
+Document 16 step Q8. Every answer is the one the C library's shell writes,
+with the version of the format this crate writes in place of the version
+of the library.
+
+- `sqlite_version()`, and the same call with a `*` for the arguments.
+- `sqlite_source_id()`, which names the crate.

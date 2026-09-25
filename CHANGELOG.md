@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` answers `sqlite_version()` with the version of the format it
+  writes and `sqlite_source_id()` with the name of the crate in front of it.
+  D-516 records it. Catalog 6.6.362. `normalize.test` goes from 62 cases passing
+  to 64.
+
 - `db-sqlite` reads the expressions of a statement whose walk read no row
   against a row of nulls, so a name it writes is refused before the statement
   answers. D-515 records it. Catalog 6.6.361. `capi3.test` goes from 184 cases

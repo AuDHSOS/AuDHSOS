@@ -377,3 +377,28 @@ fn what_the_ieee754_family_answers() {
         Value::Null
     );
 }
+
+/// The version of the format the crate writes, which a `*` for the
+/// arguments leaves the call with none of, and the name of the crate in
+/// place of a check-in of the C library.
+#[test]
+fn what_the_version_of_the_library_answers() {
+    let answered = |sql: &str| {
+        let writer = crate::change::Writer::new(1024, 0, crate::header::Encoding::Utf8).unwrap();
+        let bytes = writer.written();
+        crate::db::Database::open(&bytes)
+            .unwrap()
+            .query(sql.as_bytes())
+            .unwrap()
+            .rows
+            .remove(0)
+            .remove(0)
+    };
+    let text = |held: &str| Value::Text(held.as_bytes().to_vec());
+    assert_eq!(answered("SELECT sqlite_version()"), text("3.53.4"));
+    assert_eq!(answered("SELECT sqlite_version(*)"), text("3.53.4"));
+    assert_eq!(
+        answered("SELECT sqlite_source_id()"),
+        text("db-sqlite 3.53.4")
+    );
+}
