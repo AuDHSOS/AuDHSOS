@@ -1189,6 +1189,8 @@ Size: L.
      records.
 209. The name `affinity()` answers for an expression. Built, which D-509
      records.
+210. Where the aggregates of a statement written inside another one
+     stand. Built, which D-510 records.
 
 ### Done when
 
@@ -1198,8 +1200,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 123 514 cases in 843 files, 118 582
-pass, 2612 answer differently, and 2320 name something the engine
+under the `tclsh` of the machine. Of 123 494 cases in 843 files, 118 565
+pass, 2609 answer differently, and 2320 name something the engine
 refuses or a command that needs the C library's internals. The files
 that answer for tens of thousands of rows reach the five-minute
 deadline and are counted with the cases they ran by then. One run over

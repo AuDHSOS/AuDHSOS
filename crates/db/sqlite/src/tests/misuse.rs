@@ -156,3 +156,51 @@ fn what_a_distinct_before_the_arguments_is_refused_with() {
         alloc::vec![alloc::vec![crate::value::Value::Int(1)]]
     );
 }
+
+/// An aggregate written where no group has been made is refused whether
+/// a row reaches the statement that holds it or not, which is what
+/// `sqlite3SelectPrep` reads before any statement runs.
+#[test]
+fn what_a_misplaced_aggregate_of_a_statement_inside_one_is_refused_with() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t0(a,b)").unwrap();
+    let image = writer.written();
+    let held = "(SELECT b FROM t0 ORDER BY sum(a))";
+    for sql in [
+        alloc::format!("SELECT {held} FROM t0"),
+        alloc::format!("SELECT 1 FROM t0 WHERE EXISTS{held}"),
+        alloc::format!("SELECT 1 FROM t0 WHERE a IN {held}"),
+        alloc::format!("SELECT 1 FROM t0 GROUP BY {held}"),
+        alloc::format!("SELECT 1 FROM t0 GROUP BY a HAVING {held}"),
+        alloc::format!("SELECT 1 FROM t0 ORDER BY {held}"),
+        alloc::format!("SELECT 1 FROM t0 LEFT JOIN t0 AS u ON {held}"),
+        alloc::format!("SELECT 1 FROM {held}"),
+        alloc::format!("SELECT 1 FROM t0 UNION SELECT {held} FROM t0"),
+        alloc::format!("SELECT 1 FROM t0 WHERE EXISTS(SELECT 1 FROM t0 WHERE {held})"),
+        // The walk stops at the first refusal, which the rest of the
+        // expression the refused statement stands in does not undo.
+        alloc::format!("SELECT 1 FROM t0 WHERE {held} AND 1"),
+    ] {
+        assert_eq!(
+            refused(&image, sql.as_bytes()),
+            "misuse of aggregate: sum()",
+            "{sql}"
+        );
+    }
+}
+
+/// A name inside an aggregate of a statement written inside another one
+/// stands for a column of that statement, which the walk over the
+/// places the aggregates stand in reads no alias for.
+#[test]
+fn what_an_aggregate_of_a_statement_inside_one_answers() {
+    let image = written();
+    let database = Database::open(&image).expect("a database");
+    assert_eq!(
+        database
+            .query(b"SELECT (SELECT sum(a) FROM t1) FROM t1")
+            .unwrap()
+            .rows,
+        alloc::vec![alloc::vec![crate::value::Value::Int(1)]]
+    );
+}

@@ -7722,3 +7722,14 @@ Document 16 step Q8. Every answer is the one the C library's shell writes.
   no declared type.
 - A call on an expression that is no column, which carries no affinity.
 - A call on a connection the name was not defined on, which is refused.
+
+### 6.6.356 The aggregates of a statement inside one (`db-sqlite`)
+
+Document 16 step Q8. Every answer is the one the C library's shell writes.
+
+- One statement per place a statement stands in: a result column, a
+  `WHERE`, a `GROUP BY`, a `HAVING`, an `ORDER BY`, an `ON`, a `FROM`, a
+  compound and an `EXISTS` inside another statement.
+- A statement no row reaches, whose aggregate stands in its `ORDER BY`.
+- An aggregate over a bare name of the statement that holds it, which
+  the walk reads no alias for.

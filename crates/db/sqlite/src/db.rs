@@ -4007,7 +4007,8 @@ impl<'a> Database<'a> {
             Vec::new()
         };
         subqueries(arena, &select)?;
-        let calls = aggregates(arena, &select, sql, &sides, self.grouped)?;
+        nested_aggregates(arena, &select, sql, self.grouped)?;
+        let calls = aggregates(arena, &select, sql, Some(&sides), self.grouped)?;
         let overs = overs(arena, &select, sql, self.grouped)?;
         let alone = overs.is_empty();
         let (gathered, held) = self.ordering(arena, &select, sql, (&mut sides, alone, &calls));
@@ -8693,6 +8694,15 @@ pub(crate) fn width_of(arena: &Arena, id: SelectId) -> Option<usize> {
 /// The walk reads every expression of the statement once, so it is
 /// O(nodes) per statement.
 fn subqueries(arena: &Arena, select: &Select) -> Result<(), Error> {
+    for root in roots(arena, select) {
+        counted_columns(arena, root)?;
+    }
+    Ok(())
+}
+
+/// Every expression one statement holds, which is what a walk over the
+/// statement starts from.
+fn roots(arena: &Arena, select: &Select) -> Vec<ExprId> {
     let mut roots: Vec<ExprId> = Vec::new();
     for column in arena.results(select.columns) {
         if let ResultColumn::Expr { expr, .. } = *column {
@@ -8708,10 +8718,7 @@ fn subqueries(arena: &Arena, select: &Select) -> Result<(), Error> {
     for source in arena.sources(select.from) {
         roots.extend(source.on);
     }
-    for root in roots {
-        counted_columns(arena, root)?;
-    }
-    Ok(())
+    roots
 }
 
 /// The same for one expression and everything under it.
@@ -8758,7 +8765,7 @@ fn aggregates(
     arena: &Arena,
     select: &Select,
     sql: &[u8],
-    sides: &[Side<'_>],
+    sides: Option<&[Side<'_>]>,
     grouped: &'static [crate::func::Grouped],
 ) -> Result<Vec<Call>, Error> {
     let walk = Gathering {
@@ -8811,6 +8818,80 @@ fn aggregates(
     loose.map_or(Ok(calls), |name| Err(Error::LooseAggregate(name)))
 }
 
+/// Refuses a misplaced aggregate of a statement written inside this one.
+///
+/// `sqlite3SelectPrep` of `research/sqlite/src/select.c:5919` resolves
+/// every statement of a statement before any of them runs, so a
+/// statement no row reaches is refused all the same. The walk reads the
+/// statements of the expressions, of the `FROM` and of the compound, not
+/// the terms of a `WITH`, which `sqlite3WithPush` resolves once a name
+/// reaches one.
+///
+/// The walk is O(n) in the nodes of the statement.
+fn nested_aggregates(
+    arena: &Arena,
+    select: &Select,
+    sql: &[u8],
+    grouped: &'static [crate::func::Grouped],
+) -> Result<(), Error> {
+    for root in roots(arena, select) {
+        nested_columns(arena, root, sql, grouped)?;
+    }
+    for source in arena.sources(select.from) {
+        if let SourceKind::Select(id) = source.kind {
+            standing(arena, id, sql, grouped)?;
+        }
+    }
+    if let Some((_, id)) = select.compound {
+        standing(arena, id, sql, grouped)?;
+    }
+    Ok(())
+}
+
+/// The same for one expression and everything under it.
+fn nested_columns(
+    arena: &Arena,
+    id: ExprId,
+    sql: &[u8],
+    grouped: &'static [crate::func::Grouped],
+) -> Result<(), Error> {
+    arena
+        .node(id)
+        .map_or(Ok(()), |node| nested_node(arena, node, sql, grouped))
+}
+
+/// The same for one node the arena holds.
+fn nested_node(
+    arena: &Arena,
+    node: Node,
+    sql: &[u8],
+    grouped: &'static [crate::func::Grouped],
+) -> Result<(), Error> {
+    if let Node::Subquery(id) | Node::Exists(id) | Node::InSelect { select: id, .. } = node {
+        standing(arena, id, sql, grouped)?;
+    }
+    let mut deeper = Ok(());
+    arena.under(node, |child| {
+        if deeper.is_ok() {
+            deeper = nested_columns(arena, child, sql, grouped);
+        }
+    });
+    deeper
+}
+
+/// Where every aggregate of one statement written inside another one
+/// stands, and of every statement written inside that one.
+fn standing(
+    arena: &Arena,
+    id: SelectId,
+    sql: &[u8],
+    grouped: &'static [crate::func::Grouped],
+) -> Result<(), Error> {
+    let select = arena.select(id).ok_or(Error::Unsupported)?;
+    aggregates(arena, &select, sql, None, grouped)?;
+    nested_aggregates(arena, &select, sql, grouped)
+}
+
 /// What the walk for the aggregate calls of one statement reads.
 struct Gathering<'a> {
     /// The tree the statement was parsed into.
@@ -8820,8 +8901,10 @@ struct Gathering<'a> {
     /// The columns the statement answers, whose aliases a name written
     /// inside an aggregate may stand for.
     results: &'a [ResultColumn],
-    /// The sides of the `FROM`, which hold the names that are columns.
-    sides: &'a [Side<'a>],
+    /// The sides of the `FROM`, which hold the names that are columns,
+    /// and nothing where the statement stands inside another one and
+    /// only the place each aggregate stands in is read.
+    sides: Option<&'a [Side<'a>]>,
     /// The aggregates the application defined on the connection.
     grouped: &'static [crate::func::Grouped],
 }
@@ -8909,8 +8992,11 @@ impl Gathering<'_> {
         else {
             return Ok(());
         };
+        let Some(sides) = self.sides else {
+            return Ok(());
+        };
         let name = dequote(column.text(self.sql));
-        if holds(self.sides, &name) {
+        if holds(sides, &name) {
             return Ok(());
         }
         let aggregate = aliased(self.results, self.sql, &name)

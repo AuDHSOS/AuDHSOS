@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` reads where every aggregate of a statement written inside another
+  one stands before the statement that holds it runs, so an aggregate of a
+  statement no row reaches is refused all the same. D-510 records it. Catalog
+  6.6.356. `window1.test` goes from 294 cases passing to 297.
+
 - `db-sqlite` answers `affinity(X)` with the name of the affinity of the
   expression `X` is, on a connection the name was defined on. D-509 records it.
   Catalog 6.6.355. `subquery.test` goes from 57 cases passing to 70 and
