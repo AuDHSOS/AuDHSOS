@@ -3,7 +3,7 @@
 
 [package]
 name = "kernel-core"
-description = "The architecture-neutral kernel: boot sequence, trap handling, and the global kernel state"
+description = "The architecture-neutral kernel: boot sequence, trap handling, and the global kernel cells"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

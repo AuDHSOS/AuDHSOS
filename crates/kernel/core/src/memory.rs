@@ -641,8 +641,8 @@ fn page_at(address: u64) -> Result<Page, MemoryError> {
         .map_err(|_| MemoryError::Address)
 }
 
-/// Registers every maximal run of mapped pages in the `count` pages above
-/// `base` as one region backed by `backing`.
+/// Registers every maximal run of mapped pages of one permission set in the
+/// `count` pages above `base` as one region backed by `backing`.
 fn register_runs<F, A, T, S>(
     mapper: &Mapper<'_, F, A, T, S>,
     regions: &mut KernelRegions,
@@ -664,7 +664,7 @@ where
             offset = offset.saturating_add(1);
             continue;
         };
-        let length = run_length(mapper, page, count.saturating_sub(offset));
+        let length = run_length(mapper, page, perms, count.saturating_sub(offset));
         let pages = PageRange::new(page, length).map_err(|_| MemoryError::Address)?;
         regions.insert(Region {
             pages,
@@ -678,8 +678,13 @@ where
     Ok(())
 }
 
-/// The number of mapped pages from `start`, at most `limit`.
-fn run_length<F, A, T, S>(mapper: &Mapper<'_, F, A, T, S>, start: Page, limit: u64) -> u64
+/// The number of pages from `start` mapped with `perms`, at most `limit`.
+fn run_length<F, A, T, S>(
+    mapper: &Mapper<'_, F, A, T, S>,
+    start: Page,
+    perms: Permissions,
+    limit: u64,
+) -> u64
 where
     F: EntryFormat,
     A: FrameAccess<PageTable<F>>,
@@ -688,7 +693,11 @@ where
 {
     let run = (0..limit)
         .map_while(|offset| start.checked_add(offset))
-        .take_while(|page| mapper.translate(*page).is_some())
+        .take_while(|page| {
+            mapper
+                .translate(*page)
+                .is_some_and(|(_, found)| found == perms)
+        })
         .count();
     u64::try_from(run).unwrap_or(limit)
 }
@@ -733,11 +742,11 @@ where
             .start()
             .checked_add(offset)
             .ok_or(MemoryError::Address)?;
-        if mapper.translate(page).is_none() {
+        let Some((_, perms)) = mapper.translate(page) else {
             offset = offset.saturating_add(1);
             continue;
-        }
-        let length = run_length(mapper, page, count.saturating_sub(offset));
+        };
+        let length = run_length(mapper, page, perms, count.saturating_sub(offset));
         let mut rest = PageRange::new(page, length).map_err(|_| MemoryError::Address)?;
         while !rest.is_empty() {
             match mapper.unmap_range(rest, MAX_PAGES_PER_CALL)? {

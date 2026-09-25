@@ -64,7 +64,7 @@ AuDHSOS/
 │   │   ├── sched/             kernel-sched: thread states, run queues, time slices
 │   │   ├── ipc/               kernel-ipc: endpoints, notifications, rendezvous, message transfer
 │   │   ├── syscall/           kernel-syscall: argument decoding, validation, dispatch
-│   │   ├── core/              kernel-core: KernelState, boot sequence, memory bring-up, reactions to traps and ticks
+│   │   ├── core/              kernel-core: boot sequence, memory bring-up, reactions to traps and ticks
 │   │   ├── hal-x86_64/        kernel-hal-x86_64: the adapter (unsafe allowed)
 │   │   ├── test-harness/      kernel-test-harness: in-QEMU test runner, serial protocol
 │   │   └── bin/               audhsos-kernel: the binary; tests/*.rs are QEMU test kernels

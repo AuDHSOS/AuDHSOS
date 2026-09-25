@@ -6,16 +6,13 @@
 use kernel_hal_api::doubles::{RecordingConsole, RecordingExit};
 use kernel_hal_api::exit::ExitStatus;
 
-use crate::state::KernelState;
 use crate::trap::{EXCEPTION_VECTORS, Exception, Response, on_exception, on_user_fault};
 
 fn report(exception: Exception) -> String {
     let mut console = RecordingConsole::new();
     let mut exit = RecordingExit::new();
-    let mut state = KernelState::new();
-    on_exception(exception, &mut state, &mut console, &mut exit);
+    on_exception(exception, &mut console, &mut exit);
     assert_eq!(exit.status(), Some(ExitStatus::Failure));
-    assert_eq!(state.traps, 1);
     console.text()
 }
 
@@ -112,25 +109,20 @@ fn a_general_protection_reports_the_error_code_but_no_address() {
 }
 
 #[test]
-fn every_reported_trap_is_counted() {
+fn every_reported_trap_ends_the_machine() {
     let mut console = RecordingConsole::new();
-    let mut exit = RecordingExit::new();
-    let mut state = KernelState::new();
     for vector in [3u8, 6, 13] {
+        let mut exit = RecordingExit::new();
         on_exception(
             Exception {
                 vector,
                 ..Exception::default()
             },
-            &mut state,
             &mut console,
             &mut exit,
         );
+        assert_eq!(exit.status(), Some(ExitStatus::Failure), "vector {vector}");
     }
-    assert_eq!(state.traps, 3);
-    assert_eq!(exit.status(), Some(ExitStatus::Failure));
-    assert_eq!(KernelState::new().traps, 0);
-    assert_eq!(KernelState::default(), KernelState::new());
 }
 
 #[test]
@@ -157,7 +149,6 @@ fn an_exception_of_the_kernel_stops_the_machine_and_one_of_a_thread_stops_the_th
 #[test]
 fn a_user_fault_is_reported_in_full_and_the_machine_runs_on() {
     let mut console = RecordingConsole::new();
-    let mut state = KernelState::new();
     on_user_fault(
         Exception {
             vector: 14,
@@ -167,7 +158,6 @@ fn a_user_fault_is_reported_in_full_and_the_machine_runs_on() {
             cr2: 0xFFFF_FFFF_8000_0000,
             user: true,
         },
-        &mut state,
         &mut console,
     );
     let text = console.text();
@@ -178,7 +168,6 @@ fn a_user_fault_is_reported_in_full_and_the_machine_runs_on() {
         text.contains("faulting address 0xffffffff80000000"),
         "{text}"
     );
-    assert_eq!(state.traps, 1, "a user fault is a trap like any other");
 }
 
 #[test]
@@ -192,8 +181,7 @@ fn a_user_fault_writes_the_same_report_a_kernel_exception_does() {
         user: true,
     };
     let mut console = RecordingConsole::new();
-    let mut state = KernelState::new();
-    on_user_fault(exception, &mut state, &mut console);
+    on_user_fault(exception, &mut console);
     let user = console.text();
 
     let fatal = report(Exception {

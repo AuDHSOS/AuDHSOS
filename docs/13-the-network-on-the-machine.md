@@ -55,7 +55,7 @@ Phase 15.
 | Volatile MMIO from a `forbid(unsafe_code)` crate | **missing** |
 | `driver-virtio-net`, `server-net`, the socket protocol | Phase 14 |
 
-The kernel counts ticks — `KernelState::ticks` — and `system_info`
+The kernel counts ticks — `interrupts::ticks` — and `system_info`
 reports the tick frequency, so the clock is arithmetic over a number the
 kernel already has. The scheduler has four blocked states and none of them
 has a deadline, so the wait is new work in `kernel-sched`.
@@ -74,7 +74,7 @@ Two system calls, and one change in the scheduler.
 
 `clock_now` takes no handle and returns one word: microseconds since the
 kernel started, which is `Instant::from_micros` without further
-arithmetic. The kernel computes it from `KernelState::ticks` and the
+arithmetic. The kernel computes it from `interrupts::ticks` and the
 calibrated frequency it already reports through `system_info`; the
 resolution is therefore the tick and not the microsecond, and the
 documentation says so rather than implying a precision the timer does not
