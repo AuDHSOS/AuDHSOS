@@ -20,9 +20,24 @@ pub static ONLINE: [AtomicU32; CPUS] = [const { AtomicU32::new(0) }; CPUS];
 /// Per-processor timer observations.
 pub static TICKS: [AtomicU64; CPUS] = [const { AtomicU64::new(0) }; CPUS];
 
+/// Base of each processor's private GDT; zero before `install_private`.
+pub(crate) static GDT_BASES: [AtomicU64; CPUS] = [const { AtomicU64::new(0) }; CPUS];
+
 /// The calling processor, without borrowing a cell.
+///
+/// Reads the GDT base with `sgdt`: a local APIC read is MMIO, which QEMU
+/// TCG serializes on its global lock, and every lock-wait spin calls this.
+/// A processor without its private GDT loaded reads the APIC ID.
 #[must_use]
 pub fn processor() -> Option<u8> {
+    let gdt = crate::instructions::global_descriptor_table_base();
+    if gdt != 0
+        && let Some(index) = GDT_BASES
+            .iter()
+            .position(|entry| entry.load(Ordering::Relaxed) == gdt)
+    {
+        return u8::try_from(index).ok();
+    }
     let base = APIC_WINDOW.load(Ordering::Acquire);
     // Bring-up publishes the complete identifier list before the window.
     // With no AP candidate, every caller is the boot processor.

@@ -137,6 +137,15 @@ impl<T> Global<T> {
         self.owner.load(Ordering::Acquire) != 0
     }
 
+    /// `true` while `token`'s owner holds a [`GlobalRef`]; O(1), no wait.
+    #[must_use]
+    pub fn is_held_by(&self, token: &impl ExclusiveToken) -> bool {
+        token
+            .owner()
+            .checked_add(1)
+            .is_some_and(|owner| self.owner.load(Ordering::Acquire) == owner)
+    }
+
     fn acquire(&self, token: &impl ExclusiveToken) -> Result<(), Error> {
         let Some(owner) = token.owner().checked_add(1) else {
             return Err(Error::AlreadyBorrowed);
@@ -273,6 +282,15 @@ impl<T> Preset<T> {
     #[must_use]
     pub fn is_borrowed(&self) -> bool {
         self.owner.load(Ordering::Acquire) != 0
+    }
+
+    /// `true` while `token`'s owner holds a [`PresetRef`]; O(1), no wait.
+    #[must_use]
+    pub fn is_held_by(&self, token: &impl ExclusiveToken) -> bool {
+        token
+            .owner()
+            .checked_add(1)
+            .is_some_and(|owner| self.owner.load(Ordering::Acquire) == owner)
     }
 
     /// The value, when nothing can be borrowing it because the caller owns

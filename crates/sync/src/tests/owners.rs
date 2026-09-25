@@ -105,3 +105,23 @@ fn preset_contention_polls_until_release() {
     );
     crate::UncontendedToken.wait();
 }
+
+#[test]
+fn only_the_holding_owner_reads_as_holding() {
+    let waited = AtomicBool::new(false);
+    let preset = Preset::new(0);
+    let global = Global::new();
+    global.init(0).unwrap();
+    assert!(!preset.is_held_by(&Token(2, &waited)));
+    let first = preset.borrow(&Token(2, &waited)).unwrap();
+    let second = global.borrow(&Token(2, &waited)).unwrap();
+    assert!(preset.is_held_by(&Token(2, &waited)));
+    assert!(global.is_held_by(&Token(2, &waited)));
+    assert!(!preset.is_held_by(&Token(3, &waited)));
+    assert!(!global.is_held_by(&Token(u32::MAX, &waited)));
+    drop(first);
+    drop(second);
+    assert!(!preset.is_held_by(&Token(2, &waited)));
+    assert!(!global.is_held_by(&Token(2, &waited)));
+    assert!(!waited.load(Ordering::Relaxed));
+}

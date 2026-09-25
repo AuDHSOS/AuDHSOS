@@ -293,6 +293,17 @@ pub unsafe fn load_global_descriptor_table(pointer: &DescriptorTablePointer) {
     }
 }
 
+/// The base of the loaded global descriptor table.
+#[must_use]
+pub fn global_descriptor_table_base() -> u64 {
+    let mut pointer = DescriptorTablePointer { limit: 0, base: 0 };
+    // SAFETY: `sgdt` writes ten bytes into `pointer` and changes nothing else.
+    unsafe {
+        asm!("sgdt [{}]", in(reg) &raw mut pointer, options(nostack, preserves_flags));
+    }
+    pointer.base
+}
+
 /// Loads the interrupt descriptor table.
 ///
 /// # Safety

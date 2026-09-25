@@ -961,6 +961,15 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- The four-processor `bench` image overran its 60 s limit on slower hosts
+  inside `bench::machine_wait`. The cause is cell contention under QEMU TCG,
+  not a lost wakeup: `processor()` read the local APIC ID over MMIO on every
+  lock-wait spin, and QEMU serializes that MMIO on its global lock.
+  `processor()` reads the GDT base with `sgdt` (D-195); `nothing_is_held`
+  checks the owner word through `is_held_by` and waits for no cell; `sweep`
+  borrows the memory only when a thread ended; APs keep no turn log. The
+  image runs in about 29 s instead of 42 s.
+
 - `kernel-hal-x86_64` audit findings (issues #87, #92, #95, #98, #103,
   #105, #108, #110):
   - #87: `testing::read_byte` and `testing::write_byte` are `unsafe fn` with

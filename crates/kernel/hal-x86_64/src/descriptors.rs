@@ -150,6 +150,8 @@ unsafe fn install_private(kernel_stack_top: u64) -> Result<(), InstallError> {
     unsafe {
         load_global_descriptor_table(&pointer);
     }
+    crate::processor::slot(&crate::processor::GDT_BASES, cpu)
+        .store(pointer.base, Ordering::Relaxed);
     // SAFETY: the loaded GDT carries these selectors.
     unsafe {
         reload_segments(KERNEL_CODE_SELECTOR.as_u16(), KERNEL_DATA_SELECTOR.as_u16());
