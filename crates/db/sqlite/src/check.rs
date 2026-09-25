@@ -354,6 +354,7 @@ fn rows_held(
     }
     for (at, (key, values)) in rows.iter().enumerate() {
         nulls_held(table, values, found);
+        types_held(table, values, found);
         for held in &kept {
             row_held(database, table, held, (at, key, values), found)?;
         }
@@ -373,6 +374,69 @@ fn nulls_held(table: &crate::schema::Table, values: &[Value], found: &mut Found)
         text.extend_from_slice(&column.name);
         found.note_row(&text);
     }
+}
+
+/// Every column of one row that holds a value of another type than the
+/// column is declared.
+///
+/// `sqlite3Pragma` of `research/sqlite/src/pragma.c:1986` holds three
+/// rules over the types a column holds, each of which `OP_IsType` reads
+/// the type the record wrote. Reading one row costs O(c) in its columns.
+fn types_held(table: &crate::schema::Table, values: &[Value], found: &mut Found) {
+    for (column, value) in table.columns.iter().zip(values) {
+        let Some(word) = mistyped(table.strict, column, value) else {
+            continue;
+        };
+        let mut text = word;
+        text.extend_from_slice(b" value in ");
+        text.extend_from_slice(&table.name);
+        text.push(b'.');
+        text.extend_from_slice(&column.name);
+        found.note_row(&text);
+    }
+}
+
+/// The words a problem of one value opens with, and nothing where the
+/// value is of the type the column is declared.
+///
+/// A column of a `STRICT` table that is not `ANY` holds a value of its
+/// own type or nothing, where `aStdTypeMask` counts an integer as a
+/// value of a `REAL` column because a real that is a whole number is
+/// stored as one. A column of any other table holds no number where it
+/// is declared `TEXT`, and no text that converts to a number where it
+/// asks for one.
+fn mistyped(strict: bool, column: &crate::schema::Column, value: &Value) -> Option<Vec<u8>> {
+    if *value == Value::Null {
+        return None;
+    }
+    if strict {
+        let held = match column.declared.as_slice() {
+            b"ANY" => return None,
+            b"BLOB" => matches!(value, Value::Blob(_)),
+            b"INT" | b"INTEGER" => matches!(value, Value::Int(_)),
+            b"REAL" => matches!(value, Value::Int(_) | Value::Real(_)),
+            // A column of a `STRICT` table is declared one of the six,
+            // which `crate::schema` holds it to, so the rest is `TEXT`.
+            _ => matches!(value, Value::Text(_)),
+        };
+        if held {
+            return None;
+        }
+        let mut out = b"non-".to_vec();
+        out.extend_from_slice(&column.declared);
+        return Some(out);
+    }
+    if column.affinity == crate::value::Affinity::Text {
+        return matches!(value, Value::Int(_) | Value::Real(_)).then(|| b"NUMERIC".to_vec());
+    }
+    if column.affinity.numeric() {
+        let mut held = value.clone();
+        crate::value::apply(&mut held, crate::value::Affinity::Numeric);
+        return matches!(held, Value::Int(_) | Value::Real(_))
+            .then(|| b"TEXT".to_vec())
+            .filter(|_| matches!(value, Value::Text(_)));
+    }
+    None
 }
 
 /// One index read once: its entries in the order it holds them, what a

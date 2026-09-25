@@ -1170,6 +1170,8 @@ Size: L.
 200. The functions an expression of an object of the schema may name,
      which `PRAGMA trusted_schema` and the two flags of a function say.
      Built, which D-499 records.
+201. The types `PRAGMA integrity_check` holds the value of every column
+     to. Built, which D-500 records.
 
 ### Done when
 
@@ -1179,8 +1181,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 123 555 cases in 843 files, 118 509
-pass, 2696 answer differently, and 2350 name something the engine
+under the `tclsh` of the machine. Of 123 619 cases in 843 files, 118 620
+pass, 2651 answer differently, and 2348 name something the engine
 refuses or a command that needs the C library's internals. The files
 that answer for tens of thousands of rows reach the five-minute
 deadline and are counted with the cases they ran by then. One run over

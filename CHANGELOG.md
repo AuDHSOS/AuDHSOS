@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` holds the value of every column to the type the column names
+  where `PRAGMA integrity_check` reads a row. D-500 records it. Catalog
+  6.6.348. `strict2.test` goes from 7 cases passing to 25, which is every
+  case of the file.
+
 - `db-sqlite` holds an expression of an object of the schema to the functions
   a schema may name, which `PRAGMA trusted_schema` and the `SQLITE_INNOCUOUS`
   and `SQLITE_DIRECTONLY` flags of a function say. D-499 records it. Catalog

@@ -4762,3 +4762,82 @@ fn what_the_integrity_check_finds_where_a_key_of_a_unique_index_may_not_be_nothi
         ]
     );
 }
+
+/// The types `PRAGMA integrity_check` holds the values of a row to: a
+/// column of a `STRICT` table to the type it is declared, a column of
+/// `TEXT` affinity to no number, and a column that asks for a number to
+/// no text that converts to one.
+#[test]
+fn what_the_integrity_check_finds_of_the_types_a_row_holds() {
+    use crate::change::Writer;
+    // One row of each table, with the serial type of the one value
+    // written over so that the value is of another type than the column.
+    // The value `53` is stored as the one byte `0x35`, which is the
+    // letter `5`, so the serial type alone says whether the row holds a
+    // number or the text of one.
+    let over = |sql: &[u8], number: bool| -> Vec<Vec<u8>> {
+        let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+        writer.run(sql).unwrap();
+        let insert: &[u8] = if number {
+            b"INSERT INTO t VALUES(53)"
+        } else {
+            b"INSERT INTO t VALUES('5')"
+        };
+        writer.run(insert).unwrap();
+        // A text of one byte is serial type fifteen, which is thirteen
+        // and two for the byte.
+        let (written, serial) = if number { (1_u8, 15_u8) } else { (15, 1) };
+        let mut bytes = writer.written();
+        let at = bytes
+            .windows(3)
+            .position(|window| window == [2, written, 0x35])
+            .expect("the record of the row");
+        bytes[at + 1] = serial;
+        checked(&bytes)
+    };
+    // A `STRICT` table: text where the column is declared `INT`, and a
+    // number where it is declared `TEXT`.
+    assert_eq!(
+        over(b"CREATE TABLE t(a INT) STRICT", true),
+        [b"non-INT value in t.a".to_vec()]
+    );
+    assert_eq!(
+        over(b"CREATE TABLE t(a TEXT) STRICT", false),
+        [b"non-TEXT value in t.a".to_vec()]
+    );
+    // `ANY` holds whatever the row carries.
+    assert_eq!(
+        over(b"CREATE TABLE t(a ANY) STRICT", false),
+        [b"ok".to_vec()]
+    );
+    // Every other table: a number where the column is declared `TEXT`,
+    // and text that converts to a number where it asks for one.
+    assert_eq!(
+        over(b"CREATE TABLE t(a TEXT)", false),
+        [b"NUMERIC value in t.a".to_vec()]
+    );
+    assert_eq!(
+        over(b"CREATE TABLE t(a INTEGER)", true),
+        [b"TEXT value in t.a".to_vec()]
+    );
+    // A column of no affinity holds whatever the row carries.
+    assert_eq!(over(b"CREATE TABLE t(a BLOB)", false), [b"ok".to_vec()]);
+    // A row of three columns, each holding a value of its own type: a
+    // `REAL` column holds the integer `2` because a real that is a whole
+    // number is stored as one.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer
+        .run(b"CREATE TABLE t(a INT, b REAL, c TEXT) STRICT")
+        .unwrap();
+    writer.run(b"INSERT INTO t VALUES(53, 2, '5')").unwrap();
+    let mut bytes = writer.written();
+    assert_eq!(checked(&bytes), [b"ok".to_vec()]);
+    // The same row with the second value written over as text, which the
+    // column does not hold while the two beside it stand.
+    let at = bytes
+        .windows(4)
+        .position(|window| window == [4, 1, 1, 15])
+        .expect("the record of the row");
+    bytes[at + 2] = 15;
+    assert_eq!(checked(&bytes), [b"non-REAL value in t.b".to_vec()]);
+}

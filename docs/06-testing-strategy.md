@@ -7643,3 +7643,16 @@ Document 16 step Q8. Every answer is the one the C library's shell writes.
   are resolved where a statement reads them.
 - A statement a client wrote, which names every function the connection
   holds.
+### 6.6.348 The types the integrity check holds a row to (`db-sqlite`)
+
+Document 16 step Q8. Every answer is the one the C library's shell writes.
+One row of one column, with the serial type of its value written over so
+that the row holds a value of another type.
+
+- A column of a `STRICT` table declared `INT` holding text, and one
+  declared `TEXT` holding a number.
+- A column declared `ANY`, which holds whatever the row carries.
+- A column of `TEXT` affinity in a table that is not `STRICT` holding a
+  number, and one of `INTEGER` affinity holding text that converts to a
+  number.
+- A column of no affinity, which holds whatever the row carries.
