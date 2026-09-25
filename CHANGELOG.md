@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` reads a text a dot follows as a name, and carries the question
+  the C library asks after a name written in double quotes into the refusal a
+  `DROP COLUMN` writes. D-501 and D-502 record it. Catalog 6.6.349.
+  `quote.test` goes from 12 cases passing to 19.
+
 - `db-sqlite` holds the value of every column to the type the column names
   where `PRAGMA integrity_check` reads a row. D-500 records it. Catalog
   6.6.348. `strict2.test` goes from 7 cases passing to 25, which is every

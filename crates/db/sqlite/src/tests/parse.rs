@@ -536,6 +536,11 @@ fn every_shape_of_expression_reads_as_the_shape_it_is() {
         ("a.b", "(col a b)"),
         ("a.b.c", "(col a b c)"),
         ("\"quoted\"", "(col \"quoted\")"),
+        // `nm ::= STRING`: a text a dot follows names a table or a
+        // schema, where one nothing follows is a text of its own.
+        ("'t'.'c'", "(col 't' 'c')"),
+        ("'s'.'t'.'c'", "(col 's' 't' 'c')"),
+        ("'t'.c", "(col 't' c)"),
         ("[bracketed]", "(col [bracketed])"),
         ("`quoted`", "(col `quoted`)"),
         ("abs(-1)", "(call abs (neg 1))"),

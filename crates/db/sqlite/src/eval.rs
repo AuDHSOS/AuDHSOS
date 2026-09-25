@@ -1706,11 +1706,22 @@ fn missed(schema: Option<Span>, table: Option<Span>, column: &[u8], sql: &[u8]) 
     if schema.is_some() || table.is_some() {
         return written(schema, table, column, sql);
     }
-    if column.first() != Some(&b'"') {
-        return column.to_vec();
+    asked_of(column)
+}
+
+/// A bare name as `no such column: ` writes it: the name with its quotes
+/// taken off, and one written in double quotes with the question the C
+/// library asks after it.
+///
+/// `resolveExprStep` of `research/sqlite/src/resolve.c:791` reads
+/// `EP_DblQuoted`, which the parser marks a name it read between double
+/// quotes, so `"b"` carries the question and `'b'` does not.
+pub(crate) fn asked_of(written: &[u8]) -> Vec<u8> {
+    if written.first() != Some(&b'"') {
+        return crate::schema::dequote(written);
     }
     let mut shown = alloc::vec![b'"'];
-    shown.extend_from_slice(&crate::schema::dequote(column));
+    shown.extend_from_slice(&crate::schema::dequote(written));
     shown.extend_from_slice(b"\" - should this be a string literal in single-quotes?");
     shown
 }

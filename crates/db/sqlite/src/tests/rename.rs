@@ -453,6 +453,10 @@ fn a_column_a_key_is_over_or_the_one_column_of_a_table_is_not_dropped() {
     }
 }
 
+/// What a `DROP COLUMN` is refused with where an index names the column
+/// it dropped in double quotes.
+const HINTED: &str = "error in index i after drop column: no such column: \"b\" - should this be a string literal in single-quotes?";
+
 #[test]
 fn a_statement_that_names_the_column_holds_it_where_it_is() {
     for (made, sql, message) in [
@@ -483,6 +487,25 @@ fn a_statement_that_names_the_column_holds_it_where_it_is() {
             ],
             b"ALTER TABLE q DROP COLUMN a",
             "error in trigger tr after drop column: no such column: new.a",
+        ),
+        // A name the statement wrote in double quotes carries the
+        // question the C library asks, where one written in single
+        // quotes stands as it is: an index over a name alone holds the
+        // name as a text, and one over an expression holds a column.
+        (
+            alloc::vec![b"CREATE TABLE d(a,b)", b"CREATE INDEX i ON d(\"b\")"],
+            b"ALTER TABLE d DROP COLUMN b",
+            HINTED,
+        ),
+        (
+            alloc::vec![b"CREATE TABLE d(a,b)", b"CREATE INDEX i ON d('b')"],
+            b"ALTER TABLE d DROP COLUMN b",
+            "error in index i after drop column: no such column: b",
+        ),
+        (
+            alloc::vec![b"CREATE TABLE d(a,b)", b"CREATE INDEX i ON d(\"a\"||\"b\")"],
+            b"ALTER TABLE d DROP COLUMN b",
+            HINTED,
         ),
     ] {
         let mut writer = writer();

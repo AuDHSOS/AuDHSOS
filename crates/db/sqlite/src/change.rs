@@ -412,8 +412,10 @@ fn names_column(statement: &[u8], column: &[u8]) -> Option<Vec<u8>> {
             else {
                 return None;
             };
-            let name = crate::schema::dequote(text.text(statement));
-            name.eq_ignore_ascii_case(column).then_some(name)
+            let written = text.text(statement);
+            crate::schema::dequote(written)
+                .eq_ignore_ascii_case(column)
+                .then(|| crate::eval::asked_of(written))
         });
         if named.is_some() {
             return named;
@@ -431,11 +433,11 @@ fn names_column(statement: &[u8], column: &[u8]) -> Option<Vec<u8>> {
         if !crate::schema::dequote(named.text(statement)).eq_ignore_ascii_case(column) {
             return None;
         }
-        let mut shown = Vec::new();
-        if let Some(held) = table {
-            shown.extend_from_slice(&crate::schema::dequote(held.text(statement)));
-            shown.push(b'.');
-        }
+        let Some(held) = table else {
+            return Some(crate::eval::asked_of(named.text(statement)));
+        };
+        let mut shown = crate::schema::dequote(held.text(statement));
+        shown.push(b'.');
         shown.extend_from_slice(&crate::schema::dequote(named.text(statement)));
         Some(shown)
     })

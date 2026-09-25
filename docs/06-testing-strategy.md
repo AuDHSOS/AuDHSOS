@@ -7656,3 +7656,12 @@ that the row holds a value of another type.
   number, and one of `INTEGER` affinity holding text that converts to a
   number.
 - A column of no affinity, which holds whatever the row carries.
+### 6.6.349 The names a statement writes in quotes (`db-sqlite`)
+
+Document 16 step Q8. Every answer is the one the C library's shell writes.
+
+- `'t'.'c'`, `'s'.'t'.'c'` and `'t'.c` read as columns, and a text
+  nothing follows as a text.
+- An `ALTER TABLE ... DROP COLUMN` under an index over the dropped
+  column written in double quotes, in single quotes, and inside an
+  expression.

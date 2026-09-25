@@ -2638,6 +2638,12 @@ impl<'a> Parser<'a> {
                 self.bump();
                 self.literal(Literal::Float(Span::of(token)))
             }
+            // `nm ::= STRING` of `research/sqlite/src/parse.y:270`: a
+            // text stands where a name is written, so a text a dot
+            // follows names a table or a schema.
+            Kind::String if self.ahead(1).is_some_and(|held| held.kind == Kind::Dot) => {
+                self.named()
+            }
             Kind::String => {
                 self.bump();
                 self.literal(Literal::Text(Span::of(token)))
