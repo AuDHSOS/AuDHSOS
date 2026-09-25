@@ -2770,6 +2770,14 @@ impl Writer {
             return Ok(());
         }
         let (table, values, rowid) = row;
+        // A statement written inside the clause is read against the file
+        // as this statement found it, which costs one reader per row, so
+        // a clause that holds none is read against no reader at all.
+        let images = reads_statement(arena, returning).then(|| self.images());
+        let reader = match &images {
+            Some(images) => Some(self.reading_beside(images)?),
+            None => None,
+        };
         // `sqlite3AddReturning` builds the clause before the `AS` of the
         // statement is read, so a `RETURNING` reads the table under its
         // own name and not under the name the statement knows it by.
@@ -2790,7 +2798,11 @@ impl Writer {
             grouped: self.grouped,
             collating: self.collating,
             outer: None,
-            reading: None,
+            reading: reader.as_ref().map(|database| Reading {
+                database,
+                arena,
+                sql,
+            }),
             purely: None,
         };
         let mut answered = Vec::new();
@@ -12855,6 +12867,35 @@ fn called_names(arena: &Arena, id: ExprId, sql: &[u8], out: &mut Vec<Vec<u8>>) -
             called_names(arena, under, sql, out);
         });
         true
+    })
+}
+
+/// Whether a run of result columns holds a statement, which says the row
+/// they are read against needs a reader behind it.
+///
+/// Reading them costs O(n) in the nodes under the columns.
+fn reads_statement(arena: &Arena, columns: crate::ast::Range) -> bool {
+    arena.results(columns).iter().any(|column| match *column {
+        crate::ast::ResultColumn::Expr { expr, .. } => holds_statement(arena, expr),
+        _ => false,
+    })
+}
+
+/// Whether an expression holds a statement, which a subquery, an
+/// `EXISTS`, and either shape of an `IN` each are.
+fn holds_statement(arena: &Arena, id: ExprId) -> bool {
+    arena.node(id).is_some_and(|node| {
+        if matches!(
+            node,
+            Node::Subquery(_) | Node::Exists(_) | Node::InSelect { .. } | Node::InTable { .. }
+        ) {
+            return true;
+        }
+        let mut found = false;
+        arena.under(node, |child| {
+            found |= holds_statement(arena, child);
+        });
+        found
     })
 }
 

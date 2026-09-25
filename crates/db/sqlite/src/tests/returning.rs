@@ -193,3 +193,35 @@ fn what_names_a_returning_answers_its_columns_under() {
         "RETURNING may not use \"TABLE.*\" wildcards"
     );
 }
+
+/// A statement written inside a `RETURNING`, which is read against the
+/// file as the statement that holds it found the file.
+#[test]
+fn what_a_statement_written_inside_a_returning_answers() {
+    let mut writer = writer();
+    writer.run(b"CREATE TABLE u(b,c)").unwrap();
+    writer.run(b"INSERT INTO u VALUES(3,40)").unwrap();
+    // The clause reads the table it answers under its own name, so a
+    // statement inside it names the row the statement wrote.
+    assert_eq!(
+        writer
+            .run(b"INSERT INTO t(a) VALUES(3) RETURNING a, (SELECT c FROM u WHERE t.a=u.b)")
+            .unwrap(),
+        alloc::vec![alloc::vec![Value::Int(3), Value::Int(40)]]
+    );
+    assert_eq!(
+        writer
+            .run(b"INSERT INTO t(a) VALUES(4) RETURNING EXISTS(SELECT 1 FROM u WHERE u.b=t.a)")
+            .unwrap(),
+        alloc::vec![alloc::vec![Value::Int(0)]]
+    );
+    // `new` and `old` are names of a trigger's row and no name of a
+    // clause, whatever the statement wrote.
+    for sql in [
+        b"INSERT INTO t(a) VALUES(5) RETURNING (SELECT c FROM u WHERE new.a=u.b)".as_slice(),
+        b"INSERT INTO t(a) VALUES(5) RETURNING (SELECT c FROM u WHERE old.a=u.b)",
+    ] {
+        let message = writer.run(sql).unwrap_err().message();
+        assert!(message.starts_with("no such column: "), "{message}");
+    }
+}

@@ -7,6 +7,10 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` reads a statement written inside a `RETURNING` against the file
+  as the statement that holds the clause found it. D-508 records it. Catalog
+  6.6.354. `returning1.test` goes from 63 cases passing to 72.
+
 - `db-sqlite` names the columns a `RETURNING` answers, which a caller reads
   out of the statement without running it, and refuses a `TABLE.*` there.
   D-507 records it. Catalog 6.6.353. `returning1.test` goes from 57 cases

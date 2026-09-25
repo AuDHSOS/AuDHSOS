@@ -7706,3 +7706,10 @@ Document 16 step Q8. Every answer is the one the C library's shell writes.
 - A statement that holds no `RETURNING`, one the parser does not take,
   and one over a table the schema does not hold.
 - A `TABLE.*`, which the clause takes no name in front of.
+### 6.6.354 A statement inside a `RETURNING` (`db-sqlite`)
+
+Document 16 step Q8. Every answer is the one the C library's shell writes.
+
+- A subquery inside the clause that names the row the statement wrote,
+  and an `EXISTS` beside it.
+- The same naming `new` and `old`, which are no names of a clause.
