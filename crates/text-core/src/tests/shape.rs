@@ -245,9 +245,12 @@ fn anchor(x: u16, y: u16) -> Bin {
     Bin::words(&[1, x, y])
 }
 fn mark(kind: u16) -> Bin {
+    mark_on(kind, 1)
+}
+fn mark_on(kind: u16, base: u16) -> Bin {
     let mut t = Bin::words(&[1, 0, 0, 1, 0, 0]);
     t.child(2, coverage(&[7]));
-    t.child(4, coverage(&[1]));
+    t.child(4, coverage(&[base]));
     let mut marks = Bin::words(&[1, 0, 0]);
     marks.child(4, anchor(10, 20));
     t.child(8, marks);
@@ -294,6 +297,114 @@ fn mark_base_ligature_mark_and_cursive_chains() {
         assert_eq!(r[1].advance, Fixed::from_i32(70));
     }
 }
+/// Positions `ids` with lookups `0..lookups` of `data`; glyphs 7 and 8 are zero-width marks.
+fn attach(data: &[u8], lookups: usize, ids: &[u16], rtl: bool) -> Result<Vec<Glyph>, FontError> {
+    let mut glyphs: Vec<Glyph> = ids
+        .iter()
+        .enumerate()
+        .map(|(i, &id)| {
+            let mut g = Glyph::new(id, i, i + 1);
+            let mark = matches!(id, 7 | 8);
+            g.class = if mark { 3 } else { 1 };
+            g.advance = Fixed::from_i32(if mark { 0 } else { 100 });
+            g
+        })
+        .collect();
+    let mut buffer = Buffer::new(&mut glyphs, ids.len())?;
+    let table = LayoutTable::parse(data, false)?;
+    for index in 0..lookups {
+        table.apply_lookup(index, Gdef::default(), &[], rtl, &mut buffer)?;
+    }
+    shape::finish(&mut buffer, rtl)?;
+    Ok(buffer.glyphs().to_vec())
+}
+fn offsets(glyphs: &[Glyph]) -> Vec<(Fixed, Fixed)> {
+    glyphs.iter().map(|g| (g.x, g.y)).collect()
+}
+#[test]
+fn mark_to_base_over_4000_marks_is_linear() {
+    let ids = [&[1], &[7; 4000][..]].concat();
+    let expected = (Fixed::from_i32(-70), Fixed::from_i32(50));
+    for kind in [4, 5] {
+        // A base coverage miss in the first subtable repeats the search.
+        let mut l = Bin::words(&[kind, 0, 2, 0, 0]);
+        l.child(6, mark_on(kind, 2));
+        l.child(8, mark(kind));
+        let r = attach(&layout(vec![l]).0, 1, &ids, false).unwrap();
+        assert_eq!(offsets(&r[1..]), vec![expected; 4000], "kind {kind}");
+    }
+}
+#[test]
+fn mark_to_mark_chain_of_2000_marks_resolves_linearly() {
+    let mut t = Bin::words(&[1, 0, 0, 1, 0, 0]);
+    t.child(2, coverage(&[7]));
+    t.child(4, coverage(&[1, 7]));
+    let mut marks = Bin::words(&[1, 0, 0]);
+    marks.child(4, anchor(0, 0));
+    t.child(8, marks);
+    let mut bases = Bin::words(&[2, 0, 0]);
+    bases.child(2, anchor(1, 1));
+    bases.child(4, anchor(1, 1));
+    t.child(10, bases);
+    let ids = [&[1], &[7; 2000][..]].concat();
+    let r = attach(&layout(vec![lookup(6, 0, t)]).0, 1, &ids, false).unwrap();
+    // Each link adds anchor (1, 1); the marks start at the base's advance 100.
+    let expected: Vec<_> = (0..=2000)
+        .map(|k| {
+            (
+                Fixed::from_i32(if k == 0 { 0 } else { k - 100 }),
+                Fixed::from_i32(k),
+            )
+        })
+        .collect();
+    assert_eq!(offsets(&r), expected);
+}
+#[test]
+fn context_alternating_two_mark_lookups_is_linear() {
+    // Context: glyphs 7, 8 apply lookup 1 at 7 and lookup 2 at 8.
+    let mut c = Bin::words(&[3, 2, 2, 0, 0, 0, 1, 1, 2]);
+    c.child(6, coverage(&[7]));
+    c.child(8, coverage(&[8]));
+    // Lookup 2 attaches each 8 to the 7 before it with anchor (1, 1).
+    let mut t = Bin::words(&[1, 0, 0, 1, 0, 0]);
+    t.child(2, coverage(&[8]));
+    t.child(4, coverage(&[7]));
+    let mut marks = Bin::words(&[1, 0, 0]);
+    marks.child(4, anchor(0, 0));
+    t.child(8, marks);
+    let mut bases = Bin::words(&[1, 0]);
+    bases.child(2, anchor(1, 1));
+    t.child(10, bases);
+    let b = layout(vec![
+        lookup(7, 0, c),
+        lookup(4, 0, mark(4)),
+        lookup(6, 0, t),
+    ]);
+    let ids = [&[1], &[7, 8].repeat(2000)[..]].concat();
+    let r = attach(&b.0, 1, &ids, false).unwrap();
+    let pair = [(-70, 50), (-69, 51)].map(|(x, y)| (Fixed::from_i32(x), Fixed::from_i32(y)));
+    assert_eq!(offsets(&r[1..]), pair.repeat(2000));
+}
+fn cursive(flags: u16) -> Bin {
+    let mut t = Bin::words(&[1, 0, 1, 0, 0]);
+    t.child(2, coverage(&[1]));
+    t.child(6, anchor(0, 0));
+    t.child(8, anchor(0, 1));
+    lookup(3, flags, t)
+}
+#[test]
+fn forward_cursive_chain_of_2000_glyphs_resolves_linearly() {
+    let r = attach(&layout(vec![cursive(1)]).0, 1, &[1; 2000], false).unwrap();
+    let expected: Vec<_> = (0..2000)
+        .map(|k| (Fixed::ZERO, Fixed::from_i32(k - 1999)))
+        .collect();
+    assert_eq!(offsets(&r), expected);
+}
+#[test]
+fn opposite_cursive_attachments_are_a_cycle() {
+    let b = layout(vec![cursive(1), cursive(0)]);
+    assert_eq!(attach(&b.0, 2, &[1, 1], false), Err(FontError::Cycle));
+}
 #[test]
 fn malformed_layout_truncation_cycles_and_capacity() {
     let b = layout(vec![lookup(5, 0, context(3, false, 0))]);
@@ -329,7 +440,7 @@ fn shape_font(
         .map(|t| Gdef::parse(t.data, 0))
         .transpose()?
         .unwrap_or_default();
-    let mut glyphs = vec![Glyph::default(); 256];
+    let mut glyphs = vec![Glyph::default(); text.len().max(256)];
     let n = shape::prepare(text, font.cmap()?, script, rtl, &mut glyphs)?;
     let mut buffer = Buffer::new(&mut glyphs, n)?;
     if let Some(t) = font.table(*b"GSUB") {
@@ -434,6 +545,19 @@ pub(super) fn with_features(mut b: Bin, required: u16) -> Bin {
     features.child(12, Bin::words(&[0, 1, 1]));
     b.child(6, features);
     b
+}
+#[test]
+fn real_font_stacks_1500_fathas_on_one_base() {
+    let data = include_bytes!("fixtures/DejaVu-shaping.ttf");
+    let text = format!("\u{628}{}", "\u{64e}".repeat(1500));
+    let r = shape_font(data, &text, crate::unicode::Script::Arabic, true, *b"ARA ").unwrap();
+    let marks: Vec<_> = r.iter().filter(|g| g.id == 31).collect();
+    assert_eq!(marks.len(), 1500);
+    // `mark` places the first fatha, `mkmk` stacks each one 300 units higher.
+    for (k, g) in marks.iter().rev().enumerate() {
+        let y = -200 + 300 * i32::try_from(k).unwrap();
+        assert_eq!((g.x, g.y), (marks[0].x, Fixed::from_i32(y)), "fatha {k}");
+    }
 }
 #[test]
 fn language_required_and_variation_feature_selection() {

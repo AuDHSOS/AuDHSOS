@@ -50,6 +50,7 @@ pub struct Glyph {
     source_order: usize,
     origin: Fixed,
     resolved: (Fixed, Fixed),
+    state: position::State,
     parent: Option<usize>,
     cursive: bool,
 }
@@ -314,6 +315,7 @@ struct Engine<'a, 'c> {
     active: [usize; 16],
     depth: usize,
     feature: Feature,
+    attach: [Option<position::Attach>; 16],
 }
 impl<'a, 'c> Engine<'a, 'c> {
     fn new(
@@ -338,6 +340,7 @@ impl<'a, 'c> Engine<'a, 'c> {
                 tag: [0; 4],
                 value: 1,
             },
+            attach: [None; 16],
         })
     }
     fn tick(&mut self) -> Result<(), FontError> {
@@ -427,6 +430,7 @@ impl<'a, 'c> Engine<'a, 'c> {
             g.source_order = order;
         }
         buffer.set_classes(self.gdef)?;
+        self.attach = [None; 16];
         let lookup = self.lookup(index)?;
         let kind = lookup.u(0)?;
         let reverse = self.layout.substitution

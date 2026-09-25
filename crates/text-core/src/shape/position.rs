@@ -7,6 +7,24 @@ use crate::{
     read::{add, mul, sub},
 };
 
+/// Last attachment search of one lookup in a pass.
+#[derive(Clone, Copy)]
+pub(super) struct Attach {
+    lookup: usize,
+    marks: bool,
+    from: usize,
+    found: Option<usize>,
+}
+
+/// Resolution progress of one glyph in `finish`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum State {
+    #[default]
+    Unresolved,
+    Progress,
+    Done,
+}
+
 fn size(format: u16) -> Result<usize, FontError> {
     if format & 0xff00 != 0 {
         return Err(FontError::InvalidTable);
@@ -213,6 +231,56 @@ impl<'a> Engine<'a, '_> {
         buffer.put(j, second)?;
         Ok(Some(j))
     }
+    /// Nearest preceding eligible glyph of `i`, skipping marks when `marks`.
+    /// Reuses the lookup's previous search of the pass once it reaches that
+    /// search's start, so a run of n marks costs O(n).
+    fn attachment(
+        &mut self,
+        buffer: &Buffer<'_>,
+        i: usize,
+        lookup: Table<'a>,
+        marks: bool,
+    ) -> Result<Option<usize>, FontError> {
+        let index = *self
+            .active
+            .get(sub(self.depth, 1)?)
+            .ok_or(FontError::InvalidTable)?;
+        // Slot per lookup, so a context alternating lookups keeps each search.
+        let slot = index & 15;
+        let mut at = i;
+        let found = loop {
+            if let Some(last) = self.attach.get(slot).copied().flatten()
+                && last.from == at
+                && last.marks == marks
+                && last.lookup == index
+            {
+                break last.found;
+            }
+            self.tick()?;
+            let Some(n) = at.checked_sub(1) else {
+                break None;
+            };
+            at = n;
+            if !self.eligible(buffer, at, lookup)? {
+                continue;
+            }
+            let glyph = buffer.get(at)?;
+            let class = match self.gdef.class(glyph.id)? {
+                0 => glyph.class,
+                class => class,
+            };
+            if !marks || class != 3 {
+                break Some(at);
+            }
+        };
+        *self.attach.get_mut(slot).ok_or(FontError::InvalidTable)? = Some(Attach {
+            lookup: index,
+            marks,
+            from: i,
+            found,
+        });
+        Ok(found)
+    }
     fn mark(
         &mut self,
         buffer: &mut Buffer<'_>,
@@ -225,20 +293,8 @@ impl<'a> Engine<'a, '_> {
         if table.u(0)? != 1 {
             return Err(FontError::UnsupportedFormat);
         }
-        let mut p = i;
-        let parent = loop {
-            let Some(next) = self.next(buffer, p, lookup, true)? else {
-                return Ok(None);
-            };
-            p = next;
-            let glyph = buffer.get(p)?;
-            let class = match self.gdef.class(glyph.id)? {
-                0 => glyph.class,
-                coverage_index => coverage_index,
-            };
-            if kind == 6 || class != 3 {
-                break p;
-            }
+        let Some(parent) = self.attachment(buffer, i, lookup, kind != 6)? else {
+            return Ok(None);
         };
         let Some(d) = table.child(4)?.coverage(buffer.get(parent)?.id)? else {
             return Ok(None);
@@ -288,9 +344,10 @@ impl<'a> Engine<'a, '_> {
     }
 }
 
-/// Resolve mark/cursive attachment chains after all positioning stages.
+/// Resolve mark/cursive attachment chains after all positioning stages in O(n).
 /// # Errors
-/// Rejects cyclic attachments, invalid parents, overflow, and excessive work.
+/// Rejects cyclic attachments, invalid parents, and overflow; the buffer's
+/// attachments are then unspecified.
 pub fn finish(buffer: &mut Buffer<'_>, rtl: bool) -> Result<(), FontError> {
     let mut total = Fixed::ZERO;
     if rtl {
@@ -299,6 +356,7 @@ pub fn finish(buffer: &mut Buffer<'_>, rtl: bool) -> Result<(), FontError> {
         }
     }
     for g in buffer.glyphs_mut() {
+        g.state = State::Unresolved;
         if rtl {
             total = total.checked_sub(g.advance)?;
             g.origin = total;
@@ -307,45 +365,53 @@ pub fn finish(buffer: &mut Buffer<'_>, rtl: bool) -> Result<(), FontError> {
             total = total.checked_add(g.advance)?;
         }
     }
-    let mut work = 0;
     for i in 0..buffer.len {
+        // Ascend to a root or a resolved glyph; `parent` then names the child.
+        let mut child = None;
         let mut at = i;
-        let mut x = Fixed::ZERO;
-        let mut y = Fixed::ZERO;
-        let mut include_x = true;
-        let mut depth = 0;
-        loop {
-            work = add(work, 1)?;
-            depth = add(depth, 1)?;
-            if work > 1_000_000 {
-                return Err(FontError::LimitExceeded);
+        let mut above = loop {
+            let mut g = buffer.get(at)?;
+            match g.state {
+                State::Done => break Some(at),
+                State::Progress => return Err(FontError::Cycle),
+                State::Unresolved => {}
             }
-            if depth > buffer.len {
-                return Err(FontError::Cycle);
+            let up = g.parent;
+            g.state = State::Progress;
+            g.parent = child;
+            buffer.put(at, g)?;
+            child = Some(at);
+            match up {
+                Some(p) => at = p,
+                None => break None,
             }
-            let g = buffer.get(at)?;
-            if include_x {
-                x = x.checked_add(g.x)?;
+        };
+        // Descend, resolving each glyph from its resolved parent.
+        while let Some(c) = child {
+            let mut g = buffer.get(c)?;
+            let mut x = g.x;
+            let mut y = g.y;
+            if let Some(p) = above {
+                let p = buffer.get(p)?;
+                y = y.checked_add(p.resolved.1)?;
+                if !g.cursive {
+                    x = x
+                        .checked_add(p.origin.checked_sub(g.origin)?)?
+                        .checked_add(p.resolved.0)?;
+                }
             }
-            y = y.checked_add(g.y)?;
-            let Some(parent) = g.parent else {
-                break;
-            };
-            if g.cursive {
-                include_x = false;
-            } else if include_x {
-                x = x.checked_add(buffer.get(parent)?.origin.checked_sub(g.origin)?)?;
-            }
-            at = parent;
+            g.resolved = (x, y);
+            g.state = State::Done;
+            child = g.parent;
+            g.parent = None;
+            buffer.put(c, g)?;
+            above = Some(c);
         }
-        let mut g = buffer.get(i)?;
-        g.resolved = (x, y);
-        buffer.put(i, g)?;
     }
     for g in buffer.glyphs_mut() {
         g.x = g.resolved.0;
         g.y = g.resolved.1;
-        g.parent = None;
+        g.state = State::Unresolved;
     }
     Ok(())
 }
