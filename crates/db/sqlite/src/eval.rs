@@ -856,6 +856,9 @@ fn called(
         values.push(argument.value);
     }
     let called = crate::schema::dequote(name.text(sql));
+    // What the row says about the schema, read before the name, because
+    // every call is read against the same row.
+    let schemed = row.schemed();
     // `sqlite3FindFunction` reads the functions the application defined
     // before the ones the library holds.
     if let Some(defined) = row.defined(&called, values.len()) {
@@ -864,7 +867,7 @@ fn called(
         // schema may name: no expression names one the application marked
         // `SQLITE_DIRECTONLY`, and one it marked neither way is named
         // only where the connection trusts the schema.
-        if let Some(trusted) = row.schemed()
+        if let Some(trusted) = schemed
             && match defined.safety {
                 crate::func::Safety::Direct => true,
                 crate::func::Safety::Unsafe => !trusted,

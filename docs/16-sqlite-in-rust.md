@@ -1179,6 +1179,8 @@ Size: L.
      connection made. Built, which D-503 records.
 204. The kind of each value the suite harness hands the interpreter for
      a function it defined. Built, which D-504 records.
+205. The functions a `CHECK`, a `DEFAULT` and a trigger's body name.
+     Built, which D-505 records.
 
 ### Done when
 
@@ -1188,8 +1190,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 123 558 cases in 843 files, 118 578
-pass, 2633 answer differently, and 2347 name something the engine
+under the `tclsh` of the machine. Of 123 558 cases in 843 files, 118 588
+pass, 2628 answer differently, and 2342 name something the engine
 refuses or a command that needs the C library's internals. The files
 that answer for tens of thousands of rows reach the five-minute
 deadline and are counted with the cases they ran by then. One run over

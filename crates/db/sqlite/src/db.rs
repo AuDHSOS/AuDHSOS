@@ -3287,11 +3287,17 @@ impl<'a> Database<'a> {
         else {
             return Ok(Vec::new());
         };
-        let clock = self.clock.map(crate::date::julian_of);
+        // A `DEFAULT` is an expression of the schema, so it names the
+        // functions the application defined and is held to the ones a
+        // schema may name.
+        let row = Falling {
+            clock: self.clock.map(crate::date::julian_of),
+            schemed: self.schemed(stored.place),
+        };
         let mut out = Vec::with_capacity(stored.table.columns.len());
         for column in &stored.table.columns {
             out.push(match column.falls_back {
-                Some(id) => eval::evaluate(&stored.arena, id, &stored.sql, clock)?,
+                Some(id) => eval::evaluate_row(&stored.arena, id, &stored.sql, &row)?,
                 None => Value::Null,
             });
         }
@@ -3442,8 +3448,11 @@ impl<'a> Database<'a> {
         let scope = Scope {
             terms: &[],
             outer,
+            // The statements of a trigger's body are ones the schema
+            // holds, which the row the body reads `new` and `old` out of
+            // says, so the functions a schema may name are read for them.
+            schema: outer.is_some_and(|row| row.schemed().is_some()),
             views: 0,
-            schema: false,
         };
         Ok(self.statement(arena, id, sql, scope)?.answer)
     }
@@ -10221,6 +10230,40 @@ struct Schemed {
     schema: bool,
     /// Whether the connection trusts the schema.
     trusted: bool,
+}
+
+/// A row a `DEFAULT` is read against: it names no column of its own, and
+/// it carries the functions the application defined and what the
+/// connection says about the schema.
+struct Falling {
+    /// The moment the caller told the connection, which a clock literal
+    /// reads.
+    clock: Option<i64>,
+    /// What the expression is read under.
+    schemed: Schemed,
+}
+
+impl eval::Row for Falling {
+    fn clock(&self) -> Option<i64> {
+        self.clock
+    }
+
+    fn defined(&self, name: &[u8], count: usize) -> Option<crate::func::Defined> {
+        crate::func::defined(self.schemed.defined, name, count)
+    }
+
+    fn schemed(&self) -> Option<bool> {
+        self.schemed.schema.then_some(self.schemed.trusted)
+    }
+
+    fn column(
+        &self,
+        _schema: Option<&[u8]>,
+        _table: Option<&[u8]>,
+        _column: &[u8],
+    ) -> Option<(Value, Affinity, Collation)> {
+        None
+    }
 }
 
 /// A row while its computed columns are being filled in: it answers the

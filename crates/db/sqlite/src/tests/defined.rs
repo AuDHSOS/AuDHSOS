@@ -554,3 +554,72 @@ fn what_a_function_a_view_and_a_computed_column_name_is_refused_with() {
         "unsafe use of unsafely()"
     );
 }
+/// A `CHECK`, a `DEFAULT` and the body of a trigger are each expressions
+/// of the schema, so each names the functions the application defined and
+/// is held to the ones a schema may name.
+#[test]
+fn what_a_function_a_constraint_and_a_trigger_name_is_refused_with() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.defines(EDGY);
+    for sql in [
+        b"CREATE TABLE t(a, b DEFAULT (unsafely(21)))".as_slice(),
+        b"CREATE TABLE u(a, CHECK(unsafely(a)>0))",
+        b"CREATE TABLE seen(x)",
+        b"CREATE TRIGGER r AFTER INSERT ON t BEGIN \
+          INSERT INTO seen(x) SELECT unsafely(new.a); END",
+    ] {
+        writer.run(sql).unwrap_or_else(|error| {
+            panic!("{sql:?}: {}", error.message());
+        });
+    }
+    // While the connection trusts the schema each of the three answers.
+    writer.run(b"INSERT INTO t(a) VALUES(1)").unwrap();
+    writer.run(b"INSERT INTO u VALUES(1)").unwrap();
+    assert_eq!(
+        writer
+            .run(b"SELECT b FROM t")
+            .map_err(|error| error.message()),
+        Err(alloc::string::String::from("near \"SELECT\": syntax error"))
+    );
+    let image = writer.written();
+    let database = Database::open(&image).expect("a database").defining(EDGY);
+    assert_eq!(
+        database.query(b"SELECT b FROM t").unwrap().rows,
+        alloc::vec![alloc::vec![Value::Int(42)]]
+    );
+    assert_eq!(
+        database.query(b"SELECT x FROM seen").unwrap().rows,
+        alloc::vec![alloc::vec![Value::Int(2)]]
+    );
+    // A connection that does not trust the schema is refused each of
+    // them where the expression is read.
+    writer.run(b"PRAGMA trusted_schema=OFF").unwrap();
+    for (sql, message) in [
+        (
+            b"INSERT INTO t(a) VALUES(2)".as_slice(),
+            "unsafe use of unsafely()",
+        ),
+        (b"INSERT INTO u VALUES(2)", "unsafe use of unsafely()"),
+    ] {
+        assert_eq!(writer.run(sql).unwrap_err().message(), message, "{sql:?}");
+    }
+    // The body of the trigger is read the same way, which the statement
+    // that fires it carries out.
+    writer.run(b"PRAGMA trusted_schema=ON").unwrap();
+    writer.run(b"DROP TABLE t").unwrap();
+    writer.run(b"CREATE TABLE t(a)").unwrap();
+    writer
+        .run(
+            b"CREATE TRIGGER r2 AFTER INSERT ON t BEGIN \
+              INSERT INTO seen(x) SELECT unsafely(new.a); END",
+        )
+        .unwrap();
+    writer.run(b"PRAGMA trusted_schema=OFF").unwrap();
+    assert_eq!(
+        writer
+            .run(b"INSERT INTO t VALUES(3)")
+            .unwrap_err()
+            .message(),
+        "unsafe use of unsafely()"
+    );
+}

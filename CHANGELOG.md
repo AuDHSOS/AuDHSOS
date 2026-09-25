@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` reads a `CHECK`, a `DEFAULT` and the body of a trigger as
+  expressions the schema holds, so each names the functions the application
+  defined and is held to the ones a schema may name. D-505 records it.
+  Catalog 6.6.351. `trustschema1.test` goes from 29 cases passing to 37.
+
 - The suite harness hands the interpreter one value per argument of the kind
   the value is, so a function that answers its argument answers a value of
   that kind. D-504 records it. `subquery.test` goes from 55 cases passing to

@@ -2170,6 +2170,7 @@ impl Writer {
     ) -> Held<'a> {
         let (table, values, rowid) = row;
         Held {
+            schemed: self.schemed_here(false),
             table,
             values,
             rowid,
@@ -2763,6 +2764,7 @@ impl Writer {
         }
         let (table, values, rowid) = row;
         let held = Held {
+            schemed: self.schemed_here(false),
             table,
             values,
             rowid,
@@ -4042,6 +4044,20 @@ impl Writer {
         })
     }
 
+    /// What an expression is read under where an object of the schema
+    /// holds it: `own` says the expression is one of a `CHECK` or a
+    /// `DEFAULT` of the table, and every statement of a trigger's body
+    /// holds the expressions of that trigger.
+    ///
+    /// An object of the temp schema holds no such expression, which
+    /// `fixExprCb` of `research/sqlite/src/attach.c:468` reads `bTemp`
+    /// for, so a statement that writes the temp schema is read as a
+    /// client's own.
+    fn schemed_here(&self, own: bool) -> Option<bool> {
+        let held = own || !self.running.is_empty();
+        (held && !self.called.name.eq_ignore_ascii_case(b"temp")).then(|| self.trusts_schema())
+    }
+
     /// Whether the connection trusts the schema, which `PRAGMA
     /// trusted_schema` says and which stands on at open: an expression of
     /// a schema object names a function the application marked neither
@@ -4863,8 +4879,10 @@ const fn changing<'a>(
     old: (&'a [Value], i64),
     new: (&'a [Value], i64),
     encoding: Encoding,
+    schemed: Option<bool>,
 ) -> Fired<'a> {
     Fired {
+        schemed,
         table,
         old: Some(old),
         new: Some(new),
@@ -7796,6 +7814,7 @@ impl Writer {
             *slot = Value::Int(shown);
         }
         let row = Fired {
+            schemed: self.schemed_here(true),
             table,
             old: None,
             new: Some((&early, shown)),
@@ -7888,7 +7907,12 @@ impl Writer {
             (table, rows)
         };
         for values in &rows {
-            let row = Fired::inserted(&table, values, self.held.header.encoding);
+            let row = Fired::inserted(
+                &table,
+                values,
+                self.held.header.encoding,
+                self.schemed_here(true),
+            );
             self.fire(&triggers, &[], &row)?;
         }
         // `sqlite3_changes` counts the rows a statement wrote, and a
@@ -7948,6 +7972,7 @@ impl Writer {
                         outer,
                     });
                     let row = Held {
+                        schemed: self.schemed_here(false),
                         table: &table,
                         values,
                         rowid: None,
@@ -7995,6 +8020,7 @@ impl Writer {
         };
         for (old, new) in &written {
             let row = Fired {
+                schemed: self.schemed_here(true),
                 table: &table,
                 old: Some((old, 0)),
                 new: Some((new, 0)),
@@ -8034,6 +8060,7 @@ impl Writer {
             let mut taken = Vec::new();
             for values in &held {
                 let row = Held {
+                    schemed: self.schemed_here(false),
                     table: &table,
                     values,
                     rowid: None,
@@ -8069,6 +8096,7 @@ impl Writer {
         };
         for values in &taken {
             let row = Fired {
+                schemed: self.schemed_here(true),
                 table: &table,
                 old: Some((values, 0)),
                 new: None,
@@ -8108,6 +8136,7 @@ impl Writer {
         // A table with no rowid answers none of the three names of the
         // key, which `Held` says by holding none.
         let held = Held {
+            schemed: self.schemed_here(false),
             table,
             values,
             rowid: None,
@@ -8170,6 +8199,7 @@ impl Writer {
         let mut taken = 0_i64;
         for values in rows {
             let row = Fired {
+                schemed: self.schemed_here(true),
                 table: &table,
                 old: Some((&values, 0)),
                 new: None,
@@ -8243,7 +8273,12 @@ impl Writer {
         let mut count = 0_i64;
         for (_, values) in rows {
             let mut named = values;
-            let row = Fired::inserted(&table, &named, self.held.header.encoding);
+            let row = Fired::inserted(
+                &table,
+                &named,
+                self.held.header.encoding,
+                self.schemed_here(true),
+            );
             if fires && !self.fire(&before, &[], &row)? {
                 continue;
             }
@@ -8272,7 +8307,12 @@ impl Writer {
             self.writing = count;
             self.returns(arena, statement.returning, sql, (&table, &named, None))?;
             if fires {
-                let row = Fired::inserted(&table, &named, self.held.header.encoding);
+                let row = Fired::inserted(
+                    &table,
+                    &named,
+                    self.held.header.encoding,
+                    self.schemed_here(true),
+                );
                 self.fire(&after, &[], &row)?;
             }
         }
@@ -8475,6 +8515,7 @@ impl Writer {
         let fires = !before.is_empty() || !after.is_empty();
         if fires {
             let row = Fired {
+                schemed: self.schemed_here(true),
                 table,
                 old: Some((held, 0)),
                 new: Some((&named, 0)),
@@ -8518,6 +8559,7 @@ impl Writer {
         self.returns(wanted.arena, wanted.returning, wanted.sql, answered)?;
         if fires {
             let row = Fired {
+                schemed: self.schemed_here(true),
                 table,
                 old: Some((held, 0)),
                 new: Some((&named, 0)),
@@ -8580,6 +8622,7 @@ impl Writer {
         // on a connection that was told nothing.
         let (before, after) = self.deleting(&table.name)?;
         let row = Fired {
+            schemed: self.schemed_here(true),
             table,
             old: Some((&values, 0)),
             new: None,
@@ -8709,6 +8752,7 @@ impl Writer {
                     outer,
                 });
                 let held = Held {
+                    schemed: self.schemed_here(false),
                     table,
                     values: &values,
                     rowid: None,
@@ -8812,6 +8856,7 @@ impl Writer {
             let mut named = values;
             if fires {
                 let row = Fired {
+                    schemed: self.schemed_here(true),
                     table: &table,
                     old: Some((&held, 0)),
                     new: Some((&named, 0)),
@@ -8850,6 +8895,7 @@ impl Writer {
             self.returns(arena, statement.returning, sql, (&table, &named, None))?;
             if fires {
                 let row = Fired {
+                    schemed: self.schemed_here(true),
                     table: &table,
                     old: Some((&held, 0)),
                     new: Some((&named, 0)),
@@ -9291,6 +9337,7 @@ impl Writer {
             }
             Self::refilled(&named, &mut values, alias);
             let row = Fired {
+                schemed: self.schemed_here(true),
                 table: &table,
                 old: None,
                 new: Some((&named, rowid)),
@@ -9783,6 +9830,7 @@ impl Writer {
         let fires = !before.is_empty() || !after.is_empty();
         if fires {
             let row = Fired {
+                schemed: self.schemed_here(true),
                 table,
                 old: Some((held, rowid)),
                 new: Some((&named, key)),
@@ -9798,6 +9846,7 @@ impl Writer {
         self.constrained(table, &mut named, key, Conflict::Unspecified)?;
         Self::refilled(&named, &mut values, wanted.alias);
         let row = Fired {
+            schemed: self.schemed_here(true),
             table,
             old: Some((held, rowid)),
             new: Some((&named, key)),
@@ -9953,6 +10002,10 @@ struct Reading<'a> {
 }
 
 struct Held<'a> {
+    /// What the connection says about the schema where the expression is
+    /// one an object of the schema holds, and nothing where a client
+    /// wrote the statement.
+    schemed: Option<bool>,
     /// The table it belongs to, because a column may be written with
     /// the table's name before it.
     table: &'a Table,
@@ -9998,6 +10051,10 @@ struct Held<'a> {
 }
 
 impl crate::eval::Row for Held<'_> {
+    fn schemed(&self) -> Option<bool> {
+        self.schemed
+    }
+
     fn purely(&self) -> Option<crate::date::Purely> {
         self.purely
     }
@@ -10221,6 +10278,10 @@ struct Updating {
 /// cursors the body reaches by those names: a `DELETE` has `old` alone,
 /// an `INSERT` has `new` alone, and an `UPDATE` has both.
 struct Fired<'a> {
+    /// What the connection says about the schema, which the statements of
+    /// the body are read under because the schema holds them, and nothing
+    /// where the trigger stands in the temp schema.
+    schemed: Option<bool>,
     /// The table the trigger is on.
     table: &'a Table,
     /// The row as it was, with its key.
@@ -10234,8 +10295,14 @@ struct Fired<'a> {
 impl<'a> Fired<'a> {
     /// The row an `INSERT` writes, which no key of its own names where
     /// the table keeps its rows in the key's own tree.
-    const fn inserted(table: &'a Table, values: &'a [Value], encoding: Encoding) -> Self {
+    const fn inserted(
+        table: &'a Table,
+        values: &'a [Value],
+        encoding: Encoding,
+        schemed: Option<bool>,
+    ) -> Self {
         Fired {
+            schemed,
             table,
             old: None,
             new: Some((values, 0)),
@@ -10245,6 +10312,10 @@ impl<'a> Fired<'a> {
 }
 
 impl crate::eval::Row for Fired<'_> {
+    fn schemed(&self) -> Option<bool> {
+        self.schemed
+    }
+
     fn encoding(&self) -> Encoding {
         self.encoding
     }
@@ -10860,6 +10931,7 @@ impl Writer {
             let mut keys = Vec::new();
             for (rowid, values) in &rows {
                 let held = Held {
+                    schemed: self.schemed_here(false),
                     table,
                     values,
                     rowid: Some(*rowid),
@@ -10901,6 +10973,7 @@ impl Writer {
         let mut taken = 0_i64;
         for (key, values) in keys {
             let row = Fired {
+                schemed: self.schemed_here(true),
                 table: &table,
                 old: Some((&values, key)),
                 new: None,
@@ -11129,8 +11202,9 @@ impl Writer {
             let mut named;
             (key, named) = Self::rekeying(&mut values, alias, key)?;
             let encoding = self.held.header.encoding;
+            let schemed = self.schemed_here(true);
             if fires {
-                let row = changing(&table, (&held, rowid), (&named, key), encoding);
+                let row = changing(&table, (&held, rowid), (&named, key), encoding, schemed);
                 if !self.fire(&before, &columns, &row)?
                     // `sqlite3Update` reads the row again after the
                     // triggers before it have run, so a trigger whose
@@ -11145,7 +11219,7 @@ impl Writer {
                 continue;
             }
             Self::refilled(&named, &mut values, alias);
-            let row = changing(&table, (&held, rowid), (&named, key), encoding);
+            let row = changing(&table, (&held, rowid), (&named, key), encoding, schemed);
             // A row that keeps the key it had shares it with nothing.
             if key != rowid && !self.keyed(root, &kept, &table, alias, key, statement.conflict)? {
                 continue;
@@ -11288,6 +11362,7 @@ impl Writer {
         };
         let (before, after) = self.deleting(&table.name)?;
         let row = Fired {
+            schemed: self.schemed_here(true),
             table,
             old: Some((&values, rowid)),
             new: None,
@@ -11453,6 +11528,7 @@ impl Writer {
             return Err(Error::NotNull(shown));
         }
         let row = Held {
+            schemed: self.schemed_here(true),
             table,
             values,
             rowid: Some(rowid),

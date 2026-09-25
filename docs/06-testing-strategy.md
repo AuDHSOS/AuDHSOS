@@ -7674,3 +7674,12 @@ Document 16 step Q8. Every answer is the one the C library's shell writes.
 - A statement that sets the pragma, which changes nothing, and a caller
   that tells the connection a value, which the pragma answers.
 - A name no pragma is kept under, which is told nothing.
+### 6.6.351 The functions a constraint and a trigger name (`db-sqlite`)
+
+Document 16 step Q8. Every answer is the one the C library's shell writes.
+
+- A `DEFAULT`, a `CHECK` and a trigger's body over a function the
+  application marked neither way, each of which answers while the
+  connection trusts the schema.
+- The same three read by a connection that does not trust it, each of
+  which is refused where the expression is read.
