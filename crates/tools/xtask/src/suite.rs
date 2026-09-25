@@ -4075,7 +4075,19 @@ fn called(
         };
         let null = NULLED.with(|text| text.borrow().clone());
         let mut values = vec![String::from_utf8_lossy(name).into_owned()];
-        values.extend(args.iter().map(|value| listed(value, &null)));
+        // `tclSqlFunc` of `research/sqlite/src/tclsqlite.c:1046` builds
+        // one Tcl object per argument, of the kind the value is, so a
+        // proc that answers its argument answers an object of that kind
+        // and `value_kind` reads it back. The line carries text, so the
+        // kind stands in front of every value.
+        for value in args {
+            values.push(String::from(match value {
+                Value::Int(_) => "int",
+                Value::Real(_) => "real",
+                _ => "text",
+            }));
+            values.push(listed(value, &null));
+        }
         if write_call(&mut line.writer, "function", &values).is_err() {
             return Ok(Value::Null);
         }

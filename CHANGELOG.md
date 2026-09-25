@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The suite harness hands the interpreter one value per argument of the kind
+  the value is, so a function that answers its argument answers a value of
+  that kind. D-504 records it. `subquery.test` goes from 55 cases passing to
+  57 and `trustschema1.test` from 27 to 29.
+
 - `db-sqlite` answers `PRAGMA data_version` per connection, raised by one per
   commit another connection made to the file. D-503 records it. Catalog
   6.6.350. `pragma3.test` goes from 10 cases passing to 17.

@@ -148,6 +148,16 @@ proc value_kind {declared value} {
   return text
 }
 
+# One argument of a function as the object `tclSqlFunc` of
+# `research/sqlite/src/tclsqlite.c:1046` builds for it: a whole number
+# and a real each carry the Tcl type of a number, which a proc that
+# answers its argument answers again, and every other value is text.
+proc value_of {kind text} {
+  if {$kind eq "int"} { return [expr {wide($text)}] }
+  if {$kind eq "real"} { return [expr {double($text)}] }
+  return $text
+}
+
 # One call the engine wrote onto the line: the name of the collation or
 # the function, then its values, answered by the proc the file named, as
 # the values the `RET` carries.
@@ -214,7 +224,7 @@ proc harness_call {kind vals} {
     return [list [uplevel #0 $cmd]]
   }
   set cmd $::functions($name)
-  foreach v [lrange $vals 1 end] { lappend cmd $v }
+  foreach {kind v} [lrange $vals 1 end] { lappend cmd [value_of $kind $v] }
   set rc [catch { uplevel #0 $cmd } out]
   # A script that ends by `break` answers NULL, and one that raises ends
   # the statement, which this harness has no path for and answers NULL.
