@@ -178,18 +178,21 @@ pub struct Post {
     pub underline_thickness: i16,
     /// Whether the font declares equal character advances.
     pub fixed_pitch: bool,
+    /// False if a version 2.0 name is empty or breaks the charset or 63-byte limit.
+    pub names_valid: bool,
 }
 
 impl Post {
     /// Parse post versions 1, 2, 2.5, and 3, including glyph-name bounds.
     /// # Errors
-    /// Rejects unknown versions, invalid names/counts, and truncated data.
+    /// Rejects unknown versions, invalid counts, and truncated data.
     pub fn parse(data: &[u8], glyphs: u16) -> Result<Self, FontError> {
         read::bytes(data, 0, 32)?;
+        let mut names_valid = true;
         match read::u32(data, 0)? {
             0x0001_0000 if glyphs == 258 => (),
             0x0003_0000 => (),
-            0x0002_0000 => validate_names(data, glyphs)?,
+            0x0002_0000 => names_valid = validate_names(data, glyphs)?,
             0x0002_5000 => {
                 if read::u16(data, 32)? != glyphs {
                     return Err(FontError::InvalidTable);
@@ -214,11 +217,14 @@ impl Post {
             underline_position: read::i16(data, 8)?,
             underline_thickness: read::i16(data, 10)?,
             fixed_pitch: read::u32(data, 12)? != 0,
+            names_valid,
         })
     }
 }
 
-fn validate_names(data: &[u8], glyphs: u16) -> Result<(), FontError> {
+/// Bounds errors fail; name content only clears the returned flag
+/// (`docs/microsoft/post.html:839`), since names do not affect layout.
+fn validate_names(data: &[u8], glyphs: u16) -> Result<bool, FontError> {
     if read::u16(data, 32)? != glyphs {
         return Err(FontError::InvalidTable);
     }
@@ -228,21 +234,18 @@ fn validate_names(data: &[u8], glyphs: u16) -> Result<(), FontError> {
         max = max.max(read::u16(pair, 0)?);
     }
     let mut at = add(34, indices.len())?;
+    let mut valid = true;
     for _ in 258..=max {
         let len = usize::from(read::u8(data, at)?);
         at = add(at, 1)?;
         let name = read::bytes(data, at, len)?;
-        if len == 0
-            || len > 63
-            || !name
+        valid &= (1..=63).contains(&len)
+            && name
                 .iter()
-                .all(|b| b.is_ascii_alphanumeric() || matches!(*b, b'.' | b'_'))
-        {
-            return Err(FontError::InvalidTable);
-        }
+                .all(|b| b.is_ascii_alphanumeric() || matches!(*b, b'.' | b'_'));
         at = add(at, len)?;
     }
-    Ok(())
+    Ok(valid)
 }
 
 /// Validated horizontal metrics borrowing the font's hmtx table.
