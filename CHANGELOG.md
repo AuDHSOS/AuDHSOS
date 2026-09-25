@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` refuses a view and a trigger whose statement names a table of
+  another database than the one the object stands in. D-497 records it.
+  Catalog 6.6.345. `attach.test` goes from 78 cases passing to 86,
+  `with4.test` from 3 to 6 and `triggerupfrom.test` from 9 to 12.
+
 - `db-sqlite` opens the temp schema for a statement that only reads it, so
   its own table answers no row where the connection made no temp object.
   D-496 records it. Catalog 6.6.344. `attach.test` goes from 23 cases

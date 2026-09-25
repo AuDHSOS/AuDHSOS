@@ -7605,3 +7605,16 @@ Document 16 step Q8. Every answer is the one the C library's shell writes.
   names two databases and the schema's own table answers no row under
   each of its three names.
 - A name the temp schema holds no table of, which is no table of it.
+### 6.6.345 A view and a trigger that name another database (`db-sqlite`)
+
+Document 16 step Q8. Every answer is the one the C library's shell writes.
+
+- A view whose statement names a table of an attached database, under a
+  `FROM`, under a subquery, on the right of an `IN`, and as a
+  table-valued function.
+- A view that names the temp schema, and one that names a database the
+  connection does not hold.
+- A trigger whose body names such a table, under a step and under a
+  subquery of a step.
+- A view and a trigger that name the database they stand in, and one of
+  the temp schema that names another, each of which stands.

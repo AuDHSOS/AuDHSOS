@@ -1648,6 +1648,11 @@ impl Arena {
         self.selects.iter().copied()
     }
 
+    /// Every node the arena holds, in the order they were written.
+    pub fn all_nodes(&self) -> impl Iterator<Item = Node> {
+        self.nodes.iter().copied()
+    }
+
     /// Every clause of a `SET` the arena holds, in the order they were
     /// written.
     pub fn all_sets(&self) -> impl Iterator<Item = Set> {

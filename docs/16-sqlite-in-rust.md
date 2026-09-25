@@ -1163,6 +1163,8 @@ Size: L.
      records.
 197. The temp schema a statement that only reads it opens. Built, which
      D-496 records.
+198. The database a view's statement and a trigger's body may name,
+     which is the one the object stands in. Built, which D-497 records.
 
 ### Done when
 

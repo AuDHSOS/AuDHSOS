@@ -1344,3 +1344,65 @@ fn what_a_statement_that_names_the_temp_schema_opens() {
         "no such table: temp.t"
     );
 }
+
+/// A view and a trigger of one database whose statement names another are
+/// each refused where they are made, and one of the temp schema names
+/// every database.
+#[test]
+fn what_a_statement_that_names_another_database_is_refused_with() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a)").unwrap();
+    writer.run(b"ATTACH ':memory:' AS aux").unwrap();
+    writer.run(b"CREATE TABLE aux.u(b)").unwrap();
+    writer.run(b"CREATE TEMP TABLE tt(c)").unwrap();
+    for (sql, message) in [
+        (
+            b"CREATE VIEW v AS SELECT b FROM aux.u".as_slice(),
+            "view v cannot reference objects in database aux",
+        ),
+        (
+            b"CREATE VIEW v AS SELECT (SELECT b FROM aux.u)",
+            "view v cannot reference objects in database aux",
+        ),
+        (
+            b"CREATE VIEW v AS SELECT 1 WHERE 1 IN aux.u",
+            "view v cannot reference objects in database aux",
+        ),
+        (
+            b"CREATE VIEW v AS SELECT 1 FROM aux.pragma_table_info('u')",
+            "view v cannot reference objects in database aux",
+        ),
+        (
+            b"CREATE VIEW v AS SELECT c FROM temp.tt",
+            "view v cannot reference objects in database temp",
+        ),
+        (
+            b"CREATE VIEW v AS SELECT 1 FROM nope.u",
+            "view v cannot reference objects in database nope",
+        ),
+        (
+            b"CREATE TRIGGER r AFTER INSERT ON t BEGIN SELECT b FROM aux.u; END",
+            "trigger r cannot reference objects in database aux",
+        ),
+        (
+            b"CREATE TRIGGER r AFTER INSERT ON t BEGIN \
+              DELETE FROM t WHERE a<(SELECT b FROM aux.u); END",
+            "trigger r cannot reference objects in database aux",
+        ),
+    ] {
+        assert_eq!(writer.run(sql).unwrap_err().message(), message, "{sql:?}");
+    }
+    // A name written under the database the object stands in stands, and
+    // so does every name of an object of the temp schema.
+    for sql in [
+        b"CREATE VIEW v AS SELECT a FROM main.t".as_slice(),
+        b"CREATE VIEW aux.w AS SELECT b FROM aux.u",
+        b"CREATE TEMP VIEW tv AS SELECT b FROM aux.u",
+        b"CREATE TRIGGER r AFTER INSERT ON t BEGIN SELECT a FROM main.t; END",
+        b"CREATE TEMP TRIGGER tr AFTER INSERT ON t BEGIN SELECT b FROM aux.u; END",
+    ] {
+        writer.run(sql).unwrap_or_else(|error| {
+            panic!("{sql:?}: {}", error.message());
+        });
+    }
+}

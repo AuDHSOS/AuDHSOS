@@ -157,9 +157,10 @@ pub enum Error {
     /// A trigger, or a chain of foreign keys, that reached deeper than
     /// the connection carries.
     TriggerDepth,
-    /// A `CREATE TRIGGER` whose table stands in another database than the
-    /// trigger, with the name as it was written and that database.
-    TriggerSchema(Vec<u8>, Vec<u8>),
+    /// A view or a trigger whose statement names another database than
+    /// the one it stands in, with the word for the object, its name as it
+    /// was written, and that database.
+    ObjectSchema(Vec<u8>, Vec<u8>, Vec<u8>),
     /// An `ORDER BY` or a `GROUP BY` that counts to a column the answer
     /// does not have, with which term it is, the word for the clause,
     /// and how many columns the answer has.
@@ -595,6 +596,12 @@ impl Error {
                 alloc::string::String::from("RAISE() may only be used within a trigger-program")
             }
             Error::IndexedView => alloc::string::String::from("views may not be indexed"),
+            Error::ObjectSchema(kind, name, schema) => alloc::format!(
+                "{} {} cannot reference objects in database {}",
+                shown(kind),
+                shown(name),
+                shown(schema)
+            ),
             Error::ConstraintIndex => alloc::string::String::from(
                 "index associated with UNIQUE or PRIMARY KEY constraint cannot be dropped",
             ),
@@ -1009,11 +1016,6 @@ impl Error {
             ),
             Error::SystemTrigger => "cannot create trigger on system table".to_string(),
             Error::TriggerDepth => "too many levels of trigger recursion".to_string(),
-            Error::TriggerSchema(name, schema) => alloc::format!(
-                "trigger {} cannot reference objects in database {}",
-                alloc::string::String::from_utf8_lossy(name),
-                alloc::string::String::from_utf8_lossy(schema)
-            ),
             Error::Foreign => "FOREIGN KEY constraint failed".to_string(),
             Error::ForeignMismatch(child, parent) => alloc::format!(
                 "foreign key mismatch - \"{}\" referencing \"{}\"",

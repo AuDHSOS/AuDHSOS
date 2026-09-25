@@ -2701,6 +2701,19 @@ impl Writer {
         if matches!(definition, Definition::View(_)) && crate::token::holds_variable(sql) {
             return Err(Error::ViewVariable);
         }
+        // `sqlite3FixSelect` of `research/sqlite/src/attach.c:531` holds
+        // every name the statement of a view writes to the database the
+        // view stands in, and a view of the temp schema to none.
+        if let Definition::View(view) = definition
+            && !self.called.name.eq_ignore_ascii_case(b"temp")
+            && let Some(named) = other_database(arena, sql, &self.called.name)
+        {
+            return Err(Error::ObjectSchema(
+                b"view".to_vec(),
+                view.name.text(sql).to_vec(),
+                named,
+            ));
+        }
         Ok(())
     }
 
@@ -3939,6 +3952,41 @@ impl Writer {
             held,
         });
         Ok(self.attached.len().saturating_sub(1))
+    }
+
+    /// Raises where the table of a trigger or a name its body writes
+    /// stands in another database than the trigger.
+    ///
+    /// `fixSelectCb` of `research/sqlite/src/attach.c:495` holds the table
+    /// of the trigger to the database the trigger stands in, and
+    /// `sqlite3FixTriggerStep` of the same file holds every name the body
+    /// writes to that database. A trigger of the temp schema is held to
+    /// neither, which the caller reads before it asks.
+    ///
+    /// Reading the statement costs O(n) in the nodes the parser wrote.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ObjectSchema`] names the trigger and the database.
+    fn trigger_schemas(
+        &self,
+        arena: &Arena,
+        trigger: &crate::ast::CreateTrigger,
+        over_schema: Option<&[u8]>,
+        sql: &[u8],
+    ) -> Result<(), Error> {
+        let other = over_schema
+            .filter(|named| !named.eq_ignore_ascii_case(&self.called.name))
+            .map(<[u8]>::to_vec)
+            .or_else(|| other_database(arena, sql, &self.called.name));
+        match other {
+            Some(named) => Err(Error::ObjectSchema(
+                b"trigger".to_vec(),
+                trigger.name.text(sql).to_vec(),
+                named,
+            )),
+            None => Ok(()),
+        }
     }
 
     /// Opens the temp schema where `sql` names it, so a statement that
@@ -5800,16 +5848,8 @@ impl Writer {
             .table_schema
             .map(|span| crate::schema::dequote(span.text(sql)));
         let temping = self.called.name.eq_ignore_ascii_case(b"temp");
-        // `fixSelectCb` of `research/sqlite/src/attach.c:495` refuses a
-        // schema in front of the table that names another database than
-        // the one the trigger stands in, which a trigger of the temp
-        // schema is held to no name of.
-        if let Some(ref named) = over_schema
-            && !temping
-            && !named.eq_ignore_ascii_case(&self.called.name)
-        {
-            let written = trigger.name.text(sql).to_vec();
-            return Err(Error::TriggerSchema(written, named.clone()));
+        if !temping {
+            self.trigger_schemas(arena, trigger, over_schema.as_deref(), sql)?;
         }
         // `sqlite3CreateTrigger`: a table SQLite keeps for itself
         // carries no trigger at all.
@@ -12556,6 +12596,33 @@ fn holds_temp(sql: &[u8]) -> bool {
         }
     }
     false
+}
+
+/// The first database the statements of an arena name in front of a table
+/// that is not `held`, and nothing where every name they write stands
+/// under `held`.
+///
+/// `fixSelectCb` of `research/sqlite/src/attach.c:495` holds every table
+/// of every `FROM` of a view's statement and of a trigger's body to the
+/// database the object stands in, a table-valued function and the table
+/// on the right of an `IN` among them, and a name written with no
+/// database stands under that one, which `sqlite3FixSrcList` writes into
+/// it. The arena holds the nodes of one statement, so reading it costs
+/// O(n) in those nodes.
+fn other_database(arena: &Arena, sql: &[u8], held: &[u8]) -> Option<Vec<u8>> {
+    let sourced = arena.all_sources().filter_map(|source| match source.kind {
+        crate::ast::SourceKind::Table { schema, .. }
+        | crate::ast::SourceKind::Function { schema, .. } => schema,
+        crate::ast::SourceKind::Select(_) => None,
+    });
+    let inside = arena.all_nodes().filter_map(|node| match node {
+        crate::ast::Node::InTable { schema, .. } => schema,
+        _ => None,
+    });
+    sourced
+        .chain(inside)
+        .map(|span| crate::schema::dequote(span.text(sql)))
+        .find(|named| !named.eq_ignore_ascii_case(held))
 }
 
 /// Whether a text holds `name` as a word of its own, which is one no byte

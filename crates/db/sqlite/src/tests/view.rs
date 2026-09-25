@@ -151,7 +151,12 @@ fn which_database_a_body_that_names_no_table_is_refused_under() {
         b"CREATE TABLE t1(x)",
         b"CREATE TABLE gone(y)",
         b"CREATE VIEW v1 AS SELECT * FROM gone",
-        b"CREATE VIEW v2 AS SELECT * FROM aux.gone",
+        // The body of a view names no database of its own, so a view
+        // that reads the attached database stands in it.
+        b"CREATE VIEW aux.v2 AS SELECT * FROM gone",
+        // A name the body wrote a database in front of keeps the one it
+        // wrote.
+        b"CREATE VIEW v3 AS SELECT * FROM main.gone",
         b"CREATE TRIGGER r1 AFTER INSERT ON t1 BEGIN INSERT INTO gone VALUES(1); END",
         b"DROP TABLE gone",
     ] {
@@ -163,9 +168,20 @@ fn which_database_a_body_that_names_no_table_is_refused_under() {
         database.query(b"SELECT * FROM v1").unwrap_err().message(),
         "no such table: main.gone"
     );
+    let beside = writer
+        .attached_written(b"aux")
+        .expect("the attached database");
+    let every = Database::open(&image)
+        .expect("a database")
+        .attaching(b"aux", &beside)
+        .expect("the attached database");
     assert_eq!(
-        database.query(b"SELECT * FROM v2").unwrap_err().message(),
+        every.query(b"SELECT * FROM v2").unwrap_err().message(),
         "no such table: aux.gone"
+    );
+    assert_eq!(
+        database.query(b"SELECT * FROM v3").unwrap_err().message(),
+        "no such table: main.gone"
     );
     assert_eq!(
         writer
