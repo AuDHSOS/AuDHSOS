@@ -207,3 +207,58 @@ fn a_clause_of_a_triggers_body_reads_the_row_the_trigger_stands_on() {
     }
     assert_eq!(shown(&writer, b"SELECT z FROM t1 WHERE x=1"), "ten!|");
 }
+
+/// The name an `AS` gives the table of an `UPDATE` or a `DELETE`, which
+/// the `SET` and the `WHERE` know the table by and the table's own name is
+/// no name of.
+#[test]
+fn what_the_name_an_as_gives_the_table_of_a_statement_reaches() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a,b)").unwrap();
+    writer.run(b"INSERT INTO t VALUES(1,2),(3,4)").unwrap();
+    // The `SET` and the `WHERE` read the table under the name the `AS`
+    // gave it.
+    assert_eq!(
+        writer
+            .run(b"UPDATE t AS x SET b=x.a+10 WHERE x.a=1")
+            .unwrap()
+            .len(),
+        0
+    );
+    assert_eq!(shown(&writer, b"SELECT a,b FROM t ORDER BY a"), "1|11|3|4|");
+    assert_eq!(
+        writer.run(b"DELETE FROM t AS y WHERE y.a=3").unwrap().len(),
+        0
+    );
+    assert_eq!(shown(&writer, b"SELECT a,b FROM t"), "1|11|");
+    // The table's own name is no name of it from there on.
+    for (sql, message) in [
+        (
+            b"UPDATE t AS x SET b=1 WHERE t.a=1".as_slice(),
+            "no such column: t.a",
+        ),
+        (b"DELETE FROM t AS y WHERE t.a=1", "no such column: t.a"),
+        // A `RETURNING` is built before the `AS` is read, so it reads the
+        // table under its own name.
+        (
+            b"UPDATE t AS x SET b=2 RETURNING x.b",
+            "no such column: x.b",
+        ),
+        // A table of the `FROM` may not carry the name the statement
+        // knows the table by.
+        (
+            b"UPDATE t AS x SET b=1 FROM t AS x",
+            "target object/alias may not appear in FROM clause: x",
+        ),
+    ] {
+        assert_eq!(writer.run(sql).unwrap_err().message(), message, "{sql:?}");
+    }
+    // A `RETURNING` under the table's own name answers.
+    assert_eq!(
+        writer
+            .run(b"UPDATE t AS x SET b=99 RETURNING t.b")
+            .unwrap()
+            .len(),
+        1
+    );
+}

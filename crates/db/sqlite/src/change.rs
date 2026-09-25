@@ -989,6 +989,10 @@ pub struct Writer {
     /// sharing a key with one the table holds does, which holds every
     /// statement of the body where the statement said anything.
     firing: Conflict,
+    /// The name an `AS` gave the table of the `UPDATE` or the `DELETE`
+    /// running now, which its `SET` and its `WHERE` know the table by and
+    /// the table's own name is no name of.
+    aliased: Option<Vec<u8>>,
     /// How many rows a `REPLACE` has taken out for the row the statement
     /// writes now, which `regTrigCnt` of
     /// `research/sqlite/src/insert.c:2230` counts: a trigger of the
@@ -1143,6 +1147,7 @@ impl Writer {
             deferred: 0,
             refusing: Refusing::Abort,
             firing: Conflict::Unspecified,
+            aliased: None,
             replacing: 0,
             defined: &[],
             grouped: &[],
@@ -1278,6 +1283,7 @@ impl Writer {
             deferred: 0,
             refusing: Refusing::Abort,
             firing: Conflict::Unspecified,
+            aliased: None,
             replacing: 0,
             defined: &[],
             grouped: &[],
@@ -2171,6 +2177,7 @@ impl Writer {
         let (table, values, rowid) = row;
         Held {
             schemed: self.schemed_here(false),
+            named: self.aliased.as_deref(),
             table,
             values,
             rowid,
@@ -2763,8 +2770,12 @@ impl Writer {
             return Ok(());
         }
         let (table, values, rowid) = row;
+        // `sqlite3AddReturning` builds the clause before the `AS` of the
+        // statement is read, so a `RETURNING` reads the table under its
+        // own name and not under the name the statement knows it by.
         let held = Held {
             schemed: self.schemed_here(false),
+            named: None,
             table,
             values,
             rowid,
@@ -7973,6 +7984,7 @@ impl Writer {
                     });
                     let row = Held {
                         schemed: self.schemed_here(false),
+                        named: self.aliased.as_deref(),
                         table: &table,
                         values,
                         rowid: None,
@@ -8061,6 +8073,7 @@ impl Writer {
             for values in &held {
                 let row = Held {
                     schemed: self.schemed_here(false),
+                    named: self.aliased.as_deref(),
                     table: &table,
                     values,
                     rowid: None,
@@ -8137,6 +8150,7 @@ impl Writer {
         // key, which `Held` says by holding none.
         let held = Held {
             schemed: self.schemed_here(false),
+            named: self.aliased.as_deref(),
             table,
             values,
             rowid: None,
@@ -8753,6 +8767,7 @@ impl Writer {
                 });
                 let held = Held {
                     schemed: self.schemed_here(false),
+                    named: self.aliased.as_deref(),
                     table,
                     values: &values,
                     rowid: None,
@@ -10006,6 +10021,9 @@ struct Held<'a> {
     /// one an object of the schema holds, and nothing where a client
     /// wrote the statement.
     schemed: Option<bool>,
+    /// The name the statement knows the table by, where an `AS` gave it
+    /// one, which is then the only name a column may be written under.
+    named: Option<&'a [u8]>,
     /// The table it belongs to, because a column may be written with
     /// the table's name before it.
     table: &'a Table,
@@ -10149,7 +10167,8 @@ impl Held<'_> {
         if schema.is_some_and(|name| !name.eq_ignore_ascii_case(b"main")) {
             return None;
         }
-        if table.is_some_and(|name| !name.eq_ignore_ascii_case(&self.table.name)) {
+        let known = self.named.unwrap_or(&self.table.name);
+        if table.is_some_and(|name| !name.eq_ignore_ascii_case(known)) {
             return None;
         }
         let at = self
@@ -10897,7 +10916,9 @@ impl Writer {
         outer: Option<&dyn crate::eval::Row>,
     ) -> Result<i64, Error> {
         let held = core::mem::replace(&mut self.firing, Conflict::Unspecified);
+        let named = core::mem::replace(&mut self.aliased, aliased(statement.alias, sql));
         let answered = self.deleted(arena, statement, sql, outer);
+        self.aliased = named;
         self.firing = held;
         answered
     }
@@ -10932,6 +10953,7 @@ impl Writer {
             for (rowid, values) in &rows {
                 let held = Held {
                     schemed: self.schemed_here(false),
+                    named: self.aliased.as_deref(),
                     table,
                     values,
                     rowid: Some(*rowid),
@@ -11147,7 +11169,9 @@ impl Writer {
         outer: Option<&dyn crate::eval::Row>,
     ) -> Result<i64, Error> {
         let held = core::mem::replace(&mut self.firing, statement.conflict);
+        let named = core::mem::replace(&mut self.aliased, aliased(statement.alias, sql));
         let answered = self.updated(arena, statement, sql, outer);
+        self.aliased = named;
         self.firing = held;
         answered
     }
@@ -11529,6 +11553,7 @@ impl Writer {
         }
         let row = Held {
             schemed: self.schemed_here(true),
+            named: self.aliased.as_deref(),
             table,
             values,
             rowid: Some(rowid),
@@ -12776,6 +12801,12 @@ fn called_names(arena: &Arena, id: ExprId, sql: &[u8], out: &mut Vec<Vec<u8>>) -
         });
         true
     })
+}
+
+/// The name an `AS` gave the table of a statement, with its quotes taken
+/// off, and nothing where the statement wrote none.
+fn aliased(alias: Option<Span>, sql: &[u8]) -> Option<Vec<u8>> {
+    alias.map(|span| crate::schema::dequote(span.text(sql)))
 }
 
 /// The first database the statements of an arena name in front of a table

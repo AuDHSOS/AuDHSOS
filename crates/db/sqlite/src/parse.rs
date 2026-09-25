@@ -1088,6 +1088,7 @@ impl<'a> Parser<'a> {
             Conflict::Unspecified
         };
         let (schema, name) = self.qualified_name()?;
+        let alias = self.aliased()?;
         let indexed = self.indexed_name()?;
         self.expect_keyword(Keyword::Set, Expected::Set)?;
         let sets = self.set_list()?;
@@ -1097,7 +1098,7 @@ impl<'a> Parser<'a> {
         // `sqlite3Update` builds them into.
         let from = if self.eat_keyword(Keyword::From) {
             let tables = self.tables()?;
-            self.refused_target((schema, name), tables)?;
+            self.refused_target((schema, name, alias), tables)?;
             let columns = self.arena.push_results(&[ResultColumn::Star]);
             Some(self.arena.push_select(Select {
                 columns,
@@ -1117,6 +1118,7 @@ impl<'a> Parser<'a> {
             conflict,
             schema,
             name,
+            alias,
             indexed,
             sets,
             from,
@@ -1125,11 +1127,25 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// The name an `AS` gives the table of an `UPDATE` or a `DELETE`,
+    /// which the statement knows the table by from there on.
+    ///
+    /// `xfullname ::= nm AS nm` of `research/sqlite/src/parse.y:1120`
+    /// takes the name only after `AS`, so a bare word there is the next
+    /// part of the statement.
+    fn aliased(&mut self) -> Result<Option<Span>, Error> {
+        if !self.eat_keyword(Keyword::As) {
+            return Ok(None);
+        }
+        self.name().map(Some)
+    }
+
     /// `DELETE FROM name [WHERE filter]`.
     fn delete(&mut self) -> Result<Delete, Error> {
         self.expect_keyword(Keyword::Delete, Expected::Delete)?;
         self.expect_keyword(Keyword::From, Expected::From)?;
         let (schema, name) = self.qualified_name()?;
+        let alias = self.aliased()?;
         let indexed = self.indexed_name()?;
         let filter = if self.eat_keyword(Keyword::Where) {
             Some(self.expression()?)
@@ -1140,6 +1156,7 @@ impl<'a> Parser<'a> {
         Ok(Delete {
             schema,
             name,
+            alias,
             indexed,
             filter,
             returning,
@@ -3303,10 +3320,16 @@ impl<'a> Parser<'a> {
     ///
     /// [`Expected::TargetInFrom`] where a source or its alias names the
     /// table the statement changes.
-    fn refused_target(&self, target: (Option<Span>, Span), tables: Range) -> Result<(), Error> {
-        let (schema, target) = target;
+    fn refused_target(
+        &self,
+        target: (Option<Span>, Span, Option<Span>),
+        tables: Range,
+    ) -> Result<(), Error> {
+        let (schema, target, alias) = target;
         let held = self.schema_named(schema);
-        let wanted = crate::schema::dequote(target.text(self.sql));
+        // The statement knows the table by the name an `AS` gave it, so
+        // that is the name a table of the `FROM` may not carry either.
+        let wanted = crate::schema::dequote(alias.unwrap_or(target).text(self.sql));
         for source in self.arena.sources(tables) {
             let (named, under) = match source.kind {
                 SourceKind::Table { schema, name, .. } => (Some(name), self.schema_named(schema)),

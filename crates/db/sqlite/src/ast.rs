@@ -708,6 +708,10 @@ pub struct Delete {
     pub schema: Option<Span>,
     /// The table the rows come out of.
     pub name: Span,
+    /// The name the statement knows the table by, where an `AS` wrote
+    /// one, which the `WHERE` reads the table under and the table's own
+    /// name is no name of.
+    pub alias: Option<Span>,
     /// What the statement says about the index to use.
     pub indexed: Indexed,
     /// The `WHERE` clause, where one was written; a statement without
@@ -739,6 +743,12 @@ pub struct Update {
     pub schema: Option<Span>,
     /// The table whose rows change.
     pub name: Span,
+    /// The name the statement knows the table by, where an `AS` wrote
+    /// one: `xfullname ::= nm AS nm` of
+    /// `research/sqlite/src/parse.y:1120`, which the `SET` and the
+    /// `WHERE` read the table under and the table's own name is no name
+    /// of.
+    pub alias: Option<Span>,
     /// What the statement says about the index to use.
     pub indexed: Indexed,
     /// The columns written, each with what it is written with.

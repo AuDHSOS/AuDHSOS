@@ -7683,3 +7683,15 @@ Document 16 step Q8. Every answer is the one the C library's shell writes.
   connection trusts the schema.
 - The same three read by a connection that does not trust it, each of
   which is refused where the expression is read.
+### 6.6.352 The name an `AS` gives the table of a statement (`db-sqlite`)
+
+Document 16 step Q8. Every answer is the one the C library's shell writes.
+
+- An `UPDATE` and a `DELETE` whose `SET` and `WHERE` read the table under
+  the name the `AS` gave it.
+- The same statements writing the table's own name, which is no name of
+  it.
+- A `RETURNING` under the name the `AS` gave, which is no name there, and
+  one under the table's own name, which answers.
+- A `FROM` naming a table under the name the statement knows the table
+  by, which the parser refuses.

@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` takes a name after `AS` in an `UPDATE` and a `DELETE`, which the
+  `SET` and the `WHERE` know the table by. D-506 records it. Catalog 6.6.352.
+  `update.test` goes from 133 cases passing to 135 and `upfrom2.test` from 44
+  to 46, which is every case of the file.
+
 - `db-sqlite` reads a `CHECK`, a `DEFAULT` and the body of a trigger as
   expressions the schema holds, so each names the functions the application
   defined and is held to the ones a schema may name. D-505 records it.
