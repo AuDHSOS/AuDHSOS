@@ -456,7 +456,9 @@ may use the documented 68-byte legacy form. Line metrics use OS/2 typo
 values when USE_TYPO_METRICS is set and available, otherwise hhea.
 Negative line gaps become zero. Metrics remain in font units until scaled
 by `Fixed::mul_ratio(size, units, units_per_em)`, with one rounding.
-PostScript glyph names are validated but do not affect layout.
+PostScript glyph names do not affect layout. `Post::parse` rejects name-bound errors;
+a name that is empty or breaks the charset or 63-byte limit
+(`docs/microsoft/post.html:839`) clears `Post::names_valid`.
 **Done when:** exact scaled metrics, negative ties, overflow, truncated metric
 arrays, and invalid count relationships pass host tests; report acceptance before continuing.
 

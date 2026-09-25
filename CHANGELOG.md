@@ -961,6 +961,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `text-core` (issue #481): a version 2.0 post glyph name that is empty or
+  breaks the charset or 63-byte limit (`docs/microsoft/post.html:839`) clears
+  `Post::names_valid` instead of failing `Post::parse`, so metrics, outline
+  and instance parsing accept the face. Name-bound and count errors still fail.
+
 - The four-processor `bench` image overran its 60 s limit on slower hosts
   inside `bench::machine_wait`. The cause is cell contention under QEMU TCG,
   not a lost wakeup: `processor()` read the local APIC ID over MMIO on every

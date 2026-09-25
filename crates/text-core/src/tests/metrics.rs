@@ -277,8 +277,17 @@ fn post_versions_names_and_bounds() {
     for end in 32..post.len() {
         assert!(Post::parse(&post[..end], 3).is_err());
     }
-    post[43] = b'/';
-    assert!(Post::parse(&post, 3).is_err());
+    assert!(Post::parse(&post, 3).expect("post").names_valid);
+    // Name content clears the flag; bounds still fail.
+    post[43] = b'-';
+    assert!(!Post::parse(&post, 3).expect("post").names_valid);
+    post[43] = b'_';
+    post[40] = 0;
+    post.remove(41);
+    assert!(!Post::parse(&post, 3).expect("post").names_valid);
+    for end in 32..post.len() {
+        assert!(Post::parse(&post[..end], 3).is_err());
+    }
     post.truncate(32);
     put32(&mut post, 0, 0x0002_5000);
     post.extend([0, 3, 1, 255, 0]);
