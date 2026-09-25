@@ -507,3 +507,60 @@ fn the_three_words_of_a_window_are_names_where_no_window_stands() {
         ["1"]
     );
 }
+
+/// A `RANGE` frame that begins backwards holds the row it stands on
+/// whatever the offset does to the term, which is the comparison
+/// `windowCodeRangeTest` makes before it moves one term by the offset.
+#[test]
+fn what_a_range_frame_holds_where_the_offset_rounds_the_term() {
+    let mut writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t1(a INTEGER)").unwrap();
+    // Two integers a double holds no exact value of, so a term moved by
+    // a real offset rounds away from the term itself.
+    writer
+        .run(b"INSERT INTO t1 VALUES(3578824042033200656),(3029012920382354029)")
+        .unwrap();
+    let bytes = writer.written();
+    for frame in [
+        "ORDER BY a RANGE BETWEEN 0.3 PRECEDING AND 10 FOLLOWING",
+        "ORDER BY a RANGE BETWEEN 0.3 PRECEDING AND 0.1 PRECEDING",
+        "ORDER BY a RANGE BETWEEN 0.3 FOLLOWING AND 10 FOLLOWING",
+        "ORDER BY a DESC RANGE BETWEEN 0.3 PRECEDING AND 10 FOLLOWING",
+        "ORDER BY a NULLS LAST RANGE BETWEEN 0.3 PRECEDING AND 10 FOLLOWING",
+        "ORDER BY a RANGE BETWEEN 1.0 PRECEDING AND 2.0 PRECEDING",
+    ] {
+        let sql = alloc::format!("SELECT total(a) OVER ({frame}) FROM t1 ORDER BY a");
+        assert_eq!(
+            answered(&bytes, &sql).unwrap(),
+            ["3.0290129203823539e+18", "3.5788240420332006e+18"],
+            "{sql}"
+        );
+    }
+    // A frame that counts backwards over a term that sorts backwards
+    // subtracts the offset, which rounds away from the term and holds
+    // no row.
+    assert_eq!(
+        answered(
+            &bytes,
+            "SELECT total(a) OVER (ORDER BY a DESC \
+             RANGE BETWEEN 0.3 PRECEDING AND 0.1 PRECEDING) FROM t1 ORDER BY a"
+        )
+        .unwrap(),
+        ["0.0", "0.0"]
+    );
+    // A text is moved by no offset, so the two terms are compared as
+    // they stand.
+    let mut writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t2(a)").unwrap();
+    writer.run(b"INSERT INTO t2 VALUES('x'),('y')").unwrap();
+    let bytes = writer.written();
+    assert_eq!(
+        answered(
+            &bytes,
+            "SELECT count(*) OVER (ORDER BY a \
+             RANGE BETWEEN 1 PRECEDING AND CURRENT ROW) FROM t2 ORDER BY a"
+        )
+        .unwrap(),
+        ["1", "1"]
+    );
+}

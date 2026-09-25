@@ -7733,3 +7733,12 @@ Document 16 step Q8. Every answer is the one the C library's shell writes.
 - A statement no row reaches, whose aggregate stands in its `ORDER BY`.
 - An aggregate over a bare name of the statement that holds it, which
   the walk reads no alias for.
+
+### 6.6.357 A `RANGE` frame over a term the offset rounds (`db-sqlite`)
+
+Document 16 step Q8. Every answer is the one the C library's shell writes.
+
+- The six frames of two integers no double holds a value of: forwards and
+  backwards, ascending and descending, and nulls last.
+- The same frame over a term that sorts backwards, which holds no row.
+- A frame counted over a text, which no offset moves.

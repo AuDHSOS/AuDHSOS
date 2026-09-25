@@ -1191,6 +1191,8 @@ Size: L.
      records.
 210. Where the aggregates of a statement written inside another one
      stand. Built, which D-510 records.
+211. What a `RANGE` frame holds where the offset rounds the term.
+     Built, which D-511 records.
 
 ### Done when
 
@@ -1200,8 +1202,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 123 494 cases in 843 files, 118 565
-pass, 2609 answer differently, and 2320 name something the engine
+under the `tclsh` of the machine. Of 123 491 cases in 843 files, 118 566
+pass, 2605 answer differently, and 2320 name something the engine
 refuses or a command that needs the C library's internals. The files
 that answer for tens of thousands of rows reach the five-minute
 deadline and are counted with the cases they ran by then. One run over

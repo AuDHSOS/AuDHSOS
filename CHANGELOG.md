@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` holds the row a `RANGE` frame that begins backwards stands on
+  whatever the offset does to the term, which the comparison before the
+  arithmetic decides. D-511 records it. Catalog 6.6.357. `window1.test` goes
+  from 297 cases passing to 301.
+
 - `db-sqlite` reads where every aggregate of a statement written inside another
   one stands before the statement that holds it runs, so an aggregate of a
   statement no row reaches is refused all the same. D-510 records it. Catalog

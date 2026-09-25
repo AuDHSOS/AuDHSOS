@@ -11148,6 +11148,19 @@ fn range_edge(
         if big && let Some(answer) = by_rule(back != descending, strict, first, second) {
             return answer;
         }
+        // `windowCodeRangeTest` of `research/sqlite/src/window.c:2201`
+        // compares the two terms before it moves one of them by the
+        // offset, because a frame that begins backwards holds every row
+        // the offset moves no further out: a term the arithmetic rounds
+        // is held by its own value. A text and a blob are moved by
+        // nothing, which the same test leaves out.
+        if back && !strict && !matches!(value.0, Value::Text(_) | Value::Blob(_)) {
+            let order = compare(&value.0, &here.0, collation);
+            let order = if descending { order.reverse() } else { order };
+            if order != core::cmp::Ordering::Less {
+                return true;
+            }
+        }
         let (left, right) = match &moved {
             Some(target) => (value.0.clone(), target.clone()),
             None => (shifted(op, &value.0, offset), here.0.clone()),
