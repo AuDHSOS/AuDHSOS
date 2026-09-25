@@ -33,7 +33,7 @@ use user_loader as _;
 use virtio_queue as _;
 
 use audhsos_abi::Error;
-use server_memory::{Object, Pages, Store};
+use server_memory::{Object, Pages, Quota, Store};
 use user_programs::mapping::{Mapping, SCRATCH};
 use user_programs::serve::{Serving, receive};
 use user_proto::handles::Carried;
@@ -47,6 +47,11 @@ sys::program!(main);
 /// out at once.
 type Memory = Store<256, 256>;
 
+/// How many objects one client holds at most: half of the table, so no
+/// client exhausts the table for every other client. The byte quota is
+/// half of the memory, for the same reason.
+const QUOTA_OBJECTS: usize = 128;
+
 /// Serves memory until the endpoint is gone.
 #[expect(
     clippy::needless_pass_by_value,
@@ -56,7 +61,15 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
     let (Some(endpoint), Some(own)) = (startup.own_endpoint, startup.own_process) else {
         gate.thread_exit()
     };
-    let mut store = Memory::new();
+    let total = startup
+        .ram
+        .iter()
+        .filter_map(|region| describe(&mut gate, *region).ok())
+        .fold(0u64, |total, object| total.saturating_add(object.len));
+    let mut store = Memory::new(Quota {
+        objects: QUOTA_OBJECTS,
+        bytes: total.wrapping_div(2),
+    });
     for region in &startup.ram {
         let Ok(object) = describe(&mut gate, *region) else {
             continue;
