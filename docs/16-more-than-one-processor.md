@@ -24,9 +24,9 @@ everywhere.
 | interprocessor interrupt | An interrupt one processor sends to another through the interrupt command register. Abbreviated IPI. |
 | `INIT-SIPI-SIPI` | The three IPIs that bring an application processor from reset to the start-up page, *Intel SDM* Vol. 3A, 11.4.4.1. |
 | interrupt command register | Local APIC registers `0x300` and `0x310`, which send an IPI, *Intel SDM* Vol. 3A, 13.6.1. Abbreviated ICR. |
-| kernel cell | One of the sixteen `static` cells of `audhsos-sync` the kernel borrows. D6 (16.10) names them and orders them. |
+| kernel cell | One of the fifteen `static` cells of `audhsos-sync` the kernel borrows. D6 (16.10) names them and orders them. |
 | held cell | A kernel cell a processor holds while it takes another. There are four: the controller, the console, the memory, the machine. |
-| cell taken alone | A kernel cell whose borrow ends before the caller does anything else. There are eight, listed in D6 (16.10). |
+| cell taken alone | A kernel cell whose borrow ends before the caller does anything else. There are seven, listed in D6 (16.10). |
 | machine cell | `MACHINE` in `crates/kernel/core/src/machine.rs`, line 44, holding the object pools and the run queues. |
 | home processor | The processor whose run queue a thread is enqueued in. Fixed when the thread is created. |
 | remote invalidation | Removing a translation from the translation lookaside buffer of a processor other than the one that changed the page table. |
@@ -85,7 +85,7 @@ implements it rather than reopening it.
 | 10 | Run queues per processor. `Machine` holds one `Scheduler`, and eighteen signatures take `&mut Scheduler`. | `crates/kernel/core/src/machine.rs`, line 23; `crates/kernel/syscall/src/dispatch.rs`, line 38 | S9 |
 | 11 | Remote invalidation. `LocalTlb` invalidates on the calling processor and nowhere else. | `crates/kernel/hal-x86_64/src/paging.rs`, line 24 | S10 |
 | 12 | A clock that counts once. `TICKS` is one counter, and `acknowledge` raises it through `record_tick` for a timer vector, whichever processor took it. | `crates/kernel/hal-x86_64/src/timer.rs`, line 81; `crates/kernel/hal-x86_64/src/interrupts.rs`, line 195 | S6 |
-| 13 | The kernel's token at the eight cells taken alone. They keep `UncontendedToken`, whose owner is `0` for every processor, so a second processor is refused rather than made to wait, and loses what the cell carries. | `crates/kernel/hal-x86_64/src/traps.rs`, lines 74, 78 and 97; `crates/kernel/hal-x86_64/src/testing.rs`, lines 35, 42, 51 and 54; `crates/kernel/core/src/state.rs`, line 62 | S6 |
+| 13 | The kernel's token at the seven cells taken alone. They keep `UncontendedToken`, whose owner is `0` for every processor, so a second processor is refused rather than made to wait, and loses what the cell carries. | `crates/kernel/hal-x86_64/src/traps.rs`, lines 74, 78 and 97; `crates/kernel/hal-x86_64/src/testing.rs`, lines 35, 42, 51 and 54 | S6 |
 | 14 | A gate for each of the two vectors the IPIs carry. `device_handlers!` declares a handler for 0x20 to 0x30 and for 0x40 to 0x7F, so 0x31 and 0x32 have no entry, and `interrupts::bring_up` requires a handler for every vector of the plan. | `crates/kernel/hal-x86_64/src/traps.rs`, lines 241 to 255; `crates/kernel/hal-x86_64/src/interrupts.rs`, line 98 | S4 |
 | 15 | A wait of a given length, which the start-up sequence needs twice. `arm_interval_timer` and `wait_for_interval_timer` are private, and `calibrate` is the one public caller of both. | `crates/kernel/hal-x86_64/src/timer.rs`, lines 141 and 176 | S7 |
 
@@ -297,11 +297,11 @@ is halfway through reads a half-written machine.
 
 ## 16.10 Decision D6: the order of the locks
 
-This decision must be made before S5 starts. Sixteen kernel cells exist
+This decision must be made before S5 starts. Fifteen kernel cells exist
 and a wait turns two taken in the wrong order into a machine that stops.
 
 **The decision: the order is controller, console, memory, machine, then
-the eight cells taken alone. A processor that holds one may take only a
+the seven cells taken alone. A processor that holds one may take only a
 cell later in the list.**
 
 Four cells are held while another is taken. The order among them is the
@@ -318,11 +318,11 @@ one the code already has, and it is fixed rather than chosen:
 controller (`crates/kernel/bin/src/main.rs`, lines 283 to 297), so those
 two are held one after the other and not one inside the other.
 
-**The eight cells taken alone.** Each borrow copies a value out or writes
+**The seven cells taken alone.** Each borrow copies a value out or writes
 one in and ends before the caller does anything else, so none of these
 cells is held while another cell is taken and they come last in the
 order. A trap arrives while a processor holds one of the four, so the
-eight come after those four and not before. S6 installs the kernel's token
+seven come after those four and not before. S6 installs the kernel's token
 at each, because a processor refused one loses the work the cell carries:
 
 | Cell | Where | What a refusal costs |
@@ -330,7 +330,6 @@ at each, because a processor refused one loses the work the cell carries:
 | `HANDLER` | `crates/kernel/hal-x86_64/src/traps.rs`, line 74 | `dispatch` halts the machine. |
 | `DEVICE_HANDLER` | `crates/kernel/hal-x86_64/src/traps.rs`, line 78 | `deliver` drops the interrupt and sends no end-of-interrupt, after which that line delivers nothing. |
 | `SYSCALL_HANDLER` | `crates/kernel/hal-x86_64/src/traps.rs`, line 97 | `call_kernel` returns without an answer. |
-| `KERNEL` | `crates/kernel/core/src/state.rs`, line 62 | `on_interrupt` counts no interrupt and expires no deadline (`crates/kernel/bin/src/main.rs`, line 210). |
 | `HARNESS` | `crates/kernel/hal-x86_64/src/testing.rs`, line 35 | A report is lost, and `on_panic` exits the machine with failure. |
 | `HOOK` | `crates/kernel/hal-x86_64/src/testing.rs`, line 42 | `on_trap` reports a trap the image expected as a failure. |
 | `CURRENT` | `crates/kernel/hal-x86_64/src/testing.rs`, line 51 | A report names `OUTSIDE` and not the test that is running. |
@@ -341,10 +340,10 @@ and S8 reports through them from the application processor.
 
 **The two cells of the kernel test image.** The budget scan reads
 `<crate>/src` alone (`crates/tools/xtask/src/unsafe_budget.rs`, line 287),
-so these two are outside the sixteen and outside every count D8 states.
+so these two are outside the fifteen and outside every count D8 states.
 Each is borrowed on a path every processor runs once S8 and S9 land, so
 S6 installs the kernel's token at each of them too, and both come last in
-the order beside the eight:
+the order beside the seven:
 
 | Cell | Where | Borrowed from | What a refusal costs |
 |------|-------|---------------|----------------------|
@@ -363,7 +362,7 @@ and 118).
 
 `OWN` (`crates/kernel/core/src/tests/machine.rs`, line 34) is a cell of
 `kernel-core` that the budget scan reads, because the scan reads
-`<crate>/src` whole. It is outside the sixteen and keeps
+`<crate>/src` whole. It is outside the fifteen and keeps
 `UncontendedToken`, for the reason `SEEN`, `PAGES` and `LOG` keep it: it
 is borrowed from a host test body, which no application processor runs.
 
@@ -381,7 +380,7 @@ It admits a timer tick into a processor that is inside a wait, and that
 tick takes the same cell the wait is for, so the wait nests one level per
 interrupt.
 
-**The option not taken: an atomic in place of the eight cells.** Each of
+**The option not taken: an atomic in place of the seven cells.** Each of
 them is written once during bring-up and read from then on, so an atomic
 word would need no borrow and no order. It costs a `transmute` per read to
 get a function pointer back out of an integer, which is an `unsafe` site
@@ -770,8 +769,8 @@ Size: L.
 4. Add `processor() -> Option<u8>`: read register `0x20` through
    `APIC_WINDOW`, scan `IDENTIFIERS`, answer the position. The scan is
    over `CPUS` entries and `CPUS` is a constant, so the call is O(1).
-5. Install the kernel's token of S5 at the fourteen cells D6 orders — the
-   four held cells, the eight taken alone, and the two of the kernel test
+5. Install the kernel's token of S5 at the thirteen cells D6 orders — the
+   four held cells, the seven taken alone, and the two of the kernel test
    image — in place of
    `UncontendedToken`: its `owner` is `processor()`, its `wait` is
    `remote::poll` of S10 followed by `spin_loop`. Until S10 exists the
@@ -1157,7 +1156,7 @@ on four processors, and stays whole otherwise.
 | 1 | No usable frame below 1 MiB. | No application processor starts. | S7 step 1 searches the map rather than fixing an address, and the machine boots on one processor and says so. The start-up code is position-independent (D2, reason 2), so any low frame serves. |
 | 2 | An application processor faults before it reaches Rust. | It triple-faults; `-no-reboot` turns that into a QEMU exit, which the runner reports as a crash of the whole machine. | S7 ends with a test that reports the second processor's own reading of its identifier, so the first thing built is the thing that proves the sequence. The boot processor's wait has a deadline, so a processor that never reports costs 100 ms and not the run. |
 | 3 | The wait of S5 replaces a refusal that some caller relied on. | A path that used to skip now blocks. | D5 keeps the refusal for the processor that holds the cell, which is every caller that exists today. S5's Miri test insists on the refusal. |
-| 4 | Two processors take two cells in opposite orders. | Both wait forever. | D6 fixes the order, names the four sites that already nest, and puts the eight cells taken alone last. A seventeenth cell is a change to D6. |
+| 4 | Two processors take two cells in opposite orders. | Both wait forever. | D6 fixes the order, names the four sites that already nest, and puts the seven cells taken alone last. A sixteenth cell is a change to D6. |
 | 5 | The `-smp 4` run under TCG is slower and finds new flakes. | The check takes longer and fails intermittently. | `-smp 1` stays the default of every existing run (S2). A run with more processors is the acceptance of this track and not of everything else. |
 | 6 | Round robin gives one processor the busy threads. | One processor is loaded and another idles. | D4 states the cost and names work stealing as what removes it, after S11 has measured. |
 | 7 | Remote invalidation is missed on a path that changes a page table without `TlbControl`. | A processor reads memory through a translation that no longer exists. | R5 of [document 4](04-safety-policy.md) keeps every page-table change in `kernel-mm`, which reaches the hardware only through `TlbControl`, `FrameAccess` and `activate`. S10 replaces the implementation at all seven call sites and leaves `LocalTlb` reachable only from the bring-up. |

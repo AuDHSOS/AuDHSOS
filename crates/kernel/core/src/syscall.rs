@@ -69,9 +69,8 @@ where
     /// calls that need them.
     pub devices: Option<&'a mut D>,
     /// The microseconds since the kernel started, as the tick count stood
-    /// when the call began. It is a word and not a borrow of the state
-    /// cell: the count is read once, before the call, and a call that took
-    /// a tick answers the clock it started with.
+    /// when the call began. The count is read once before the call, so a
+    /// call that took a tick answers the clock it started with.
     pub now: u64,
     /// The physical address of the root system description pointer, which
     /// the bring-up read and `system_info` reports.
@@ -100,7 +99,8 @@ where
     C: DebugConsole,
     D: Devices,
 {
-    /// The environment over these six.
+    /// The environment over these seven parameters, of which five are
+    /// borrows.
     pub fn new(
         memory: &'a mut KernelMemory,
         access: &'a mut A,
@@ -127,8 +127,9 @@ where
     /// The same environment with the wall clock the loader reported.
     ///
     /// It is a builder and not a parameter of [`KernelEnvironment::new`]
-    /// for the reason `at` is one: the six the constructor takes are
-    /// borrows of the machine, and these two are values read out of it.
+    /// for the reason `at` is one: five of the seven parameters of the
+    /// constructor are borrows of the machine, and these two are values
+    /// read out of it.
     #[must_use]
     pub const fn with_wall_clock(self, wall: Option<(i64, WallClockSource)>) -> Self {
         KernelEnvironment { wall, ..self }

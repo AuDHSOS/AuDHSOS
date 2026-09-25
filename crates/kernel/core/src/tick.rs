@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 Manuel Baesler and contributors
 
-//! What the kernel does with a timer tick.
-//!
-//! Invariant: a tick is counted before anything else happens, so that the
-//! count the kernel reports is the number of ticks the hardware delivered
-//! and not the number of ticks the scheduler agreed to.
+//! Conversions of a tick count to seconds, milliseconds and microseconds.
+//! The kernel image counts ticks through `interrupts::ticks` of
+//! `kernel-hal-x86_64` and schedules in `on_timer_tick` of
+//! `crates/kernel/bin/src/main.rs`.
 
 #![expect(
     clippy::as_conversions,
@@ -13,15 +12,6 @@
 )]
 
 use audhsos_abi::layout::TICKS_PER_SECOND;
-
-use crate::state::KernelState;
-
-/// Counts one tick and answers the count. The scheduler runs in
-/// `on_timer_tick` of the kernel image (`crates/kernel/bin/src/main.rs`).
-pub const fn on_tick(state: &mut KernelState) -> u64 {
-    state.record_tick();
-    state.ticks
-}
 
 /// The rate the kernel runs its timer at, as the divisor of a count.
 const RATE: u64 = TICKS_PER_SECOND as u64;

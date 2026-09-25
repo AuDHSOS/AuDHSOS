@@ -282,6 +282,52 @@ fn the_walk_registers_the_four_fixed_ranges_of_the_kernel_half() {
 }
 
 #[test]
+fn the_walk_ends_a_region_where_the_permissions_change() {
+    // Issue #124: `.text` read and execute, then `.data` read and write.
+    const TEXT_PAGES: u64 = 3;
+    let mut machine = Machine::full();
+    {
+        let mut frames = no_frames();
+        let mut mapper = machine.mapper(&mut frames);
+        for index in 0..TEXT_PAGES {
+            mapper
+                .protect(
+                    page(KERNEL_BASE + index * PAGE_SIZE),
+                    Permissions::READ_EXECUTE,
+                )
+                .unwrap();
+        }
+    }
+    let mut frames = no_frames();
+    let mapper = machine.mapper(&mut frames);
+    let Adopted { regions, .. } = adopt(&mapper, RAM_PAGES).unwrap();
+    assert_eq!(regions.len(), 5);
+    assert!(regions.check_invariants());
+    let image: Vec<_> = regions
+        .iter()
+        .filter(|region| region.backing == KernelBacking::Image)
+        .map(|region| {
+            (
+                region.pages.start().start().as_u64(),
+                region.pages.count(),
+                region.perms,
+            )
+        })
+        .collect();
+    assert_eq!(
+        image,
+        [
+            (KERNEL_BASE, TEXT_PAGES, Permissions::READ_EXECUTE),
+            (
+                KERNEL_BASE + TEXT_PAGES * PAGE_SIZE,
+                KERNEL_PAGES - TEXT_PAGES,
+                Permissions::READ_WRITE
+            ),
+        ]
+    );
+}
+
+#[test]
 fn a_boot_information_page_without_a_translation_is_reported() {
     let mut machine = Machine::full();
     let mut frames = no_frames();

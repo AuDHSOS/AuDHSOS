@@ -13,7 +13,6 @@ use kernel_hal_api::console::DebugConsole;
 use kernel_hal_api::exit::{ExitStatus, TestExit};
 
 use crate::println;
-use crate::state::KernelState;
 
 /// Number of processor-defined exception vectors.
 pub const EXCEPTION_VECTORS: u8 = 32;
@@ -128,28 +127,19 @@ impl Exception {
     }
 }
 
-/// Reports `exception`, counts it in `state`, and ends the machine with a
-/// failure.
+/// Reports `exception` and ends the machine with a failure.
 pub fn on_exception(
     exception: Exception,
-    state: &mut KernelState,
     console: &mut impl DebugConsole,
     exit: &mut impl TestExit,
 ) {
-    state.record_trap();
     describe(exception, console);
     exit.exit(ExitStatus::Failure);
 }
 
-/// Reports `exception` and counts it in `state`, without ending the
-/// machine: a user thread raised it, and stopping that thread is the whole
-/// of the answer.
-pub fn on_user_fault(
-    exception: Exception,
-    state: &mut KernelState,
-    console: &mut impl DebugConsole,
-) {
-    state.record_trap();
+/// Reports `exception` without ending the machine: a user thread raised
+/// it, and stopping that thread is the whole of the answer.
+pub fn on_user_fault(exception: Exception, console: &mut impl DebugConsole) {
     println!(console, "[trap] a user thread faulted");
     describe(exception, console);
 }

@@ -15,7 +15,6 @@ use kernel_hal_api::platform::{MemoryRegion, MemoryRegionKind, Platform};
 
 use crate::memory::MemoryError;
 use crate::println;
-use crate::state::{KERNEL, KernelState};
 
 /// The name the kernel reports.
 pub const NAME: &str = "AuDHSOS";
@@ -49,7 +48,7 @@ impl core::fmt::Display for BootError {
 }
 
 /// Prints the banner, the physical memory window, and every memory region
-/// the loader reported, then initializes the kernel state.
+/// the loader reported.
 ///
 /// The caller halts afterwards; this function returns so that the same
 /// sequence can run in a host test.
@@ -83,7 +82,6 @@ pub fn run(platform: &impl Platform, console: &mut impl DebugConsole) -> Result<
     if usable_kib(regions) == 0 {
         return Err(BootError::NoUsableMemory);
     }
-    let _ = KERNEL.init(KernelState::new());
     Ok(())
 }
 

@@ -16,9 +16,8 @@ use core::panic::PanicInfo;
 
 use audhsos_abi::layout::{BOOT_STACK_TOP, TICKS_PER_SECOND};
 use kernel_core::memory::MemoryError;
-use kernel_core::state::KernelState;
 use kernel_core::trap::{Exception, Response};
-use kernel_core::{boot, memory, println, tick, trap};
+use kernel_core::{boot, memory, println, trap};
 use kernel_hal_api::exit::{ExitStatus, TestExit};
 use kernel_hal_x86_64::bootinfo::X86Platform;
 use kernel_hal_x86_64::exit::QemuExit;
@@ -172,9 +171,8 @@ fn map_device(frames: PhysFrameRange) -> Option<VirtAddr> {
     .flatten()
 }
 
-/// Counts a device interrupt in the kernel state, forwards it to whoever
-/// holds the interrupt object of its vector, and acknowledges it at the
-/// hardware.
+/// Forwards a device interrupt to whoever holds the interrupt object of its
+/// vector, and acknowledges it at the hardware.
 fn on_interrupt(vector: u8) {
     if vector == vectors::INVALIDATE {
         interrupts::acknowledge(vector);
@@ -186,17 +184,6 @@ fn on_interrupt(vector: u8) {
         task::run(None);
         return;
     }
-    let counted = runtime::with_state(|state| {
-        state.record_interrupt();
-        match vector {
-            vectors::TIMER if kernel_hal_x86_64::processor::processor() == Some(0) => {
-                tick::on_tick(state);
-            }
-            vectors::SPURIOUS => state.record_spurious(),
-            _ => {}
-        }
-    });
-    let _ = counted;
     if vector != vectors::TIMER && vector != vectors::SPURIOUS {
         // The forwarding acknowledges at the hardware itself: the order of
         // the three steps is part of what 2.7 asks for.
@@ -363,9 +350,8 @@ fn on_trap(report: TrapReport) {
         user: report.from_user(),
     };
     if exception.response() == Response::StopMachine {
-        let mut state = KernelState::new();
         let reported = entry::with_console(|console| {
-            trap::on_exception(exception, &mut state, console, &mut QemuExit::new());
+            trap::on_exception(exception, console, &mut QemuExit::new());
         });
         if reported.is_none() {
             entry::fail(b"[trap] a trap arrived while one was being reported\n");
@@ -373,9 +359,8 @@ fn on_trap(report: TrapReport) {
         return;
     }
 
-    let mut state = KernelState::new();
     let reported = entry::with_console(|console| {
-        kernel_core::trap::on_user_fault(exception, &mut state, console);
+        kernel_core::trap::on_user_fault(exception, console);
     });
     if reported.is_none() {
         entry::fail(b"[trap] the console is not reachable\n");

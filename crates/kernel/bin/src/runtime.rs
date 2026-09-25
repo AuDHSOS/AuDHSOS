@@ -47,13 +47,6 @@ pub(crate) fn with_memory<R>(
     kernel_core::memory::with_memory_on(&KernelToken, body)
 }
 
-pub(crate) fn with_state<R>(
-    body: impl FnOnce(&mut kernel_core::state::KernelState) -> R,
-) -> Option<R> {
-    let _guard = InterruptGuard::new();
-    kernel_core::state::with_state_on(&KernelToken, body)
-}
-
 #[cfg(test)]
 pub(crate) mod measured {
     use audhsos_sync::ExclusiveToken;

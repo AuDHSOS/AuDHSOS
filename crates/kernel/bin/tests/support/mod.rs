@@ -34,7 +34,6 @@ pub(crate) mod runtime;
 #[path = "../../src/switching.rs"]
 mod switching;
 use kernel_core::memory;
-use kernel_core::state::KernelState;
 use kernel_core::syscall::{KernelEnvironment, handle_syscall, reap, schedule, store_context};
 use kernel_core::trap::{Exception, Response};
 use kernel_hal_api::paging::FrameAccess;
@@ -1330,9 +1329,8 @@ fn on_trap(report: TrapReport) {
             exception.cr2
         ));
     }
-    let mut state = KernelState::new();
     let mut reported = console();
-    kernel_core::trap::on_user_fault(exception, &mut state, &mut reported);
+    kernel_core::trap::on_user_fault(exception, &mut reported);
     LAST_VECTOR.store(u32::from(exception.vector), Ordering::SeqCst);
     LAST_ERROR.store(exception.error_code, Ordering::SeqCst);
     LAST_ADDRESS.store(exception.cr2, Ordering::SeqCst);
