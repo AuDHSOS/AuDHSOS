@@ -3017,7 +3017,13 @@ impl<'a> Database<'a> {
         // value it was given, because a statement writes down only the
         // columns computed once and the read of a column computed where
         // it is read refuses on its own.
-        let held = match compute(stored, &mut held, self.encoding, Collation::Binary) {
+        let held = match compute(
+            stored,
+            &mut held,
+            self.encoding,
+            Collation::Binary,
+            self.defined,
+        ) {
             Ok(()) => held,
             // A column whose expression refuses the row itself refuses
             // the statement, and one this row cannot answer keeps the
@@ -3336,6 +3342,7 @@ impl<'a> Database<'a> {
                 Some(rowid),
                 self.encoding,
                 self.collation(),
+                self.defined,
             )?;
             out.push((rowid, values));
         }
@@ -3388,7 +3395,15 @@ impl<'a> Database<'a> {
         for step in self.walk(stored, (None, None)) {
             let (_, held) = step?;
             read_payload(&image, &held, &mut payload)?;
-            out.push(values_of(&payload, stored, None, self.encoding, collation)?);
+            let row = values_of(
+                &payload,
+                stored,
+                None,
+                self.encoding,
+                collation,
+                self.defined,
+            );
+            out.push(row?);
         }
         Ok(out)
     }
@@ -4806,6 +4821,7 @@ impl<'a> Database<'a> {
             searched: 0,
             encoding: self.encoding,
             collation: self.collation(),
+            defined: self.defined,
             payload: Vec::new(),
         })))
     }
@@ -4831,6 +4847,7 @@ impl<'a> Database<'a> {
             taken: 0,
             encoding: self.encoding,
             collation: self.collation(),
+            defined: self.defined,
             payload: Vec::new(),
         }))
     }
@@ -7777,6 +7794,9 @@ struct Sought<'i, 'f> {
     encoding: Encoding,
     /// What a comparison uses where nothing writes a collation.
     collation: Collation,
+    /// The functions the application defined on the connection, which a
+    /// computed column of the table may name.
+    defined: &'static [crate::func::Defined],
     /// The buffer one record is read into.
     payload: Vec<u8>,
 }
@@ -7890,6 +7910,7 @@ impl<'i> Sought<'i, '_> {
             Some(row.rowid),
             self.encoding,
             self.collation,
+            self.defined,
         )?;
         Ok(Some((Some(row.rowid), values)))
     }
@@ -7913,6 +7934,9 @@ struct Tree<'i, 'f> {
     encoding: Encoding,
     /// What a comparison uses where nothing writes a collation.
     collation: Collation,
+    /// The functions the application defined on the connection, which a
+    /// computed column of the table may name.
+    defined: &'static [crate::func::Defined],
     /// The buffer one record is read into.
     payload: Vec<u8>,
 }
@@ -7939,6 +7963,7 @@ impl<'i> Tree<'i, '_> {
             rowid,
             self.encoding,
             self.collation,
+            self.defined,
         )?;
         Ok((rowid, values))
     }
@@ -10027,6 +10052,7 @@ fn values_of(
     rowid: Option<i64>,
     encoding: Encoding,
     collation: Collation,
+    defined: &'static [crate::func::Defined],
 ) -> Result<Vec<Value>, Error> {
     let record = record::Record::parse(payload)?;
     let table = &stored.table;
@@ -10076,7 +10102,7 @@ fn values_of(
         }
         out.push(Some(value));
     }
-    compute(stored, &mut out, encoding, collation)?;
+    compute(stored, &mut out, encoding, collation, defined)?;
     Ok(out
         .into_iter()
         .map(|value| value.unwrap_or(Value::Null))
@@ -10093,11 +10119,16 @@ fn compute(
     values: &mut [Option<Value>],
     encoding: Encoding,
     collation: Collation,
+    defined: &'static [crate::func::Defined],
 ) -> Result<(), Error> {
     let table = &stored.table;
     let waiting = values.iter().filter(|value| value.is_none()).count();
+    // What the last pass refused a column with, which is what a column
+    // no pass settled carries out.
+    let mut refused = None;
     for _ in 0..waiting {
         let mut settled: Vec<(usize, Value)> = Vec::new();
+        refused = None;
         for (at, column) in table.columns.iter().enumerate() {
             let unsettled = values.get(at).is_some_and(Option::is_none);
             let Some(expr) = column.computed.filter(|_| unsettled) else {
@@ -10108,6 +10139,7 @@ fn compute(
                 values,
                 encoding,
                 collation,
+                defined,
             };
             match evaluate_row(&stored.arena, expr, &stored.sql, &row) {
                 Ok(mut value) => {
@@ -10119,7 +10151,7 @@ fn compute(
                 Err(error @ eval::Error::NotPure(..)) => return Err(error.into()),
                 // A name this pass cannot answer yet refuses, and the
                 // next pass asks again.
-                Err(_) => {}
+                Err(error) => refused = Some(error),
             }
         }
         if settled.is_empty() {
@@ -10132,9 +10164,15 @@ fn compute(
         }
     }
     if values.iter().any(Option::is_none) {
-        // A computed column that names itself, or names a column no
-        // table has.
-        return Err(Error::Computed);
+        // A column that names another the passes never settle names
+        // itself, which is what no pass answers a column for; every
+        // other refusal is the one the C library answers where it reads
+        // the statement, a function the connection was not told among
+        // them.
+        return Err(match refused {
+            None | Some(eval::Error::NoColumn(_)) => Error::Computed,
+            Some(error) => error.into(),
+        });
     }
     Ok(())
 }
@@ -10150,11 +10188,18 @@ struct Computed<'a> {
     encoding: Encoding,
     /// What a comparison uses where nothing writes a collation.
     collation: Collation,
+    /// The functions the application defined on the connection, which a
+    /// computed column may name as the rows a statement reads may.
+    defined: &'static [crate::func::Defined],
 }
 
 impl eval::Row for Computed<'_> {
     fn purely(&self) -> Option<crate::date::Purely> {
         Some(crate::date::Purely::Generated)
+    }
+
+    fn defined(&self, name: &[u8], count: usize) -> Option<crate::func::Defined> {
+        crate::func::defined(self.defined, name, count)
     }
 
     fn collation(&self) -> Collation {

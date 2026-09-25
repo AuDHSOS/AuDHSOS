@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` reaches the functions the application defined from a column a
+  table computes, and carries out the refusal of the column rather than the
+  one that stands for a loop. D-498 records it. Catalog 6.6.346.
+  `trustschema1.test` goes from 13 cases passing to 16.
+
 - `db-sqlite` refuses a view and a trigger whose statement names a table of
   another database than the one the object stands in. D-497 records it.
   Catalog 6.6.345. `attach.test` goes from 78 cases passing to 86,

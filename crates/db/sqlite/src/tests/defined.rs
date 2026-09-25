@@ -379,3 +379,46 @@ fn what_regexp_and_match_reach_of_the_functions_the_application_defined() {
         alloc::vec![alloc::vec![Value::Int(2)]]
     );
 }
+
+/// A column a table computes reaches the functions the application
+/// defined, both where the value stands in the row and where the row is
+/// read.
+#[test]
+fn what_a_computed_column_reaches_of_the_functions_the_application_defined() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.defines(DEFINED);
+    writer
+        .run(b"CREATE TABLE t(a, b AS (twice(a)), c AS (twice(a)+1) STORED)")
+        .unwrap();
+    writer.run(b"INSERT INTO t VALUES(21)").unwrap();
+    let image = writer.written();
+    let database = Database::open(&image)
+        .expect("a database")
+        .defining(DEFINED);
+    assert_eq!(
+        database.query(b"SELECT a, b, c FROM t").unwrap().rows,
+        alloc::vec![alloc::vec![Value::Int(21), Value::Int(42), Value::Int(43)]]
+    );
+    // A connection that was told no such function reads no such column,
+    // the value of a column the row holds standing as it is.
+    assert_eq!(
+        Database::open(&image)
+            .expect("a database")
+            .query(b"SELECT b FROM t")
+            .map(|answered| answered.rows)
+            .map_err(|error| error.message())
+            .unwrap_err(),
+        "no such function: twice"
+    );
+    // The column is read the same way where an index over it names the
+    // rows, which holds the value the column computed.
+    writer.run(b"CREATE INDEX tb ON t(b)").unwrap();
+    let image = writer.written();
+    let database = Database::open(&image)
+        .expect("a database")
+        .defining(DEFINED);
+    assert_eq!(
+        database.query(b"SELECT a FROM t WHERE b=42").unwrap().rows,
+        alloc::vec![alloc::vec![Value::Int(21)]]
+    );
+}

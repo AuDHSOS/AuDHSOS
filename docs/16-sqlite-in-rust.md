@@ -1165,6 +1165,8 @@ Size: L.
      D-496 records.
 198. The database a view's statement and a trigger's body may name,
      which is the one the object stands in. Built, which D-497 records.
+199. The functions a computed column reaches, which are the ones the
+     application defined on the connection. Built, which D-498 records.
 
 ### Done when
 

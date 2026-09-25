@@ -7618,3 +7618,12 @@ Document 16 step Q8. Every answer is the one the C library's shell writes.
   subquery of a step.
 - A view and a trigger that name the database they stand in, and one of
   the temp schema that names another, each of which stands.
+### 6.6.346 A computed column that names a defined function (`db-sqlite`)
+
+Document 16 step Q8. Every answer is the one the C library's shell writes.
+
+- A table of a column computed where it is read and one computed into
+  the row, both over a function the application defined.
+- The same column read through an index over it, which holds the value.
+- The same over a connection the function was not defined on, which
+  answers no such function.
