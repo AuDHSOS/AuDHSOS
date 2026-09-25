@@ -88,6 +88,13 @@ pub fn with_console<R>(body: impl FnOnce(&mut SerialConsole) -> R) -> Option<R> 
     Some(body(&mut console))
 }
 
+/// `true` while this processor holds the debug console; O(1), no wait.
+#[cfg(feature = "debug-uart")]
+#[must_use]
+pub fn console_is_held() -> bool {
+    CONSOLE.is_held_by(&KernelToken)
+}
+
 /// Reports `message` on the console with `debug-uart`, ends the machine
 /// with a failure with `test-exit`, and halts.
 pub fn fail(message: &[u8]) -> ! {

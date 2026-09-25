@@ -53,3 +53,15 @@ fn a_refused_install_leaves_the_task_state_segment_alone() {
     assert_eq!(outcome, Err(InstallError::AlreadyInstalled));
     assert_eq!(kept, Ok(marker));
 }
+
+/// The loaded private GDT names the boot processor.
+#[test_case]
+fn the_loaded_table_names_the_boot_processor() {
+    let base = kernel_hal_x86_64::instructions::global_descriptor_table_base();
+    assert_ne!(base, 0);
+    assert_eq!(
+        kernel_hal_x86_64::instructions::global_descriptor_table_base(),
+        base
+    );
+    assert_eq!(kernel_hal_x86_64::processor::processor(), Some(0));
+}

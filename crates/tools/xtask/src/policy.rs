@@ -698,8 +698,9 @@ pub(crate) const CRATES: &[Crate] = &[
         kind: Kind::Adapter {
             // D-192: per-processor tables, startup trampoline and PIT delays.
             // D-194: four `unsafe fn` and one call.
-            unsafe_budget: 179,
-            asm_budget: 31,
+            // D-195: the `sgdt` wrapper.
+            unsafe_budget: 180,
+            asm_budget: 32,
         },
         deps: &[
             "kernel-acpi",

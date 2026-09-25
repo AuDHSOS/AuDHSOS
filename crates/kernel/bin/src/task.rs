@@ -31,6 +31,7 @@ use kernel_hal_x86_64::ports::DeviceAccess;
 use kernel_hal_x86_64::remote::SharedTlb;
 use kernel_hal_x86_64::window::PhysicalWindow;
 
+use kernel_hal_x86_64::processor::KernelToken;
 use kernel_hal_x86_64::{context, descriptors, entry};
 
 use kernel_types::{PhysFrame, PhysFrameRange, VirtAddr};
@@ -182,9 +183,9 @@ pub(crate) fn idle_thread(slot: u32) {
 
 /// Refuses a same-processor nested borrow before switching stacks.
 fn nothing_is_held() -> bool {
-    with_memory(|_| ()).is_some()
-        && with_machine(|_| ()).is_some()
-        && entry::with_console(|_| ()).is_some()
+    !memory::MEMORY.is_held_by(&KernelToken)
+        && !kernel_core::machine::MACHINE.is_held_by(&KernelToken)
+        && !entry::console_is_held()
 }
 
 /// Runs whichever thread the scheduler picks, and comes back when the
@@ -224,6 +225,9 @@ pub(crate) fn run(standing_on: Option<kernel_objects::object::ThreadId>) {
 
 /// Gives back what every thread that has ended held.
 pub(crate) fn sweep() {
+    if with_machine(|machine| machine.scheduler.ended()) == Some(0) {
+        return;
+    }
     let mut tables = window();
     let mut tlb = SharedTlb::new();
     with_memory(|memory| {

@@ -981,7 +981,8 @@ fn stack_frame_below(top: VirtAddr) -> PhysFrame {
 /// try, a millisecond later. The tick hook of `preemption.rs` already
 /// leaves work for the next tick on the same grounds.
 fn nothing_is_held() -> bool {
-    with_memory(|_| ()).is_some() && with_machine(|_| ()).is_some()
+    !memory::MEMORY.is_held_by(&KernelToken)
+        && !kernel_core::machine::MACHINE.is_held_by(&KernelToken)
 }
 
 /// Gives the processor to whichever thread should run, and returns when
@@ -1031,6 +1032,9 @@ pub(crate) fn run_threads(standing_on: Option<ThreadId>) {
 
 /// Gives back what every thread that has ended held.
 pub(crate) fn sweep() {
+    if with_machine(|machine| machine.scheduler.ended()) == Some(0) {
+        return;
+    }
     let mut tables = window();
     let mut tlb = SharedTlb::new();
     with_memory(|memory| {
@@ -1632,6 +1636,10 @@ fn write_wakeup(machine: &kernel_core::machine::Machine, wakeup: kernel_ipc::Wak
 /// Writes down which thread the timer found on the processor, unless it is
 /// the one the tick before it found.
 fn record_turn() {
+    // The log is of one processor: the boot processor's.
+    if kernel_hal_x86_64::processor::processor() != Some(0) {
+        return;
+    }
     // A tick that arrives while the kernel holds the machine says nothing
     // about whose turn it is: it arrived inside a system call of the
     // thread whose turn it already was.
