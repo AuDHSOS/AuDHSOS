@@ -671,6 +671,8 @@ index the sequence modified by preceding actions
 (`docs/microsoft/gsub.html:1`, Lookup type 5). Insertions inherit active
 context membership; deletions remove membership. GDEF classes override inferred
 classes after substitutions and before advances.
+Mark attachment reuses a lookup's previous base search within a pass, and
+`shape::finish` resolves each attachment chain once; both are O(n) over a mark run.
 Normalization preserves grapheme source ranges, decomposes canonically,
 orders Hebrew pronunciation marks before vowels and Arabic shadda before
 vowels, and recomposes only glyphs the face covers. CGJ blocks reordering.
