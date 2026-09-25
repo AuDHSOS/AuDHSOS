@@ -86,6 +86,9 @@ pub struct RecordingPages {
     /// Whether a join is refused, which is what the kernel does when
     /// something other than the server still holds one of the two.
     pub refuse_merges: bool,
+    /// The error every close answers with. `None` lets closes succeed.
+    pub refuse_closes: Option<Error>,
+    references_asked: usize,
 }
 
 /// Where the double puts the first mapping.
@@ -111,7 +114,15 @@ impl RecordingPages {
             next_address: FIRST_ADDRESS,
             fail_after: None,
             refuse_merges: false,
+            refuse_closes: None,
+            references_asked: 0,
         }
+    }
+
+    /// How many times the policy asked for a reference count.
+    #[must_use]
+    pub const fn references_asked(&self) -> usize {
+        self.references_asked
     }
 
     /// Every call, in the order it was made.
@@ -157,6 +168,7 @@ impl RecordingPages {
 
 impl Pages for RecordingPages {
     fn references(&mut self, object: Handle) -> Result<u64, Error> {
+        self.references_asked = self.references_asked.wrapping_add(1);
         Ok(if self.shared.contains(&object) { 2 } else { 1 })
     }
     fn map(&mut self, object: Handle, offset: u64, len: u64) -> Result<u64, Error> {
@@ -198,6 +210,7 @@ impl Pages for RecordingPages {
     }
 
     fn close(&mut self, handle: Handle) -> Result<(), Error> {
-        self.record(Call::Close { handle })
+        self.record(Call::Close { handle })?;
+        self.refuse_closes.map_or(Ok(()), Err)
     }
 }

@@ -10,9 +10,12 @@
 //! that goes out is split off and stays free. A release retires the object
 //! until it is exclusively owned, then joins it to neighbours, which keeps the
 //! store from grinding its objects down to single pages (D-90). A retired
-//! object keeps the slot it had while it was held, so a client that keeps
-//! its handle after a release takes no slot from another client and the
-//! bound on objects out bounds retired objects with them.
+//! object keeps the slot it had while it was held and counts against the
+//! quota of its owner, so a client that keeps its handle after a release
+//! takes no slot from another client.
+//!
+//! Every client holds at most [`Quota`] at once, so one client cannot
+//! exhaust the tables or the free memory for every other client.
 //!
 //! Zeroing happens twice over the same bytes and both are meant. The pass
 //! on return is what keeps what a client wrote out of free memory; the pass
@@ -65,6 +68,15 @@ pub struct Held {
     pub retired: bool,
 }
 
+/// What one client may hold at once, its retired objects included.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Quota {
+    /// How many objects.
+    pub objects: usize,
+    /// How many bytes.
+    pub bytes: u64,
+}
+
 /// The memory the server has and the memory it has given out.
 ///
 /// `FREE` is how many pieces the free memory may be in and `LIVE` how many
@@ -75,21 +87,17 @@ pub struct Store<const FREE: usize, const LIVE: usize> {
     /// Every object that is out, including the returned ones that are
     /// still reachable through another handle or mapping.
     live: ArrayVec<Held, LIVE>,
-}
-
-impl<const FREE: usize, const LIVE: usize> Default for Store<FREE, LIVE> {
-    fn default() -> Self {
-        Self::new()
-    }
+    quota: Quota,
 }
 
 impl<const FREE: usize, const LIVE: usize> Store<FREE, LIVE> {
-    /// A store that holds no memory.
+    /// A store that holds no memory and gives each client at most `quota`.
     #[must_use]
-    pub const fn new() -> Self {
+    pub const fn new(quota: Quota) -> Self {
         Store {
             free: ArrayVec::new(),
             live: ArrayVec::new(),
+            quota,
         }
     }
 
@@ -149,7 +157,7 @@ impl<const FREE: usize, const LIVE: usize> Store<FREE, LIVE> {
     ///
     /// [`Error::PoolExhausted`] when the free list has no room, in which
     /// case the object is zeroed and dropped rather than held half; the
-    /// errors of the zeroing pass and of a join.
+    /// errors of the zeroing pass.
     pub fn adopt(&mut self, pages: &mut impl Pages, object: Object) -> Result<(), Error> {
         wipe(pages, object)?;
         self.put_free(pages, object)
@@ -165,9 +173,11 @@ impl<const FREE: usize, const LIVE: usize> Store<FREE, LIVE> {
     ///
     /// [`Error::InvalidArgument`] for a length of zero, for an alignment
     /// that is zero or no power of two, or for an owner of zero;
-    /// [`Error::OutOfMemory`] when no free object holds the request;
+    /// [`Error::QuotaExceeded`] when the owner would hold more than the
+    /// quota; [`Error::OutOfMemory`] when no free object holds the request;
     /// [`Error::PoolExhausted`] when a table is full; the errors of the
-    /// split and of the zeroing pass.
+    /// split and of the zeroing pass. A failed request puts the memory it
+    /// took back in the free list.
     pub fn allocate(
         &mut self,
         pages: &mut impl Pages,
@@ -178,58 +188,49 @@ impl<const FREE: usize, const LIVE: usize> Store<FREE, LIVE> {
         if owner == 0 || len == 0 || align == 0 || !align.is_power_of_two() {
             return Err(Error::InvalidArgument);
         }
-        self.reclaim(pages)?;
         let wanted = len
             .checked_next_multiple_of(PAGE_SIZE)
             .ok_or(Error::InvalidArgument)?;
+        // A reclaim costs one system call per retired object, so it runs
+        // only when the request would be refused without it.
+        let mut reclaimed = false;
+        if self.live.is_full() || !self.admits(owner, wanted) {
+            self.reclaim(pages)?;
+            reclaimed = true;
+        }
+        if !self.admits(owner, wanted) {
+            return Err(Error::QuotaExceeded);
+        }
         if self.live.is_full() {
             return Err(Error::PoolExhausted);
         }
-        let (index, start, object) = self.first_fit(wanted, align).ok_or(Error::OutOfMemory)?;
-        // Two splits at most, and each of them needs a slot the free list
-        // may not have. Both are refused before anything is cut.
-        let leading = start.wrapping_sub(object.start);
-        let trailing = object.end().wrapping_sub(start.wrapping_add(wanted));
-        let extra = usize::from(leading > 0).wrapping_add(usize::from(trailing > 0));
-        if self.free.len().wrapping_add(extra) > FREE.wrapping_add(1) {
+        // A reclaim joins free pieces, which can make room in the free list
+        // as well as memory.
+        let placed = match self.place(wanted, align) {
+            Err(Error::OutOfMemory | Error::PoolExhausted) if !reclaimed => {
+                self.reclaim(pages)?;
+                self.place(wanted, align)
+            }
+            placed => placed,
+        };
+        let (index, start, object) = placed?;
+        let _taken = self.free.remove(index);
+        let piece = match self.carve(pages, object, start, wanted) {
+            Ok(piece) => piece,
+            Err((piece, error)) => {
+                self.restore(pages, piece);
+                return Err(error);
+            }
+        };
+        let held = Held {
+            object: piece,
+            owner,
+            retired: false,
+        };
+        if self.live.push(held).is_err() {
+            self.restore(pages, piece);
             return Err(Error::PoolExhausted);
         }
-
-        let _taken = self.free.remove(index);
-        let mut piece = object;
-        if leading > 0 {
-            let upper = pages.split(piece.handle, leading)?;
-            let below = Object {
-                handle: piece.handle,
-                start: piece.start,
-                len: leading,
-            };
-            piece = Object {
-                handle: upper,
-                start,
-                len: piece.len.wrapping_sub(leading),
-            };
-            self.insert_free(below)?;
-        }
-        if trailing > 0 {
-            let upper = pages.split(piece.handle, wanted)?;
-            let above = Object {
-                handle: upper,
-                start: start.wrapping_add(wanted),
-                len: trailing,
-            };
-            piece.len = wanted;
-            self.insert_free(above)?;
-        }
-
-        wipe(pages, piece)?;
-        self.live
-            .push(Held {
-                object: piece,
-                owner,
-                retired: false,
-            })
-            .map_err(|_| Error::PoolExhausted)?;
         Ok(piece)
     }
 
@@ -253,11 +254,13 @@ impl<const FREE: usize, const LIVE: usize> Store<FREE, LIVE> {
     /// [`Error::NotFound`] for memory this store did not hand out, a second
     /// release of the same object included; [`Error::AccessDenied`] when
     /// another client holds it; [`Error::InvalidArgument`] for a length
-    /// that is not the object's; the errors of the zeroing pass and of a
-    /// join. Nothing is zeroed in the cases that are refused. Accepted
-    /// objects remain retired while foreign handles or mappings exist, in
-    /// the slot they already have, so a release needs no slot of its own
-    /// and a client that keeps its handle takes no slot from another.
+    /// that is not the object's; the error of closing the returned handle;
+    /// the errors of the zeroing pass. Nothing is zeroed in the cases that
+    /// are refused. After a failed close or zeroing pass the object stays
+    /// retired and a later reclaim takes it back. Accepted objects remain
+    /// retired while foreign handles or mappings exist, in the slot they
+    /// already have, so a release needs no slot of its own and a client
+    /// that keeps its handle takes no slot from another.
     pub fn release(
         &mut self,
         pages: &mut impl Pages,
@@ -279,16 +282,20 @@ impl<const FREE: usize, const LIVE: usize> Store<FREE, LIVE> {
         if let Some(slot) = self.live.get_mut(index) {
             slot.retired = true;
         }
-        if returned.handle != held.object.handle {
-            pages.close(returned.handle)?;
-        }
+        let closed = if returned.handle == held.object.handle {
+            Ok(())
+        } else {
+            pages.close(returned.handle)
+        };
         self.reclaim(pages)?;
+        closed?;
         Ok(held.object)
     }
 
     /// Reclaims only exclusively owned objects. A caller returning a page
-    /// still holds its handle until the reply arrives, so this is also run
-    /// before allocations. Unknown reference counts leave pages retired.
+    /// still holds its handle until the reply arrives, so this also runs in
+    /// an allocation that a full table, the quota, or the free memory
+    /// would refuse. Unknown reference counts leave pages retired.
     ///
     /// # Errors
     ///
@@ -316,8 +323,8 @@ impl<const FREE: usize, const LIVE: usize> Store<FREE, LIVE> {
     ///
     /// # Errors
     ///
-    /// The errors of the zeroing pass and of a join. Whatever was taken
-    /// back before the error stays taken back.
+    /// The errors of the zeroing pass. Whatever was taken back before the
+    /// error stays taken back.
     pub fn forget_client(&mut self, pages: &mut impl Pages, owner: u64) -> Result<usize, Error> {
         let mut taken = 0usize;
         for held in self.live.iter_mut() {
@@ -329,6 +336,89 @@ impl<const FREE: usize, const LIVE: usize> Store<FREE, LIVE> {
         }
         self.reclaim(pages)?;
         Ok(taken)
+    }
+
+    /// Whether `owner` may hold `len` more bytes in one more object.
+    fn admits(&self, owner: u64, len: u64) -> bool {
+        let (objects, bytes) = self.live.iter().filter(|held| held.owner == owner).fold(
+            (0usize, 0u64),
+            |(objects, bytes), held| {
+                (
+                    objects.saturating_add(1),
+                    bytes.saturating_add(held.object.len),
+                )
+            },
+        );
+        objects < self.quota.objects && bytes.saturating_add(len) <= self.quota.bytes
+    }
+
+    /// Where `wanted` bytes aligned to `align` would be cut out, as the
+    /// index and the free object and the address the piece begins at.
+    ///
+    /// Two splits at most, each needing a free slot, and one slot for the
+    /// piece to go back when a later step fails. All are refused before
+    /// anything is cut.
+    fn place(&self, wanted: u64, align: u64) -> Result<(usize, u64, Object), Error> {
+        let (index, start, object) = self.first_fit(wanted, align).ok_or(Error::OutOfMemory)?;
+        let leading = start.wrapping_sub(object.start);
+        let trailing = object.end().wrapping_sub(start.wrapping_add(wanted));
+        let extra = usize::from(leading > 0).wrapping_add(usize::from(trailing > 0));
+        if self.free.len().wrapping_add(extra) > FREE {
+            return Err(Error::PoolExhausted);
+        }
+        Ok((index, start, object))
+    }
+
+    /// Cuts `wanted` bytes at `start` out of `object`, which has left the
+    /// free list, puts what lies around them in the free list, and zeroes
+    /// the piece. An error comes back with the piece still in hand.
+    fn carve(
+        &mut self,
+        pages: &mut impl Pages,
+        object: Object,
+        start: u64,
+        wanted: u64,
+    ) -> Result<Object, (Object, Error)> {
+        let leading = start.wrapping_sub(object.start);
+        let trailing = object.end().wrapping_sub(start.wrapping_add(wanted));
+        let mut piece = object;
+        if leading > 0 {
+            let upper = pages
+                .split(piece.handle, leading)
+                .map_err(|error| (piece, error))?;
+            let below = Object {
+                handle: piece.handle,
+                start: piece.start,
+                len: leading,
+            };
+            piece = Object {
+                handle: upper,
+                start,
+                len: piece.len.wrapping_sub(leading),
+            };
+            self.insert_free(below).map_err(|error| (piece, error))?;
+        }
+        if trailing > 0 {
+            let upper = pages
+                .split(piece.handle, wanted)
+                .map_err(|error| (piece, error))?;
+            let above = Object {
+                handle: upper,
+                start: start.wrapping_add(wanted),
+                len: trailing,
+            };
+            piece.len = wanted;
+            self.insert_free(above).map_err(|error| (piece, error))?;
+        }
+        wipe(pages, piece).map_err(|error| (piece, error))?;
+        Ok(piece)
+    }
+
+    /// Puts back a piece a failed allocation had in hand. The slot check
+    /// in [`Store::allocate`] holds the slot. The bytes are zero, because
+    /// they were free and a failed pass writes nothing but zeros.
+    fn restore(&mut self, pages: &mut impl Pages, piece: Object) {
+        let _restored = self.put_free(pages, piece);
     }
 
     /// Puts `object` in the free list and joins it to the neighbours it

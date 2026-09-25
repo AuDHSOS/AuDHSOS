@@ -10,11 +10,17 @@ use test_support::generators::{Generator, range, vec};
 use test_support::property::check;
 
 use crate::doubles::{Call, RecordingPages};
-use crate::store::{Object, Store};
+use crate::store::{Object, Quota, Store};
 
 /// The store the tests work with: small enough that either table can be
 /// filled, wide enough for the cases.
 type Memory = Store<8, 8>;
+
+/// A quota no test reaches.
+const WHOLE: Quota = Quota {
+    objects: usize::MAX,
+    bytes: u64::MAX,
+};
 
 /// Two mebibytes, which is the alignment the catalog names beside a page.
 const TWO_MIB: u64 = 2 * 1024 * 1024;
@@ -35,7 +41,7 @@ fn object(index: u32, start: u64, pages: u64) -> Object {
 
 /// A store that has taken over one region of `pages` pages at zero.
 fn adopted(pages: u64) -> (Memory, RecordingPages) {
-    let mut store = Memory::new();
+    let mut store = Memory::new(WHOLE);
     let mut kernel = RecordingPages::new();
     store.adopt(&mut kernel, object(1, 0, pages)).unwrap();
     kernel.forget();
@@ -77,12 +83,11 @@ fn pass(calls: &[Call]) -> Option<(Handle, u64, u64)> {
 
 #[test]
 fn a_new_store_holds_nothing() {
-    let store = Memory::new();
+    let store = Memory::new(WHOLE);
     assert_eq!(store.free_bytes(), 0);
     assert_eq!(store.live_bytes(), 0);
     assert_eq!(store.free_objects(), 0);
     assert_eq!(store.live_objects(), 0);
-    assert_eq!(Memory::default().free_bytes(), 0);
 }
 
 #[test]
@@ -130,7 +135,7 @@ fn client_end_does_not_recycle_memory_transferred_to_another_process() {
 
 #[test]
 fn memory_taken_over_is_zeroed_before_it_is_free() {
-    let mut store = Memory::new();
+    let mut store = Memory::new(WHOLE);
     let mut kernel = RecordingPages::new();
     let region = object(1, 0, 4);
     store.adopt(&mut kernel, region).unwrap();
@@ -341,7 +346,7 @@ fn a_client_that_holds_nothing_leaves_nothing_behind() {
 #[test]
 fn the_alignments_the_catalog_names_are_met() {
     for align in [PAGE_SIZE, TWO_MIB] {
-        let mut store = Memory::new();
+        let mut store = Memory::new(WHOLE);
         let mut kernel = RecordingPages::new();
         // A region that begins one page below a two-mebibyte boundary, so
         // that the wider alignment costs a piece at the front.
@@ -358,7 +363,7 @@ fn the_alignments_the_catalog_names_are_met() {
 
 #[test]
 fn an_alignment_no_free_object_can_meet_finds_nothing() {
-    let mut store = Memory::new();
+    let mut store = Memory::new(WHOLE);
     let mut kernel = RecordingPages::new();
     // Four pages that begin one page above a two-mebibyte boundary: the
     // next boundary lies far beyond the end of them.
@@ -495,7 +500,7 @@ fn a_release_joins_the_neighbour_below_and_the_one_above() {
 
 #[test]
 fn a_piece_taken_out_of_the_middle_leaves_both_ends_free() {
-    let mut store = Memory::new();
+    let mut store = Memory::new(WHOLE);
     let mut kernel = RecordingPages::new();
     let start = TWO_MIB.wrapping_sub(PAGE_SIZE);
     store.adopt(&mut kernel, object(1, start, 3)).unwrap();
@@ -529,7 +534,7 @@ fn a_free_list_with_no_room_for_the_pieces_refuses_the_request() {
     // begins one page below a two-mebibyte boundary, so a request aligned
     // to that boundary lands in the middle of one and would leave a piece
     // on either side — two where one was, and there is no slot for it.
-    let mut store = Memory::new();
+    let mut store = Memory::new(WHOLE);
     let mut kernel = RecordingPages::new();
     for index in 0..8u32 {
         let start = u64::from(index)
@@ -554,7 +559,7 @@ fn a_free_list_with_no_room_for_the_pieces_refuses_the_request() {
 
 #[test]
 fn taking_over_more_regions_than_the_free_list_holds_is_refused() {
-    let mut store = Memory::new();
+    let mut store = Memory::new(WHOLE);
     let mut kernel = RecordingPages::new();
     for index in 0..8u32 {
         let start = u64::from(index).wrapping_mul(TWO_MIB);
@@ -584,7 +589,7 @@ fn an_error_from_the_kernel_comes_back_out() {
 
 #[test]
 fn a_failed_unmap_is_reported_even_when_the_fill_worked() {
-    let mut store = Memory::new();
+    let mut store = Memory::new(WHOLE);
     let mut kernel = RecordingPages::new();
     // Map and zero go through; the unmap behind them does not.
     kernel.fail_after = Some((2, Error::NotMapped));
@@ -597,7 +602,7 @@ fn a_failed_unmap_is_reported_even_when_the_fill_worked() {
 
 #[test]
 fn the_free_objects_come_out_lowest_first() {
-    let mut store = Memory::new();
+    let mut store = Memory::new(WHOLE);
     let mut kernel = RecordingPages::new();
     store.adopt(&mut kernel, object(1, 8 * TWO_MIB, 2)).unwrap();
     store.adopt(&mut kernel, object(2, 2 * TWO_MIB, 2)).unwrap();
@@ -640,7 +645,7 @@ fn what_is_out_never_overlaps_and_every_byte_of_it_was_zeroed() {
         0..=30,
     );
     check("memory store keeps its ranges apart", &steps, |steps| {
-        let mut store: Store<32, 32> = Store::new();
+        let mut store: Store<32, 32> = Store::new(WHOLE);
         let mut kernel = RecordingPages::new();
         store
             .adopt(&mut kernel, object(1, 0, ARENA_PAGES))
@@ -772,43 +777,279 @@ fn a_refused_release_of_the_store_s_own_handle_keeps_it() {
 
 #[test]
 fn a_client_that_keeps_its_handles_after_releasing_takes_no_slot_from_another_client() {
-    /// Four objects out at once over eight pages, so the table is
-    /// exhausted while memory is left.
+    /// Four objects out at once over eight pages, two per client.
     type Small = Store<8, 4>;
-    let mut store = Small::new();
+    let mut store = Small::new(Quota {
+        objects: 2,
+        bytes: u64::MAX,
+    });
     let mut pages = RecordingPages::new();
     store.adopt(&mut pages, object(1, 0, 8)).unwrap();
     pages.forget();
     // The greedy client gives every object back and closes no handle, so
-    // none of the four is reclaimed.
-    for _ in 0..4 {
+    // none of them is reclaimed.
+    for _ in 0..2 {
         let page = store.allocate(&mut pages, 5, PAGE_SIZE, PAGE_SIZE).unwrap();
         pages.shared.push(page.handle);
         store.release(&mut pages, 5, page).unwrap();
     }
-    assert_eq!(store.retired_objects(), 4);
+    assert_eq!(store.retired_objects(), 2);
     assert_eq!(
         store.live_objects(),
-        4,
+        2,
         "a retired object keeps the slot it had"
     );
-    assert!(store.free_bytes() >= 4 * PAGE_SIZE, "and memory is left");
-    // The table is what is exhausted, and the refusal reaches the client
-    // that filled it. No client is handed memory it could not give back.
     assert_eq!(
         store.allocate(&mut pages, 5, PAGE_SIZE, PAGE_SIZE),
-        Err(Error::PoolExhausted)
+        Err(Error::QuotaExceeded),
+        "a retired object counts against its owner"
     );
-    assert_eq!(
-        store.allocate(&mut pages, 6, PAGE_SIZE, PAGE_SIZE),
-        Err(Error::PoolExhausted)
-    );
-    pages.shared.clear();
-    store.reclaim(&mut pages).unwrap();
-    assert_eq!(store.live_objects(), 0, "every slot came back");
     let page = store.allocate(&mut pages, 6, PAGE_SIZE, PAGE_SIZE).unwrap();
     assert_eq!(store.release(&mut pages, 6, page), Ok(page));
-    assert_eq!(store.live_objects(), 0, "and that one went straight back");
+    // Once the handles are closed, the quota refusal reclaims them.
+    pages.shared.clear();
+    store.allocate(&mut pages, 5, PAGE_SIZE, PAGE_SIZE).unwrap();
+    assert_eq!(store.retired_objects(), 0, "every retired slot came back");
+    assert_eq!(store.live_objects(), 1);
+}
+
+#[test]
+fn one_client_cannot_fill_the_live_table_for_another() {
+    // Regression for issue 115.
+    let mut store = Memory::new(Quota {
+        objects: 4,
+        bytes: u64::MAX,
+    });
+    let mut kernel = RecordingPages::new();
+    store.adopt(&mut kernel, object(1, 0, 16)).unwrap();
+    for _ in 0..4 {
+        store
+            .allocate(&mut kernel, 7, PAGE_SIZE, PAGE_SIZE)
+            .unwrap();
+    }
+    assert_eq!(
+        store.allocate(&mut kernel, 7, PAGE_SIZE, PAGE_SIZE),
+        Err(Error::QuotaExceeded)
+    );
+    assert_eq!(store.live_objects(), 4);
+    store
+        .allocate(&mut kernel, 9, PAGE_SIZE, PAGE_SIZE)
+        .unwrap();
+}
+
+#[test]
+fn one_client_cannot_take_the_free_memory_of_another() {
+    // Regression for issue 115.
+    let mut store = Memory::new(Quota {
+        objects: usize::MAX,
+        bytes: 4 * PAGE_SIZE,
+    });
+    let mut kernel = RecordingPages::new();
+    store.adopt(&mut kernel, object(1, 0, 8)).unwrap();
+    assert_eq!(
+        store.allocate(&mut kernel, 7, 8 * PAGE_SIZE, PAGE_SIZE),
+        Err(Error::QuotaExceeded)
+    );
+    store
+        .allocate(&mut kernel, 7, 3 * PAGE_SIZE, PAGE_SIZE)
+        .unwrap();
+    assert_eq!(
+        store.allocate(&mut kernel, 7, 2 * PAGE_SIZE, PAGE_SIZE),
+        Err(Error::QuotaExceeded),
+        "the quota adds up over requests"
+    );
+    store
+        .allocate(&mut kernel, 7, PAGE_SIZE, PAGE_SIZE)
+        .unwrap();
+    store
+        .allocate(&mut kernel, 9, 4 * PAGE_SIZE, PAGE_SIZE)
+        .unwrap();
+    assert_eq!(store.free_bytes(), 0);
+}
+
+#[test]
+fn a_failed_first_split_puts_the_object_back() {
+    // Regression for issue 125.
+    let (mut store, mut kernel) = adopted(8);
+    kernel.fail_after = Some((0, Error::OutOfKernelMemory));
+    assert_eq!(
+        store.allocate(&mut kernel, 7, PAGE_SIZE, PAGE_SIZE),
+        Err(Error::OutOfKernelMemory)
+    );
+    assert_eq!(store.free_bytes(), 8 * PAGE_SIZE);
+    assert_eq!(store.free_objects(), 1);
+    assert_eq!(store.live_bytes(), 0);
+}
+
+#[test]
+fn a_failed_second_split_puts_the_upper_piece_back() {
+    // Regression for issue 125: a piece in front and one behind.
+    let mut store = Memory::new(WHOLE);
+    let mut kernel = RecordingPages::new();
+    let start = TWO_MIB.wrapping_sub(PAGE_SIZE);
+    store.adopt(&mut kernel, object(1, start, 3)).unwrap();
+    kernel.forget();
+    kernel.fail_after = Some((1, Error::OutOfKernelMemory));
+    assert_eq!(
+        store.allocate(&mut kernel, 7, PAGE_SIZE, TWO_MIB),
+        Err(Error::OutOfKernelMemory)
+    );
+    assert_eq!(store.free_bytes(), 3 * PAGE_SIZE);
+    assert_eq!(store.live_bytes(), 0);
+    kernel.fail_after = None;
+    let given = store.allocate(&mut kernel, 7, PAGE_SIZE, TWO_MIB).unwrap();
+    assert_eq!(given.start, TWO_MIB, "and the memory is usable again");
+}
+
+#[test]
+fn a_failed_zeroing_pass_puts_the_piece_back() {
+    // Regression for issue 125: split, then map, then the zero fails.
+    let (mut store, mut kernel) = adopted(8);
+    kernel.fail_after = Some((2, Error::OutOfKernelMemory));
+    assert_eq!(
+        store.allocate(&mut kernel, 7, PAGE_SIZE, PAGE_SIZE),
+        Err(Error::OutOfKernelMemory)
+    );
+    assert_eq!(store.free_bytes(), 8 * PAGE_SIZE);
+    assert_eq!(store.live_bytes(), 0);
+}
+
+#[test]
+fn a_full_free_list_keeps_a_slot_for_the_piece_to_go_back() {
+    // Regression for issue 125. Eight regions fill the free list. A piece
+    // in front takes one slot and the piece that goes back on a failure
+    // takes another.
+    let mut store = Memory::new(WHOLE);
+    let mut kernel = RecordingPages::new();
+    for index in 0..8u32 {
+        let start = u64::from(index)
+            .wrapping_mul(4)
+            .wrapping_add(1)
+            .wrapping_mul(TWO_MIB)
+            .wrapping_sub(PAGE_SIZE);
+        store
+            .adopt(&mut kernel, object(index.wrapping_add(1), start, 2))
+            .unwrap();
+    }
+    kernel.forget();
+    assert_eq!(
+        store.allocate(&mut kernel, 7, PAGE_SIZE, TWO_MIB),
+        Err(Error::PoolExhausted)
+    );
+    assert!(kernel.calls().is_empty(), "and nothing was cut");
+}
+
+#[test]
+fn a_failed_zeroing_pass_with_one_free_slot_left_puts_the_piece_back() {
+    // Regression for issue 125. Seven regions and the piece in front fill
+    // the free list, and the piece that goes back takes the last slot.
+    let mut store = Memory::new(WHOLE);
+    let mut kernel = RecordingPages::new();
+    for index in 0..7u32 {
+        let start = u64::from(index)
+            .wrapping_mul(4)
+            .wrapping_add(1)
+            .wrapping_mul(TWO_MIB)
+            .wrapping_sub(PAGE_SIZE);
+        store
+            .adopt(&mut kernel, object(index.wrapping_add(1), start, 2))
+            .unwrap();
+    }
+    kernel.forget();
+    // Split and map go through; the zero does not.
+    kernel.fail_after = Some((2, Error::OutOfKernelMemory));
+    assert_eq!(
+        store.allocate(&mut kernel, 7, PAGE_SIZE, TWO_MIB),
+        Err(Error::OutOfKernelMemory)
+    );
+    assert_eq!(store.free_objects(), 8);
+    assert_eq!(store.free_bytes(), 14 * PAGE_SIZE);
+    assert_eq!(store.live_bytes(), 0);
+}
+
+#[test]
+fn a_close_that_fails_in_a_release_still_takes_the_object_back() {
+    // Regression for issue 126.
+    let (mut store, mut kernel) = adopted(8);
+    let given = store
+        .allocate(&mut kernel, 7, 2 * PAGE_SIZE, PAGE_SIZE)
+        .unwrap();
+    let returned = Object {
+        handle: handle(9999),
+        ..given
+    };
+    kernel.refuse_closes = Some(Error::InvalidHandle);
+    assert_eq!(
+        store.release(&mut kernel, 7, returned),
+        Err(Error::InvalidHandle)
+    );
+    assert_eq!(store.live_objects(), 0);
+    assert_eq!(store.free_bytes(), 8 * PAGE_SIZE, "and no memory was lost");
+}
+
+#[test]
+fn a_close_that_fails_in_a_release_of_a_shared_object_leaves_it_retired() {
+    // Regression for issue 126.
+    let (mut store, mut kernel) = adopted(8);
+    let given = store
+        .allocate(&mut kernel, 7, 2 * PAGE_SIZE, PAGE_SIZE)
+        .unwrap();
+    kernel.shared.push(given.handle);
+    let returned = Object {
+        handle: handle(9999),
+        ..given
+    };
+    kernel.refuse_closes = Some(Error::InvalidHandle);
+    assert_eq!(
+        store.release(&mut kernel, 7, returned),
+        Err(Error::InvalidHandle)
+    );
+    assert_eq!(
+        store.retired_objects(),
+        1,
+        "the object is still in the store"
+    );
+    kernel.shared.clear();
+    store.reclaim(&mut kernel).unwrap();
+    assert_eq!(store.free_bytes(), 8 * PAGE_SIZE);
+    assert_eq!(store.live_objects(), 0);
+}
+
+#[test]
+fn an_allocation_makes_no_references_call_while_memory_is_left() {
+    // Regression for issue 136.
+    let (mut store, mut kernel) = adopted(8);
+    for _ in 0..3 {
+        let page = store
+            .allocate(&mut kernel, 5, PAGE_SIZE, PAGE_SIZE)
+            .unwrap();
+        kernel.shared.push(page.handle);
+        store.release(&mut kernel, 5, page).unwrap();
+    }
+    assert_eq!(store.retired_objects(), 3);
+    kernel.forget();
+    let asked = kernel.references_asked();
+    store
+        .allocate(&mut kernel, 6, PAGE_SIZE, PAGE_SIZE)
+        .unwrap();
+    assert_eq!(kernel.references_asked(), asked, "no reclaim ran");
+}
+
+#[test]
+fn an_allocation_that_finds_no_memory_reclaims_first() {
+    // Regression for issue 136: the rare case still reclaims.
+    let (mut store, mut kernel) = adopted(1);
+    let page = store
+        .allocate(&mut kernel, 5, PAGE_SIZE, PAGE_SIZE)
+        .unwrap();
+    kernel.shared.push(page.handle);
+    store.release(&mut kernel, 5, page).unwrap();
+    kernel.shared.clear();
+    assert_eq!(store.retired_objects(), 1);
+    let again = store
+        .allocate(&mut kernel, 6, PAGE_SIZE, PAGE_SIZE)
+        .unwrap();
+    assert_eq!(again.start, page.start);
 }
 
 #[test]

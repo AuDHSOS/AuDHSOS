@@ -2790,7 +2790,8 @@ requires `INFO` on the process and `BIND` on the notification, cancels exactly
 one watch, and returns the process's ended state; already queued bits remain.
 The latter requires `INFO` and counts all handles and mappings of the memory
 object. The memory server retires returned objects until the count is one,
-then zeroes and reclaims them before another allocation. Closing the server's
+then zeroes and reclaims them in a release, or in an allocation that a full
+table, the owner's quota, or the free memory would refuse. Closing the server's
 mapping alone never authorizes recycling a page a client can still reach.
 
 `Notification::bound_interrupt` goes, per D-108, and with it the check in

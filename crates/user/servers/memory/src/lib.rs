@@ -11,7 +11,7 @@ pub mod pages;
 pub mod store;
 
 pub use pages::Pages;
-pub use store::{Held, Object, Store};
+pub use store::{Held, Object, Quota, Store};
 
 #[cfg(test)]
 mod tests;
