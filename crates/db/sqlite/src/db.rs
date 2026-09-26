@@ -4101,6 +4101,29 @@ impl<'a> Database<'a> {
         self.resolved(&view.arena, view.select, &view.sql, scope)
     }
 
+    /// Resolves the statement `id` and answers no row, with `outer` for
+    /// the row the statement it stands inside holds, which is how the
+    /// statement of a trigger's body reads `new` and `old`.
+    ///
+    /// # Errors
+    ///
+    /// Whatever resolving a name of the statement refuses.
+    pub(crate) fn resolved_select(
+        &self,
+        arena: &Arena,
+        id: SelectId,
+        sql: &[u8],
+        outer: Option<&dyn eval::Row>,
+    ) -> Result<(), Error> {
+        let scope = Scope {
+            terms: &[],
+            outer,
+            views: 0,
+            schema: true,
+        };
+        self.resolved(arena, id, sql, scope)
+    }
+
     /// Resolves every core of one statement and answers no row.
     ///
     /// # Errors

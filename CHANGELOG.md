@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` resolves the body of every trigger of the schema when an
+  `ALTER TABLE` reads the schema, against the columns of the table each step
+  writes and the `old` and `new` rows the trigger stands on. D-530 records it.
+  Catalog 6.6.375. `altercol.test` goes from 213 cases passing to 216 and
+  `alterdropcol.test` from 96 to 98.
+
 - `db-sqlite` reads the schema of the database an `ALTER TABLE ... DROP COLUMN`
   names, and the temp schema beside it, before the drop writes a statement.
   D-529 records it. Catalog 6.6.374. `alterdropcol.test` goes from 94 cases

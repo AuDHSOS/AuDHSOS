@@ -624,6 +624,32 @@ fn collated(
 /// [`Error::NoColumn`] names what no side answers, [`Error::Ambiguous`]
 /// what more than one answers, and whatever the expression a name stood
 /// for was refused with.
+/// Whether the row answers the column one name stands for, reading
+/// nothing else of the expression the name stands in.
+///
+/// `sqlite3ResolveExprNames` of `research/sqlite/src/resolve.c:1740`
+/// resolves the names of an expression without answering it, which is
+/// what the pass over the statements of the schema reads.
+///
+/// Resolving one name costs O(n) in the columns the row answers.
+///
+/// # Errors
+///
+/// [`Error::NoColumn`] where no side answers the name and
+/// [`Error::Ambiguous`] where two do.
+pub(crate) fn resolves_name(
+    held: (
+        Option<crate::ast::Span>,
+        Option<crate::ast::Span>,
+        crate::ast::Span,
+    ),
+    sql: &[u8],
+    row: &dyn Row,
+) -> Result<(), Error> {
+    named_value(held, sql, row)?;
+    Ok(())
+}
+
 fn named_value(
     held: (
         Option<crate::ast::Span>,

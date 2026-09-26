@@ -219,6 +219,39 @@ impl Standing<'_> {
     }
 }
 
+/// The statement one step of a trigger body writes.
+#[derive(Clone, Copy)]
+enum Written<'a> {
+    /// `INSERT`.
+    Insert(&'a crate::ast::Insert),
+    /// `UPDATE`.
+    Update(&'a crate::ast::Update),
+    /// `DELETE`.
+    Delete(&'a crate::ast::Delete),
+}
+
+impl<'a> Written<'a> {
+    /// The statement the step writes, and nothing for a `SELECT` step,
+    /// which reads the tables of its own `FROM` alone.
+    const fn of(step: &'a crate::ast::TriggerStep) -> Option<Self> {
+        match *step {
+            crate::ast::TriggerStep::Insert(ref statement) => Some(Self::Insert(statement)),
+            crate::ast::TriggerStep::Update(ref statement) => Some(Self::Update(statement)),
+            crate::ast::TriggerStep::Delete(ref statement) => Some(Self::Delete(statement)),
+            crate::ast::TriggerStep::Select(_) => None,
+        }
+    }
+
+    /// The table the statement writes.
+    const fn table(self) -> Span {
+        match self {
+            Self::Insert(statement) => statement.name,
+            Self::Update(statement) => statement.name,
+            Self::Delete(statement) => statement.name,
+        }
+    }
+}
+
 /// The column one `ALTER TABLE ... RENAME COLUMN` renames.
 #[derive(Clone, Copy)]
 struct Column<'a> {
@@ -468,6 +501,52 @@ fn reads_after(
     };
     let refused = crate::schema::table(&arena, &made, text, collating).err()?;
     Some(Error::Schema(refused).message())
+}
+
+/// Resolves the names one expression writes, reading nothing else of it:
+/// every name is looked up in `row` and every statement written inside
+/// the expression is resolved on its own.
+///
+/// `sqlite3ResolveExprNames` of `research/sqlite/src/resolve.c:1740`
+/// resolves the names of an expression without answering it, so a
+/// function no library holds and a value no comparison takes refuse
+/// nothing here.
+///
+/// The walk is as deep as the expression, which the parser has bounded.
+///
+/// # Errors
+///
+/// Whatever resolving one name or one statement refuses.
+fn names_read(
+    database: &Database<'_>,
+    read: (&Arena, &[u8]),
+    id: crate::ast::ExprId,
+    row: &dyn crate::eval::Row,
+) -> Result<(), Error> {
+    let (arena, sql) = read;
+    arena.node(id).into_iter().try_for_each(|node| {
+        if let crate::ast::Node::Column {
+            schema,
+            table,
+            column,
+        } = node
+        {
+            crate::eval::resolves_name((schema, table, column), sql, row)?;
+        }
+        if let crate::ast::Node::Subquery(select)
+        | crate::ast::Node::Exists(select)
+        | crate::ast::Node::InSelect { select, .. } = node
+        {
+            database.resolved_select(arena, select, sql, Some(row))?;
+        }
+        let mut deeper = Ok(());
+        arena.under(node, |child| {
+            if deeper.is_ok() {
+                deeper = names_read(database, read, child, row);
+            }
+        });
+        deeper
+    })
 }
 
 /// Whether SQLite made the name for itself, which is `name NOT LIKE
@@ -2100,6 +2179,7 @@ impl Writer {
             ));
         }
         self.resolves_indexes(&images)?;
+        self.resolves_triggers(Error::InObject)?;
         self.resolves_views(false)
     }
 
@@ -2156,6 +2236,187 @@ impl Writer {
         crate::schema::index(&arena, &made, statement, table, self.collating)
             .err()
             .map(|refused| Error::Schema(refused).message())
+    }
+
+    /// Raises where a statement of the body of a trigger of the schema
+    /// names a column no table of that statement holds.
+    ///
+    /// `renameResolveTrigger` of `research/sqlite/src/alter.c:1341`
+    /// resolves the body of every trigger of the schema before an alter
+    /// writes a statement and again after. The statements are read
+    /// against rows of nulls: the table the trigger stands on answers
+    /// `new` and `old`, and the table each step writes answers the bare
+    /// names of that step.
+    ///
+    /// Resolving the triggers costs O(n) in the rows of the schema and
+    /// O(m) in the expressions of each body.
+    ///
+    /// # Errors
+    ///
+    /// Whatever `refused_as` names the trigger and the refusal with.
+    fn resolves_triggers(
+        &self,
+        refused_as: fn(Vec<u8>, Vec<u8>, alloc::string::String) -> Error,
+    ) -> Result<(), Error> {
+        let images = self.images();
+        let database = self.reading(&images.held)?;
+        for (_, values) in database.rows_of(SCHEMA_TABLE)? {
+            let text = |at: usize| values.get(at).and_then(Value::text).unwrap_or_default();
+            let kind = text(0);
+            let name = text(1);
+            if !kind.eq_ignore_ascii_case(b"trigger") {
+                continue;
+            }
+            let read = database
+                .held_trigger(&name)
+                .into_iter()
+                .try_for_each(|trigger| self.trigger_reads(&database, trigger));
+            if let Err(refused) = read {
+                return Err(refused_as(kind, name, refused.message()));
+            }
+        }
+        Ok(())
+    }
+
+    /// The refusal the body of one trigger answers, read against a row of
+    /// nulls.
+    ///
+    /// # Errors
+    ///
+    /// Whatever resolving a name of one step refuses.
+    fn trigger_reads(
+        &self,
+        database: &Database<'_>,
+        trigger: &crate::db::Trigger,
+    ) -> Result<(), Error> {
+        let Some((over, _)) = database.table(&trigger.table) else {
+            return Ok(());
+        };
+        let nulls = alloc::vec![Value::Null; over.columns.len()];
+        // `codeRowTrigger` of `research/sqlite/src/trigger.c:1006` gives
+        // a trigger the rows its event holds: an `INSERT` writes a row
+        // and reads none, a `DELETE` reads one and writes none, and an
+        // `UPDATE` holds both, so `old` of an insert names no column.
+        let event = trigger.written.event;
+        let held = |kept: bool| kept.then_some((nulls.as_slice(), 0));
+        let fired = Fired {
+            schemed: self.schemed_here(true),
+            table: over,
+            old: held(event != crate::ast::TriggerEvent::Insert),
+            new: held(event != crate::ast::TriggerEvent::Delete),
+            encoding: self.held.header.encoding,
+        };
+        let arena = &trigger.arena;
+        let sql = &trigger.sql;
+        for step in arena.steps(trigger.written.body) {
+            self.step_reads(database, (arena, sql), step, &fired)?;
+        }
+        Ok(())
+    }
+
+    /// The refusal one statement of a body answers.
+    ///
+    /// A step that writes reads the columns of the table it writes and
+    /// the two rows the trigger stands on; a step that reads is resolved
+    /// as the statement of a view is, with those rows beside it.
+    ///
+    /// # Errors
+    ///
+    /// Whatever resolving a name of the step refuses.
+    fn step_reads(
+        &self,
+        database: &Database<'_>,
+        read: (&Arena, &[u8]),
+        step: &crate::ast::TriggerStep,
+        fired: &Fired<'_>,
+    ) -> Result<(), Error> {
+        let (arena, sql) = read;
+        // A `SELECT` of a body reads the tables of its own `FROM`, which
+        // [`Self::resolved`] reads for the tables it names and nothing
+        // else.
+        let Some(written) = Written::of(step) else {
+            return Ok(());
+        };
+        let name = crate::schema::dequote(written.table().text(sql));
+        let Some((into, _)) = database.table(&name) else {
+            return Ok(());
+        };
+        let nulls = alloc::vec![Value::Null; into.columns.len()];
+        let row = self.reading_row(
+            (into, &nulls, None),
+            Some(fired),
+            Some(Reading {
+                database,
+                arena,
+                sql,
+            }),
+        );
+        let reads = |expr| names_read(database, (arena, sql), expr, &row);
+        let column = |written: crate::ast::Span| {
+            let name = crate::schema::dequote(written.text(sql));
+            into.columns
+                .iter()
+                .any(|held| held.name.eq_ignore_ascii_case(&name))
+                .then_some(())
+                .ok_or(Error::Eval(crate::eval::Error::NoColumn(name)))
+        };
+        match written {
+            Written::Insert(statement) => {
+                for written in arena.names(statement.columns) {
+                    column(*written)?;
+                }
+                // The rows an `INSERT` of a body writes are a list of
+                // values, whose names are the rows the trigger stands
+                // on; one that answers a statement reads the tables of
+                // its own `FROM`, which [`Self::resolved`] reads.
+                let rows = arena.select(statement.select).ok_or(Error::Unsupported)?;
+                for held in arena.children(rows.values) {
+                    names_read(database, (arena, sql), *held, fired)?;
+                }
+                // `sqlite3UpsertAnalyzeTarget` of
+                // `research/sqlite/src/upsert.c:141` puts the row the
+                // clause did not write beside the table under the name
+                // `excluded`, whose columns are the table's own.
+                let mut beside = self.reading_row(
+                    (into, &nulls, None),
+                    Some(fired),
+                    Some(Reading {
+                        database,
+                        arena,
+                        sql,
+                    }),
+                );
+                beside.named = Some(b"excluded");
+                let held = |expr| names_read(database, (arena, sql), expr, &beside);
+                for upsert in arena.upserts(statement.upserts) {
+                    for term in arena.orders(upsert.targets) {
+                        held(term.expr)?;
+                    }
+                    for set in arena.sets(upsert.sets) {
+                        column(set.column)?;
+                        held(set.value)?;
+                    }
+                    for expr in upsert.over.into_iter().chain(upsert.filter) {
+                        held(expr)?;
+                    }
+                }
+                Ok(())
+            }
+            Written::Update(statement) => {
+                // An `UPDATE ... FROM` reads the columns of the tables
+                // that `FROM` names as well, which [`Self::resolved`]
+                // reads for the tables and nothing else.
+                if statement.from.is_some() {
+                    return Ok(());
+                }
+                for set in arena.sets(statement.sets) {
+                    column(set.column)?;
+                    reads(set.value)?;
+                }
+                statement.filter.map_or(Ok(()), reads)
+            }
+            Written::Delete(statement) => statement.filter.map_or(Ok(()), reads),
+        }
     }
 
     /// Raises where the statement of a view of the schema the connection

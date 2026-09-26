@@ -7856,6 +7856,24 @@ Document 16 step Q8. Every answer is the one the C library's shell writes.
 - A `FROM` of 65 and of 100 sides, which are refused.
 - Two statements of 64 sides, one written inside the other, which stand.
 
+### 6.6.375 The body of a trigger an `ALTER TABLE` resolves (`db-sqlite`)
+
+Document 16 step Q8. Every answer is the one the C library's shell writes.
+
+- A step whose `WHERE`, whose `SET` column, whose column list or whose
+  written value names a column neither the table it writes nor the rows
+  the trigger stands on hold: the rename is refused `error in trigger g:
+  no such column: nosuch`.
+- `old` under a trigger over an insert, which names no column.
+- An `ON CONFLICT` whose `DO UPDATE` reads `excluded`, which stands, and
+  one whose target or value names a column the table does not hold,
+  which is refused.
+- A statement written inside an expression of a step, resolved on its
+  own.
+- A `SELECT` step and an `UPDATE ... FROM`, both passed over.
+- A step whose table no schema holds: refused `error in trigger g: no
+  such table: main.nosuchtable`.
+
 ### 6.6.374 The indexes and the triggers an `ALTER TABLE` reads (`db-sqlite`)
 
 Document 16 step Q8. Every answer is the one the C library's shell writes,

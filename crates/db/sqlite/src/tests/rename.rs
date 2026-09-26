@@ -1207,3 +1207,100 @@ fn what_an_index_or_a_trigger_an_alter_no_longer_resolves_refuses() {
     );
     writer.run(b"ALTER TABLE k RENAME COLUMN a TO aa").unwrap();
 }
+
+/// The statements of a trigger's body an `ALTER TABLE` reads again.
+#[test]
+fn what_a_trigger_an_alter_no_longer_resolves_refuses() {
+    let held = |body: &str| -> Result<(), crate::db::Error> {
+        let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+        ran(
+            &mut writer,
+            &[
+                b"CREATE TABLE t1(a,b)",
+                b"CREATE TABLE t2(c UNIQUE,d)",
+                b"CREATE TABLE u(x)",
+            ],
+        );
+        let mut sql = b"CREATE TRIGGER g AFTER INSERT ON t1 BEGIN ".to_vec();
+        sql.extend_from_slice(body.as_bytes());
+        sql.extend_from_slice(b" END");
+        writer.run(&sql).unwrap();
+        writer.run(b"ALTER TABLE u RENAME TO uu").map(|_| ())
+    };
+    // A step that writes reads the columns of the table it writes and
+    // the row the trigger stands on, so a name neither answers refuses
+    // the rename.
+    assert_eq!(
+        held("UPDATE t2 SET c=new.a WHERE nosuch=1;")
+            .unwrap_err()
+            .message(),
+        "error in trigger g: no such column: nosuch"
+    );
+    assert_eq!(
+        held("UPDATE t2 SET nosuch=1;").unwrap_err().message(),
+        "error in trigger g: no such column: nosuch"
+    );
+    assert_eq!(
+        held("DELETE FROM t2 WHERE nosuch=new.a;")
+            .unwrap_err()
+            .message(),
+        "error in trigger g: no such column: nosuch"
+    );
+    assert_eq!(
+        held("INSERT INTO t2(nosuch) VALUES(1);")
+            .unwrap_err()
+            .message(),
+        "error in trigger g: no such column: nosuch"
+    );
+    assert_eq!(
+        held("INSERT INTO t2 VALUES(new.nosuch, 1);")
+            .unwrap_err()
+            .message(),
+        "error in trigger g: no such column: new.nosuch"
+    );
+    // An `INSERT` of a trigger over an insert reads no `old` row.
+    assert_eq!(
+        held("UPDATE t2 SET c=old.a;").unwrap_err().message(),
+        "error in trigger g: no such column: old.a"
+    );
+    // The row an `ON CONFLICT` did not write stands under the name
+    // `excluded`, whose columns are the table's own.
+    assert_eq!(
+        held(
+            "INSERT INTO t2 VALUES(new.a, new.b) ON CONFLICT(c) WHERE c>0 \
+             DO UPDATE SET d=excluded.d WHERE d IS NOT NULL;"
+        ),
+        Ok(())
+    );
+    assert_eq!(
+        held("INSERT INTO t2 VALUES(new.a, new.b) ON CONFLICT(c) DO UPDATE SET d=nosuch;")
+            .unwrap_err()
+            .message(),
+        "error in trigger g: no such column: nosuch"
+    );
+    assert_eq!(
+        held("INSERT INTO t2 VALUES(new.a, new.b) ON CONFLICT(nosuch) DO NOTHING;")
+            .unwrap_err()
+            .message(),
+        "error in trigger g: no such column: nosuch"
+    );
+    // A statement written inside an expression of a step is resolved on
+    // its own, and a `SELECT` step reads the tables of its own `FROM`.
+    assert_eq!(held("UPDATE t2 SET c=(SELECT max(x) FROM u);"), Ok(()));
+    assert_eq!(
+        held("UPDATE t2 SET c=1 WHERE EXISTS(SELECT nosuch FROM t2);")
+            .unwrap_err()
+            .message(),
+        "error in trigger g: no such column: nosuch"
+    );
+    assert_eq!(held("SELECT c FROM t2;"), Ok(()));
+    // An `UPDATE ... FROM` and a step whose table no schema holds are
+    // both passed over.
+    assert_eq!(held("UPDATE t2 SET c=x FROM u;"), Ok(()));
+    assert_eq!(
+        held("INSERT INTO nosuchtable VALUES(1);")
+            .unwrap_err()
+            .message(),
+        "error in trigger g: no such table: main.nosuchtable"
+    );
+}
