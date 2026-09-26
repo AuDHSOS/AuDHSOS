@@ -465,6 +465,9 @@ pub enum Error {
     /// A row a `CHECK` of the table does not hold for, with the name
     /// of the constraint or the text of the expression.
     Check(Vec<u8>),
+    /// A statement whose `FROM` holds more sides than the bits of the
+    /// mask the walk of them counts in, with that count.
+    Joined(usize),
     /// A `WITH` term that reads itself and answered more rows than
     /// `RECURSION_ROWS` allows, which the C library keeps answering
     /// until the memory of the machine is gone.
@@ -1104,6 +1107,7 @@ impl Error {
             Error::Schema(schema::Error::IndexDot) => {
                 "the \".\" operator prohibited in index expressions".to_string()
             }
+            Error::Joined(most) => alloc::format!("at most {most} tables in a join"),
             Error::Recursion => "recursive aggregate queries not supported".to_string(),
             Error::RecursiveWindow => {
                 "cannot use window functions in recursive queries".to_string()
@@ -1618,6 +1622,11 @@ impl Limits {
 /// that reads them, which D2 records, so a term that does not stop is
 /// stopped by this count instead.
 const RECURSION_ROWS: usize = 100_000;
+
+/// How many sides the `FROM` of one statement holds, which is `BMS` of
+/// `research/sqlite/src/sqliteInt.h:1411`: the bits of the mask the walk
+/// of the sides counts each of them in.
+const JOINED: usize = 64;
 
 /// What a view puts in the place of a table: the columns it answers,
 /// the rows its statement answered, and the name it is known by.
@@ -4042,6 +4051,7 @@ impl<'a> Database<'a> {
             let cursor = Cursor::new(self.collation(), self.encoding, reach);
             return listed(arena, &select, sql, &cursor);
         }
+        counted_sides(arena, &select)?;
         let mut sides = self.sides(arena, &select, sql, scope)?;
         planned(
             arena,
@@ -8967,6 +8977,23 @@ fn unread(
     }
     for root in roots(arena, select) {
         evaluate_row(arena, root, sql, &cursor)?;
+    }
+    Ok(())
+}
+
+/// Refuses a statement whose `FROM` holds more sides than the mask the
+/// walk of them counts each side in.
+///
+/// `sqlite3WhereBegin` of `research/sqlite/src/where.c:6880` holds them
+/// to the bits of a `Bitmask`, which `BMS` of
+/// `research/sqlite/src/sqliteInt.h:1411` counts as 64.
+///
+/// # Errors
+///
+/// [`Error::Joined`] carries that count.
+fn counted_sides(arena: &Arena, select: &Select) -> Result<(), Error> {
+    if arena.sources(select.from).len() > JOINED {
+        return Err(Error::Joined(JOINED));
     }
     Ok(())
 }

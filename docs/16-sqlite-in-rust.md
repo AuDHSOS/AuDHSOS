@@ -1215,6 +1215,8 @@ Size: L.
      harness binds. Built, which D-520 records.
 221. The place a parameter of the harness stands at. Built, which D-521
      records.
+222. How many sides the `FROM` of one statement holds, and the rowid of
+     a view the harness reads none of. Built, which D-522 records.
 
 ### Done when
 
@@ -1224,8 +1226,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 123 560 cases in 844 files, 118 819
-pass, 2533 answer differently, and 2208 name something the engine
+under the `tclsh` of the machine. Of 123 560 cases in 844 files, 118 834
+pass, 2518 answer differently, and 2208 name something the engine
 refuses or a command that needs the C library's internals. The files
 that answer for tens of thousands of rows reach the five-minute
 deadline and are counted with the cases they ran by then. One run over

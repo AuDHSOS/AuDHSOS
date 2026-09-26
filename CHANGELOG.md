@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` refuses a statement whose `FROM` holds more than 64 sides, and the
+  suite harness names `allow_rowid_in_view` among the capabilities it holds none
+  of. D-522 records it. Catalog 6.6.368. `rowid.test` goes from 241 cases passing
+  to 246 and `join.test` from 173 to 177.
+
 - The suite harness counts the place a parameter stands at from the largest
   place any parameter of the statement stands for, and reads two parameters
   written under different characters as two. D-521 records it. Catalog 6.6.367.

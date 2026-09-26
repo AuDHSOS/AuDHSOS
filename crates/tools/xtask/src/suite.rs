@@ -273,12 +273,16 @@ const LOOPING: usize = 5000;
 
 /// The capabilities an `ifcapable` may name that this engine does not
 /// have. Every other name is answered as held.
-const MISSING: [&str; 22] = [
+const MISSING: [&str; 23] = [
     "vtab",
     // `SQLITE_DEBUG` writes the program of a statement out as it runs and
     // gives the library the seven pragmas that turn each listing on. This
     // engine builds no program, so it holds none of them.
     "debug",
+    // `SQLITE_ALLOW_ROWID_IN_VIEW` answers a `rowid` of a view, which is
+    // the rowid of the row the statement of the view read it from. This
+    // engine answers no rowid for a view.
+    "allow_rowid_in_view",
     "fts1",
     "fts2",
     "fts3",

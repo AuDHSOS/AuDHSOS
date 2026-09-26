@@ -432,3 +432,40 @@ fn what_a_limit_stops_the_walk_at() {
         "no such column: a"
     );
 }
+
+/// The sides of one statement are held to the bits of the mask the walk
+/// of them counts each side in, which is 64.
+#[test]
+fn how_many_sides_the_from_of_one_statement_holds() {
+    let image = three();
+    let database = Database::open(&image).expect("a database");
+    let sides = |count: usize| -> alloc::vec::Vec<u8> {
+        let mut sql = b"SELECT 1 FROM aa".to_vec();
+        for _ in 1..count {
+            sql.extend_from_slice(b", aa");
+        }
+        sql
+    };
+    for count in [1, 30, 63, 64] {
+        let sql = sides(count);
+        database
+            .query(&sql)
+            .unwrap_or_else(|error| panic!("{count} sides: {error:?}"));
+    }
+    for count in [65, 100] {
+        assert_eq!(
+            database.query(&sides(count)).unwrap_err().message(),
+            "at most 64 tables in a join",
+            "{count} sides"
+        );
+    }
+    // A statement written inside another one carries its own sides, so
+    // two of 64 stand together.
+    let mut sql = sides(64);
+    sql.extend_from_slice(b" WHERE EXISTS(");
+    sql.extend_from_slice(&sides(64));
+    sql.extend_from_slice(b")");
+    database
+        .query(&sql)
+        .unwrap_or_else(|error| panic!("two statements of 64 sides: {error:?}"));
+}

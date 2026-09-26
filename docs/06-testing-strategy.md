@@ -7847,3 +7847,11 @@ and `sqlite3_bind_parameter_index` answer for the same statement.
 - A `?N` below the largest place so far, which the `?` after it counts
   from that place and not from `N`.
 - Two names under different characters, which stand at two places.
+
+### 6.6.368 How many sides one statement holds (`db-sqlite`)
+
+Document 16 step Q8. Every answer is the one the C library's shell writes.
+
+- A `FROM` of one, 30, 63 and 64 sides, which stand.
+- A `FROM` of 65 and of 100 sides, which are refused.
+- Two statements of 64 sides, one written inside the other, which stand.
