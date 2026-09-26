@@ -486,13 +486,30 @@ impl<'a, const SOCKETS: usize, const CONNECTIONS: usize> Stack<'a, SOCKETS, CONN
         send: &'a mut [u8],
         receive: &'a mut [u8],
     ) -> Result<Handle, StackError> {
-        let source = self.source_for(address).ok_or(StackError::NoAddress)?;
-        let local = net_tcp::Endpoint::new(source, Port::new(0));
+        let local = self.active_local(address).ok_or(StackError::NoAddress)?;
         let remote = net_tcp::Endpoint::new(address, port);
         let id = self
             .connections
             .connect(local, remote, self.config.tcp, rng, send, receive)?;
         self.connection_slots.handle(id.index())
+    }
+
+    /// Whether a connection already joins this host to `address` at
+    /// `port`, which [`connect_to`](Stack::connect_to) refuses.
+    ///
+    /// Asked for the same reason as [`is_bound`](Stack::is_bound).
+    #[must_use]
+    pub fn holds(&self, address: IpAddr, port: Port) -> bool {
+        self.active_local(address).is_some_and(|local| {
+            self.connections
+                .holds(local, net_tcp::Endpoint::new(address, port))
+        })
+    }
+
+    /// The local end of an active open to `address`.
+    fn active_local(&self, address: IpAddr) -> Option<net_tcp::Endpoint> {
+        let source = self.source_for(address)?;
+        Some(net_tcp::Endpoint::new(source, Port::new(0)))
     }
 
     /// The connection `handle` names.
@@ -521,6 +538,35 @@ impl<'a, const SOCKETS: usize, const CONNECTIONS: usize> Stack<'a, SOCKETS, CONN
         let buffers = self.connections.close(net_tcp::ConnectionId::new(index))?;
         self.connection_slots.retire(index);
         Ok(buffers)
+    }
+
+    /// Aborts a connection, queues the reset RFC 9293, section 3.10.5
+    /// owes the peer, and gives its two buffers back.
+    ///
+    /// # Errors
+    ///
+    /// Whatever [`close_connection`](Stack::close_connection) returns.
+    pub fn abort_connection(
+        &mut self,
+        handle: Handle,
+        now: Instant,
+    ) -> Result<(&'a mut [u8], &'a mut [u8]), StackError> {
+        let index = self.connection_slots.resolve(handle)?;
+        let mut segment = [0u8; PAYLOAD_LEN];
+        let plan = self
+            .connections
+            .get_mut(net_tcp::ConnectionId::new(index))
+            .and_then(|connection| {
+                connection.abort();
+                let len = connection.poll(now, &mut segment)?.len();
+                Some((connection.local().address, connection.remote().address, len))
+            });
+        if let Some((source, destination, len)) = plan {
+            let bytes = segment.get(..len).unwrap_or(&[]);
+            // A reset that finds no route is lost, as RFC 9293 allows.
+            let _sent = self.transmit(source, destination, Protocol::TCP, bytes, now);
+        }
+        self.close_connection(handle)
     }
 }
 

@@ -29,6 +29,12 @@ pub(crate) fn rng(seed: u8) -> Rng {
     ChaChaRng::from_seed(&[seed; 32], CountingEntropy::new(seed))
 }
 
+/// The process handle an opening request carries, which the server
+/// leaves to the program around it.
+pub(crate) fn process() -> Handle {
+    Handle::new(9, 1).expect("a handle")
+}
+
 /// The network both test hosts are on.
 pub(crate) const LINK: Ipv4Cidr = match Ipv4Cidr::new(Ipv4Addr::new(10, 0, 0, 0), 24) {
     Ok(network) => network,

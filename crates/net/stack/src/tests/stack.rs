@@ -803,6 +803,61 @@ fn a_handle_of_the_wrong_kind_names_nothing() {
 }
 
 #[test]
+fn a_connection_the_stack_holds_is_named_before_a_second_open_is_refused() {
+    let mut outgoing = [0u8; 4096];
+    let (mut send, mut receive) = ([0u8; 256], [0u8; 256]);
+    let (mut again_send, mut again_receive) = ([0u8; 256], [0u8; 256]);
+    let mut stack: Stack<'_, 4, 2> = configured(&mut outgoing);
+    let mut rng = rng();
+    assert!(!stack.holds(IpAddr::V4(PEER), Port::new(80)));
+    let _connection = stack
+        .connect_to(
+            IpAddr::V4(PEER),
+            Port::new(80),
+            &mut rng,
+            &mut send,
+            &mut receive,
+        )
+        .expect("a connection");
+    assert!(stack.holds(IpAddr::V4(PEER), Port::new(80)));
+    assert!(!stack.holds(IpAddr::V4(PEER), Port::new(81)));
+    assert!(
+        stack
+            .connect_to(
+                IpAddr::V4(PEER),
+                Port::new(80),
+                &mut rng,
+                &mut again_send,
+                &mut again_receive,
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn an_aborted_listener_sends_nothing_and_gives_its_buffers_back() {
+    let mut outgoing = [0u8; 4096];
+    let (mut send, mut receive) = ([0u8; 256], [0u8; 256]);
+    let mut stack: Stack<'_, 4, 2> = configured(&mut outgoing);
+    let mut rng = rng();
+    let now = start();
+    let _quiet = drain(&mut stack, None, now, &mut rng);
+    let connection = stack
+        .listen(
+            IpAddr::V4(HERE),
+            Port::new(80),
+            &mut rng,
+            &mut send,
+            &mut receive,
+        )
+        .expect("a connection");
+    let buffers = stack.abort_connection(connection, now).expect("the memory");
+    assert_eq!(buffers.0.len(), 256);
+    assert_eq!(stack.connection(connection).err(), Some(StackError::Stale));
+    assert!(drain(&mut stack, None, now, &mut rng).is_empty());
+}
+
+#[test]
 fn bytes_that_are_not_the_thing_they_claim_to_be_are_dropped() {
     let mut outgoing = [0u8; 8192];
     let mut datagrams = [0u8; 256];

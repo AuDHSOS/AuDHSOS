@@ -172,10 +172,9 @@ impl<'a, const N: usize> Connections<'a, N> {
         Ok(id)
     }
 
-    /// Closes the connection `id` names at once and gives its two buffers
-    /// back. A connection that was still open sends a reset first, which
-    /// the caller fetches with one last `poll` before it takes the
-    /// buffers.
+    /// Takes the connection `id` names out of the table and gives its two
+    /// buffers back, with no segment sent. A caller that owes the peer a
+    /// reset calls [`Connection::abort`] and polls once before this.
     ///
     /// # Errors
     ///
@@ -221,7 +220,8 @@ impl<'a, const N: usize> Connections<'a, N> {
     /// One that has been closed and not yet taken out of the table holds
     /// nothing: its numbers are spent and its buffers are waiting to be
     /// given back, so the pair of ends is free again.
-    fn holds(&self, local: Endpoint, remote: Endpoint) -> bool {
+    #[must_use]
+    pub fn holds(&self, local: Endpoint, remote: Endpoint) -> bool {
         self.entries
             .iter()
             .flatten()

@@ -15,7 +15,9 @@ use audhsos_time::Instant;
 use net_wire::{IpAddr, Ipv4Addr, MacAddr};
 use user_proto::socket::{Direction, Endpoint, Reply, Request, State};
 
-use super::support::{Host, PORT, against_the_link, exchange, host, rng};
+use crate::server::NOBODY;
+
+use super::support::{Host, PORT, against_the_link, exchange, host, process, rng};
 
 /// The hardware address of the host that connects.
 const ONE_MAC: MacAddr = MacAddr::new([0x52, 0x54, 0x00, 0x00, 0x00, 1]);
@@ -52,7 +54,10 @@ fn connected(from: Instant) -> (Host, Host, u32, u32, Instant) {
     let mut generator = rng(3);
     let listener = opened(two.server.answer(
         CLIENT,
-        &Request::TcpListen { port: PORT },
+        &Request::TcpListen {
+            port: PORT,
+            process: process(),
+        },
         now,
         &mut generator,
     ))
@@ -61,6 +66,7 @@ fn connected(from: Instant) -> (Host, Host, u32, u32, Instant) {
         CLIENT,
         &Request::TcpConnect {
             remote: Endpoint::new(IpAddr::V4(TWO), PORT),
+            process: process(),
         },
         now,
         &mut generator,
@@ -114,7 +120,10 @@ fn an_accept_with_nothing_to_take_answers_would_block() {
     let mut generator = rng(2);
     let listener = opened(two.server.answer(
         CLIENT,
-        &Request::TcpListen { port: PORT },
+        &Request::TcpListen {
+            port: PORT,
+            process: process(),
+        },
         now,
         &mut generator,
     ))
@@ -161,16 +170,11 @@ fn bytes_go_both_ways_through_the_rings() {
     assert_eq!(usize::try_from(moved).unwrap_or(0), sent.len());
     let now = exchange(&mut one, &mut two, now, &mut generator);
 
-    let held = match two.server.answer(
-        CLIENT,
-        &Request::TcpRecv { socket: accepted },
-        now,
-        &mut generator,
-    ) {
-        Reply::Received(Ok(held)) => held,
-        other => panic!("{other:?} received nothing"),
-    };
-    assert_eq!(usize::try_from(held).unwrap_or(0), sent.len());
+    // The exchange pumped the bytes into the ring already.
+    assert_eq!(
+        usize::try_from(two.pages[0].inbound.held()).unwrap_or(0),
+        sent.len()
+    );
     let mut into = [0u8; 64];
     let taken = two.pages[0].inbound.read(&mut into);
     assert_eq!(&into[..taken], sent);
@@ -249,7 +253,7 @@ fn a_client_that_is_gone_gives_up_every_socket_it_held() {
     let now = Instant::from_micros(0);
     let (mut one, _two, _client, _accepted, _reached) = connected(now);
     assert_eq!(one.server.open(), 1);
-    one.server.forget(CLIENT);
+    one.server.forget(CLIENT, now);
     assert_eq!(one.server.open(), 0);
 }
 
@@ -345,7 +349,10 @@ fn a_datagram_socket_is_opened_and_given_back() {
     let mut generator = rng(29);
     let socket = opened(one.server.answer(
         CLIENT,
-        &Request::UdpBind { port: 5353 },
+        &Request::UdpBind {
+            port: 5353,
+            process: process(),
+        },
         now,
         &mut generator,
     ))
@@ -368,7 +375,10 @@ fn a_connection_request_on_a_datagram_socket_is_refused_by_type() {
     let mut generator = rng(31);
     let socket = opened(one.server.answer(
         CLIENT,
-        &Request::UdpBind { port: 5353 },
+        &Request::UdpBind {
+            port: 5353,
+            process: process(),
+        },
         now,
         &mut generator,
     ))
@@ -432,7 +442,10 @@ fn a_listen_on_a_host_with_no_address_is_refused() {
     let mut generator = rng(37);
     match server.answer(
         CLIENT,
-        &Request::TcpListen { port: PORT },
+        &Request::TcpListen {
+            port: PORT,
+            process: process(),
+        },
         now,
         &mut generator,
     ) {
@@ -570,12 +583,16 @@ fn a_datagram_socket_sends_what_the_client_put_into_the_ring() {
     let now = Instant::from_micros(0);
     let mut one = host(ONE_MAC, ONE);
     let mut generator = rng(53);
-    let socket =
-        opened(
-            one.server
-                .answer(CLIENT, &Request::UdpBind { port: 0 }, now, &mut generator),
-        )
-        .expect("a datagram socket on a port of the dynamic range");
+    let socket = opened(one.server.answer(
+        CLIENT,
+        &Request::UdpBind {
+            port: 0,
+            process: process(),
+        },
+        now,
+        &mut generator,
+    ))
+    .expect("a datagram socket on a port of the dynamic range");
     let payload = b"a datagram";
     assert_eq!(one.pages[0].outbound.write(payload), payload.len());
     match one.server.answer(
@@ -603,17 +620,25 @@ fn the_sockets_run_out_and_the_next_one_is_refused() {
     for index in 0..crate::sockets::MAX_SOCKETS {
         let port = 4000 + u16::try_from(index).unwrap_or(0);
         assert!(
-            opened(
-                one.server
-                    .answer(CLIENT, &Request::UdpBind { port }, now, &mut generator)
-            )
+            opened(one.server.answer(
+                CLIENT,
+                &Request::UdpBind {
+                    port,
+                    process: process(),
+                },
+                now,
+                &mut generator
+            ))
             .is_ok(),
             "a slot was not free"
         );
     }
     match one.server.answer(
         CLIENT,
-        &Request::UdpBind { port: 4999 },
+        &Request::UdpBind {
+            port: 4999,
+            process: process(),
+        },
         now,
         &mut generator,
     ) {
@@ -758,7 +783,7 @@ fn a_client_that_is_gone_ends_the_resolution_it_started() {
     let _started = one
         .server
         .answer(CLIENT, &Request::Resolve { name }, now, &mut generator);
-    one.server.forget(CLIENT);
+    one.server.forget(CLIENT, now);
     // The next client's resolution starts rather than meeting a busy
     // server, which is what says the first one was given up.
     match one
@@ -775,18 +800,26 @@ fn a_datagram_arrives_in_the_ring_behind_the_record_of_where_it_came_from() {
     let now = Instant::from_micros(0);
     let (mut one, mut two, _client, _accepted, now) = connected(now);
     let mut generator = rng(67);
-    let _taking =
-        opened(
-            one.server
-                .answer(CLIENT, &Request::UdpBind { port: 9 }, now, &mut generator),
-        )
-        .expect("a datagram socket");
-    let sender =
-        opened(
-            two.server
-                .answer(CLIENT, &Request::UdpBind { port: 0 }, now, &mut generator),
-        )
-        .expect("a datagram socket");
+    let _taking = opened(one.server.answer(
+        CLIENT,
+        &Request::UdpBind {
+            port: 9,
+            process: process(),
+        },
+        now,
+        &mut generator,
+    ))
+    .expect("a datagram socket");
+    let sender = opened(two.server.answer(
+        CLIENT,
+        &Request::UdpBind {
+            port: 0,
+            process: process(),
+        },
+        now,
+        &mut generator,
+    ))
+    .expect("a datagram socket");
     let payload = b"a datagram of the link";
     assert_eq!(two.pages[1].outbound.write(payload), payload.len());
     let _sent = two.server.answer(
@@ -846,7 +879,10 @@ fn a_socket_of_one_kind_is_refused_by_the_messages_of_the_other() {
     let mut generator = rng(71);
     let datagram = opened(one.server.answer(
         CLIENT,
-        &Request::UdpBind { port: 5000 },
+        &Request::UdpBind {
+            port: 5000,
+            process: process(),
+        },
         now,
         &mut generator,
     ))
@@ -918,6 +954,7 @@ fn a_connection_to_a_port_nobody_listens_on_is_refused() {
         CLIENT,
         &Request::TcpConnect {
             remote: Endpoint::new(IpAddr::V4(TWO), 9),
+            process: process(),
         },
         now,
         &mut generator,
@@ -958,18 +995,26 @@ fn a_datagram_the_clients_ring_has_no_room_for_waits_rather_than_being_torn() {
     let now = Instant::from_micros(0);
     let (mut one, mut two, _client, _accepted, now) = connected(now);
     let mut generator = rng(89);
-    let _taking =
-        opened(
-            one.server
-                .answer(CLIENT, &Request::UdpBind { port: 9 }, now, &mut generator),
-        )
-        .expect("a datagram socket");
-    let sender =
-        opened(
-            two.server
-                .answer(CLIENT, &Request::UdpBind { port: 0 }, now, &mut generator),
-        )
-        .expect("a datagram socket");
+    let _taking = opened(one.server.answer(
+        CLIENT,
+        &Request::UdpBind {
+            port: 9,
+            process: process(),
+        },
+        now,
+        &mut generator,
+    ))
+    .expect("a datagram socket");
+    let sender = opened(two.server.answer(
+        CLIENT,
+        &Request::UdpBind {
+            port: 0,
+            process: process(),
+        },
+        now,
+        &mut generator,
+    ))
+    .expect("a datagram socket");
     // The client of the receiving host reads nothing and its ring is
     // full, so the record has nowhere to go.
     let full = vec![0u8; usize::try_from(user_proto::ring::RING_CAPACITY).unwrap_or(0)];
@@ -1200,28 +1245,41 @@ fn a_port_a_datagram_socket_holds_is_refused_and_its_buffer_stays_in_the_pool() 
     let now = Instant::from_micros(0);
     let mut one = host(ONE_MAC, ONE);
     let mut generator = rng(71);
-    let _first =
-        opened(
-            one.server
-                .answer(CLIENT, &Request::UdpBind { port: 9 }, now, &mut generator),
-        )
-        .expect("a datagram socket");
-    match one
-        .server
-        .answer(CLIENT, &Request::UdpBind { port: 9 }, now, &mut generator)
-    {
+    let _first = opened(one.server.answer(
+        CLIENT,
+        &Request::UdpBind {
+            port: 9,
+            process: process(),
+        },
+        now,
+        &mut generator,
+    ))
+    .expect("a datagram socket");
+    match one.server.answer(
+        CLIENT,
+        &Request::UdpBind {
+            port: 9,
+            process: process(),
+        },
+        now,
+        &mut generator,
+    ) {
         Reply::Bound(Err(error)) => assert_eq!(error, Error::AddressInUse),
         other => panic!("{other:?} bound one port twice"),
     }
     // The refusal came before the pool handed anything over, so three
     // buffers are left and every one of them can still be taken.
     for port in 10..13 {
-        let _bound =
-            opened(
-                one.server
-                    .answer(CLIENT, &Request::UdpBind { port }, now, &mut generator),
-            )
-            .expect("the pool kept its buffer");
+        let _bound = opened(one.server.answer(
+            CLIENT,
+            &Request::UdpBind {
+                port,
+                process: process(),
+            },
+            now,
+            &mut generator,
+        ))
+        .expect("the pool kept its buffer");
     }
 }
 
@@ -1232,14 +1290,20 @@ fn a_port_a_listener_holds_is_refused_and_its_windows_stay_in_the_pool() {
     let mut generator = rng(73);
     let _listener = opened(two.server.answer(
         CLIENT,
-        &Request::TcpListen { port: PORT },
+        &Request::TcpListen {
+            port: PORT,
+            process: process(),
+        },
         now,
         &mut generator,
     ))
     .expect("a listener");
     match two.server.answer(
         CLIENT,
-        &Request::TcpListen { port: PORT },
+        &Request::TcpListen {
+            port: PORT,
+            process: process(),
+        },
         now,
         &mut generator,
     ) {
@@ -1247,12 +1311,16 @@ fn a_port_a_listener_holds_is_refused_and_its_windows_stay_in_the_pool() {
         other => panic!("{other:?} listened on one port twice"),
     }
     for port in [PORT + 1, PORT + 2, PORT + 3] {
-        let _listening =
-            opened(
-                two.server
-                    .answer(CLIENT, &Request::TcpListen { port }, now, &mut generator),
-            )
-            .expect("the pool kept its windows");
+        let _listening = opened(two.server.answer(
+            CLIENT,
+            &Request::TcpListen {
+                port,
+                process: process(),
+            },
+            now,
+            &mut generator,
+        ))
+        .expect("the pool kept its windows");
     }
 }
 
@@ -1264,7 +1332,10 @@ fn what_a_client_wrote_before_its_connection_opened_waits_in_the_ring() {
     let mut generator = rng(79);
     let listener = opened(two.server.answer(
         CLIENT,
-        &Request::TcpListen { port: PORT },
+        &Request::TcpListen {
+            port: PORT,
+            process: process(),
+        },
         now,
         &mut generator,
     ))
@@ -1273,6 +1344,7 @@ fn what_a_client_wrote_before_its_connection_opened_waits_in_the_ring() {
         CLIENT,
         &Request::TcpConnect {
             remote: Endpoint::new(IpAddr::V4(TWO), PORT),
+            process: process(),
         },
         now,
         &mut generator,
@@ -1317,12 +1389,16 @@ fn a_datagram_longer_than_one_of_the_link_is_refused_and_the_ring_keeps_it() {
     let now = Instant::from_micros(0);
     let mut one = host(ONE_MAC, ONE);
     let mut generator = rng(83);
-    let socket =
-        opened(
-            one.server
-                .answer(CLIENT, &Request::UdpBind { port: 9 }, now, &mut generator),
-        )
-        .expect("a datagram socket");
+    let socket = opened(one.server.answer(
+        CLIENT,
+        &Request::UdpBind {
+            port: 9,
+            process: process(),
+        },
+        now,
+        &mut generator,
+    ))
+    .expect("a datagram socket");
     let payload = [7u8; 1473];
     assert_eq!(one.pages[0].outbound.write(&payload), payload.len());
     match one.server.answer(
@@ -1350,18 +1426,26 @@ fn a_datagram_of_more_than_one_chunk_arrives_whole() {
     let now = Instant::from_micros(0);
     let (mut one, mut two, _client, _accepted, now) = connected(now);
     let mut generator = rng(89);
-    let _taking =
-        opened(
-            one.server
-                .answer(CLIENT, &Request::UdpBind { port: 9 }, now, &mut generator),
-        )
-        .expect("a datagram socket");
-    let sender =
-        opened(
-            two.server
-                .answer(CLIENT, &Request::UdpBind { port: 0 }, now, &mut generator),
-        )
-        .expect("a datagram socket");
+    let _taking = opened(one.server.answer(
+        CLIENT,
+        &Request::UdpBind {
+            port: 9,
+            process: process(),
+        },
+        now,
+        &mut generator,
+    ))
+    .expect("a datagram socket");
+    let sender = opened(two.server.answer(
+        CLIENT,
+        &Request::UdpBind {
+            port: 0,
+            process: process(),
+        },
+        now,
+        &mut generator,
+    ))
+    .expect("a datagram socket");
     let payload: Vec<u8> = (0..1200u32)
         .map(|byte| u8::try_from(byte % 251).unwrap_or(0))
         .collect();
@@ -1417,4 +1501,337 @@ fn what_the_client_wrote_goes_before_the_shutdown_it_asked_for() {
         "the bytes of the ring went nowhere when the client closed"
     );
     assert_eq!(state(&mut two, accepted, now), State::PeerClosed);
+}
+
+#[test]
+fn a_request_under_no_badge_is_refused_and_opens_nothing() {
+    let now = Instant::from_micros(0);
+    let mut one = host(ONE_MAC, ONE);
+    let mut generator = rng(101);
+    match one
+        .server
+        .answer(NOBODY, &Request::Interface, now, &mut generator)
+    {
+        Reply::Interface(Err(error)) => assert_eq!(error, Error::AccessDenied),
+        other => panic!("{other:?} answered nobody"),
+    }
+    match one.server.answer(
+        NOBODY,
+        &Request::UdpBind {
+            port: 9,
+            process: process(),
+        },
+        now,
+        &mut generator,
+    ) {
+        Reply::Bound(Err(error)) => assert_eq!(error, Error::AccessDenied),
+        other => panic!("{other:?} opened a socket for nobody"),
+    }
+    assert_eq!(one.server.open(), 0);
+}
+
+#[test]
+fn a_second_connect_to_the_same_remote_keeps_the_window_pair() {
+    let now = Instant::from_micros(0);
+    let (mut one, _two, _client, _accepted, now) = connected(now);
+    let mut generator = rng(103);
+    for _ in 0..4 {
+        match one.server.answer(
+            CLIENT,
+            &Request::TcpConnect {
+                remote: Endpoint::new(IpAddr::V4(TWO), PORT),
+                process: process(),
+            },
+            now,
+            &mut generator,
+        ) {
+            Reply::Connected(Err(error)) => assert_eq!(error, Error::AddressInUse),
+            other => panic!("{other:?} joined two connections to one pair of ends"),
+        }
+    }
+    // One pair is in use; the other three are still in the pool.
+    for port in [8, 9, 10] {
+        let _listener = opened(one.server.answer(
+            CLIENT,
+            &Request::TcpListen {
+                port,
+                process: process(),
+            },
+            now,
+            &mut generator,
+        ))
+        .expect("a window pair is left");
+    }
+}
+
+#[test]
+fn the_slot_of_a_client_that_is_gone_is_offered_to_the_next() {
+    let now = Instant::from_micros(0);
+    let mut one = host(ONE_MAC, ONE);
+    let mut generator = rng(107);
+    let bind = |host: &mut Host, badge: u64, generator: &mut super::support::Rng| {
+        host.server.answer(
+            badge,
+            &Request::UdpBind {
+                port: 0,
+                process: process(),
+            },
+            now,
+            generator,
+        )
+    };
+    for badge in 1..=4 {
+        let socket = opened(bind(&mut one, badge, &mut generator)).expect("a free slot");
+        let _closed = one
+            .server
+            .answer(badge, &Request::UdpClose { socket }, now, &mut generator);
+    }
+    assert_eq!(
+        opened(bind(&mut one, 5, &mut generator)),
+        Err(Error::OutOfHandles)
+    );
+    assert!(one.server.holds(1));
+    one.server.forget(1, now);
+    assert!(!one.server.holds(1));
+    let _socket = opened(bind(&mut one, 5, &mut generator)).expect("the slot of the first");
+    assert!(one.server.holds(5));
+}
+
+#[test]
+fn a_resolution_nobody_collects_gives_way_to_the_next_client() {
+    let now = Instant::from_micros(0);
+    let (mut one, now, mut generator) = leased(now);
+    let name =
+        user_proto::socket::Name::new(super::link::KNOWN_NAME.as_bytes()).expect("a short name");
+    let _started = one
+        .server
+        .answer(CLIENT, &Request::Resolve { name }, now, &mut generator);
+    let mut now = now;
+    for _ in 0..32 {
+        if matches!(
+            one.server.stack().resolution(),
+            Some(net_dns::Status::Done | net_dns::Status::Failed(_))
+        ) {
+            break;
+        }
+        now = against_the_link(&mut one, now, &mut generator);
+    }
+    assert!(
+        matches!(one.server.stack().resolution(), Some(net_dns::Status::Done)),
+        "the resolution never ended"
+    );
+    // The first client never asks again; the second starts its own.
+    match one
+        .server
+        .answer(CLIENT + 1, &Request::Resolve { name }, now, &mut generator)
+    {
+        Reply::Resolved(Err(error)) => assert_eq!(error, Error::WouldBlock),
+        other => panic!("{other:?} did not start a resolution"),
+    }
+}
+
+#[test]
+fn a_shutdown_waits_until_every_byte_of_the_ring_is_in_the_connection() {
+    let now = Instant::from_micros(0);
+    let (mut one, mut two, client, accepted, now) = connected(now);
+    let mut generator = rng(109);
+    let payload: Vec<u8> = (0..2000u32)
+        .map(|byte| u8::try_from(byte % 251).unwrap_or(0))
+        .collect();
+    assert_eq!(one.pages[0].outbound.write(&payload), payload.len());
+    let mut now = now;
+    let mut received = Vec::new();
+    let mut into = [0u8; 4096];
+    let mut shut = false;
+    for _ in 0..16 {
+        match one.server.answer(
+            CLIENT,
+            &Request::TcpShutdown {
+                socket: client,
+                direction: Direction::Write,
+            },
+            now,
+            &mut generator,
+        ) {
+            Reply::ShutDown(Ok(())) => shut = true,
+            Reply::ShutDown(Err(Error::WouldBlock)) => {}
+            other => panic!("{other:?} is no answer to a shutdown"),
+        }
+        now = exchange(&mut one, &mut two, now, &mut generator);
+        let len = two.pages[0].inbound.read(&mut into);
+        received.extend_from_slice(&into[..len]);
+        if shut {
+            break;
+        }
+    }
+    assert!(shut, "the shutdown never went through");
+    now = exchange(&mut one, &mut two, now, &mut generator);
+    let len = two.pages[0].inbound.read(&mut into);
+    received.extend_from_slice(&into[..len]);
+    assert_eq!(received, payload, "bytes of the ring were lost");
+    assert_eq!(state(&mut two, accepted, now), State::PeerClosed);
+}
+
+#[test]
+fn a_close_of_an_open_connection_resets_the_peer() {
+    let now = Instant::from_micros(0);
+    let (mut one, mut two, client, accepted, now) = connected(now);
+    let mut generator = rng(113);
+    match one.server.answer(
+        CLIENT,
+        &Request::TcpClose { socket: client },
+        now,
+        &mut generator,
+    ) {
+        Reply::Closed(Ok(())) => {}
+        other => panic!("{other:?} closed nothing"),
+    }
+    let now = exchange(&mut one, &mut two, now, &mut generator);
+    assert_eq!(state(&mut two, accepted, now), State::Refused);
+}
+
+#[test]
+fn a_receive_answers_the_bytes_it_moved_not_the_bytes_waiting() {
+    let now = Instant::from_micros(0);
+    let (mut one, mut two, client, accepted, now) = connected(now);
+    let mut generator = rng(127);
+    give(&mut two, accepted, &[5u8; 500], now, &mut generator);
+    let now = exchange(&mut one, &mut two, now, &mut generator);
+    assert_eq!(one.pages[0].inbound.held(), 500);
+    match one.server.answer(
+        CLIENT,
+        &Request::TcpRecv { socket: client },
+        now,
+        &mut generator,
+    ) {
+        Reply::Received(Ok(moved)) => assert_eq!(moved, 0),
+        other => panic!("{other:?} is no count"),
+    }
+}
+
+#[test]
+fn a_send_moves_no_more_than_the_client_asked() {
+    let now = Instant::from_micros(0);
+    let (mut one, _two, client, _accepted, now) = connected(now);
+    let mut generator = rng(131);
+    assert_eq!(one.pages[0].outbound.write(&[3u8; 300]), 300);
+    match one.server.answer(
+        CLIENT,
+        &Request::TcpSend {
+            socket: client,
+            len: 100,
+        },
+        now,
+        &mut generator,
+    ) {
+        Reply::Sent(Ok(moved)) => assert_eq!(moved, 100),
+        other => panic!("{other:?} is no count"),
+    }
+    assert_eq!(one.pages[0].outbound.held(), 200);
+}
+
+#[test]
+fn a_close_right_after_a_shutdown_drains_before_it_resets() {
+    let now = Instant::from_micros(0);
+    let (mut one, mut two, client, _accepted, now) = connected(now);
+    let mut generator = rng(137);
+    let last = b"the tail the peer has not acknowledged yet";
+    assert_eq!(one.pages[0].outbound.write(last), last.len());
+    for request in [
+        Request::TcpShutdown {
+            socket: client,
+            direction: Direction::Write,
+        },
+        Request::TcpClose { socket: client },
+    ] {
+        match one.server.answer(CLIENT, &request, now, &mut generator) {
+            Reply::ShutDown(Ok(())) | Reply::Closed(Ok(())) => {}
+            other => panic!("{other:?} for {request:?}"),
+        }
+    }
+    // The number names nothing from the close on.
+    match one.server.answer(
+        CLIENT,
+        &Request::TcpState { socket: client },
+        now,
+        &mut generator,
+    ) {
+        Reply::State(Err(error)) => assert_eq!(error, Error::NotFound),
+        other => panic!("{other:?} answered for a closed socket"),
+    }
+    let _reached = exchange(&mut one, &mut two, now, &mut generator);
+    assert_eq!(one.server.open(), 0, "the drained connection stayed");
+    let mut into = [0u8; 64];
+    let len = two.pages[0].inbound.read(&mut into);
+    assert_eq!(&into[..len], last, "the tail was lost to the reset");
+}
+
+#[test]
+fn another_client_that_is_gone_leaves_the_resolution_running() {
+    let now = Instant::from_micros(0);
+    let (mut one, now, mut generator) = leased(now);
+    let name =
+        user_proto::socket::Name::new(super::link::KNOWN_NAME.as_bytes()).expect("a short name");
+    let _started = one
+        .server
+        .answer(CLIENT, &Request::Resolve { name }, now, &mut generator);
+    one.server.forget(CLIENT + 1, now);
+    match one
+        .server
+        .answer(CLIENT + 1, &Request::Resolve { name }, now, &mut generator)
+    {
+        Reply::Resolved(Err(error)) => assert_eq!(error, Error::Busy),
+        other => panic!("{other:?} ended the resolution of another client"),
+    }
+}
+
+#[test]
+fn a_second_shutdown_of_a_closing_connection_answers_at_once() {
+    let now = Instant::from_micros(0);
+    let (mut one, _two, client, _accepted, now) = connected(now);
+    let mut generator = rng(139);
+    let shutdown = Request::TcpShutdown {
+        socket: client,
+        direction: Direction::Write,
+    };
+    for _ in 0..2 {
+        match one.server.answer(CLIENT, &shutdown, now, &mut generator) {
+            Reply::ShutDown(Ok(())) => {}
+            other => panic!("{other:?} for a shutdown"),
+        }
+    }
+    // A byte written after the shutdown stays in the ring.
+    assert_eq!(one.pages[0].outbound.write(b"x"), 1);
+    match one.server.answer(CLIENT, &shutdown, now, &mut generator) {
+        Reply::ShutDown(Ok(())) => {}
+        other => panic!("{other:?} for a shutdown of a closing connection"),
+    }
+    assert_eq!(one.pages[0].outbound.held(), 1);
+}
+
+#[test]
+fn a_listener_that_is_closed_gives_its_slot_back_at_once() {
+    let now = Instant::from_micros(0);
+    let mut two = host(TWO_MAC, TWO);
+    let mut generator = rng(149);
+    let listener = opened(two.server.answer(
+        CLIENT,
+        &Request::TcpListen {
+            port: PORT,
+            process: process(),
+        },
+        now,
+        &mut generator,
+    ))
+    .expect("a listener");
+    match two.server.answer(
+        CLIENT,
+        &Request::TcpClose { socket: listener },
+        now,
+        &mut generator,
+    ) {
+        Reply::Closed(Ok(())) => {}
+        other => panic!("{other:?} closed nothing"),
+    }
+    assert_eq!(two.server.open(), 0);
 }

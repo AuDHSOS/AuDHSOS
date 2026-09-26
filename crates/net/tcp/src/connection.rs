@@ -314,6 +314,12 @@ impl<'a> Connection<'a> {
         self.remote
     }
 
+    /// Whether this end has closed and takes no more bytes.
+    #[must_use]
+    pub const fn is_closing(&self) -> bool {
+        self.closing
+    }
+
     /// Whether the peer reset the connection.
     #[must_use]
     pub const fn was_reset(&self) -> bool {
@@ -462,9 +468,20 @@ impl<'a> Connection<'a> {
         }
     }
 
-    /// Tears the connection down at once, with a reset to the peer.
-    pub fn abort(&mut self) {
-        if self.state.is_open() && self.state != State::Listen {
+    /// Tears the connection down at once.
+    ///
+    /// A reset goes to the peer from `SYN-RECEIVED`, `ESTABLISHED`,
+    /// `FIN-WAIT-1`, `FIN-WAIT-2` and `CLOSE-WAIT`; the other states send
+    /// none (RFC 9293, section 3.10.5).
+    pub const fn abort(&mut self) {
+        if matches!(
+            self.state,
+            State::SynReceived
+                | State::Established
+                | State::FinWait1
+                | State::FinWait2
+                | State::CloseWait
+        ) {
             self.reset_pending = Some((self.remote, self.snd_nxt, Some(self.rcv_nxt)));
         }
         self.state = State::Closed;
