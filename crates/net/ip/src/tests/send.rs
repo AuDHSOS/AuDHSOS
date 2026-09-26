@@ -104,6 +104,7 @@ fn collect(frames: &[Vec<u8>]) -> Vec<(MacAddr, Ipv4Addr, Vec<u8>)> {
 #[test]
 fn a_datagram_to_a_known_neighbor_on_this_link_goes_out_at_once() {
     let mut neighbors = NeighborCache::<4, 2048>::new();
+    neighbors.resolve(on_link(), &[], Instant::ZERO);
     neighbors.on_confirmed(on_link(), PEER_HARDWARE, Instant::ZERO);
     let table = routes();
     let mut sender = Sender {
@@ -138,6 +139,7 @@ fn a_datagram_to_a_known_neighbor_on_this_link_goes_out_at_once() {
 #[test]
 fn a_datagram_to_a_far_host_goes_to_the_router_and_keeps_its_own_address() {
     let mut neighbors = NeighborCache::<4, 2048>::new();
+    neighbors.resolve(gateway(), &[], Instant::ZERO);
     neighbors.on_confirmed(gateway(), PEER_HARDWARE, Instant::ZERO);
     let table = routes();
     let mut sender = Sender {
@@ -223,6 +225,7 @@ fn a_datagram_to_an_unknown_neighbor_waits_and_goes_when_the_answer_comes() {
 #[test]
 fn a_datagram_longer_than_the_mtu_leaves_in_several_frames() {
     let mut neighbors = NeighborCache::<4, 2048>::new();
+    neighbors.resolve(on_link(), &[], Instant::ZERO);
     neighbors.on_confirmed(on_link(), PEER_HARDWARE, Instant::ZERO);
     let table = routes();
     let mut sender = Sender {
@@ -262,6 +265,7 @@ fn a_datagram_longer_than_the_mtu_leaves_in_several_frames() {
 #[test]
 fn a_datagram_that_may_not_be_cut_up_is_an_error_and_not_a_truncation() {
     let mut neighbors = NeighborCache::<4, 2048>::new();
+    neighbors.resolve(on_link(), &[], Instant::ZERO);
     neighbors.on_confirmed(on_link(), PEER_HARDWARE, Instant::ZERO);
     let table = routes();
     let mut sender = Sender {
@@ -353,11 +357,21 @@ fn a_datagram_the_cache_will_not_hold_is_dropped_and_said_so() {
         )
         .expect("it answers");
     assert_eq!(sent, Sent::Dropped);
+    // Resolution starts all the same, so a retransmission finds the
+    // address (issue #294).
+    assert_eq!(
+        neighbors.poll(Instant::ZERO),
+        Some(net_eth::Event::Solicit {
+            address: on_link(),
+            hardware: None
+        })
+    );
 }
 
 #[test]
 fn what_the_emitter_refuses_comes_back_to_the_caller() {
     let mut neighbors = NeighborCache::<4, 2048>::new();
+    neighbors.resolve(on_link(), &[], Instant::ZERO);
     neighbors.on_confirmed(on_link(), PEER_HARDWARE, Instant::ZERO);
     let table = routes();
     let mut sender = Sender {
@@ -381,6 +395,7 @@ fn what_the_emitter_refuses_comes_back_to_the_caller() {
 #[test]
 fn a_buffer_smaller_than_the_mtu_is_refused_before_anything_is_written() {
     let mut neighbors = NeighborCache::<4, 2048>::new();
+    neighbors.resolve(on_link(), &[], Instant::ZERO);
     neighbors.on_confirmed(on_link(), PEER_HARDWARE, Instant::ZERO);
     let table = routes();
     let mut sender = Sender {
@@ -406,6 +421,7 @@ fn a_frame_this_host_writes_is_one_a_reader_accepts() {
     // The frame goes out to the peer, so the peer receives it and this
     // host does not.
     let mut neighbors = NeighborCache::<4, 2048>::new();
+    neighbors.resolve(on_link(), &[], Instant::ZERO);
     neighbors.on_confirmed(on_link(), PEER_HARDWARE, Instant::ZERO);
     let table = routes();
     let mut sender = Sender {

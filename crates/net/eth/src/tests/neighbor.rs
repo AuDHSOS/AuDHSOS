@@ -44,6 +44,18 @@ fn secs(seconds: u64) -> Instant {
     Instant::ZERO.saturating_add(Duration::from_secs(seconds))
 }
 
+/// Makes `address` a `Reachable` entry at `hardware` the way a neighbor
+/// does: this host asks, and the neighbor answers.
+fn confirm<const E: usize, const P: usize>(
+    cache: &mut NeighborCache<E, P>,
+    address: IpAddr,
+    hardware: MacAddr,
+    now: Instant,
+) {
+    cache.resolve(address, &[], now);
+    assert!(cache.on_confirmed(address, hardware, now));
+}
+
 #[test]
 fn an_unknown_neighbor_is_asked_for_and_the_packet_waits() {
     let mut cache = Cache::new();
@@ -96,19 +108,124 @@ fn an_answer_makes_the_entry_reachable_and_releases_the_packet() {
 }
 
 #[test]
-fn a_confirmation_for_an_unknown_neighbor_creates_a_reachable_entry() {
+fn a_confirmation_or_an_observation_for_an_unknown_neighbor_adds_nothing() {
+    // Issue #278: only `resolve` and `learn` create entries.
     let mut cache = Cache::new();
-    cache.on_confirmed(NEIGHBOR, HARDWARE, at(0));
-    assert_eq!(cache.state(NEIGHBOR), Some(NeighborState::Reachable));
+    assert!(!cache.on_confirmed(NEIGHBOR, HARDWARE, at(0)));
+    assert!(!cache.on_observed(NEIGHBOR, HARDWARE));
+    assert!(cache.is_empty());
+}
+
+#[test]
+fn unsolicited_packets_from_many_senders_do_not_flush_the_cache() {
+    // Issue #278: the trigger is one packet per entry of the cache.
+    let mut cache = Cache::new();
+    assert_eq!(cache.resolve(NEIGHBOR, b"held", at(0)), Resolution::Waiting);
+    for host in 10..20 {
+        let sender = IpAddr::V4(Ipv4Addr::new(192, 168, 1, host));
+        assert!(!cache.on_confirmed(sender, IMPOSTOR, at(1)));
+        assert!(!cache.on_observed(sender, IMPOSTOR));
+    }
+    assert_eq!(cache.len(), 1);
+    assert_eq!(cache.state(NEIGHBOR), Some(NeighborState::Incomplete));
+}
+
+#[test]
+fn learning_an_unknown_neighbor_creates_a_stale_entry() {
+    let mut cache = Cache::new();
+    assert!(cache.learn(NEIGHBOR, HARDWARE, at(0)));
+    assert_eq!(cache.state(NEIGHBOR), Some(NeighborState::Stale));
     assert_eq!(cache.hardware(NEIGHBOR), Some(HARDWARE));
-    assert_eq!(cache.pending(NEIGHBOR), None);
+    assert_eq!(cache.poll_at(), None);
+    // A second claim that agrees changes nothing.
+    assert!(!cache.learn(NEIGHBOR, HARDWARE, at(1)));
+}
+
+#[test]
+fn an_unsolicited_reply_does_not_move_a_reachable_entry() {
+    // Issue #275: the gateway is reachable, and an attacker replies with
+    // its own hardware address.
+    let timers = Timers::DEFAULT;
+    let mut cache = Cache::new();
+    confirm(&mut cache, NEIGHBOR, HARDWARE, at(0));
+    assert!(!cache.on_confirmed(NEIGHBOR, IMPOSTOR, at(1)));
+    assert_eq!(cache.hardware(NEIGHBOR), Some(HARDWARE));
+    assert_eq!(cache.state(NEIGHBOR), Some(NeighborState::Reachable));
+    // And the reachable time is not extended.
+    assert_eq!(
+        cache.poll_at(),
+        Some(at(0).saturating_add(timers.reachable))
+    );
+}
+
+#[test]
+fn a_reply_to_a_stale_entry_is_taken_as_an_observation() {
+    let mut cache = Cache::new();
+    assert!(cache.learn(NEIGHBOR, HARDWARE, at(0)));
+    assert!(cache.on_confirmed(NEIGHBOR, IMPOSTOR, at(1)));
+    assert_eq!(cache.state(NEIGHBOR), Some(NeighborState::Stale));
+    assert_eq!(cache.hardware(NEIGHBOR), Some(IMPOSTOR));
+}
+
+#[test]
+fn a_reply_during_a_probe_takes_a_new_address() {
+    // A solicitation is outstanding in `Probe`, so the answer is evidence.
+    let timers = Timers::DEFAULT;
+    let mut cache = Cache::new();
+    confirm(&mut cache, NEIGHBOR, HARDWARE, Instant::ZERO);
+    let stale_at = Instant::ZERO.saturating_add(timers.reachable);
+    assert_eq!(cache.poll(stale_at), None);
+    cache.resolve(NEIGHBOR, b"x", stale_at);
+    let probe_at = stale_at.saturating_add(timers.delay_first_probe);
+    assert!(cache.poll(probe_at).is_some());
+    assert_eq!(cache.state(NEIGHBOR), Some(NeighborState::Probe));
+    assert!(cache.on_confirmed(NEIGHBOR, IMPOSTOR, probe_at));
+    assert_eq!(cache.state(NEIGHBOR), Some(NeighborState::Reachable));
+    assert_eq!(cache.hardware(NEIGHBOR), Some(IMPOSTOR));
+}
+
+#[test]
+fn a_hardware_address_that_names_no_station_is_not_stored() {
+    // Issue #302: a broadcast, a multicast or an all-zero address.
+    let group = MacAddr::new([0x01, 0x00, 0x5E, 0x00, 0x00, 0x01]);
+    for hardware in [MacAddr::BROADCAST, group, MacAddr::UNSPECIFIED] {
+        let mut cache = Cache::new();
+        assert!(!cache.learn(NEIGHBOR, hardware, at(0)), "{hardware}");
+        assert!(cache.is_empty(), "{hardware}");
+        assert_eq!(cache.resolve(NEIGHBOR, b"x", at(0)), Resolution::Waiting);
+        assert!(!cache.on_confirmed(NEIGHBOR, hardware, at(1)), "{hardware}");
+        assert!(!cache.on_observed(NEIGHBOR, hardware), "{hardware}");
+        assert_eq!(cache.state(NEIGHBOR), Some(NeighborState::Incomplete));
+        assert_eq!(cache.hardware(NEIGHBOR), None);
+    }
+}
+
+#[test]
+fn an_address_that_names_no_host_is_not_a_key() {
+    // Issue #304: an ARP probe carries `0.0.0.0`; a spoofed packet carries
+    // any group or the broadcast.
+    for address in [
+        IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+        IpAddr::V4(Ipv4Addr::new(255, 255, 255, 255)),
+        IpAddr::V4(Ipv4Addr::new(224, 0, 0, 1)),
+        IpAddr::V6(Ipv6Addr::UNSPECIFIED),
+        IpAddr::V6(Ipv6Addr::ALL_NODES),
+    ] {
+        let mut cache = Cache::new();
+        assert!(!cache.learn(address, HARDWARE, at(0)), "{address}");
+        assert!(!cache.on_confirmed(address, HARDWARE, at(0)), "{address}");
+        assert!(!cache.on_observed(address, HARDWARE), "{address}");
+        assert_eq!(cache.resolve(address, b"x", at(0)), Resolution::Dropped);
+        assert!(cache.is_empty(), "{address}");
+        assert_eq!(cache.poll(at(0)), None, "{address}");
+    }
 }
 
 #[test]
 fn a_reachable_entry_goes_stale_at_the_age_boundary() {
     let timers = Timers::DEFAULT;
     let mut cache = Cache::new();
-    cache.on_confirmed(NEIGHBOR, HARDWARE, Instant::ZERO);
+    confirm(&mut cache, NEIGHBOR, HARDWARE, Instant::ZERO);
     let boundary = Instant::ZERO.saturating_add(timers.reachable);
     assert_eq!(cache.poll_at(), Some(boundary));
 
@@ -128,7 +245,7 @@ fn a_reachable_entry_goes_stale_at_the_age_boundary() {
 fn a_packet_to_a_stale_neighbor_starts_the_check_and_still_goes_out() {
     let timers = Timers::DEFAULT;
     let mut cache = Cache::new();
-    cache.on_confirmed(NEIGHBOR, HARDWARE, Instant::ZERO);
+    confirm(&mut cache, NEIGHBOR, HARDWARE, Instant::ZERO);
     let stale_at = Instant::ZERO.saturating_add(timers.reachable);
     assert_eq!(cache.poll(stale_at), None);
 
@@ -202,7 +319,7 @@ fn an_unanswered_request_is_repeated_and_then_given_up() {
 fn an_unanswered_probe_is_repeated_and_then_given_up() {
     let timers = Timers::DEFAULT;
     let mut cache = Cache::new();
-    cache.on_confirmed(NEIGHBOR, HARDWARE, Instant::ZERO);
+    confirm(&mut cache, NEIGHBOR, HARDWARE, Instant::ZERO);
     let stale_at = Instant::ZERO.saturating_add(timers.reachable);
     assert_eq!(cache.poll(stale_at), None);
     assert_eq!(
@@ -246,11 +363,27 @@ fn a_second_packet_replaces_the_one_waiting_rather_than_queueing_behind_it() {
 }
 
 #[test]
-fn a_packet_longer_than_the_cache_holds_is_dropped_and_nothing_is_kept() {
+fn a_packet_longer_than_the_cache_holds_is_dropped_and_resolution_starts() {
+    // Issue #294: the entry is created without the packet, so the
+    // solicitation goes out and a retransmission finds the address.
     let mut cache = Cache::new();
     let long = [0u8; 65];
     assert_eq!(cache.resolve(NEIGHBOR, &long, at(0)), Resolution::Dropped);
-    assert!(cache.is_empty());
+    assert_eq!(cache.state(NEIGHBOR), Some(NeighborState::Incomplete));
+    assert_eq!(
+        cache.poll(at(0)),
+        Some(Event::Solicit {
+            address: NEIGHBOR,
+            hardware: None
+        })
+    );
+    assert!(cache.on_confirmed(NEIGHBOR, HARDWARE, at(1)));
+    assert_eq!(cache.pending(NEIGHBOR), None);
+    assert_eq!(
+        cache.resolve(NEIGHBOR, &long, at(2)),
+        Resolution::Deliver(HARDWARE)
+    );
+    let mut cache = Cache::new();
 
     // And on an entry that already exists, the packet waiting there is
     // dropped too: half a packet is worse than none.
@@ -266,9 +399,9 @@ fn a_packet_longer_than_the_cache_holds_is_dropped_and_nothing_is_kept() {
 #[test]
 fn the_entry_evicted_at_capacity_is_the_least_recently_used() {
     let mut cache = Cache::new();
-    cache.on_confirmed(NEIGHBOR, HARDWARE, at(10));
-    cache.on_confirmed(SECOND, HARDWARE, at(20));
-    cache.on_confirmed(THIRD, HARDWARE, at(30));
+    confirm(&mut cache, NEIGHBOR, HARDWARE, at(10));
+    confirm(&mut cache, SECOND, HARDWARE, at(20));
+    confirm(&mut cache, THIRD, HARDWARE, at(30));
     assert_eq!(cache.len(), 3);
 
     // Touching the oldest makes the second one the oldest instead.
@@ -277,7 +410,7 @@ fn the_entry_evicted_at_capacity_is_the_least_recently_used() {
         Resolution::Deliver(HARDWARE)
     );
 
-    cache.on_confirmed(FOURTH, HARDWARE, at(50));
+    assert!(cache.learn(FOURTH, HARDWARE, at(50)));
     assert_eq!(cache.len(), 3);
     assert_eq!(cache.state(SECOND), None);
     assert!(cache.state(NEIGHBOR).is_some());
@@ -286,23 +419,28 @@ fn the_entry_evicted_at_capacity_is_the_least_recently_used() {
 }
 
 #[test]
-fn a_gratuitous_claim_refreshes_a_reachable_entry_that_agrees() {
+fn a_gratuitous_claim_that_agrees_leaves_the_reachable_timer_running() {
+    // Issue #307: RFC 4861, section 7.2.5 leaves the state unchanged, and
+    // the timer is part of the state.
     let timers = Timers::DEFAULT;
     let mut cache = Cache::new();
-    cache.on_confirmed(NEIGHBOR, HARDWARE, Instant::ZERO);
+    confirm(&mut cache, NEIGHBOR, HARDWARE, Instant::ZERO);
     let half = Instant::ZERO.saturating_add(Duration::from_secs(15));
 
-    assert!(cache.on_observed(NEIGHBOR, HARDWARE, half));
+    assert!(!cache.on_observed(NEIGHBOR, HARDWARE));
+    assert!(!cache.learn(NEIGHBOR, HARDWARE, half));
     assert_eq!(cache.state(NEIGHBOR), Some(NeighborState::Reachable));
-    // The clock started again, so the entry outlives its first deadline.
-    assert_eq!(cache.poll_at(), Some(half.saturating_add(timers.reachable)));
+    assert_eq!(
+        cache.poll_at(),
+        Some(Instant::ZERO.saturating_add(timers.reachable))
+    );
 }
 
 #[test]
 fn a_gratuitous_claim_never_takes_a_reachable_entry_from_its_owner() {
     let mut cache = Cache::new();
-    cache.on_confirmed(NEIGHBOR, HARDWARE, at(0));
-    assert!(!cache.on_observed(NEIGHBOR, IMPOSTOR, at(1)));
+    confirm(&mut cache, NEIGHBOR, HARDWARE, at(0));
+    assert!(!cache.on_observed(NEIGHBOR, IMPOSTOR));
     assert_eq!(cache.hardware(NEIGHBOR), Some(HARDWARE));
     assert_eq!(cache.state(NEIGHBOR), Some(NeighborState::Reachable));
 }
@@ -314,7 +452,7 @@ fn an_observation_fills_an_entry_nobody_has_answered_for() {
         cache.resolve(NEIGHBOR, b"a packet", at(0)),
         Resolution::Waiting
     );
-    assert!(cache.on_observed(NEIGHBOR, HARDWARE, at(1)));
+    assert!(cache.on_observed(NEIGHBOR, HARDWARE));
     assert_eq!(cache.state(NEIGHBOR), Some(NeighborState::Stale));
     // Stale is usable, so the packet that was waiting may go.
     assert_eq!(cache.pending(NEIGHBOR), Some((HARDWARE, &b"a packet"[..])));
@@ -322,16 +460,16 @@ fn an_observation_fills_an_entry_nobody_has_answered_for() {
 }
 
 #[test]
-fn an_observation_of_a_neighbor_nobody_asked_about_is_kept_as_stale() {
+fn a_learned_neighbor_is_taken_over_by_the_last_claim() {
     let mut cache = Cache::new();
-    assert!(cache.on_observed(NEIGHBOR, HARDWARE, at(0)));
+    assert!(cache.learn(NEIGHBOR, HARDWARE, at(0)));
     assert_eq!(cache.state(NEIGHBOR), Some(NeighborState::Stale));
     // A stale entry has no deadline of its own.
     assert_eq!(cache.poll_at(), None);
 
     // A station that is not reachable is taken over by whoever claims it
     // last, which is the limit of what this layer can tell.
-    assert!(cache.on_observed(NEIGHBOR, IMPOSTOR, at(1)));
+    assert!(cache.on_observed(NEIGHBOR, IMPOSTOR));
     assert_eq!(cache.hardware(NEIGHBOR), Some(IMPOSTOR));
 }
 
@@ -339,8 +477,8 @@ fn an_observation_of_a_neighbor_nobody_asked_about_is_kept_as_stale() {
 fn one_cache_holds_neighbors_of_both_families() {
     let six = IpAddr::V6(Ipv6Addr::new([0xFE80, 0, 0, 0, 0, 0, 0, 1]));
     let mut cache = Cache::new();
-    cache.on_confirmed(NEIGHBOR, HARDWARE, at(0));
-    cache.on_confirmed(six, IMPOSTOR, at(1));
+    confirm(&mut cache, NEIGHBOR, HARDWARE, at(0));
+    confirm(&mut cache, six, IMPOSTOR, at(1));
     assert_eq!(cache.len(), 2);
     assert_eq!(cache.hardware(NEIGHBOR), Some(HARDWARE));
     assert_eq!(cache.hardware(six), Some(IMPOSTOR));
@@ -395,9 +533,10 @@ fn the_states_say_which_of_them_can_be_sent_to() {
 fn a_cache_that_holds_nothing_drops_what_it_is_given() {
     let mut cache = NeighborCache::<0, 16>::new();
     assert_eq!(cache.resolve(NEIGHBOR, b"x", at(0)), Resolution::Dropped);
-    cache.on_confirmed(NEIGHBOR, HARDWARE, at(1));
+    assert!(!cache.on_confirmed(NEIGHBOR, HARDWARE, at(1)));
+    assert!(!cache.learn(NEIGHBOR, HARDWARE, at(1)));
     assert_eq!(cache.state(NEIGHBOR), None);
-    assert!(!cache.on_observed(NEIGHBOR, HARDWARE, at(2)));
+    assert!(!cache.on_observed(NEIGHBOR, HARDWARE));
     assert_eq!(cache.poll(at(3)), None);
     assert_eq!(cache.poll_at(), None);
     cache.clear_pending(NEIGHBOR);
@@ -434,7 +573,7 @@ fn a_claim_that_disagrees_takes_a_reachable_entry_to_stale_and_no_further() {
     // trusted for the rest of the reachable time, so the next packet to
     // it starts the check.
     let mut cache = Cache::new();
-    cache.on_confirmed(NEIGHBOR, HARDWARE, at(0));
+    confirm(&mut cache, NEIGHBOR, HARDWARE, at(0));
     assert_eq!(cache.state(NEIGHBOR), Some(NeighborState::Reachable));
 
     assert!(cache.on_conflict(NEIGHBOR));
@@ -452,7 +591,7 @@ fn a_claim_that_disagrees_moves_nothing_else() {
     assert!(!cache.on_conflict(NEIGHBOR));
     assert!(cache.is_empty());
 
-    cache.on_observed(NEIGHBOR, HARDWARE, at(0));
+    cache.learn(NEIGHBOR, HARDWARE, at(0));
     assert_eq!(cache.state(NEIGHBOR), Some(NeighborState::Stale));
     assert!(!cache.on_conflict(NEIGHBOR));
     assert_eq!(cache.state(NEIGHBOR), Some(NeighborState::Stale));

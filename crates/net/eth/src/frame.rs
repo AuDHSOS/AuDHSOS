@@ -22,6 +22,10 @@ pub const HEADER_LEN: usize = 14;
 /// The largest payload an Ethernet II frame carries (RFC 894).
 pub const MTU: usize = 1500;
 
+/// The smallest payload an Ethernet II frame carries; a shorter one is
+/// padded with zeros (RFC 894, `docs/rfc/rfc894.txt:30-34`).
+pub const MIN_PAYLOAD_LEN: usize = 46;
+
 /// The largest frame, header and payload together. The frame check
 /// sequence is not part of it, because the device strips it.
 pub const MAX_FRAME_LEN: usize = HEADER_LEN + MTU;
@@ -113,7 +117,9 @@ impl<'a> Frame<'a> {
             || self.destination.is_multicast()
     }
 
-    /// Writes a frame with this payload.
+    /// Writes a frame with this payload, padded with zeros to
+    /// [`MIN_PAYLOAD_LEN`]. A receiver trims the padding by the length
+    /// field of the layer above.
     ///
     /// # Errors
     ///
@@ -130,7 +136,10 @@ impl<'a> Frame<'a> {
         if payload.len() > MTU {
             return Err(EthError::PayloadTooLong(payload.len()));
         }
-        let needed = HEADER_LEN.saturating_add(payload.len());
+        let padding = MIN_PAYLOAD_LEN.saturating_sub(payload.len());
+        let needed = HEADER_LEN
+            .saturating_add(payload.len())
+            .saturating_add(padding);
         if writer.remaining() < needed {
             return Err(EthError::Wire(net_wire::WireError::OutOfBounds {
                 needed,
@@ -141,6 +150,8 @@ impl<'a> Frame<'a> {
         writer.write_mac(source)?;
         writer.write_u16(ether_type.get())?;
         writer.write_bytes(payload)?;
+        let zeros = [0u8; MIN_PAYLOAD_LEN];
+        writer.write_bytes(zeros.get(..padding).unwrap_or(&[]))?;
         Ok(())
     }
 }

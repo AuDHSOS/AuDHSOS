@@ -117,8 +117,9 @@ pub enum Resolution {
     /// The address is being resolved and the packet is held. It comes
     /// back from [`NeighborCache::pending`] when an answer arrives.
     Waiting,
-    /// The packet is longer than a held packet may be, or the cache is
-    /// full of entries that are all in use. Nothing was stored.
+    /// The packet is longer than a held packet may be, the cache has no
+    /// room, or the address names no host. Nothing was stored; a new
+    /// entry for a host still solicits.
     Dropped,
 }
 
@@ -149,12 +150,17 @@ struct Entry<const PENDING: usize> {
 /// The cache: `ENTRIES` neighbors, each able to hold one packet of at
 /// most `PENDING` bytes while it is being resolved.
 ///
-/// A new neighbor evicts the least recently used one when the cache is
-/// full, and a packet waiting behind the evicted entry goes with it
-/// without an event. That is deliberate: the caller learns of it the way
-/// it learns of any other loss on a link, by the upper layer not being
-/// acknowledged, and a cache sized for the neighbors a host actually
-/// talks to does not reach the case.
+/// Only [`resolve`](Self::resolve) and [`learn`](Self::learn) create
+/// entries, so an unsolicited packet cannot flush the cache. RFC 826 adds
+/// the sender of any packet addressed to this host
+/// (`docs/rfc/rfc826.txt:214-218`); this cache adds it only for a request,
+/// because an unsolicited reply would let any station fill the cache.
+/// RFC 4861, section 7.2.5 adds nothing for an advertisement. A new entry
+/// evicts the least recently used one when the cache is full; a packet
+/// held by the evicted entry is lost without an event.
+///
+/// An entry is keyed only by an address that names one host, and holds
+/// only a unicast hardware address.
 #[derive(Debug)]
 pub struct NeighborCache<const ENTRIES: usize, const PENDING: usize> {
     /// The neighbors, in no particular order.
@@ -228,6 +234,9 @@ impl<const ENTRIES: usize, const PENDING: usize> NeighborCache<ENTRIES, PENDING>
     /// packet is the one a retransmission will produce again, and the
     /// newer is the one the caller has just decided to send.
     pub fn resolve(&mut self, address: IpAddr, packet: &[u8], now: Instant) -> Resolution {
+        if !is_host(address) {
+            return Resolution::Dropped;
+        }
         let delay_deadline = now.saturating_add(self.timers.delay_first_probe);
         if let Some(entry) = self.find_mut(address) {
             entry.used = now;
@@ -260,77 +269,85 @@ impl<const ENTRIES: usize, const PENDING: usize> NeighborCache<ENTRIES, PENDING>
             pending: [0; PENDING],
             pending_len: 0,
         };
-        if !entry.store(packet) {
-            return Resolution::Dropped;
-        }
-        if self.insert(entry).is_none() {
+        // A packet too long to hold still starts resolution, so a
+        // retransmission finds the address.
+        let held = entry.store(packet);
+        if self.insert(entry).is_none() || !held {
             return Resolution::Dropped;
         }
         Resolution::Waiting
     }
 
-    /// A neighbor answered a solicitation: it holds `hardware` and is
-    /// reachable.
+    /// A neighbor answered for `address` with `hardware`.
+    ///
+    /// An entry in `Incomplete`, `Delay` or `Probe` is being checked by
+    /// this host: it takes `hardware` and becomes `Reachable`. Any other
+    /// entry is treated as by [`on_observed`](Self::on_observed), because
+    /// the cache cannot tell a reply to a solicitation from an unsolicited
+    /// one. An unknown address is not added.
     ///
     /// A packet waiting behind it is now sendable; the caller reads it
     /// with [`pending`](Self::pending) and drops it with
     /// [`clear_pending`](Self::clear_pending) once it is on the wire.
-    pub fn on_confirmed(&mut self, address: IpAddr, hardware: MacAddr, now: Instant) {
-        let deadline = now.saturating_add(self.timers.reachable);
-        if let Some(entry) = self.find_mut(address) {
-            entry.hardware = hardware;
-            entry.state = NeighborState::Reachable;
-            entry.deadline = deadline;
-            entry.solicits = 0;
-            return;
+    ///
+    /// The answer says whether the entry changed.
+    pub fn on_confirmed(&mut self, address: IpAddr, hardware: MacAddr, now: Instant) -> bool {
+        if !is_mapping(address, hardware) {
+            return false;
         }
-        let entry = Entry {
-            address,
-            hardware,
-            state: NeighborState::Reachable,
-            deadline,
-            used: now,
-            solicits: 0,
-            pending: [0; PENDING],
-            pending_len: 0,
+        let deadline = now.saturating_add(self.timers.reachable);
+        let Some(entry) = self.find_mut(address) else {
+            return false;
         };
-        self.insert(entry);
+        match entry.state {
+            NeighborState::Incomplete | NeighborState::Delay | NeighborState::Probe => {
+                entry.hardware = hardware;
+                entry.state = NeighborState::Reachable;
+                entry.deadline = deadline;
+                entry.solicits = 0;
+                true
+            }
+            NeighborState::Reachable | NeighborState::Stale => entry.observe(hardware),
+        }
     }
 
-    /// A mapping seen without having asked for it: a gratuitous ARP, or
-    /// the sender's own address on a request meant for someone else.
+    /// A mapping seen without having asked for it: a gratuitous ARP, an
+    /// unsolicited advertisement, or the sender of a request meant for
+    /// another host.
     ///
-    /// It creates an entry that does not exist, refreshes a `Reachable`
-    /// one that agrees, and takes the new address into any other state,
-    /// leaving the entry `Stale`. What it never does is move a
-    /// `Reachable` entry to a different hardware address: that station
-    /// answered a solicitation of this host's, which is evidence, and an
-    /// unsolicited claim is not.
+    /// A `Reachable` entry does not change, because that station answered
+    /// a solicitation of this host's and an unsolicited claim is not
+    /// evidence; its reachable timer keeps running (RFC 4861,
+    /// `docs/rfc/rfc4861.txt:3626-3631`). Any other entry takes
+    /// `hardware` and becomes `Stale`. An unknown address is not added.
     ///
-    /// That one comparison is the cheap half of resistance to ARP
-    /// spoofing, and it is worth being plain about how thin the
-    /// protection is. An entry that is not `Reachable` is taken over by
-    /// whoever claims it last, and the expensive half — knowing which
-    /// station is entitled to an address — is not something a link layer
-    /// can know. What the comparison buys is that a neighbor this host is
-    /// actively talking to cannot be stolen mid-conversation.
+    /// An entry that is not `Reachable` is taken over by the last claim;
+    /// which station is entitled to an address is not something a link
+    /// layer can know.
     ///
-    /// The answer says whether the observation changed anything.
-    pub fn on_observed(&mut self, address: IpAddr, hardware: MacAddr, now: Instant) -> bool {
-        let reachable_deadline = now.saturating_add(self.timers.reachable);
+    /// The answer says whether the entry changed.
+    pub fn on_observed(&mut self, address: IpAddr, hardware: MacAddr) -> bool {
+        if !is_mapping(address, hardware) {
+            return false;
+        }
+        self.find_mut(address)
+            .is_some_and(|entry| entry.observe(hardware))
+    }
+
+    /// A mapping from a packet allowed to create an entry: an ARP request
+    /// addressed to this host (RFC 826, `docs/rfc/rfc826.txt:214-218`) or
+    /// a neighbor solicitation (RFC 4861, section 7.2.3).
+    ///
+    /// An unknown address gets a `Stale` entry; a known one is treated as
+    /// by [`on_observed`](Self::on_observed).
+    ///
+    /// The answer says whether the cache changed.
+    pub fn learn(&mut self, address: IpAddr, hardware: MacAddr, now: Instant) -> bool {
+        if !is_mapping(address, hardware) {
+            return false;
+        }
         if let Some(entry) = self.find_mut(address) {
-            if entry.state == NeighborState::Reachable {
-                if entry.hardware != hardware {
-                    return false;
-                }
-                entry.deadline = reachable_deadline;
-                return true;
-            }
-            entry.hardware = hardware;
-            entry.state = NeighborState::Stale;
-            entry.deadline = Instant::MAX;
-            entry.solicits = 0;
-            return true;
+            return entry.observe(hardware);
         }
         let entry = Entry {
             address,
@@ -500,7 +517,35 @@ impl<const ENTRIES: usize, const PENDING: usize> NeighborCache<ENTRIES, PENDING>
     }
 }
 
+/// Whether `address` names one host.
+const fn is_host(address: IpAddr) -> bool {
+    let broadcast = matches!(address, IpAddr::V4(v4) if v4.is_broadcast());
+    !address.is_unspecified() && !address.is_multicast() && !broadcast
+}
+
+/// Whether `address` names one host and `hardware` one station, which is
+/// what an entry needs to be sendable.
+fn is_mapping(address: IpAddr, hardware: MacAddr) -> bool {
+    is_host(address) && hardware.is_unicast() && !hardware.is_unspecified()
+}
+
 impl<const PENDING: usize> Entry<PENDING> {
+    /// An unsolicited claim of `hardware`: a `Reachable` entry does not
+    /// change, any other takes `hardware` and becomes `Stale`. Answers
+    /// whether the entry changed.
+    fn observe(&mut self, hardware: MacAddr) -> bool {
+        if self.state == NeighborState::Reachable {
+            return false;
+        }
+        let changed = self.state != NeighborState::Stale || self.hardware != hardware;
+        self.hardware = hardware;
+        self.state = NeighborState::Stale;
+        // A stale entry waits for traffic and not for a clock.
+        self.deadline = Instant::MAX;
+        self.solicits = 0;
+        changed
+    }
+
     /// Holds `packet`, replacing whatever was held. Answers whether it
     /// fits; a packet that does not is dropped and nothing is kept, since
     /// half a packet is worse than none.

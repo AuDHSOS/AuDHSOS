@@ -88,10 +88,16 @@ fn an_echo_request_over_ipv6_is_answered() {
     let mut outgoing = [0u8; 8192];
     let mut stack: Stack<'_, 4, 2> = configured(&mut outgoing);
     let mut rng = rng();
-    // The neighbor answers for itself, so the reply does not wait.
+    // The neighbor's solicitation puts it in the cache, so the reply does
+    // not wait.
     drain(
         &mut stack,
-        Some(&advertisement_frame(PEER6, HERE6, PEER6, PEER_MAC, false)),
+        Some(&solicitation_frame(
+            PEER6,
+            solicited_node(HERE6),
+            HERE6,
+            Some(PEER_MAC),
+        )),
         start(),
         &mut rng,
     );
@@ -153,7 +159,12 @@ fn a_segment_over_ipv6_to_no_connection_is_answered_with_a_reset() {
     let mut rng = rng();
     drain(
         &mut stack,
-        Some(&advertisement_frame(PEER6, HERE6, PEER6, PEER_MAC, false)),
+        Some(&solicitation_frame(
+            PEER6,
+            solicited_node(HERE6),
+            HERE6,
+            Some(PEER_MAC),
+        )),
         start(),
         &mut rng,
     );
@@ -443,7 +454,12 @@ fn a_packet_that_is_not_one_is_dropped() {
     // discovery message at all is read as the message it is.
     drain(
         &mut stack,
-        Some(&advertisement_frame(PEER6, HERE6, PEER6, PEER_MAC, false)),
+        Some(&solicitation_frame(
+            PEER6,
+            solicited_node(HERE6),
+            HERE6,
+            Some(PEER_MAC),
+        )),
         start(),
         &mut rng,
     );

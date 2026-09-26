@@ -62,15 +62,20 @@ impl<const SOCKETS: usize, const CONNECTIONS: usize> Stack<'_, SOCKETS, CONNECTI
         };
         let sender = IpAddr::V4(packet.sender_protocol);
         let mine = self.holds_v4(packet.target_protocol);
-        if mine {
-            // RFC 826: a packet addressed to this host teaches the cache
-            // whether it held the sender or not.
-            self.neighbors
-                .on_confirmed(sender, packet.sender_hardware, now);
-        } else {
-            // And one that is not only refreshes what is already there.
-            self.neighbors
-                .on_observed(sender, packet.sender_hardware, now);
+        let hardware = packet.sender_hardware;
+        match (mine, packet.operation) {
+            // Only a request addressed to this host adds the sender; a
+            // request is no answer, so it confirms nothing.
+            (true, Operation::Request) => {
+                self.neighbors.learn(sender, hardware, now);
+            }
+            (true, _) => {
+                self.neighbors.on_confirmed(sender, hardware, now);
+            }
+            // A packet for another host updates only an existing entry.
+            (false, _) => {
+                self.neighbors.on_observed(sender, hardware);
+            }
         }
         if mine && packet.operation == Operation::Request {
             self.answer_arp(&packet);
