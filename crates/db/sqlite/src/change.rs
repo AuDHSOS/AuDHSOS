@@ -470,6 +470,13 @@ fn reads_after(
     Some(Error::Schema(refused).message())
 }
 
+/// Whether SQLite made the name for itself, which is `name NOT LIKE
+/// 'sqliteX_%' ESCAPE 'X'` of `renameTestSchema`.
+fn named_by_sqlite(name: &[u8]) -> bool {
+    name.get(..7)
+        .is_some_and(|head| head.eq_ignore_ascii_case(b"sqlite_"))
+}
+
 /// Whether the schema already names a table, an index or a view, which
 /// are one namespace; a trigger is named in its own, so a trigger and
 /// an index may share a name.
@@ -2059,7 +2066,11 @@ impl Writer {
             let kind = text(0);
             let sql = text(4);
             let named = if kind.eq_ignore_ascii_case(b"trigger") {
-                crate::rename::named_steps(&sql)
+                // A step of the body writes one table and the statement
+                // of a step names the tables it reads, so both are read.
+                let mut named = crate::rename::named_steps(&sql);
+                named.extend(crate::rename::named_sources(&sql));
+                named
             } else if kind.eq_ignore_ascii_case(b"view") {
                 crate::rename::named_sources(&sql)
             } else {
@@ -2074,7 +2085,63 @@ impl Writer {
                 Error::NoTable(missing).message(),
             ));
         }
+        self.resolves_indexes(&images)?;
         self.resolves_views(false)
+    }
+
+    /// Raises where the statement of an index of the schema the
+    /// connection writes names a column its table does not hold.
+    ///
+    /// `renameTestSchema` of `research/sqlite/src/alter.c:53` reads every
+    /// row of the schema whose name SQLite did not make for itself, so a
+    /// row that holds no statement at all is refused with no words after
+    /// the colon; a row whose statement is nothing rather than empty is
+    /// one SQLite made and is passed over.
+    ///
+    /// Reading the indexes costs O(n) in the rows of the schema and O(m)
+    /// in the terms of each index.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InObject`] names the index and what reading it refused.
+    fn resolves_indexes(&self, images: &Images) -> Result<(), Error> {
+        for (_, values) in self.reading(&images.held)?.rows_of(SCHEMA_TABLE)? {
+            let text = |at: usize| values.get(at).and_then(Value::text).unwrap_or_default();
+            let kind = text(0);
+            let name = text(1);
+            if !kind.eq_ignore_ascii_case(b"index") || named_by_sqlite(&name) {
+                continue;
+            }
+            // A row SQLite made for itself holds nothing where the
+            // statement stands, and the name of one is read above.
+            let Some(refused) = self.index_reads(&text(4), images) else {
+                continue;
+            };
+            return Err(Error::InObject(kind, name, refused));
+        }
+        Ok(())
+    }
+
+    /// What reading one index of the schema again refuses, and nothing
+    /// where it reads.
+    fn index_reads(&self, statement: &[u8], images: &Images) -> Option<alloc::string::String> {
+        let read = crate::parse::definition(statement);
+        let (arena, made) = match read {
+            Ok((arena, Definition::Index(made))) => (arena, made),
+            // `sqlite3_rename_test` of `research/sqlite/src/alter.c:2075`
+            // reads the index of the statement alone, so a row that
+            // makes something else is passed over.
+            Ok(_) => return None,
+            // `renameParseSql` answers no words for a statement the
+            // parser refuses, so the refusal names the index alone.
+            Err(_) => return Some(alloc::string::String::new()),
+        };
+        let database = self.reading(&images.held).ok()?;
+        let named = crate::schema::dequote(made.table.text(statement));
+        let (table, _) = database.table(&named)?;
+        crate::schema::index(&arena, &made, statement, table, self.collating)
+            .err()
+            .map(|refused| Error::Schema(refused).message())
     }
 
     /// Raises where the statement of a view of the schema the connection

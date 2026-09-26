@@ -1100,3 +1100,86 @@ fn what_a_view_of_a_chain_and_of_another_database_resolves() {
         "error in view v1 after drop column: no such column: b"
     );
 }
+
+/// The indexes and the triggers an `ALTER TABLE` reads again.
+#[test]
+fn what_an_index_or_a_trigger_an_alter_no_longer_resolves_refuses() {
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    ran(
+        &mut writer,
+        &[
+            b"CREATE TABLE x1(i INTEGER, t TEXT UNIQUE)",
+            b"CREATE TRIGGER tr1 AFTER INSERT ON x1 BEGIN SELECT * FROM nosuchtable; END",
+        ],
+    );
+    // The statement of a step names the tables it reads, so a table no
+    // database holds refuses the rename.
+    assert_eq!(
+        writer
+            .run(b"ALTER TABLE x1 RENAME COLUMN t TO ttt")
+            .unwrap_err()
+            .message(),
+        "error in trigger tr1: no such table: main.nosuchtable"
+    );
+    // An index over a column its table does not hold refuses the rename,
+    // and one whose statement holds no byte is named with no words.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    ran(
+        &mut writer,
+        &[
+            b"CREATE TABLE x1(i INTEGER, t TEXT UNIQUE)",
+            b"CREATE INDEX x1i ON x1(i)",
+            b"PRAGMA writable_schema=ON",
+            b"UPDATE sqlite_schema SET sql='CREATE INDEX x1i ON x1(j)' WHERE name='x1i'",
+            b"PRAGMA writable_schema=OFF",
+        ],
+    );
+    assert_eq!(
+        writer
+            .run(b"ALTER TABLE x1 RENAME COLUMN t TO ttt")
+            .unwrap_err()
+            .message(),
+        "error in index x1i: no such column: j"
+    );
+    ran(
+        &mut writer,
+        &[
+            b"PRAGMA writable_schema=ON",
+            b"UPDATE sqlite_schema SET sql='' WHERE name='x1i'",
+            b"PRAGMA writable_schema=OFF",
+        ],
+    );
+    assert_eq!(
+        writer
+            .run(b"ALTER TABLE x1 RENAME COLUMN t TO ttt")
+            .unwrap_err()
+            .message(),
+        "error in index x1i: "
+    );
+    // A row whose type says index and whose statement makes a table is
+    // passed over, which is `sqlite3_rename_test` of
+    // `research/sqlite/src/alter.c:2075` reading the index of the
+    // statement alone.
+    ran(
+        &mut writer,
+        &[
+            b"PRAGMA writable_schema=ON",
+            b"UPDATE sqlite_schema SET sql='CREATE TABLE zz(q)' WHERE name='x1i'",
+            b"PRAGMA writable_schema=OFF",
+        ],
+    );
+    writer
+        .run(b"ALTER TABLE x1 RENAME COLUMN t TO ttt")
+        .unwrap();
+    // The index of a key, which SQLite made itself, holds no statement
+    // and is passed over, and so is a name SQLite made.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    ran(
+        &mut writer,
+        &[
+            b"CREATE TABLE k(a INTEGER, b TEXT UNIQUE)",
+            b"CREATE INDEX ki ON k(a)",
+        ],
+    );
+    writer.run(b"ALTER TABLE k RENAME COLUMN a TO aa").unwrap();
+}

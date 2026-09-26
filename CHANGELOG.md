@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` reads the tables the statement of a trigger's step names and the
+  columns of every index of the schema when an `ALTER TABLE` reads the schema
+  again. D-528 records it. Catalog 6.6.374. `altercol.test` goes from 210 cases
+  passing to 213 and `altertab3.test` from 85 to 89.
+
 - `db-sqlite` answers a `WITH` term only where a name of the statement reaches
   it, and names a circle of terms after the term the walk reaches twice. D-527
   records it. Catalog 6.6.373. `with1.test` goes from 83 cases passing to 86 and

@@ -1229,6 +1229,8 @@ Size: L.
      records.
 227. The `WITH` terms a statement reaches, and the term a circle of them
      closes at. Built, which D-527 records.
+228. The tables the statement of a trigger's step reads, and the columns
+     an index names. Built, which D-528 records.
 
 ### Done when
 
@@ -1238,8 +1240,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 123 553 cases in 844 files, 118 891
-pass, 2473 answer differently, and 2189 name something the engine
+under the `tclsh` of the machine. Of 123 557 cases in 844 files, 118 902
+pass, 2468 answer differently, and 2187 name something the engine
 refuses or a command that needs the C library's internals. The files
 that answer for tens of thousands of rows reach the five-minute
 deadline and are counted with the cases they ran by then. One run over

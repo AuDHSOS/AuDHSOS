@@ -7856,6 +7856,21 @@ Document 16 step Q8. Every answer is the one the C library's shell writes.
 - A `FROM` of 65 and of 100 sides, which are refused.
 - Two statements of 64 sides, one written inside the other, which stand.
 
+### 6.6.374 The indexes and the triggers an `ALTER TABLE` reads (`db-sqlite`)
+
+Document 16 step Q8. Every answer is the one the C library's shell writes,
+except the row whose type and statement disagree, which is read from
+`sqlite3_rename_test`.
+
+- A trigger whose body reads a table no database holds: the rename is
+  refused `error in trigger tr1: no such table: main.nosuchtable`.
+- An index over a column its table does not hold: refused
+  `error in index x1i: no such column: j`.
+- An index whose statement holds no byte: refused `error in index x1i: `.
+- A row whose type says index and whose statement makes a table: passed
+  over.
+- The index of a key, which SQLite made itself: passed over.
+
 ### 6.6.373 The `WITH` terms a statement reaches (`db-sqlite`)
 
 Document 16 step Q8. Every answer is the one the C library's shell writes.
