@@ -123,12 +123,12 @@ pub trait QueueMemory {
     /// Orders the accesses before this call against the accesses after
     /// it, as seen by the device.
     ///
-    /// Three of the four places this is called are required by name.
+    /// Two of the three places this is called are required by name.
     /// Section 2.7.13, steps 4 and 6, has the driver barrier after the
     /// ring entry and before the index that publishes it, and again
     /// after that index and before it reads the notification flag;
     /// sections 2.7.13.3.1 and 2.7.13.4.1 state both as MUST. The
-    /// fourth is between the used index and the element it names, which
+    /// third is between the used index and the element it names, which
     /// section 2.7.14 does not name — it is thorough about the driver's
     /// writes and thin about its reads — but which is the same race the
     /// other way round: the device writes the element and then the

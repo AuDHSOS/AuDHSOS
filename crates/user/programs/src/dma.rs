@@ -14,9 +14,14 @@
 //! available ring, the used ring, and then the request slots, each at the
 //! alignment virtio 2.7 asks for. [`REGION_BYTES`] is what it comes to.
 //!
-//! Invariant: every accessor answers a slice inside the region or an empty
-//! one; nothing here computes an address the caller could pass on.
+//! The device writes the used ring, the status bytes and the sectors of
+//! read requests, so [`Dma`] holds a raw pointer and not a slice; the used
+//! ring and the status bytes are read with volatile loads.
+//!
+//! Invariant: every accessor stays inside the region; nothing here
+//! computes an address the caller could pass on.
 
+use core::marker::PhantomData;
 use core::sync::atomic::{Ordering, fence};
 
 use driver_virtio_blk::blk::{Chain, Rings, Segment};
@@ -94,29 +99,64 @@ const fn align_up(value: usize, align: usize) -> usize {
 
 /// The region of one device, over the bytes of its mapping.
 pub struct Dma<'a> {
-    bytes: &'a mut [u8],
+    /// The first of [`REGION_BYTES`] bytes the device shares.
+    bytes: *mut u8,
     physical: u64,
+    region: PhantomData<&'a mut [u8]>,
 }
 
-impl<'a> Dma<'a> {
-    /// The region over `bytes`, which begin at physical address
-    /// `physical`.
+impl Dma<'_> {
+    /// The region over the `len` bytes at `bytes`, which begin at
+    /// physical address `physical`.
     ///
-    /// Answers `None` for fewer than [`REGION_BYTES`] bytes and for a
-    /// physical start that is not aligned to the descriptor table, which
-    /// virtio 2.7 requires of the table and this layout puts first.
+    /// Answers `None` for a null pointer, for fewer than [`REGION_BYTES`]
+    /// bytes and for a physical start that is not aligned to the
+    /// descriptor table, which virtio 2.7 requires of the table and this
+    /// layout puts first.
+    ///
+    /// # Safety
+    ///
+    /// The `len` bytes at `bytes` stay mapped, readable and writable, and
+    /// no reference to them exists, while the value does.
     #[must_use]
-    pub fn new(bytes: &'a mut [u8], physical: u64) -> Option<Self> {
+    pub unsafe fn new(bytes: *mut u8, len: usize, physical: u64) -> Option<Self> {
         let align = u64::try_from(DESCRIPTOR_TABLE_ALIGN).unwrap_or(1);
         let aligned = physical.is_multiple_of(align);
-        (bytes.len() >= REGION_BYTES && aligned).then_some(Dma { bytes, physical })
+        (!bytes.is_null() && len >= REGION_BYTES && aligned).then_some(Dma {
+            bytes,
+            physical,
+            region: PhantomData,
+        })
     }
 
-    /// Every byte of the region, which the driver zeroes before it tells
-    /// the device where the rings are (virtio 2.7.10.1).
-    #[must_use]
-    pub fn whole(&mut self) -> &mut [u8] {
-        region_mut(self.bytes, 0, REGION_BYTES)
+    /// Zeroes every byte of the region, which the driver does before it
+    /// tells the device where the rings are (virtio 2.7.10.1).
+    pub fn clear(&mut self) {
+        for at in 0..REGION_BYTES {
+            // SAFETY: `new` bounds the region by REGION_BYTES.
+            unsafe { self.bytes.wrapping_add(at).write_volatile(0) };
+        }
+    }
+
+    /// The bytes from `from` to `to`, which the driver writes, or none
+    /// past the region.
+    const fn slice_mut(&mut self, from: usize, to: usize) -> &mut [u8] {
+        if from > to || to > REGION_BYTES {
+            return &mut [];
+        }
+        // SAFETY: `new` bounds the region; `&mut self` makes the slice
+        // the only reference, and the device does not write these bytes
+        // while the driver holds it.
+        unsafe {
+            core::slice::from_raw_parts_mut(self.bytes.wrapping_add(from), to.saturating_sub(from))
+        }
+    }
+
+    /// The byte at `at`, read with a volatile load, or `None` past the
+    /// region.
+    fn read(&self, at: usize) -> Option<u8> {
+        // SAFETY: the check bounds `at` inside the region `new` bounds.
+        (at < REGION_BYTES).then(|| unsafe { self.bytes.wrapping_add(at).read_volatile() })
     }
 
     /// The physical address of the byte at `offset`.
@@ -159,30 +199,30 @@ impl<'a> Dma<'a> {
 
     /// The sector of slot `slot`, for the caller to fill or to read.
     #[must_use]
-    pub fn sector(&mut self, slot: usize) -> &mut [u8] {
+    pub const fn sector(&mut self, slot: usize) -> &mut [u8] {
         let at = Self::slot_at(slot).saturating_add(SECTOR_AT);
-        region_mut(self.bytes, at, at.saturating_add(SECTOR_BYTES))
+        self.slice_mut(at, at.saturating_add(SECTOR_BYTES))
     }
 
     /// The header of slot `slot`, for `Request::write_header`.
     #[must_use]
-    pub fn header(&mut self, slot: usize) -> &mut [u8] {
+    pub const fn header(&mut self, slot: usize) -> &mut [u8] {
         let at = Self::slot_at(slot);
-        region_mut(self.bytes, at, at.saturating_add(STATUS_AT))
+        self.slice_mut(at, at.saturating_add(STATUS_AT))
     }
 
     /// The status byte the device wrote into slot `slot`.
     #[must_use]
     pub fn status(&self, slot: usize) -> u8 {
         let at = Self::slot_at(slot).saturating_add(STATUS_AT);
-        self.bytes.get(at).copied().unwrap_or(NO_STATUS)
+        self.read(at).unwrap_or(NO_STATUS)
     }
 
     /// Puts a byte no device writes into the status of slot `slot`, so
     /// that a status read after a request is one the device wrote for it.
-    pub fn clear_status(&mut self, slot: usize) {
+    pub const fn clear_status(&mut self, slot: usize) {
         let at = Self::slot_at(slot).saturating_add(STATUS_AT);
-        if let Some(byte) = self.bytes.get_mut(at) {
+        if let Some(byte) = self.slice_mut(at, at.saturating_add(1)).first_mut() {
             *byte = NO_STATUS;
         }
     }
@@ -190,27 +230,39 @@ impl<'a> Dma<'a> {
 
 impl QueueMemory for Dma<'_> {
     fn descriptor_table(&self) -> &[u8] {
-        region(self.bytes, DESCRIPTORS_AT, AVAILABLE_AT)
+        // SAFETY: `new` bounds the region; the driver alone writes the
+        // table, and `&self` excludes `descriptor_table_mut`.
+        unsafe {
+            core::slice::from_raw_parts(
+                self.bytes.wrapping_add(DESCRIPTORS_AT),
+                AVAILABLE_AT - DESCRIPTORS_AT,
+            )
+        }
     }
 
     fn descriptor_table_mut(&mut self) -> &mut [u8] {
-        region_mut(self.bytes, DESCRIPTORS_AT, AVAILABLE_AT)
+        self.slice_mut(DESCRIPTORS_AT, AVAILABLE_AT)
     }
 
     fn available_ring_mut(&mut self) -> &mut [u8] {
-        region_mut(self.bytes, AVAILABLE_AT, USED_AT)
+        self.slice_mut(AVAILABLE_AT, USED_AT)
     }
 
     fn read_used(&self, at: usize, out: &mut [u8]) -> Result<(), virtio_queue::error::QueueError> {
-        let used = region(self.bytes, USED_AT, SLOTS_AT);
-        let bytes = used.get(at..at.saturating_add(out.len())).ok_or(
-            virtio_queue::error::QueueError::Region {
+        let given = SLOTS_AT - USED_AT;
+        let end = at.saturating_add(out.len());
+        if end > given {
+            return Err(virtio_queue::error::QueueError::Region {
                 area: virtio_queue::error::Area::UsedRing,
-                needed: at.saturating_add(out.len()),
-                given: used.len(),
-            },
-        )?;
-        out.copy_from_slice(bytes);
+                needed: end,
+                given,
+            });
+        }
+        for (offset, byte) in out.iter_mut().enumerate() {
+            *byte = self
+                .read(USED_AT.saturating_add(at).saturating_add(offset))
+                .unwrap_or(0);
+        }
         Ok(())
     }
 
@@ -228,13 +280,3 @@ impl QueueMemory for Dma<'_> {
 /// specification defines are 0, 1 and 2 (virtio 5.2.6), so this is none of
 /// them and a request whose status still reads it was not answered.
 pub const NO_STATUS: u8 = 0xFF;
-
-/// The bytes from `from` to `to`, or none when the region is shorter.
-fn region(bytes: &[u8], from: usize, to: usize) -> &[u8] {
-    bytes.get(from..to).unwrap_or(&[])
-}
-
-/// The same, for writing.
-fn region_mut(bytes: &mut [u8], from: usize, to: usize) -> &mut [u8] {
-    bytes.get_mut(from..to).unwrap_or(&mut [])
-}

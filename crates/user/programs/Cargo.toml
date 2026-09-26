@@ -13,7 +13,6 @@ rust-version.workspace = true
 [lib]
 name = "user_programs"
 path = "src/lib.rs"
-test = false
 bench = false
 
 [[bin]]

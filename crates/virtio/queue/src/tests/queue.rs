@@ -489,7 +489,11 @@ fn publishing_and_reaping_ask_for_a_barrier() {
 
     memory.complete(u32::from(head), 0);
     queue.next_used(&device, &memory).expect("the completion");
-    assert_eq!(memory.barriers(), 2, "before the used index is read");
+    assert_eq!(
+        memory.barriers(),
+        2,
+        "between the used index and the element"
+    );
 }
 
 #[test]
@@ -689,9 +693,8 @@ fn a_chain_that_could_not_be_published_costs_neither_a_descriptor_nor_a_count() 
 
 #[test]
 fn a_used_ring_shorter_than_the_field_being_read_is_refused() {
-    let (device, _) = live_device();
-    let mut memory = RamQueue::with_lengths(8, descriptor_table_bytes(8), 6, 0);
-    let queue = Queue::<1>::new(&mut memory, 8).expect("queue");
+    let (device, mut memory, queue) = ready();
+    memory.truncate_used(0);
     assert_eq!(
         queue.should_notify(&device, &memory),
         Err(QueueError::Region {
@@ -701,9 +704,8 @@ fn a_used_ring_shorter_than_the_field_being_read_is_refused() {
         })
     );
 
-    let mut memory =
-        RamQueue::with_lengths(8, descriptor_table_bytes(8), available_ring_bytes(8), 3);
-    let mut queue = Queue::<1>::new(&mut memory, 8).expect("queue");
+    let (device, mut memory, mut queue) = ready();
+    memory.truncate_used(3);
     assert_eq!(
         queue.next_used(&device, &memory),
         Err(QueueError::Region {
@@ -761,4 +763,94 @@ fn a_descriptor_table_that_shrinks_before_the_chain_is_freed_is_refused() {
             ..
         })
     ));
+}
+
+#[test]
+fn a_used_element_naming_a_descriptor_inside_a_chain_is_refused() {
+    let (device, mut memory, mut queue) = ready();
+    let buffers = [
+        Buffer::to_device(0x1000, 16),
+        Buffer::from_device(0x2000, 512),
+        Buffer::from_device(0x3000, 1),
+    ];
+    let head = queue.add(&device, &mut memory, &buffers).expect("three");
+    let chain = chain_of(&memory, head);
+    for inner in &chain[1..] {
+        let mut probe = memory.clone();
+        probe.complete(u32::from(*inner), 1);
+        let mut copy = queue.clone();
+        assert_eq!(
+            copy.next_used(&device, &probe),
+            Err(QueueError::UnknownDescriptor(u32::from(*inner)))
+        );
+        assert_eq!(copy.free_count(), 5, "nothing was freed");
+        assert_eq!(copy.in_flight(), 1);
+    }
+
+    memory.complete(u32::from(head), 513);
+    assert_eq!(
+        queue.next_used(&device, &memory),
+        Ok(Some(Completion { head, length: 513 }))
+    );
+    assert_eq!(queue.free_count(), 8);
+}
+
+#[test]
+fn a_head_that_came_back_is_refused_when_the_device_names_it_again() {
+    let (device, mut memory, mut queue) = ready();
+    let first = queue.add(&device, &mut memory, &to_device(2)).expect("two");
+    let second = queue.add(&device, &mut memory, &to_device(1)).expect("one");
+    memory.complete(u32::from(first), 0);
+    queue.next_used(&device, &memory).expect("the first");
+
+    memory.complete(u32::from(first), 0);
+    assert_eq!(
+        queue.next_used(&device, &memory),
+        Err(QueueError::UnknownDescriptor(u32::from(first)))
+    );
+    assert_eq!(queue.in_flight(), 1);
+    assert_ne!(first, second);
+}
+
+#[test]
+fn a_used_index_that_is_not_zero_at_construction_is_refused() {
+    let mut memory = RamQueue::new(8);
+    memory.set_used_index(3);
+    assert_eq!(
+        Queue::<1>::new(&mut memory, 8),
+        Err(QueueError::UsedIndexNotZero(3))
+    );
+    assert_eq!(memory.available_index(), 0, "nothing was written");
+
+    let mut memory =
+        RamQueue::with_lengths(8, descriptor_table_bytes(8), available_ring_bytes(8), 3);
+    assert_eq!(
+        Queue::<1>::new(&mut memory, 8),
+        Err(QueueError::Region {
+            area: Area::UsedRing,
+            needed: 4,
+            given: 3,
+        })
+    );
+}
+
+#[test]
+fn a_chain_longer_than_four_gigabytes_is_refused_before_a_descriptor_is_taken() {
+    let (device, mut memory, mut queue) = ready();
+    let buffers = [
+        Buffer::from_device(0x1000, u32::MAX),
+        Buffer::from_device(0x2000, u32::MAX),
+    ];
+    assert_eq!(
+        queue.add(&device, &mut memory, &buffers),
+        Err(QueueError::ChainBytes(2 * u64::from(u32::MAX)))
+    );
+    assert_eq!(queue.free_count(), 8);
+    assert_eq!(queue.available_index(), 0);
+
+    let buffers = [
+        Buffer::to_device(0x1000, u32::MAX - 16),
+        Buffer::from_device(0x2000, 16),
+    ];
+    assert!(queue.add(&device, &mut memory, &buffers).is_ok());
 }

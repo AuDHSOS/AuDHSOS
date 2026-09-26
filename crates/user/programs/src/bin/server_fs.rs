@@ -219,7 +219,16 @@ fn bring_up_disk<'a>(
     // reach those bytes.
     let mut registers = Window::new(unsafe { windows.registers.bytes() }, device.places);
     // SAFETY: as above.
-    let mut dma = Dma::new(unsafe { windows.region.bytes() }, physical).ok_or(Error::Unaligned)?;
+    let mut dma = unsafe {
+        Dma::new(
+            core::ptr::without_provenance_mut(
+                usize::try_from(windows.region.address()).unwrap_or(0),
+            ),
+            usize::try_from(windows.region.len()).unwrap_or(0),
+            physical,
+        )
+    }
+    .ok_or(Error::Unaligned)?;
     let (blk, queue, sectors) = {
         let mut gate = shared.borrow_mut();
         bring_up(&mut gate, &mut dma, &mut registers, device)?
@@ -399,7 +408,7 @@ fn bring_up(
     }
     // The three regions are zeroed before the device is told where they
     // are, which is what virtio 2.7.10.1 asks of the used ring's flags.
-    dma.whole().fill(0);
+    dma.clear();
     let queue = Queue::<QUEUE_WORDS>::new(dma, QUEUE_SIZE).map_err(|_| Error::InvalidState)?;
     let vectors = Vectors {
         config: NO_VECTOR,
