@@ -626,6 +626,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   6.6.259. `like.test` goes from 54 cases passing to 66, `where2.test`
   from 34 to 49 and `skipscan1.test` from 18 to 30.
 
+### Changed
+
+- The suite harness hands each statement to the engine with the semicolon that
+  ends it, so a statement the parser wants more of is refused
+  `near ";": syntax error` rather than `incomplete input`. D-531 records it.
+  Catalog 6.6.376. `select1.test` goes from 186 cases passing to 189,
+  `with2.test` from 59 to 61 and `select3.test` from 83 to 84.
+
 ### Fixed
 
 - `db-sqlite` answers `reserved` from `PRAGMA lock_status` for a database

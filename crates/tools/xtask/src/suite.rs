@@ -2552,15 +2552,12 @@ impl Session {
         let mut at: usize = 0;
         let mut text = String::new();
         for piece in statements(sql) {
-            at = at.saturating_add(piece.len()).saturating_add(1);
+            at = at.saturating_add(piece.len());
             if !db_sqlite::parse::blank(piece.as_bytes()) {
-                piece.clone_into(&mut text);
                 // The tail begins after the semicolon, so the text of
                 // the statement carries it, which is what
                 // `sqlite3_sql` and `sqlite3_expanded_sql` answer.
-                if sql.get(at.saturating_sub(1)..at) == Some(";") {
-                    text.push(';');
-                }
+                piece.clone_into(&mut text);
                 break;
             }
         }
@@ -5936,7 +5933,7 @@ fn words(sql: &str) -> Vec<String> {
     out
 }
 
-/// The statements of one case, split at the semicolons that end one.
+/// The statements of one case, each carrying the semicolon that ends it.
 ///
 /// `sqlite3_complete` reads how far a text is a statement, which
 /// [`db_sqlite::token::complete`] answers: a semicolon inside a string,
@@ -5944,6 +5941,13 @@ fn words(sql: &str) -> Vec<String> {
 /// semicolon is read against the statement it may end, so the walk is
 /// O(n) in the text and O(k) again for each semicolon of one statement
 /// of k bytes.
+///
+/// The semicolon stays with the statement because `sqlite3Parser` reads
+/// it as a token: a statement the parser wants more of is refused `near
+/// ";": syntax error` where a semicolon follows and `incomplete input`
+/// where the text ends, which `%syntax_error` of
+/// `research/sqlite/src/parse.y:44` tells apart by the bytes of the
+/// token it stopped at.
 pub(crate) fn statements(sql: &str) -> Vec<&str> {
     let mut out = Vec::new();
     let mut start = 0;
@@ -5954,7 +5958,7 @@ pub(crate) fn statements(sql: &str) -> Vec<&str> {
         let after = at.saturating_add(1);
         let piece = sql.get(start..after).unwrap_or_default();
         if db_sqlite::token::complete(piece.as_bytes()) {
-            out.push(sql.get(start..at).unwrap_or_default());
+            out.push(piece);
             start = after;
         }
     }

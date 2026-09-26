@@ -7856,6 +7856,14 @@ Document 16 step Q8. Every answer is the one the C library's shell writes.
 - A `FROM` of 65 and of 100 sides, which are refused.
 - Two statements of 64 sides, one written inside the other, which stand.
 
+### 6.6.376 The semicolon a statement of a case carries (`xtask`)
+
+Unit tests of `crate::suite`, over the text one case hands the engine.
+
+- Two statements parted by a semicolon, where the first carries it.
+- A semicolon inside a string, which parts nothing.
+- A statement the text ends without a semicolon, which carries none.
+
 ### 6.6.375 The body of a trigger an `ALTER TABLE` resolves (`db-sqlite`)
 
 Document 16 step Q8. Every answer is the one the C library's shell writes.

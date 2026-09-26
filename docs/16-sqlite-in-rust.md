@@ -1236,6 +1236,8 @@ Size: L.
 230. The columns the body of a trigger reads, of the table each step
      writes and of the rows the trigger stands on. Built, which D-530
      records.
+231. The semicolon a statement of the harness carries, which the parser
+     names where it wanted more. Built, which D-531 records.
 
 ### Done when
 
