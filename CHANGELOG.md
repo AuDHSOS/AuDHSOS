@@ -7,6 +7,17 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` answers a `WITH` term only where a name of the statement reaches
+  it, and names a circle of terms after the term the walk reaches twice. D-527
+  records it. Catalog 6.6.373. `with1.test` goes from 83 cases passing to 86 and
+  `with2.test` from 53 to 59.
+
+- `db-sqlite` resolves the statement of every view of the schema before an
+  `ALTER TABLE ... RENAME` writes a statement and again after, and refuses a view
+  that names itself as `view v is circularly defined`. D-526 records it. Catalog
+  6.6.372. `altercol.test` goes from 204 cases passing to 210, `altertab.test`
+  from 92 to 96 and `altertab3.test` from 81 to 84.
+
 - `db-sqlite` takes every row of a table away before a `DROP TABLE` takes the
   table, where a key of another table points at it or a deferred key of its own
   stands, so a child key decides whether the table may go. D-525 records it.

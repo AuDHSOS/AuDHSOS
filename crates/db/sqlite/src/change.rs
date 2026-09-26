@@ -1943,6 +1943,10 @@ impl Writer {
         };
         self.over_temp(&from, standing)?;
         self.renamed_rows(&from, &to, Renaming::Every)?;
+        if self.marking() == crate::rename::Marking::Every {
+            self.resolves_views(true)?;
+            self.in_temp(|writer| writer.resolves_views(true))?;
+        }
         self.rename_sequence(&from, &to)?;
         self.held.header.schema_cookie = self.held.header.schema_cookie.saturating_add(1);
         Ok(())
@@ -2069,6 +2073,54 @@ impl Writer {
                 text(1),
                 Error::NoTable(missing).message(),
             ));
+        }
+        self.resolves_views(false)
+    }
+
+    /// Raises where the statement of a view of the schema the connection
+    /// writes names a column the tables of its `FROM` do not hold, with
+    /// `after` naming the alter that wrote the statement where one did.
+    ///
+    /// `renameTestSchema` of `research/sqlite/src/alter.c:1128` reads
+    /// every row of the schema through `sqlite3_rename_test`, which
+    /// `sqlite3SelectPrep` of `research/sqlite/src/alter.c:2082` resolves
+    /// the statement of a view with: before the alter writes a statement
+    /// the refusal names the view alone, and after it the refusal names
+    /// the alter as well.
+    ///
+    /// Resolving the views costs O(n) in the rows of the schema and O(m)
+    /// in the expressions of each view.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InObject`] before a rename writes a statement and
+    /// [`Error::AfterRename`] after one.
+    fn resolves_views(&self, after: bool) -> Result<(), Error> {
+        let images = self.images();
+        // A view of the temp schema reads the tables of every database,
+        // which `sqlite3FindTable` of `research/sqlite/src/build.c:271`
+        // reads in the order the connection holds them.
+        let database = if self.called.name.eq_ignore_ascii_case(b"temp") {
+            self.reading_beside(&images)?.writing(false)
+        } else {
+            self.reading(&images.held)?
+        };
+        for (_, values) in self.reading(&images.held)?.rows_of(SCHEMA_TABLE)? {
+            let text = |at: usize| values.get(at).and_then(Value::text).unwrap_or_default();
+            let kind = text(0);
+            if !kind.eq_ignore_ascii_case(b"view") {
+                continue;
+            }
+            let name = text(1);
+            let Err(refused) = database.resolved_view(&name) else {
+                continue;
+            };
+            let refused = refused.message();
+            return Err(if after {
+                Error::AfterRename(kind, name, refused)
+            } else {
+                Error::InObject(kind, name, refused)
+            });
         }
         Ok(())
     }
@@ -2613,7 +2665,7 @@ impl Writer {
         for (rowid, values) in written {
             self.schema_row(rowid, &values)?;
         }
-        Ok(())
+        self.resolves_views(true)
     }
 
     /// `ALTER TABLE ... DROP COLUMN`: the column goes out of the text

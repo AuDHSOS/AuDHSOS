@@ -966,3 +966,137 @@ fn a_view_of_the_temp_schema_reads_the_table_of_every_database() {
         "error in view v1: no such table: gone"
     );
 }
+
+/// The views an `ALTER TABLE` resolves, before it writes a statement and
+/// after.
+#[test]
+fn what_a_view_an_alter_no_longer_resolves_refuses() {
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    ran(
+        &mut writer,
+        &[
+            b"CREATE TABLE t1(a,b,c)",
+            b"CREATE TABLE t2(d,e,f)",
+            b"CREATE VIEW v1 AS SELECT a, d FROM t1, t2",
+        ],
+    );
+    // `sqlite3_rename_test` under no alter: the view resolves, so the
+    // rename stands and the view reads the table under its new name.
+    writer.run(b"ALTER TABLE t1 RENAME TO t3").unwrap();
+    // A column renamed to one the other side of the view already holds
+    // leaves the view ambiguous, which the pass after the rename reads.
+    let refused = writer
+        .run(b"ALTER TABLE t2 RENAME COLUMN d TO a")
+        .unwrap_err();
+    assert_eq!(
+        refused.message(),
+        "error in view v1 after rename: ambiguous column name: a"
+    );
+    // A view that names a column no side holds refuses the rename
+    // before it writes a statement.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    ran(
+        &mut writer,
+        &[
+            b"CREATE TABLE t1(a,b)",
+            b"CREATE TABLE t2(c)",
+            b"CREATE VIEW v1 AS SELECT a FROM t1",
+            b"PRAGMA writable_schema=ON",
+            b"UPDATE sqlite_schema SET sql='CREATE VIEW v1 AS SELECT nosuch FROM t1' \
+              WHERE name='v1'",
+            b"PRAGMA writable_schema=OFF",
+        ],
+    );
+    assert_eq!(
+        writer
+            .run(b"ALTER TABLE t2 RENAME TO t4")
+            .unwrap_err()
+            .message(),
+        "error in view v1: no such column: nosuch"
+    );
+    // A view whose statement answers a list of rows names no side, and
+    // one that holds an aggregate is resolved by its columns alone.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    ran(
+        &mut writer,
+        &[
+            b"CREATE TABLE t1(a,b)",
+            b"CREATE TABLE t2(c)",
+            b"CREATE VIEW listed AS VALUES(1),(2)",
+            b"CREATE VIEW grouped AS SELECT count(a), group_concat(b ORDER BY a) FROM t1",
+            b"CREATE VIEW windowed AS SELECT row_number() OVER (ORDER BY a) FROM t1",
+        ],
+    );
+    writer.run(b"ALTER TABLE t2 RENAME TO t4").unwrap();
+    what_a_view_of_a_chain_and_of_another_database_resolves();
+}
+
+/// The second half: the chain a view names, a view another database
+/// holds, and the alter a `DROP COLUMN` refusal names.
+fn what_a_view_of_a_chain_and_of_another_database_resolves() {
+    // A chain of views longer than the reader follows is refused rather
+    // than followed until the stack gives out.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a)").unwrap();
+    writer.run(b"CREATE VIEW v0 AS SELECT a FROM t").unwrap();
+    for at in 1..40 {
+        let sql = alloc::format!("CREATE VIEW v{at} AS SELECT a FROM v{}", at - 1);
+        writer.run(sql.as_bytes()).unwrap();
+    }
+    let image = writer.written();
+    let database = Database::open(&image).unwrap();
+    assert!(database.query(b"SELECT a FROM v39").is_err());
+    assert!(database.query(b"SELECT a FROM v20").is_ok());
+    // A name the database holds no view under resolves nothing, which
+    // is what a row of the schema another database holds reads.
+    database.resolved_view(b"nosuch").unwrap();
+    // A view another database holds is passed over, because the name is
+    // read in the database the reader holds as its own.
+    let mut held = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    ran(
+        &mut held,
+        &[
+            b"CREATE TABLE t1(a)",
+            b"CREATE VIEW v1 AS SELECT nosuch FROM t1",
+        ],
+    );
+    let beside = held.written();
+    let mut bare = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    bare.run(b"CREATE TABLE t1(a)").unwrap();
+    let alone = bare.written();
+    Database::open(&alone)
+        .unwrap()
+        .attaching(b"other", &beside)
+        .unwrap()
+        .resolved_view(b"v1")
+        .unwrap();
+    // A view of the temp schema is resolved against the tables of every
+    // database, and the views the other databases hold are passed over.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    ran(
+        &mut writer,
+        &[
+            b"CREATE TABLE t1(a,b)",
+            b"CREATE TABLE t2(c)",
+            b"CREATE VIEW held AS SELECT a FROM t1",
+            b"CREATE TEMP VIEW mine AS SELECT a FROM t1",
+        ],
+    );
+    writer.run(b"ALTER TABLE t2 RENAME TO t4").unwrap();
+    // A `DROP COLUMN` names the alter the refusal carries.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    ran(
+        &mut writer,
+        &[
+            b"CREATE TABLE t1(a,b)",
+            b"CREATE VIEW v1 AS SELECT b FROM t1",
+        ],
+    );
+    assert_eq!(
+        writer
+            .run(b"ALTER TABLE t1 DROP COLUMN b")
+            .unwrap_err()
+            .message(),
+        "error in view v1 after drop column: no such column: b"
+    );
+}

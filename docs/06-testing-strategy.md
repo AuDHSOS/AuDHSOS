@@ -7856,6 +7856,48 @@ Document 16 step Q8. Every answer is the one the C library's shell writes.
 - A `FROM` of 65 and of 100 sides, which are refused.
 - Two statements of 64 sides, one written inside the other, which stand.
 
+### 6.6.373 The `WITH` terms a statement reaches (`db-sqlite`)
+
+Document 16 step Q8. Every answer is the one the C library's shell writes.
+
+- A term that names a table no schema holds, which no name of the
+  statement reaches: the statement stands.
+- A term reached through another term: answered.
+- A term the statement names twice, and a table it names twice: read
+  once.
+- A term a core of a compound reaches, and one a statement inside an
+  expression reaches: answered.
+- A term the terms of a window name, both under a `WINDOW` clause and
+  under an `OVER`: answered.
+- A term a `WITH` written inside the statement names: answered.
+- Two terms that read each other, read by the statement: refused
+  `circular reference: a`.
+- Three terms where the statement reaches the circle through the first:
+  refused `circular reference: b`, the term the walk reaches twice.
+
+### 6.6.372 The views an `ALTER TABLE` resolves (`db-sqlite`)
+
+Document 16 step Q8. Every answer is the one the C library's shell writes.
+
+- A view over two tables, renamed: the rename stands.
+- A column renamed to one the other side of the view already holds: the
+  rename is refused `error in view v1 after rename: ambiguous column
+  name: a`.
+- A view naming a column no side holds: the rename is refused
+  `error in view v1: no such column: nosuch` before it writes a
+  statement.
+- A view whose statement answers a list of rows, one holding an
+  aggregate, and one holding a window function: the rename stands.
+- A view of the temp schema: resolved against the tables of every
+  database.
+- A view another database holds: passed over.
+- A `DROP COLUMN` of a column a view names: refused
+  `error in view v1 after drop column: no such column: b`.
+- A view that names itself, and two views that name each other: refused
+  `view v is circularly defined`.
+- A chain of 40 views: refused by the count of views the reader follows,
+  which the C library holds no bound of.
+
 ### 6.6.371 A `DROP TABLE` of a table rows point at (`db-sqlite`)
 
 Document 16 step Q8. Every answer is the one the C library's shell writes.

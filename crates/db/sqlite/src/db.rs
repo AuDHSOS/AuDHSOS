@@ -440,6 +440,8 @@ pub enum Error {
     /// The table an `UPDATE` changes named again in its `FROM`, as it
     /// was written there.
     TargetInFrom(Vec<u8>),
+    /// A view whose statement names the view itself, with its name.
+    CircularView(Vec<u8>),
     /// A `TABLE.*` written in a `RETURNING`.
     ReturningStar,
     /// A table an `ALTER TABLE` left in a state the schema cannot be
@@ -847,6 +849,9 @@ impl Error {
             }
             Error::Unrecognized(token) => {
                 alloc::format!("unrecognized token: \"{}\"", shown(token))
+            }
+            Error::CircularView(name) => {
+                alloc::format!("view {} is circularly defined", shown(name))
             }
             Error::ReturningStar => {
                 alloc::string::String::from("RETURNING may not use \"TABLE.*\" wildcards")
@@ -1448,8 +1453,13 @@ struct Scope<'a> {
     schema: bool,
 }
 
-/// How many views deep a statement is answered, which is what
-/// `SQLITE_MAX_VIEW_DEPTH` bounds a view that names itself by.
+/// How many views deep a statement is answered, which bounds the walk
+/// of a chain of views to what the stack holds.
+///
+/// `sqlite3ViewGetColumnNames` of `research/sqlite/src/build.c:2540`
+/// bounds a view that names itself by the mark it writes while it works
+/// the columns out and holds a chain of views to nothing else, so a
+/// chain longer than this is refused here and answered there.
 const VIEW_DEPTH: u32 = 32;
 
 /// How many databases an `ATTACH` may add to one connection, which is
@@ -2068,6 +2078,10 @@ pub struct Database<'a> {
     /// The lines an `EXPLAIN QUERY PLAN` collects while the statement
     /// under it runs, and nothing where no such statement runs.
     planned: core::cell::RefCell<Option<Vec<Explained>>>,
+    /// The views whose statements are being answered now, innermost
+    /// last, which is what `nCol==-1` of `sqlite3ViewGetColumnNames`
+    /// marks a view with while its columns are worked out.
+    viewing: core::cell::RefCell<Vec<Vec<u8>>>,
     /// What the connection has written, which `changes()`,
     /// `total_changes()` and `last_insert_rowid()` answer.
     counted: crate::func::Counted,
@@ -2476,6 +2490,7 @@ impl<'a> Database<'a> {
             ignored: core::cell::RefCell::new(Vec::new()),
             stepped: core::cell::Cell::new(Stepped::default()),
             planned: core::cell::RefCell::new(None),
+            viewing: core::cell::RefCell::new(Vec::new()),
             counted: crate::func::Counted::default(),
             naming: Naming::default(),
             defined: &[],
@@ -2954,6 +2969,18 @@ impl<'a> Database<'a> {
                     && view.name.eq_ignore_ascii_case(&named.name)
             })
             .ok_or_else(|| Error::NoTable(named.shown.clone()))?;
+        // `sqlite3ViewGetColumnNames` of
+        // `research/sqlite/src/build.c:2540` marks a view whose columns
+        // are being worked out, so a view the statement of that view
+        // names again is refused by name.
+        if self
+            .viewing
+            .borrow()
+            .iter()
+            .any(|held| held.eq_ignore_ascii_case(&view.name))
+        {
+            return Err(Error::CircularView(view.name.clone()));
+        }
         if scope.views >= VIEW_DEPTH {
             return Err(Error::Unsupported);
         }
@@ -2970,9 +2997,11 @@ impl<'a> Database<'a> {
         // The body of a view reads a bare name under the database that
         // holds the view, which `sqlite3FixSrcList` of
         // `research/sqlite/src/attach.c:500` writes into every name of it.
-        let mut answered = self
-            .statement(&view.arena, view.select, &view.sql, inner)
-            .map_err(|error| named_under(error, &self.named_place(view.place)))?;
+        self.viewing.borrow_mut().push(view.name.clone());
+        let answered = self.statement(&view.arena, view.select, &view.sql, inner);
+        self.viewing.borrow_mut().pop();
+        let mut answered =
+            answered.map_err(|error| named_under(error, &self.named_place(view.place)))?;
         // `sqlite3ViewGetColumnNames` refuses a column list of another
         // width than the statement answers.
         let written = view.columns.len();
@@ -4040,6 +4069,117 @@ impl<'a> Database<'a> {
 
     /// One core of a statement. `whole` asks for the `ORDER BY` and the
     /// `LIMIT`, which belong to a core only where it is the statement.
+    /// Resolves the statement of the view `name` and answers no row,
+    /// which is `sqlite3SelectPrep` over the statement of a view that
+    /// `sqlite3_rename_test` of `research/sqlite/src/alter.c:2075` reads
+    /// before an `ALTER TABLE` writes one statement of the schema.
+    ///
+    /// A name the database holds no view under resolves nothing, which is
+    /// what a row of the schema another database holds reads here.
+    ///
+    /// Resolving one view costs O(n) in the expressions of its statement
+    /// and O(m) in the rows of each table its `FROM` names, because a
+    /// statement inside it is answered where it stands.
+    ///
+    /// # Errors
+    ///
+    /// Whatever resolving a name of the statement refuses.
+    pub(crate) fn resolved_view(&self, name: &[u8]) -> Result<(), Error> {
+        let Some(view) = self
+            .views
+            .iter()
+            .find(|view| view.place == 0 && view.name.eq_ignore_ascii_case(name))
+        else {
+            return Ok(());
+        };
+        let scope = Scope {
+            terms: &[],
+            outer: None,
+            views: 0,
+            schema: self.temp != Some(view.place),
+        };
+        self.resolved(&view.arena, view.select, &view.sql, scope)
+    }
+
+    /// Resolves every core of one statement and answers no row.
+    ///
+    /// # Errors
+    ///
+    /// Whatever resolving a name of one core refuses.
+    fn resolved(
+        &self,
+        arena: &Arena,
+        id: SelectId,
+        sql: &[u8],
+        scope: Scope<'_>,
+    ) -> Result<(), Error> {
+        let first = arena.select(id).ok_or(Error::Unsupported)?;
+        let held = self.terms(arena, &first, sql, scope)?;
+        let scope = Scope {
+            terms: &held,
+            outer: scope.outer,
+            views: scope.views,
+            schema: scope.schema,
+        };
+        let mut at = Some(id);
+        while let Some(id) = at {
+            let select = arena.select(id).ok_or(Error::Unsupported)?;
+            self.resolved_core(arena, id, sql, scope)?;
+            at = select.compound.map(|(_, next)| next);
+        }
+        Ok(())
+    }
+
+    /// The same for one core of a statement, which is the reading half of
+    /// [`Self::core`] without the walk that answers the rows.
+    ///
+    /// # Errors
+    ///
+    /// Whatever resolving a name of the core refuses.
+    fn resolved_core(
+        &self,
+        arena: &Arena,
+        id: SelectId,
+        sql: &[u8],
+        scope: Scope<'_>,
+    ) -> Result<(), Error> {
+        let select = arena.select(id).ok_or(Error::Unsupported)?;
+        // A core that answers a list of rows names no side, so every
+        // name of it stands for a value and nothing is resolved.
+        if !select.values.is_empty() {
+            return Ok(());
+        }
+        let reach = Reach {
+            database: self,
+            arena,
+            sql,
+            scope,
+            columns: select.columns,
+        };
+        counted_sides(arena, &select)?;
+        let sides = self.sides(arena, &select, sql, scope)?;
+        let shape = shape(arena, &select, sql, &sides, self.naming, self.collating)?;
+        let names: Vec<Vec<u8>> = shape
+            .columns
+            .iter()
+            .map(|column| column.name.clone())
+            .collect();
+        let collations = self.collations(&shape);
+        keys(arena, &select, sql, &names, &collations, self.collating)?;
+        subqueries(arena, &select)?;
+        nested_aggregates(arena, &select, sql, self.grouped)?;
+        let calls = aggregates(arena, &select, sql, Some(&sides), self.grouped)?;
+        let overs = overs(arena, &select, sql, self.grouped)?;
+        // The pass over a row of nulls reads every expression, and an
+        // aggregate answers a value there only where the walk gathered
+        // its groups, so a statement that holds one is resolved by the
+        // shape and the keys alone.
+        if !calls.is_empty() || !overs.is_empty() {
+            return Ok(());
+        }
+        unread(arena, &select, sql, &sides, reach, self.collation())
+    }
+
     fn core(
         &self,
         arena: &Arena,
@@ -4536,6 +4676,11 @@ impl<'a> Database<'a> {
             }
             waiting.push((name, cte));
         }
+        // A term no name of the statement reaches is never answered, so
+        // it refuses nothing: `sqlite3WithPush` resolves a term where a
+        // name reaches it.
+        let held = waiting.clone();
+        waiting.retain(|(name, _)| reaches_term(arena, select, sql, name, &held));
         // A term reads the terms beside it, whichever was written
         // first, so the one that reads no other is answered first and
         // the ones that read it follow. A turn that answers none of
@@ -4562,14 +4707,14 @@ impl<'a> Database<'a> {
                 }
             }
             if later.len() == held {
-                // A term the statement never reads is left unanswered,
-                // which is what the C library does by answering a term
-                // where it is read; only a circle the statement reaches
-                // refuses it.
-                return match circling(arena, select, sql, &later) {
-                    Some(name) => Err(Error::Circular(name)),
-                    None => Ok(out),
-                };
+                // Every term left is one a name of the statement
+                // reaches, so a turn that answered none of them leaves
+                // only terms that read each other: the refusal names the
+                // one the statement reads itself, and the first of them
+                // where it reaches the circle through another term.
+                return Err(Error::Circular(
+                    circled(arena, select, sql, &later).unwrap_or_default(),
+                ));
             }
             waiting = later;
         }
@@ -9736,21 +9881,176 @@ fn holds_term(arena: &Arena, select: &Select, sql: &[u8], wanted: &[u8]) -> bool
         .any(|cte| dequote(cte.name.text(sql)).eq_ignore_ascii_case(wanted))
 }
 
-/// The term a circle is named after, which is the one the statement
-/// reads, and nothing where the statement reads none of them.
+/// Every name of a table the statement writes, in its own `FROM`, in
+/// the statements of its expressions, in the cores it is joined to and
+/// in the statements of its `FROM`.
 ///
-/// `sqlite3WithPush` names the term the resolver reached the circle
-/// through, and a term no statement reads is never resolved at all.
-fn circling(
+/// The terms of the statement's own `WITH` are left alone, because they
+/// are the terms being decided; [`named_select`] reads the terms of
+/// every statement written inside this one.
+fn named_tables(arena: &Arena, select: &Select, sql: &[u8], out: &mut Vec<Vec<u8>>) {
+    for source in arena.sources(select.from) {
+        match source.kind {
+            SourceKind::Table {
+                schema: None, name, ..
+            } => out.push(dequote(name.text(sql))),
+            SourceKind::Select(id) => named_select(arena, id, sql, out),
+            _ => {}
+        }
+    }
+    for root in roots(arena, select) {
+        named_deeper(arena, root, sql, out);
+    }
+    // A `WINDOW` clause names its windows outside the expressions, and
+    // the terms of a window hold statements of their own.
+    for named in arena.named_windows(select.windows) {
+        named_window(arena, named.window, sql, out);
+    }
+    if let Some((_, next)) = select.compound {
+        named_select(arena, next, sql, out);
+    }
+}
+
+/// The same for the terms of one window.
+///
+/// The offsets of a frame are read for no name, because
+/// `windowCheckValue` of `research/sqlite/src/window.c:1163` holds an
+/// offset to a constant and a statement is none.
+fn named_window(arena: &Arena, id: WindowId, sql: &[u8], out: &mut Vec<Vec<u8>>) {
+    arena.window(id).into_iter().for_each(|window| {
+        for term in arena.children(window.partition) {
+            named_deeper(arena, *term, sql, out);
+        }
+        for term in arena.orders(window.order) {
+            named_deeper(arena, term.expr, sql, out);
+        }
+    });
+}
+
+/// The same for the statement `id`, which stands inside another one.
+///
+/// The bodies of the terms of a `WITH` this statement writes are read as
+/// well, because a term of it may name a term of the `WITH` outside it.
+/// The terms of the outermost statement are the ones being decided, so
+/// [`named_tables`] leaves them alone.
+fn named_select(arena: &Arena, id: SelectId, sql: &[u8], out: &mut Vec<Vec<u8>>) {
+    arena.select(id).into_iter().for_each(|select| {
+        for cte in arena.ctes(select.ctes) {
+            named_select(arena, cte.select, sql, out);
+        }
+        named_tables(arena, &select, sql, out);
+    });
+}
+
+/// The same for the statements one expression holds.
+fn named_deeper(arena: &Arena, id: ExprId, sql: &[u8], out: &mut Vec<Vec<u8>>) {
+    arena.node(id).into_iter().for_each(|node| {
+        if let Node::Subquery(select) | Node::Exists(select) | Node::InSelect { select, .. } = node
+        {
+            named_select(arena, select, sql, out);
+        }
+        if let Node::Over { window, .. } = node {
+            named_window(arena, window, sql, out);
+        }
+        arena.under(node, |child| {
+            named_deeper(arena, child, sql, out);
+        });
+    });
+}
+
+/// Whether the statement reaches the term `name`, through its own names
+/// or through a term it reaches.
+///
+/// `sqlite3WithPush` of `research/sqlite/src/select.c:5649` resolves a
+/// term where a name reaches it, so a term no statement names is never
+/// answered and refuses nothing.
+///
+/// The walk is O(n) in the nodes of the statement and of the terms.
+fn reaches_term(
     arena: &Arena,
     select: &Select,
     sql: &[u8],
-    later: &[(Vec<u8>, &crate::ast::Cte)],
+    name: &[u8],
+    held: &[(Vec<u8>, &crate::ast::Cte)],
+) -> bool {
+    let mut named = Vec::new();
+    named_tables(arena, select, sql, &mut named);
+    let mut read: Vec<Vec<u8>> = Vec::new();
+    while let Some(wanted) = named.pop() {
+        if read.iter().any(|held| held.eq_ignore_ascii_case(&wanted)) {
+            continue;
+        }
+        read.push(wanted.clone());
+        if wanted.eq_ignore_ascii_case(name) {
+            return true;
+        }
+        // A name that reaches a term reaches every name of that term.
+        for (_, cte) in held
+            .iter()
+            .filter(|(held, _)| held.eq_ignore_ascii_case(&wanted))
+        {
+            named_select(arena, cte.select, sql, &mut named);
+        }
+    }
+    false
+}
+
+/// The term a circle of terms closes at, which is the one the resolver
+/// reaches twice, and nothing where the terms the statement reaches hold
+/// no circle.
+///
+/// `sqlite3WithPush` of `research/sqlite/src/select.c:5649` marks a term
+/// while it resolves it, so the name it reaches again names the circle:
+/// `a` reading `b` and `b` reading `a` closes at `a` where the statement
+/// reads `a`, and `a` reading `b`, `b` reading `c` and `c` reading `b`
+/// closes at `b`.
+///
+/// The walk is O(n) in the terms and O(m) in the nodes of each.
+fn circled(
+    arena: &Arena,
+    select: &Select,
+    sql: &[u8],
+    held: &[(Vec<u8>, &crate::ast::Cte)],
 ) -> Option<Vec<u8>> {
-    later
+    let mut named = Vec::new();
+    named_tables(arena, select, sql, &mut named);
+    let mut path = Vec::new();
+    let mut done = Vec::new();
+    named
+        .into_iter()
+        .find_map(|name| walked_term(arena, sql, held, &name, (&mut path, &mut done)))
+}
+
+/// The same from one name, with the names the walk stands inside and the
+/// names it has read already.
+fn walked_term(
+    arena: &Arena,
+    sql: &[u8],
+    held: &[(Vec<u8>, &crate::ast::Cte)],
+    name: &[u8],
+    walk: (&mut Vec<Vec<u8>>, &mut Vec<Vec<u8>>),
+) -> Option<Vec<u8>> {
+    let (path, done) = walk;
+    if path.iter().any(|held| held.eq_ignore_ascii_case(name)) {
+        return Some(name.to_vec());
+    }
+    if done.iter().any(|held| held.eq_ignore_ascii_case(name)) {
+        return None;
+    }
+    let mut named = Vec::new();
+    for (_, cte) in held
         .iter()
-        .find(|(name, _)| reads(arena, select, sql, name))
-        .map(|(name, _)| name.clone())
+        .filter(|(held, _)| held.eq_ignore_ascii_case(name))
+    {
+        named_select(arena, cte.select, sql, &mut named);
+    }
+    path.push(name.to_vec());
+    let found = named
+        .iter()
+        .find_map(|next| walked_term(arena, sql, held, next, (path, done)));
+    path.pop();
+    done.push(name.to_vec());
+    found
 }
 
 /// The operator that stands in front of the core at `at`.

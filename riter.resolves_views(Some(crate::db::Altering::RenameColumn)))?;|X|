@@ -1,0 +1,4 @@
+            writer|writer| writer.resolved())?;
+            writer|writer| writer.resolves_views(Some(crate::db::Altering::RenameColumn)))?;
+        writer|writer| writer.standing(table, &database, run))
+        writer|writer| writer.resolved())?;

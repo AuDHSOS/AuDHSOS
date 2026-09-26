@@ -2290,15 +2290,23 @@ fn what_a_view_refuses() {
     assert!(writer.run(b"DROP TABLE v").is_err());
     assert!(writer.run(b"DROP VIEW nosuch").is_err());
     writer.run(b"DROP VIEW IF EXISTS nosuch").unwrap();
-    // A view that names itself is one the reader stops in rather than
-    // following forever.
+    // A view that names itself is refused by name rather than followed
+    // forever, and so is a pair of views that name each other.
     let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
     writer.run(b"CREATE VIEW v AS SELECT a FROM v").unwrap();
     let written = writer.written();
     let database = Database::open(&written).unwrap();
+    let refused = database.query(b"SELECT a FROM v").unwrap_err();
+    assert_eq!(refused, Error::CircularView(b"v".to_vec()));
+    assert_eq!(refused.message(), "view v is circularly defined");
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE VIEW one AS SELECT a FROM two").unwrap();
+    writer.run(b"CREATE VIEW two AS SELECT a FROM one").unwrap();
+    let written = writer.written();
+    let database = Database::open(&written).unwrap();
     assert_eq!(
-        database.query(b"SELECT a FROM v").err(),
-        Some(Error::Unsupported)
+        database.query(b"SELECT a FROM one").unwrap_err().message(),
+        "view one is circularly defined"
     );
 }
 
@@ -4922,4 +4930,103 @@ fn what_the_integrity_check_finds_of_the_types_a_row_holds() {
         .expect("the record of the row");
     bytes[at + 2] = 15;
     assert_eq!(checked(&bytes), [b"non-REAL value in t.b".to_vec()]);
+}
+
+/// The `WITH` terms a statement reaches, and the circle a statement
+/// reaches through another term.
+#[test]
+fn which_with_terms_a_statement_reaches() {
+    use crate::change::Writer;
+    use crate::db::{Database, Error};
+    let mut writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(x)").unwrap();
+    writer.run(b"INSERT INTO t VALUES(7)").unwrap();
+    let written = writer.written();
+    let database = Database::open(&written).unwrap();
+    // A term no name of the statement reaches is never answered, so a
+    // term that names a table no schema holds refuses nothing.
+    let rows = |sql: &[u8]| database.query(sql).map(|answer| answer.rows);
+    assert_eq!(
+        rows(b"WITH unread AS (SELECT * FROM nosuch) SELECT x FROM t").unwrap(),
+        [[Value::Int(7)]]
+    );
+    // A term reached through another term is answered, and one reached
+    // twice is answered once.
+    assert_eq!(
+        rows(
+            b"WITH inner_ AS (SELECT x FROM t), outer_ AS (SELECT x FROM inner_) \
+               SELECT x FROM outer_"
+        )
+        .unwrap(),
+        [[Value::Int(7)]]
+    );
+    assert_eq!(
+        rows(b"WITH held AS (SELECT x FROM t) SELECT a.x FROM held AS a, held AS b").unwrap(),
+        [[Value::Int(7)]]
+    );
+    // A term a core of a compound reaches, and one a statement written
+    // inside an expression reaches.
+    assert_eq!(
+        rows(b"WITH held AS (SELECT x FROM t) SELECT 1 UNION SELECT x FROM held")
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        rows(b"WITH held AS (SELECT x FROM t) SELECT (SELECT x FROM held)").unwrap(),
+        [[Value::Int(7)]]
+    );
+    // A term a `WITH` written inside the statement names is answered,
+    // because the inner term is read for the names it holds.
+    assert_eq!(
+        rows(
+            b"WITH p AS (SELECT x FROM t) \
+               SELECT * FROM (WITH i AS (SELECT x FROM p) SELECT * FROM i)"
+        )
+        .unwrap(),
+        [[Value::Int(7)]]
+    );
+    // A term the terms of a window name: the window a `WINDOW` clause
+    // names, the window an `OVER` writes, and a frame offset.
+    assert_eq!(
+        rows(
+            b"WITH held AS (SELECT x FROM t) \
+               SELECT sum(x) OVER w FROM t WINDOW w AS \
+               (PARTITION BY (SELECT x FROM held) ORDER BY (SELECT x FROM held))"
+        )
+        .unwrap(),
+        [[Value::Int(7)]]
+    );
+    // A circle the statement reads itself is named after the term it
+    // reads, and one it reaches through another term after the first
+    // term of the circle.
+    assert_eq!(
+        rows(b"WITH a AS (SELECT * FROM b), b AS (SELECT * FROM a) SELECT * FROM a")
+            .unwrap_err()
+            .message(),
+        "circular reference: a"
+    );
+    assert_eq!(
+        rows(
+            b"WITH a AS (SELECT * FROM b), b AS (SELECT * FROM c), c AS (SELECT * FROM b) \
+               SELECT * FROM a"
+        )
+        .unwrap_err(),
+        Error::Circular(b"b".to_vec())
+    );
+    // A name the statement writes twice is read once, whether it names
+    // a term or a table.
+    assert_eq!(
+        rows(b"WITH unread AS (SELECT * FROM nosuch) SELECT p.x FROM t AS p, t AS q")
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        rows(
+            b"WITH a AS (SELECT * FROM b), b AS (SELECT * FROM a)                SELECT p.x FROM t AS p, t AS q, a"
+        )
+        .unwrap_err(),
+        Error::Circular(b"a".to_vec())
+    );
 }

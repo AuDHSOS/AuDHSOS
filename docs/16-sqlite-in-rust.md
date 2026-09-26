@@ -1224,6 +1224,11 @@ Size: L.
 225. The rows a `DROP TABLE` takes away before the table goes, and what
      their keys read of a schema that no longer answers them. Built,
      which D-525 records.
+226. The views an `ALTER TABLE` resolves before and after it writes a
+     statement, and the view that names itself. Built, which D-526
+     records.
+227. The `WITH` terms a statement reaches, and the term a circle of them
+     closes at. Built, which D-527 records.
 
 ### Done when
 
@@ -1233,8 +1238,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 123 553 cases in 844 files, 118 868
-pass, 2490 answer differently, and 2195 name something the engine
+under the `tclsh` of the machine. Of 123 553 cases in 844 files, 118 891
+pass, 2473 answer differently, and 2189 name something the engine
 refuses or a command that needs the C library's internals. The files
 that answer for tens of thousands of rows reach the five-minute
 deadline and are counted with the cases they ran by then. One run over
