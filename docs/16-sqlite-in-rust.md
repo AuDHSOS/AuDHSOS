@@ -1211,6 +1211,8 @@ Size: L.
 219. The `CHECK` of a table the integrity check reads, and the column an
      `ALTER TABLE` adds to rows that break it. Built, which D-519
      records.
+220. The double a record holds that is no number, and the infinity the
+     harness binds. Built, which D-520 records.
 
 ### Done when
 
@@ -1220,8 +1222,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 123 558 cases in 844 files, 118 789
-pass, 2559 answer differently, and 2210 name something the engine
+under the `tclsh` of the machine. Of 123 557 cases in 844 files, 118 806
+pass, 2541 answer differently, and 2210 name something the engine
 refuses or a command that needs the C library's internals. The files
 that answer for tens of thousands of rows reach the five-minute
 deadline and are counted with the cases they ran by then. One run over

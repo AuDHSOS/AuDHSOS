@@ -49,6 +49,16 @@ pub enum Serial {
     Text(usize),
 }
 
+/// The value a double read out of a record stands for: the double, or a
+/// null where it is no number.
+const fn real_or_null(held: f64) -> Value<'static> {
+    if held.is_nan() {
+        Value::Null
+    } else {
+        Value::Real(held)
+    }
+}
+
 impl Serial {
     /// The serial type a header code stands for.
     ///
@@ -122,7 +132,11 @@ impl Serial {
             Serial::Zero => Value::Int(0),
             Serial::One => Value::Int(1),
             Serial::Int(_) => Value::Int(integer(bytes)),
-            Serial::Real => Value::Real(f64::from_bits(double(bytes))),
+            // `serialGet` of `research/sqlite/src/vdbeaux.c:4103` reads a
+            // double that is no number as a null, which is the value
+            // SQLite writes a NaN as, so a file another writer left one
+            // in answers a null.
+            Serial::Real => real_or_null(f64::from_bits(double(bytes))),
             Serial::Blob(_) => Value::Blob(bytes),
             Serial::Text(_) => Value::Text(bytes),
         })

@@ -89,6 +89,18 @@ fn a_double_is_eight_big_endian_bytes() {
         Serial::Real.read(&(-0.0f64).to_be_bytes()),
         Ok(Value::Real(-0.0))
     );
+    // A double that is no number is read as a null, which is the value
+    // SQLite writes a NaN as, so a file another writer left one in
+    // answers a null rather than a number no comparison holds.
+    assert_eq!(Serial::Real.read(&f64::NAN.to_be_bytes()), Ok(Value::Null));
+    assert_eq!(
+        Serial::Real.read(&(-f64::NAN).to_be_bytes()),
+        Ok(Value::Null)
+    );
+    assert_eq!(
+        Serial::Real.read(&f64::INFINITY.to_be_bytes()),
+        Ok(Value::Real(f64::INFINITY))
+    );
 }
 
 #[test]

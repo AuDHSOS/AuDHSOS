@@ -2112,6 +2112,17 @@ proc sqlite3_bind_double {stmt at value} {
     harness_send bind $stmt $at NULL
     return {}
   }
+  # An infinity is written as a literal no double holds, which
+  # `sqlite3AtoF` of `research/sqlite/src/util.c` reads as an infinity of
+  # that sign; `CAST('Inf' AS REAL)` reads nought.
+  if {[string match -nocase *inf* $value]} {
+    if {[string match -* $value]} {
+      harness_send bind $stmt $at -9.0e999
+    } else {
+      harness_send bind $stmt $at 9.0e999
+    }
+    return {}
+  }
   harness_send bind $stmt $at "CAST('$value' AS REAL)"
   return {}
 }

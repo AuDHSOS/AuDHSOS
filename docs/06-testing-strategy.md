@@ -7829,3 +7829,10 @@ Document 16 step Q8. Every answer is the one the C library's shell writes.
   after `PRAGMA ignore_check_constraints`.
 - A `CHECK` that calls a function, which the check reads against the
   connection.
+
+### 6.6.366 A double a record holds that is no number (`db-sqlite`)
+
+Document 16 step Q8. Every answer is the one the C library's shell writes.
+
+- The eight bytes of a NaN and of a negative NaN, which read as a null.
+- The eight bytes of an infinity, which reads as that infinity.

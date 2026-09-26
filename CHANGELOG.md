@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` reads a double of a record that is no number as a null, and the
+  suite harness binds an infinity as a literal no double holds. D-520 records
+  it. Catalog 6.6.366. `nan.test` goes from 31 cases passing to 47, which is
+  every case of the file.
+
 - `db-sqlite` reads every `CHECK` of a table against every row of it in the
   integrity check, and refuses an `ALTER TABLE ... ADD COLUMN` where a row the
   table holds does not hold to what the column added. D-519 records it. Catalog
