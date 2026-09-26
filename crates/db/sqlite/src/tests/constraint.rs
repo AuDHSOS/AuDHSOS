@@ -645,3 +645,72 @@ fn where_a_bound_parameter_of_the_schema_is_refused() {
         alloc::vec![alloc::vec![Value::Null, Value::Int(1)]]
     );
 }
+
+/// An `ALTER TABLE ... ADD COLUMN` is refused where a row the table
+/// already holds does not hold to what the column added, and the
+/// integrity check names the table a `CHECK` fails in.
+#[test]
+fn what_a_column_added_to_rows_that_break_it_is_refused_with() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t7(a,b)".as_slice(),
+        b"INSERT INTO t7 VALUES(1,2),('x',NULL),(3,4)",
+        b"CREATE TABLE s1(a INT) STRICT",
+        b"INSERT INTO s1 VALUES(1)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    for (sql, message) in [
+        (
+            b"ALTER TABLE t7 ADD COLUMN c CHECK(a!=1)".as_slice(),
+            "CHECK constraint failed",
+        ),
+        (
+            b"ALTER TABLE t7 ADD COLUMN d AS (b+1) NOT NULL",
+            "NOT NULL constraint failed",
+        ),
+        (
+            b"ALTER TABLE s1 ADD COLUMN c INT DEFAULT 'x'",
+            "type mismatch on DEFAULT",
+        ),
+    ] {
+        assert_eq!(writer.run(sql).unwrap_err().message(), message, "{sql:?}");
+    }
+    // A column every row holds to is added, and one the table reads no
+    // constraint of leaves the rows unread.
+    writer
+        .run(b"ALTER TABLE t7 ADD COLUMN e CHECK(a!=99)")
+        .unwrap();
+    writer.run(b"ALTER TABLE t7 ADD COLUMN f").unwrap();
+    // The integrity check reads the checks of the table against every
+    // row, which `PRAGMA ignore_check_constraints` leaves unread.
+    let text = |bytes: &[u8]| Value::Text(bytes.to_vec());
+    writer.run(b"CREATE TABLE t8(x,y,CHECK(x<y))").unwrap();
+    writer.run(b"INSERT INTO t8 VALUES(1,2)").unwrap();
+    assert_eq!(
+        writer.run(b"PRAGMA integrity_check").unwrap(),
+        [[text(b"ok")]]
+    );
+    writer.run(b"PRAGMA ignore_check_constraints=ON").unwrap();
+    writer.run(b"UPDATE t8 SET x=9").unwrap();
+    assert_eq!(
+        writer.run(b"PRAGMA integrity_check").unwrap(),
+        [[text(b"ok")]]
+    );
+    writer.run(b"PRAGMA ignore_check_constraints=OFF").unwrap();
+    assert_eq!(
+        writer.run(b"PRAGMA integrity_check").unwrap(),
+        [[text(b"CHECK constraint failed in t8")]]
+    );
+    // A `CHECK` that calls a function reads the functions the
+    // application defined and what the connection says about the schema.
+    writer.run(b"CREATE TABLE t9(a,CHECK(abs(a)<10))").unwrap();
+    writer.run(b"INSERT INTO t9 VALUES(1)").unwrap();
+    writer.run(b"PRAGMA ignore_check_constraints=ON").unwrap();
+    writer.run(b"UPDATE t9 SET a=99").unwrap();
+    writer.run(b"PRAGMA ignore_check_constraints=OFF").unwrap();
+    assert_eq!(
+        writer.run(b"PRAGMA quick_check(t9)").unwrap(),
+        [[text(b"CHECK constraint failed in t9")]]
+    );
+}

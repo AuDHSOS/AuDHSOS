@@ -138,7 +138,7 @@ fn taken_from(mut held: Vec<Vec<u8>>, left: &mut usize) -> Vec<Vec<u8>> {
 /// check cannot read rather than a file it found a problem in.
 pub fn integrity(
     database: &Database<'_>,
-    quick: bool,
+    (quick, checked): (bool, bool),
     (asked, named): (&Checking, &[u8]),
     left: &mut usize,
 ) -> Result<Vec<Vec<u8>>, Error> {
@@ -165,7 +165,7 @@ pub fn integrity(
         pages_used(database, &mut found)?;
     }
     for table in over {
-        rows_held(database, table, quick, &mut found)?;
+        rows_held(database, table, (quick, checked), &mut found)?;
     }
     Ok(found.taken(named, left))
 }
@@ -339,7 +339,7 @@ fn map_pages(image: &Image<'_>) -> Vec<u32> {
 fn rows_held(
     database: &Database<'_>,
     table: &crate::schema::Table,
-    quick: bool,
+    (quick, checked): (bool, bool),
     found: &mut Found,
 ) -> Result<(), Error> {
     let rows = database.held_rows_of(&table.name)?;
@@ -355,10 +355,35 @@ fn rows_held(
     for (at, (key, values)) in rows.iter().enumerate() {
         nulls_held(table, values, found);
         types_held(table, values, found);
+        if checked {
+            checks_held(database, table, values, found)?;
+        }
         for held in &kept {
             row_held(database, table, held, (at, key, values), found)?;
         }
     }
+    Ok(())
+}
+
+/// A `CHECK` of the table one row does not hold to, which the check
+/// names the table in.
+///
+/// `sqlite3Pragma` of `research/sqlite/src/pragma.c:2050` reads the
+/// checks of a table against every row of it, and `PRAGMA
+/// ignore_check_constraints` leaves them unread, which the caller says
+/// with `checked`. Reading one row costs O(c) in the checks.
+fn checks_held(
+    database: &Database<'_>,
+    table: &crate::schema::Table,
+    values: &[Value],
+    found: &mut Found,
+) -> Result<(), Error> {
+    if database.refused_check_of(table, values)?.is_none() {
+        return Ok(());
+    }
+    let mut text = b"CHECK constraint failed in ".to_vec();
+    text.extend_from_slice(&table.name);
+    found.note_row(&text);
     Ok(())
 }
 

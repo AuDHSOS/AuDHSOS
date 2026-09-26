@@ -107,6 +107,15 @@ pub enum Added {
     NonConstant,
     /// A view, which holds no row of its own.
     View,
+    /// A `CHECK` of the table no row of it holds to, which is the check
+    /// over the rows the column was written into.
+    Checked,
+    /// A computed column that holds no null, which a row of the table
+    /// answers one for.
+    Null,
+    /// A value of the wrong type for a `STRICT` table, which the default
+    /// of the column wrote.
+    Mismatched,
 }
 
 impl Added {
@@ -119,6 +128,9 @@ impl Added {
             Added::NotNull => "Cannot add a NOT NULL column with default value NULL",
             Added::NonConstant => "Cannot add a column with non-constant default",
             Added::View => "Cannot add a column to a view",
+            Added::Checked => "CHECK constraint failed",
+            Added::Null => "NOT NULL constraint failed",
+            Added::Mismatched => "type mismatch on DEFAULT",
         }
     }
 }
@@ -3363,6 +3375,33 @@ impl<'a> Database<'a> {
         Ok(None)
     }
 
+    /// The `CHECK` of `table` the row of `values` does not hold to, and
+    /// nothing where the row holds to every one.
+    ///
+    /// `sqlite3Pragma` of `research/sqlite/src/pragma.c:2050` reads every
+    /// `CHECK` of a table against every row of it while the integrity
+    /// check walks the table.
+    ///
+    /// Reading them costs O(c) in the checks of the table.
+    ///
+    /// # Errors
+    ///
+    /// Whatever reading one of the expressions refuses.
+    pub fn refused_check_of(
+        &self,
+        table: &Table,
+        values: &[Value],
+    ) -> Result<Option<Vec<u8>>, Error> {
+        let row = Whole {
+            table,
+            values,
+            encoding: self.encoding,
+            collation: self.collation(),
+            schemed: self.schemed(0),
+        };
+        self.refused_check(&table.name, &row)
+    }
+
     /// Every row of the table of `name`, each with its key and the
     /// values of its columns, which is what a statement that takes rows
     /// out walks to find the rows it takes.
@@ -3807,7 +3846,8 @@ impl<'a> Database<'a> {
                 return Err(Error::NoTable(wanted.clone()));
             }
             let mut left = crate::check::allowed(&asked);
-            let mut found = crate::check::integrity(self, quick, (&asked, &self.named), &mut left)?;
+            let mut found =
+                crate::check::integrity(self, (quick, true), (&asked, &self.named), &mut left)?;
             if found.is_empty() {
                 found.push(b"ok".to_vec());
             }
@@ -10555,6 +10595,59 @@ impl eval::Row for Computed<'_> {
             .position(|held| held.name.eq_ignore_ascii_case(column))?;
         let held = self.table.columns.get(at)?;
         let value = self.values.get(at)?.clone()?;
+        Some((value, held.affinity, held.collation))
+    }
+}
+
+/// One whole row of a table while a `CHECK` of it is read, which is the
+/// row the integrity check reads every `CHECK` against.
+struct Whole<'a> {
+    /// The table.
+    table: &'a Table,
+    /// Its values, one per column.
+    values: &'a [Value],
+    /// What encoding the file keeps its text in.
+    encoding: Encoding,
+    /// What a comparison uses where nothing writes a collation.
+    collation: Collation,
+    /// What the expression of the `CHECK` is read under.
+    schemed: Schemed,
+}
+
+impl eval::Row for Whole<'_> {
+    fn purely(&self) -> Option<crate::date::Purely> {
+        Some(crate::date::Purely::Check)
+    }
+
+    fn defined(&self, name: &[u8], count: usize) -> Option<crate::func::Defined> {
+        crate::func::defined(self.schemed.defined, name, count)
+    }
+
+    fn schemed(&self) -> Option<bool> {
+        self.schemed.schema.then_some(self.schemed.trusted)
+    }
+
+    fn collation(&self) -> Collation {
+        self.collation
+    }
+
+    fn encoding(&self) -> Encoding {
+        self.encoding
+    }
+
+    fn column(
+        &self,
+        _schema: Option<&[u8]>,
+        _table: Option<&[u8]>,
+        column: &[u8],
+    ) -> Option<(Value, Affinity, Collation)> {
+        let at = self
+            .table
+            .columns
+            .iter()
+            .position(|held| held.name.eq_ignore_ascii_case(column))?;
+        let held = self.table.columns.get(at)?;
+        let value = self.values.get(at)?.clone();
         Some((value, held.affinity, held.collation))
     }
 }

@@ -1789,7 +1789,56 @@ impl Writer {
         drop(database);
         crate::tree::update(&mut self.held.pages, crate::image::SCHEMA_ROOT, rowid, &row)?;
         self.held.header.schema_cookie = self.held.header.schema_cookie.saturating_add(1);
-        self.reread(&name, b"add column")
+        self.reread(&name, b"add column")?;
+        self.holds_added(&name)
+    }
+
+    /// Refuses an `ALTER TABLE ... ADD COLUMN` where a row the table
+    /// already holds does not hold to what the column added.
+    ///
+    /// `sqlite3AlterFinishAddColumn` of `research/sqlite/src/alter.c:445`
+    /// reads `PRAGMA quick_check` over the table where the table holds a
+    /// `CHECK`, where the column is computed and holds no null, or where
+    /// the table is `STRICT`, and refuses the first problem the check
+    /// names: a `CHECK` a row does not hold to, a null in a column that
+    /// holds none, and a value of a type a `STRICT` table does not hold.
+    ///
+    /// Reading the rows costs O(n) in them.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Added`] names which of the three the check found.
+    fn holds_added(&self, name: &[u8]) -> Result<(), Error> {
+        let bytes = self.image();
+        let database = self.reading(&bytes)?;
+        let (table, _) = database.table(name).ok_or(Error::NoTable(Vec::new()))?;
+        let computed = table
+            .columns
+            .iter()
+            .any(|column| column.not_null && column.generated != crate::schema::Generated::Never);
+        if table.checks.is_empty() && !computed && !table.strict {
+            return Ok(());
+        }
+        let mut left = 1;
+        let asked = crate::check::Checking::Table(name.to_vec());
+        let read = self.told(b"ignore_check_constraints") == 0;
+        let found = crate::check::integrity(&database, (true, read), (&asked, b"ok"), &mut left)?;
+        // The three problems the check names that the column added, which
+        // the `WHERE` of the statement `sqlite3AlterFinishAddColumn`
+        // writes keeps and every other problem of the table falls out of.
+        let problem = found
+            .first()
+            .map_or(b"".as_slice(), alloc::vec::Vec::as_slice);
+        let added = if problem.starts_with(b"CHECK") {
+            crate::db::Added::Checked
+        } else if problem.starts_with(b"NULL") {
+            crate::db::Added::Null
+        } else if problem.starts_with(b"non-") {
+            crate::db::Added::Mismatched
+        } else {
+            return Ok(());
+        };
+        Err(Error::Added(added))
     }
 
     /// The schema read again after an `ALTER TABLE` wrote a statement
@@ -3053,7 +3102,8 @@ impl Writer {
                 }
                 named = true;
             }
-            let more = crate::check::integrity(&database, quick, (asked, name), &mut left)?;
+            let read = self.told(b"ignore_check_constraints") == 0;
+            let more = crate::check::integrity(&database, (quick, read), (asked, name), &mut left)?;
             found.extend(more);
         }
         if let crate::check::Checking::Table(wanted) = asked

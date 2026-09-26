@@ -7815,3 +7815,17 @@ Document 16 step Q8. Every answer is the one the C library's shell writes.
 - A term whose names count against the columns of its leftmost core, and
   one whose leftmost core answers a `*`.
 - A term that never stops, which the count of rows held in memory ends.
+
+### 6.6.365 A column added to rows that break it (`db-sqlite`)
+
+Document 16 step Q8. Every answer is the one the C library's shell writes.
+
+- A column carrying a `CHECK` a row does not hold to, a computed column
+  that holds no null over a row that answers one, and a column of a
+  `STRICT` table whose default is of another type.
+- A column every row holds to, and a column the table reads no
+  constraint of.
+- The integrity check over a table a row broke a `CHECK` of, before and
+  after `PRAGMA ignore_check_constraints`.
+- A `CHECK` that calls a function, which the check reads against the
+  connection.

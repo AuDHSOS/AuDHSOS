@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` reads every `CHECK` of a table against every row of it in the
+  integrity check, and refuses an `ALTER TABLE ... ADD COLUMN` where a row the
+  table holds does not hold to what the column added. D-519 records it. Catalog
+  6.6.365. `alter3.test` goes from 41 cases passing to 51.
+
 - `db-sqlite` refuses a core of a `WITH` term that reads itself where it answers
   an aggregate or a window function, and counts the names of a term against the
   columns its leftmost core answers. D-518 records it. Catalog 6.6.364.
