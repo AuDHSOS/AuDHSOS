@@ -1171,6 +1171,30 @@ fn what_an_index_or_a_trigger_an_alter_no_longer_resolves_refuses() {
     writer
         .run(b"ALTER TABLE x1 RENAME COLUMN t TO ttt")
         .unwrap();
+    // A statement that names the table without standing over it is read
+    // for the column, which a `REFERENCES` of another table writes.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    ran(
+        &mut writer,
+        &[
+            b"CREATE TABLE p(a INTEGER PRIMARY KEY, b)",
+            b"CREATE TABLE c(x REFERENCES p)",
+        ],
+    );
+    writer.run(b"ALTER TABLE p DROP COLUMN b").unwrap();
+    // A `DROP COLUMN` reads the schema before it writes a statement,
+    // whichever database the connection writes and whether it holds a
+    // temp schema or not.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    ran(&mut writer, &[b"CREATE TABLE t(a,b)"]);
+    // A connection the client handed no temp schema holds none to read.
+    writer.temps(None).unwrap();
+    writer.run(b"ALTER TABLE t DROP COLUMN b").unwrap();
+    assert_eq!(schema(&writer), "table|t|t|CREATE TABLE t(a)|\n");
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    ran(&mut writer, &[b"CREATE TEMP TABLE tt(a,b)"]);
+    writer.run(b"ALTER TABLE temp.tt DROP COLUMN b").unwrap();
+    assert_eq!(temped(&writer), "table|tt|tt|CREATE TABLE tt(a)|\n");
     // The index of a key, which SQLite made itself, holds no statement
     // and is passed over, and so is a name SQLite made.
     let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();

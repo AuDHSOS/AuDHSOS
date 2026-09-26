@@ -1937,8 +1937,7 @@ impl Writer {
         // refuses the rename and leaves the schema as it stands.
         // `isLegacy` of `renameTableFunc` resolves none of them.
         if self.marking() == crate::rename::Marking::Every {
-            self.resolved()?;
-            self.in_temp(|writer| writer.resolved())?;
+            self.resolved_all()?;
         }
         // The temp schema holds views and triggers over the tables of
         // every database, so a rename of a table another database holds
@@ -2045,6 +2044,21 @@ impl Writer {
         let answer = run(self);
         self.switch(at);
         answer
+    }
+
+    /// The schema of the database the connection writes read again, and
+    /// the temp schema beside it.
+    ///
+    /// `renameTestSchema` of `research/sqlite/src/alter.c:53` reads the
+    /// schema of the database the alter names and the temp schema, which
+    /// holds views and triggers over the tables of every database.
+    ///
+    /// # Errors
+    ///
+    /// Whatever reading one of the two schemas refuses.
+    fn resolved_all(&mut self) -> Result<(), Error> {
+        self.resolved()?;
+        self.in_temp(|writer| writer.resolved())
     }
 
     /// Raises where a trigger of the schema the connection writes names
@@ -2668,8 +2682,7 @@ impl Writer {
             return Err(Error::NoSuchColumn(from));
         }
         drop(database);
-        self.resolved()?;
-        self.in_temp(|writer| writer.resolved())?;
+        self.resolved_all()?;
         let written = Column {
             table: &name,
             from: &from,
@@ -2791,6 +2804,9 @@ impl Writer {
         };
         let schema_rowid = self.row_of(&name)?.ok_or(Error::NoTable(Vec::new()))?;
         drop(database);
+        // `renameTestSchema` of `research/sqlite/src/alter.c:2308` reads
+        // the schema before the drop writes a statement.
+        self.resolved_all()?;
         let value = |bytes: &[u8]| Value::Text(bytes.to_vec());
         let row = crate::record::write_in(
             &[

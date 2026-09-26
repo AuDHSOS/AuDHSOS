@@ -7908,6 +7908,9 @@ Document 16 step Q8. Every answer is the one the C library's shell writes.
 - A view another database holds: passed over.
 - A `DROP COLUMN` of a column a view names: refused
   `error in view v1 after drop column: no such column: b`.
+- A `DROP COLUMN` over a schema whose view names a column no table
+  holds: refused `error in view v1: no such column: d` before the drop
+  writes a statement.
 - A view that names itself, and two views that name each other: refused
   `view v is circularly defined`.
 - A chain of 40 views: refused by the count of views the reader follows,
