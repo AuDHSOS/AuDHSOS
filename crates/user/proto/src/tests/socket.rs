@@ -10,8 +10,8 @@ use net_wire::{IpAddr, Ipv4Addr, Ipv6Addr, MacAddr};
 use crate::label::{Label, ProtoError, Protocol};
 use crate::socket::{
     Addresses, DATAGRAM_HEADER_LEN, Direction, Endpoint, INTERFACE, Interface, MAX_ADDRESSES, Name,
-    Opened, Reply, Request, State, TCP_LISTEN, TCP_STATE, UDP_BIND, datagram_header,
-    read_datagram_header,
+    Opened, RESOLVE, Reply, Request, State, TCP_CONNECT, TCP_LISTEN, TCP_STATE, UDP_BIND,
+    UDP_SEND_TO, datagram_header, read_datagram_header,
 };
 
 /// A buffer of zeros to work on.
@@ -257,7 +257,44 @@ fn an_address_family_the_message_does_not_name_is_refused() {
     // The second word of the message is the family; nine names none.
     let mut out = BufferMut::new(&mut bytes);
     assert!(out.set_word(1, 9));
-    assert!(Request::decode(Buffer::new(&bytes)).is_err());
+    assert_eq!(
+        Request::decode(Buffer::new(&bytes)),
+        Err(ProtoError::Message(Protocol::Socket, TCP_CONNECT))
+    );
+}
+
+#[test]
+fn an_unknown_family_in_a_datagram_is_refused_under_its_message() {
+    let mut bytes = buffer();
+    Request::UdpSendTo {
+        socket: 1,
+        len: 4,
+        remote: endpoint(),
+    }
+    .encode(&mut BufferMut::new(&mut bytes))
+    .expect("the request fits");
+    // Socket, length and port precede the family.
+    let mut out = BufferMut::new(&mut bytes);
+    assert!(out.set_word(3, 9));
+    assert_eq!(
+        Request::decode(Buffer::new(&bytes)),
+        Err(ProtoError::Message(Protocol::Socket, UDP_SEND_TO))
+    );
+}
+
+#[test]
+fn an_unknown_family_in_a_resolved_list_is_refused_under_its_message() {
+    let mut bytes = buffer();
+    Reply::Resolved(Ok(addresses()))
+        .encode(&mut BufferMut::new(&mut bytes))
+        .expect("the reply fits");
+    // Status and count precede the first family.
+    let mut out = BufferMut::new(&mut bytes);
+    assert!(out.set_word(2, 9));
+    assert_eq!(
+        Reply::decode(Buffer::new(&bytes)),
+        Err(ProtoError::Message(Protocol::Socket, RESOLVE))
+    );
 }
 
 #[test]

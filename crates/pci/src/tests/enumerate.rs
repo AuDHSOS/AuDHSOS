@@ -8,7 +8,7 @@
 
 use crate::address::{Address, Window};
 use crate::doubles::RecordedConfigSpace;
-use crate::enumerate::{find, walk};
+use crate::enumerate::{Buses, find, walk};
 use crate::header::Kind;
 use crate::tests::build::{Builder, VIRTIO_NET, one};
 
@@ -122,4 +122,75 @@ fn the_device_a_walk_is_looking_for_is_found_by_its_identifiers() {
     assert_eq!(found.address, Address::new(0, 0, 1, 0).unwrap());
     assert_eq!(found.header.device, VIRTIO_NET.1);
     assert_eq!(find(&space, one_bus(), 0x1AF4, 0x1000).unwrap(), None);
+}
+
+/// Every bus `buses` gives out, in order.
+fn drained(buses: &mut Buses) -> Vec<u8> {
+    let mut out = Vec::new();
+    while let Some(bus) = buses.next_bus() {
+        out.push(bus);
+    }
+    out
+}
+
+#[test]
+fn a_bridge_names_its_secondary_bus_and_an_endpoint_names_none() {
+    let mut bridge = Builder::new(0x8086, 0x2918);
+    bridge.header_type(0x01);
+    bridge.byte(0x19, 7);
+    let mut seen = Vec::new();
+    walk(&one(&bridge), one_bus(), |function| {
+        seen.push(function.header.secondary_bus);
+    })
+    .unwrap();
+    assert_eq!(seen, vec![Some(7)]);
+    let mut seen = Vec::new();
+    walk(&one(&Builder::new(0x8086, 0x29C0)), one_bus(), |function| {
+        seen.push(function.header.secondary_bus);
+    })
+    .unwrap();
+    assert_eq!(seen, vec![None]);
+}
+
+#[test]
+fn a_walk_without_a_bridge_covers_the_first_bus_alone() {
+    let mut buses = Buses::new(Window::new(0, 0, 255).unwrap());
+    assert_eq!(drained(&mut buses), vec![0]);
+}
+
+#[test]
+fn the_bus_behind_a_bridge_is_walked_once() {
+    let mut bridge = Builder::new(0x8086, 0x2918);
+    bridge.header_type(0x01);
+    bridge.byte(0x19, 3);
+    let mut space = one(&bridge);
+    Builder::new(0x8086, 0x29C0).install(&mut space, 1, 0);
+    let mut buses = Buses::new(Window::new(0, 0, 255).unwrap());
+    assert_eq!(buses.next_bus(), Some(0));
+    walk(&space, one_bus(), |function| buses.reach_behind(function)).unwrap();
+    buses.reach(3);
+    buses.reach(0);
+    assert_eq!(drained(&mut buses), vec![3]);
+}
+
+#[test]
+fn a_bus_outside_the_window_is_not_walked() {
+    let mut buses = Buses::new(Window::new(0, 4, 8).unwrap());
+    buses.reach(3);
+    buses.reach(9);
+    buses.reach(8);
+    assert_eq!(drained(&mut buses), vec![4, 8]);
+}
+
+#[test]
+fn bridges_that_name_every_bus_twice_give_each_bus_once_lowest_first() {
+    let mut buses = Buses::new(Window::new(0, 0, 255).unwrap());
+    for _ in 0..2 {
+        for bus in (0..=255u8).rev() {
+            buses.reach(bus);
+        }
+    }
+    assert_eq!(drained(&mut buses), (0..=255u8).collect::<Vec<_>>());
+    buses.reach(200);
+    assert_eq!(buses.next_bus(), None, "a bus given out stays given out");
 }

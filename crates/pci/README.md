@@ -6,9 +6,10 @@ this crate knows neither an address space nor a mapping: the enhanced
 configuration access mechanism is arithmetic here, and the adapter that
 holds the mapping calls it rather than deriving the offset again.
 
-What it reads: the type-0 header, the walk over buses and functions, the
-base address registers with size probing, the capability list, the MSI-X
-capability and its table entry, and the vendor capabilities of virtio 1.x.
+What it reads: the type-0 header, the secondary bus of a type-1 header,
+the walk over buses and functions, the base address registers with size
+probing, the capability list, the MSI-X capability and its table entry,
+and the vendor capabilities of virtio 1.x.
 
 Four rules the code keeps and the tests hold it to:
 
@@ -28,10 +29,12 @@ Four rules the code keeps and the tests hold it to:
   publish more than one structure of a type and makes the list order its
   order of preference, so the choice belongs to the driver.
 
-Bridges are read and reported and not descended into. The machine of
+`enumerate::walk` reports a bridge and does not descend into it.
+`enumerate::Buses` names the buses a program that maps one bus at a time
+walks: the first bus of the window and the secondary bus of every bridge
+found, each once (D-196). The machine of
 [03 3.1.1](../../docs/03-target-platform.md) puts its devices on bus 0,
-and a walk that follows secondary bus numbers would have no consumer
-(D-112).
+so the walk maps one bus instead of 256.
 
 PCI-SIG releases its specifications only to members, so the layout
 numbers here cannot be checked against a document kept beside the code

@@ -5,7 +5,8 @@
 //! decodes, and where its capabilities are.
 //!
 //! The layout is the *PCI Express Base Specification* 6.0, section 7.5.1,
-//! the type-0 header.
+//! the type-0 header, and of the type-1 header section 7.5.1.3, the
+//! secondary bus number.
 //!
 //! Invariant: a function whose vendor identifier reads as all ones is
 //! absent, which is an answer and not an error; every other header is read
@@ -38,6 +39,10 @@ pub const BAR0: u16 = 0x10;
 /// Offset of the subsystem identifiers of a type-0 header.
 pub const SUBSYSTEM: u16 = 0x2C;
 
+/// Offset of the secondary bus number of a type-1 header, *PCI Express
+/// Base Specification* 6.0, section 7.5.1.3.
+pub const SECONDARY_BUS: u16 = 0x19;
+
 /// Offset of the pointer to the first capability.
 pub const CAPABILITY_POINTER: u16 = 0x34;
 
@@ -65,8 +70,9 @@ const MULTI_FUNCTION: u8 = 0x80;
 pub enum Kind {
     /// A type-0 header: a device that is not a bridge.
     Endpoint,
-    /// A type-1 header: a bridge to another bus, which this crate reports
-    /// and does not descend into (D-112).
+    /// A type-1 header: a bridge to another bus. [`crate::enumerate::walk`]
+    /// reports it; [`crate::enumerate::Buses`] adds its secondary bus
+    /// (D-196).
     Bridge,
     /// A header type this crate does not lay out.
     Other(u8),
@@ -118,6 +124,8 @@ pub struct Header {
     pub kind: Kind,
     /// The subsystem, for a type-0 header.
     pub subsystem: Option<Subsystem>,
+    /// The bus behind the bridge, for a type-1 header.
+    pub secondary_bus: Option<u8>,
     /// The offset of the first capability, or zero when the function has
     /// no capability list.
     pub capabilities: u8,
@@ -167,6 +175,10 @@ pub fn read(space: &impl ConfigSpace, address: Address) -> Result<Option<Header>
         }),
         Kind::Bridge | Kind::Other(_) => None,
     };
+    let secondary_bus = match kind {
+        Kind::Bridge => Some(read_u8(space, address, SECONDARY_BUS)?),
+        Kind::Endpoint | Kind::Other(_) => None,
+    };
     let capabilities = if status & STATUS_CAPABILITIES == 0 {
         0
     } else {
@@ -184,6 +196,7 @@ pub fn read(space: &impl ConfigSpace, address: Address) -> Result<Option<Header>
         header_type,
         kind,
         subsystem,
+        secondary_bus,
         capabilities,
     }))
 }

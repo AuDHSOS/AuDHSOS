@@ -139,3 +139,33 @@ fn every_error_renders_a_message_and_an_error_code() {
         Error::BufferTooSmall
     );
 }
+
+#[test]
+fn the_readme_and_the_manifest_name_every_protocol() {
+    let readme = include_str!("../../README.md");
+    let manifest = include_str!("../../Cargo.toml");
+    let listed = readme
+        .lines()
+        .skip_while(|line| !line.contains("eight protocols"))
+        .take(2)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let description = manifest
+        .lines()
+        .find(|line| line.starts_with("description"))
+        .unwrap();
+    assert!(readme.contains("eight protocols"));
+    assert_eq!(Protocol::ALL.len(), 8);
+    for protocol in Protocol::ALL {
+        assert!(
+            listed.contains(protocol.name()),
+            "README: {}",
+            protocol.name()
+        );
+        assert!(
+            description.contains(protocol.name()),
+            "Cargo.toml: {}",
+            protocol.name()
+        );
+    }
+}

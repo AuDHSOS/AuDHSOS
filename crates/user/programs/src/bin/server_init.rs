@@ -48,7 +48,7 @@ use audhsos_collections::ArrayVec;
 use pci::address::{Address, BYTES_PER_BUS, Window};
 use pci::bar::{Bar, Space as BarSpace, probe};
 use pci::capability::{ID_MSIX, find, walk};
-use pci::enumerate::walk as enumerate;
+use pci::enumerate::{Buses, walk as enumerate};
 use pci::error::PciError;
 use pci::header::{COMMAND_BUS_MASTER, COMMAND_MEMORY, read_command, write_command};
 use pci::msix;
@@ -1551,7 +1551,9 @@ fn network_device(gate: &mut Gate, world: &mut World) -> Option<Device> {
 /// Every virtio block device of the machine, prepared for a driver.
 ///
 /// The window is mapped one bus at a time, as `app-lspci` maps it and for
-/// the same reason: one bus is one mebibyte of page tables (8.15).
+/// the same reason: one bus is one mebibyte of page tables (8.15). The
+/// buses mapped are the first bus and the buses behind bridges, as
+/// [`pci::enumerate::Buses`] names them (D-196).
 ///
 /// They are handed over in the order the bus has them, which on the
 /// reference machine is the disk the firmware read and then the disk the
@@ -1569,7 +1571,11 @@ fn find_devices(
     let Some((memory, buses)) = window(gate, world) else {
         return Ok(found);
     };
-    for bus in buses.first_bus..=buses.last_bus {
+    let whole = Window::new(buses.segment, buses.first_bus, buses.last_bus)
+        .map_err(pci_error)
+        .step("window")?;
+    let mut reach = Buses::new(whole);
+    while let Some(bus) = reach.next_bus() {
         let offset = u64::from(bus.saturating_sub(buses.first_bus)).saturating_mul(BYTES_PER_BUS);
         let mut mapping =
             Mapping::window(gate, own, memory, BUS, offset, BYTES_PER_BUS).step("bus")?;
@@ -1581,6 +1587,7 @@ fn find_devices(
             buses,
             bus,
             kind,
+            &mut reach,
             &mut found,
         );
         mapping.unmap(gate, own).step("bus back")?;
@@ -1589,10 +1596,11 @@ fn find_devices(
     Ok(found)
 }
 
-/// Prepares every device of this bus and appends it to `found`.
+/// Prepares every device of this bus, appends it to `found`, and adds the
+/// buses behind the bridges of this bus to `reach`.
 #[expect(
     clippy::too_many_arguments,
-    reason = "one bus walk needs the window it reads through, the bus it is on, and the three capabilities a device is prepared with"
+    reason = "one bus walk needs the window it reads through, the bus it is on, the walk it adds to, and the three capabilities a device is prepared with"
 )]
 fn on_one_bus(
     gate: &mut Gate,
@@ -1602,6 +1610,7 @@ fn on_one_bus(
     buses: BusRange,
     bus: u8,
     kind: u16,
+    reach: &mut Buses,
     found: &mut ArrayVec<Device, MAX_BLOCK_DEVICES>,
 ) -> Result<(), Refused> {
     let window = Window::new(buses.segment, bus, bus)
@@ -1615,6 +1624,7 @@ fn on_one_bus(
     let mut addresses = [None; MAX_BLOCK_DEVICES];
     let mut count = 0usize;
     enumerate(&space, window, |function| {
+        reach.reach_behind(function);
         if function.header.vendor == VIRTIO_VENDOR
             && function.header.device == kind
             && let Some(slot) = addresses.get_mut(count)

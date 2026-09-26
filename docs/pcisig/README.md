@@ -12,7 +12,7 @@ be obtained. The two documents this crate cites cannot be.
 
 | Document | Revision | What the crate takes from it |
 |----------|----------|------------------------------|
-| *PCI Express Base Specification* | 6.0 | the type-0 configuration header, the base address registers and their size probing, the capability list, the MSI-X capability and its table entry, the enhanced configuration access mechanism and its address arithmetic |
+| *PCI Express Base Specification* | 6.0 | the type-0 configuration header, the secondary bus number of the type-1 header, the base address registers and their size probing, the capability list, the MSI-X capability and its table entry, the enhanced configuration access mechanism and its address arithmetic |
 | *PCI Firmware Specification* | 3.3 | the `MCFG` ACPI table: the allocation structure, its base address, segment group, and bus range |
 
 Both are at `https://pcisig.com/specifications`, which states the terms:

@@ -16,7 +16,8 @@
 //! hundred and fifty-six of them. The walk therefore maps one bus at a
 //! time, at the same address, and takes it back before the next: the page
 //! tables of one mebibyte are what this program costs, whatever the
-//! firmware published.
+//! firmware published. It maps the first bus and the buses behind bridges
+//! only, as [`pci::enumerate::Buses`] names them (D-196).
 
 #![no_std]
 #![no_main]
@@ -47,7 +48,7 @@ use audhsos_abi::startup::BusRange;
 use pci::address::{Address, BYTES_PER_BUS, Window};
 use pci::bar::{AssignedBar, Space, Width, assigned};
 use pci::capability::{Capability, ID_MSIX, ID_VENDOR, MAX_CAPABILITIES, find, walk};
-use pci::enumerate::walk as enumerate;
+use pci::enumerate::{Buses, walk as enumerate};
 use pci::error::PciError;
 use pci::header::Kind;
 use pci::msix;
@@ -137,10 +138,12 @@ fn report_bus(
     );
     let mut found = 0usize;
     let mut virtio_found = false;
-    for bus in buses.first_bus..=buses.last_bus {
+    let whole = Window::new(buses.segment, buses.first_bus, buses.last_bus).map_err(pci_error)?;
+    let mut reach = Buses::new(whole);
+    while let Some(bus) = reach.next_bus() {
         let offset = u64::from(bus.saturating_sub(buses.first_bus)).saturating_mul(BYTES_PER_BUS);
         let mut mapping = Mapping::window(gate, process, memory, SCRATCH, offset, BYTES_PER_BUS)?;
-        let outcome = report_one_bus(gate, voice, &mut mapping, buses, bus);
+        let outcome = report_one_bus(gate, voice, &mut mapping, buses, bus, &mut reach);
         mapping.unmap(gate, process)?;
         let (count, virtio) = outcome?;
         found = found.saturating_add(count);
@@ -161,14 +164,15 @@ fn report_bus(
     Ok(())
 }
 
-/// Reports the functions of one bus and says whether the virtio network
-/// device was among them.
+/// Reports the functions of one bus, adds the buses behind its bridges to
+/// `reach`, and says whether the virtio network device was among them.
 fn report_one_bus(
     gate: &mut Gate,
     voice: Option<EndpointHandle>,
     mapping: &mut Mapping,
     buses: BusRange,
     bus: u8,
+    reach: &mut Buses,
 ) -> Result<(usize, bool), Error> {
     let window = Window::new(buses.segment, bus, bus).map_err(pci_error)?;
     // SAFETY: the mapping stands until it is unmapped by the caller, it is
@@ -179,6 +183,7 @@ fn report_one_bus(
     let mut addresses = [None; MAX_FUNCTIONS_PER_BUS];
     let mut count = 0usize;
     enumerate(&space, window, |function| {
+        reach.reach_behind(function);
         if let Some(slot) = addresses.get_mut(count) {
             *slot = Some(*function);
             count = count.saturating_add(1);

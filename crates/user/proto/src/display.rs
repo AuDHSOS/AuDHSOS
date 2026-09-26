@@ -274,7 +274,8 @@ impl Request {
     /// [`ProtoError`] for a label of another protocol or another version,
     /// for a message number this protocol does not have, for more
     /// rectangles than a damage set holds, and for a message whose fields
-    /// are not there.
+    /// are not there; [`ProtoError::Message`] with the number of the message
+    /// for a surface number above `u32::MAX`.
     pub fn decode(buffer: Buffer<'_>) -> Result<Self, ProtoError> {
         let mut reader = Reader::new(buffer)?;
         let label = expect(reader.label())?;
@@ -289,14 +290,14 @@ impl Request {
                 })
             }
             PRESENT => {
-                let id = surface_id(reader.word()?)?;
+                let id = surface_id(reader.word()?, PRESENT)?;
                 Ok(Request::Present {
                     id,
                     damage: read_damage(&mut reader)?,
                 })
             }
             DESTROY_SURFACE => Ok(Request::DestroySurface {
-                id: surface_id(reader.word()?)?,
+                id: surface_id(reader.word()?, DESTROY_SURFACE)?,
             }),
             SET_CURSOR => {
                 let (x, y) = unpack(reader.word()?);
@@ -314,9 +315,10 @@ impl Request {
     }
 }
 
-/// The identifier of a surface, which is a number that fits its field.
-fn surface_id(word: u64) -> Result<u32, ProtoError> {
-    u32::try_from(word).map_err(|_| ProtoError::Message(Protocol::Display, PRESENT))
+/// The identifier of a surface, which is a number that fits its field;
+/// `message` names the message in the error.
+fn surface_id(word: u64, message: u16) -> Result<u32, ProtoError> {
+    u32::try_from(word).map_err(|_| ProtoError::Message(Protocol::Display, message))
 }
 
 impl Reply {
@@ -389,7 +391,7 @@ impl Reply {
             }
             (INFO, Err(error)) => Ok(Reply::Screen(Err(error))),
             (CREATE_SURFACE, Ok(())) => Ok(Reply::Created(Ok(Surface {
-                id: surface_id(reader.word()?)?,
+                id: surface_id(reader.word()?, CREATE_SURFACE)?,
                 memory: reader.handle()?,
             }))),
             (CREATE_SURFACE, Err(error)) => Ok(Reply::Created(Err(error))),

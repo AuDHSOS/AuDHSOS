@@ -250,3 +250,11 @@ fn german_altgr_selects_the_third_level_and_release_restores_the_first() {
     keyboard.feed(KeyEvent::up(KeyCode::RightAlt));
     assert_eq!(keyboard.feed(KeyEvent::down(KeyCode::Q)), Some('q'));
 }
+
+#[test]
+fn us_altgr_types_the_first_level() {
+    let mut keyboard = Keyboard::new(Layout::Us);
+    keyboard.feed(KeyEvent::down(KeyCode::RightAlt));
+    assert_eq!(keyboard.feed(KeyEvent::down(KeyCode::Q)), Some('q'));
+    assert_eq!(keyboard.feed(KeyEvent::down(KeyCode::Digit7)), Some('7'));
+}

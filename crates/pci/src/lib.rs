@@ -20,7 +20,7 @@ pub mod virtio;
 pub use address::{Address, CONFIG_SPACE_LEN, MAX_DEVICE, MAX_FUNCTION, Window};
 pub use bar::{Bar, MAX_BARS, Space as BarSpace, Width};
 pub use capability::{Capability, ID_MSIX, ID_VENDOR, MAX_CAPABILITIES};
-pub use enumerate::Function;
+pub use enumerate::{Buses, Function};
 pub use error::PciError;
 pub use header::{Header, Kind, Subsystem};
 pub use msix::{Entry, MsiX};
