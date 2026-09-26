@@ -156,8 +156,12 @@ fn a_solicited_advertisement_makes_the_entry_reachable() {
 }
 
 #[test]
-fn an_unsolicited_advertisement_is_learned_but_does_not_confirm() {
+fn an_unsolicited_advertisement_fills_an_entry_but_does_not_confirm() {
     let mut cache = Cache::new();
+    assert_eq!(
+        cache.resolve(IpAddr::V6(PEER), b"waiting", at(0)),
+        Resolution::Waiting
+    );
     let bytes = advertisement(
         PEER,
         Ipv6Addr::ALL_NODES,
@@ -175,8 +179,22 @@ fn an_unsolicited_advertisement_is_learned_but_does_not_confirm() {
 }
 
 #[test]
+fn an_advertisement_for_an_unknown_target_adds_nothing() {
+    // RFC 4861, section 7.2.5: no entry, no change, solicited or not.
+    let mut cache = Cache::new();
+    for solicited in [false, true] {
+        let bytes = advertisement(PEER, HOST, PEER, Some(PEER_HARDWARE), solicited, true);
+        let packet_bytes = discovery_packet(PEER, HOST, &bytes);
+        let message = read(&packet_bytes).expect("an advertisement");
+        assert!(!on_advertisement(&mut cache, &message, at(1)));
+        assert!(cache.is_empty());
+    }
+}
+
+#[test]
 fn an_advertisement_without_the_override_bit_leaves_a_known_address_alone() {
     let mut cache = Cache::new();
+    cache.resolve(IpAddr::V6(PEER), &[], at(0));
     cache.on_confirmed(IpAddr::V6(PEER), PEER_HARDWARE, at(0));
     let impostor = MacAddr::new([0x00, 0x1B, 0x44, 0x11, 0x3A, 0xFF]);
     let bytes = advertisement(PEER, HOST, PEER, Some(impostor), true, false);
@@ -196,7 +214,7 @@ fn an_advertisement_without_the_override_bit_is_ignored_by_an_entry_that_is_not_
     // RFC 4861, section 7.2.5 I (b): there is nothing to demote, and the
     // address is still not taken.
     let mut cache = Cache::new();
-    cache.on_observed(IpAddr::V6(PEER), PEER_HARDWARE, at(0));
+    cache.learn(IpAddr::V6(PEER), PEER_HARDWARE, at(0));
     assert_eq!(cache.state(IpAddr::V6(PEER)), Some(NeighborState::Stale));
     let impostor = MacAddr::new([0x00, 0x1B, 0x44, 0x11, 0x3A, 0xFF]);
     let bytes = advertisement(PEER, HOST, PEER, Some(impostor), true, false);
@@ -423,32 +441,26 @@ fn believed(reference: &Reference) -> Seen {
     }
 }
 
-/// What the model says an advertisement or a solicitation that carries
-/// `hardware` does, and whether it changes anything.
+/// What the model says an unsolicited claim of `hardware` does, and
+/// whether it changes anything.
 ///
-/// This is `on_observed` as RFC 4861, section 7.2.5 II has it, with the
-/// one departure the crate documents: a `Reachable` entry is never moved
-/// to a different address by a claim this host did not ask for, whatever
-/// the override bit says.
-fn observe(reference: &mut Reference, hardware: MacAddr) -> bool {
-    let reachable = reference.now.saturating_add(Timers::DEFAULT.reachable);
+/// This is RFC 4861, section 7.2.5 II with the one departure the crate
+/// documents: a `Reachable` entry does not change on a claim this host did
+/// not ask for, whatever the override bit says. `create` is whether the
+/// claim may add an unknown neighbor, which only a solicitation may.
+fn observe(reference: &mut Reference, hardware: MacAddr, create: bool) -> bool {
     match reference.entry.as_mut() {
-        Some(entry) if entry.state == NeighborState::Reachable => {
-            if entry.hardware != hardware {
-                return false;
-            }
-            entry.deadline = reachable;
-            true
-        }
+        Some(entry) if entry.state == NeighborState::Reachable => false,
         Some(entry) => {
+            let changed = entry.state != NeighborState::Stale || entry.hardware != hardware;
             entry.hardware = hardware;
             entry.state = NeighborState::Stale;
             entry.deadline = Instant::MAX;
             entry.solicits = 0;
             reference.reached |= reached::STALE;
-            true
+            changed
         }
-        None => {
+        None if create => {
             reference.entry = Some(Believed {
                 state: NeighborState::Stale,
                 hardware,
@@ -459,6 +471,7 @@ fn observe(reference: &mut Reference, hardware: MacAddr) -> bool {
             reference.reached |= reached::STALE;
             true
         }
+        None => false,
     }
 }
 
@@ -599,28 +612,26 @@ fn apply_advertisement(
             _ => false,
         }
     } else if solicited {
+        // Only an entry with a solicitation outstanding is confirmed.
         let deadline = reference.now.saturating_add(timers.reachable);
         match reference.entry.as_mut() {
-            Some(entry) => {
+            Some(entry)
+                if matches!(
+                    entry.state,
+                    NeighborState::Incomplete | NeighborState::Delay | NeighborState::Probe
+                ) =>
+            {
                 entry.hardware = hardware;
                 entry.state = NeighborState::Reachable;
                 entry.deadline = deadline;
                 entry.solicits = 0;
+                reference.reached |= reached::REACHABLE;
+                true
             }
-            None => {
-                reference.entry = Some(Believed {
-                    state: NeighborState::Reachable,
-                    hardware,
-                    deadline,
-                    solicits: 0,
-                    waiting: false,
-                });
-            }
+            _ => observe(reference, hardware, false),
         }
-        reference.reached |= reached::REACHABLE;
-        true
     } else {
-        observe(reference, hardware)
+        observe(reference, hardware, false)
     };
     if changed == expected {
         return Ok(());
@@ -642,7 +653,7 @@ fn apply_solicitation(
     let packet_bytes = discovery_packet(PEER, group, &bytes);
     let message = read(&packet_bytes).map_err(|error| error.to_string())?;
     let changed = on_solicitation(&mut station.cache, PEER, &message, station.now);
-    let expected = observe(reference, hardware);
+    let expected = observe(reference, hardware, true);
     if changed == expected {
         return Ok(());
     }

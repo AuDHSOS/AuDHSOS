@@ -641,11 +641,10 @@ pub fn answers(message: &Discovery<'_>, address: Ipv6Addr) -> bool {
 /// Takes what a neighbor advertisement said into the cache, and answers
 /// whether it changed anything.
 ///
-/// A solicited advertisement is evidence: this host asked, and the node
-/// that holds the address answered, so the entry becomes reachable. An
-/// unsolicited one is not, and goes in the way a gratuitous ARP does —
-/// which is to say it never replaces the address of an entry this host is
-/// actively using.
+/// A solicited advertisement makes an entry with a solicitation
+/// outstanding reachable. An unsolicited one goes in the way a gratuitous
+/// ARP does: a `Reachable` entry does not change. Neither creates an entry
+/// (RFC 4861, section 7.2.5).
 ///
 /// The override bit is honored on top of that, and it is a check the
 /// cache cannot make for itself: it does not know the bit exists.
@@ -685,10 +684,9 @@ pub fn on_advertisement<const ENTRIES: usize, const PENDING: usize>(
         return cache.on_conflict(address);
     }
     if solicited {
-        cache.on_confirmed(address, hardware, now);
-        return true;
+        return cache.on_confirmed(address, hardware, now);
     }
-    cache.on_observed(address, hardware, now)
+    cache.on_observed(address, hardware)
 }
 
 /// Takes the source link-layer address of a neighbor solicitation into
@@ -713,5 +711,5 @@ pub fn on_solicitation<const ENTRIES: usize, const PENDING: usize>(
     let Some(hardware) = options.source_link_layer() else {
         return false;
     };
-    cache.on_observed(IpAddr::V6(source), hardware, now)
+    cache.learn(IpAddr::V6(source), hardware, now)
 }

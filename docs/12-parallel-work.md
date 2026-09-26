@@ -344,8 +344,8 @@ destination, and the states of RFC 4861 — `Incomplete`, `Reachable`,
 retransmission schedule is a function of `Instant`.
 
 ARP fills the IPv4 half from here: request and reply encoding, with
-gratuitous ARP accepted for refresh but never allowed to replace a
-reachable entry with a different address, which is the cheap half of
+gratuitous ARP leaving a reachable entry and its timer unchanged and
+never replacing its address with a different one, which is the cheap half of
 ARP-spoofing resistance and costs one comparison. The IPv6 half is filled
 by Neighbor Discovery, which is `ICMPv6` and therefore lives in
 `net-ipv6`; it writes into this cache rather than keeping a second one

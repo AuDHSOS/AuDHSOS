@@ -95,6 +95,8 @@ fn an_arp_request_for_this_hosts_address_is_answered() {
     let reply = &frames[0];
     assert_eq!(ether_type_of(reply), EtherType::ARP);
     assert_eq!(destination_of(reply), PEER_MAC);
+    // Padded to the Ethernet minimum (issue #327).
+    assert_eq!(reply.len(), net_eth::HEADER_LEN + net_eth::MIN_PAYLOAD_LEN);
     let packet = arp_of(reply);
     assert_eq!(packet.operation, net_eth::Operation::Reply);
     assert_eq!(packet.sender_protocol, HERE);
@@ -131,6 +133,109 @@ fn an_arp_request_for_another_address_is_not_answered() {
     let mut rng = rng();
     let other = Ipv4Addr::new(192, 168, 1, 77);
     assert!(drain(&mut stack, Some(&arp_request(other)), start(), &mut rng).is_empty());
+}
+
+/// An ARP reply to this host that says `sender` holds `hardware`.
+fn arp_reply_from(hardware: MacAddr, sender: Ipv4Addr) -> Vec<u8> {
+    let request = net_eth::Packet::request(MAC, HERE, sender);
+    let reply = net_eth::Packet::reply_to(&request, hardware);
+    let mut payload = [0u8; 64];
+    let mut writer = net_wire::Writer::new(&mut payload);
+    reply.write(&mut writer).expect("room");
+    let len = writer.position();
+    crate::tests::harness::frame(MAC, hardware, EtherType::ARP, &payload[..len])
+}
+
+/// A stack with a datagram held for `PEER`, whose ARP request is out.
+fn resolving<'a>(stack: &mut Stack<'a, 4, 2>, datagrams: &'a mut [u8]) {
+    let mut rng = rng();
+    let socket = stack
+        .bind(None, Port::new(9999), datagrams)
+        .expect("a socket");
+    stack
+        .send_to(socket, IpAddr::V4(PEER), Port::new(53), b"x", start())
+        .expect("it waits");
+    let frames = drain(stack, None, start(), &mut rng);
+    assert_eq!(frames.len(), 1);
+    assert_eq!(arp_of(&frames[0]).operation, net_eth::Operation::Request);
+}
+
+/// A station that is not the peer.
+const ATTACKER: MacAddr = MacAddr::new([0x02, 0x66, 0x66, 0x66, 0x66, 0x66]);
+
+#[test]
+fn an_unsolicited_arp_reply_adds_no_entry() {
+    // Issue #278: only a request addressed to this host adds its sender.
+    let mut outgoing = [0u8; 4096];
+    let mut stack: Stack<'_, 4, 2> = configured(&mut outgoing);
+    let mut rng = rng();
+    drain(
+        &mut stack,
+        Some(&arp_reply_from(PEER_MAC, PEER)),
+        start(),
+        &mut rng,
+    );
+    assert_eq!(stack.neighbors().state(IpAddr::V4(PEER)), None);
+    assert!(stack.neighbors().is_empty());
+}
+
+#[test]
+fn an_unsolicited_arp_reply_does_not_move_a_reachable_neighbor() {
+    // Issue #275: the peer answered, and an attacker replies after it.
+    let mut outgoing = [0u8; 4096];
+    let mut datagrams = [0u8; 256];
+    let mut stack: Stack<'_, 4, 2> = configured(&mut outgoing);
+    let mut rng = rng();
+    resolving(&mut stack, &mut datagrams);
+    let frames = drain(
+        &mut stack,
+        Some(&arp_reply_from(PEER_MAC, PEER)),
+        start(),
+        &mut rng,
+    );
+    assert_eq!(frames.len(), 1, "the held datagram");
+    assert_eq!(
+        stack.neighbors().state(IpAddr::V4(PEER)),
+        Some(net_eth::NeighborState::Reachable)
+    );
+    drain(
+        &mut stack,
+        Some(&arp_reply_from(ATTACKER, PEER)),
+        start(),
+        &mut rng,
+    );
+    assert_eq!(stack.neighbors().hardware(IpAddr::V4(PEER)), Some(PEER_MAC));
+}
+
+#[test]
+fn an_arp_reply_that_names_no_station_is_not_stored() {
+    // Issue #302: every datagram to the peer would leave as a broadcast.
+    let mut outgoing = [0u8; 4096];
+    let mut datagrams = [0u8; 256];
+    let mut stack: Stack<'_, 4, 2> = configured(&mut outgoing);
+    let mut rng = rng();
+    resolving(&mut stack, &mut datagrams);
+    for hardware in [MacAddr::BROADCAST, MacAddr::UNSPECIFIED] {
+        let frames = drain(
+            &mut stack,
+            Some(&arp_reply_from(hardware, PEER)),
+            start(),
+            &mut rng,
+        );
+        assert!(frames.is_empty(), "{hardware}");
+        assert_eq!(stack.neighbors().hardware(IpAddr::V4(PEER)), None);
+    }
+}
+
+#[test]
+fn an_arp_probe_adds_no_entry_for_the_unspecified_address() {
+    // Issue #304: a probe carries a sender address of `0.0.0.0`.
+    let mut outgoing = [0u8; 4096];
+    let mut stack: Stack<'_, 4, 2> = configured(&mut outgoing);
+    let mut rng = rng();
+    let probe = arp_request_from(PEER_MAC, Ipv4Addr::UNSPECIFIED, HERE);
+    drain(&mut stack, Some(&probe), start(), &mut rng);
+    assert!(stack.neighbors().is_empty());
 }
 
 #[test]
@@ -716,8 +821,9 @@ fn bytes_that_are_not_the_thing_they_claim_to_be_are_dropped() {
     assert!(drain(&mut stack, Some(&broken), start(), &mut rng).is_empty());
 
     // A UDP datagram whose checksum does not verify.
+    // The last byte of the datagram, not of the padded frame.
     let mut frame = udp_frame(HERE, 1024, 4711, b"hello");
-    let last = frame.len() - 1;
+    let last = net_eth::HEADER_LEN + 20 + 8 + b"hello".len() - 1;
     frame[last] ^= 0xFF;
     assert!(drain(&mut stack, Some(&frame), start(), &mut rng).is_empty());
     assert!(stack.socket(socket).expect("it").is_empty());

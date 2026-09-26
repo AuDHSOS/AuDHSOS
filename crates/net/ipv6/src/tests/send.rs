@@ -93,6 +93,7 @@ fn packet_of(frame: &[u8]) -> Vec<u8> {
 fn a_packet_that_fits_goes_out_in_one_frame_with_no_fragment_header() {
     let routes = routes();
     let mut neighbors = Cache::new();
+    neighbors.resolve(IpAddr::V6(PEER), &[], at(0));
     neighbors.on_confirmed(IpAddr::V6(PEER), PEER_HARDWARE, at(0));
     let paths = Paths::new();
 
@@ -123,6 +124,7 @@ fn a_packet_that_fits_goes_out_in_one_frame_with_no_fragment_header() {
 fn a_packet_that_does_not_fit_is_cut_and_reassembles_to_itself() {
     let routes = routes();
     let mut neighbors = Cache::new();
+    neighbors.resolve(IpAddr::V6(PEER), &[], at(0));
     neighbors.on_confirmed(IpAddr::V6(PEER), PEER_HARDWARE, at(0));
     let paths = Paths::new();
 
@@ -162,6 +164,7 @@ fn a_packet_that_does_not_fit_is_cut_and_reassembles_to_itself() {
 fn the_path_mtu_and_not_the_link_decides_how_the_packet_is_cut() {
     let routes = routes();
     let mut neighbors = Cache::new();
+    neighbors.resolve(IpAddr::V6(PEER), &[], at(0));
     neighbors.on_confirmed(IpAddr::V6(PEER), PEER_HARDWARE, at(0));
     let mut paths = Paths::new();
     assert!(paths.on_packet_too_big(PEER, 1280, at(0)));
@@ -292,6 +295,7 @@ fn a_packet_goes_through_the_router_when_the_destination_is_not_on_this_link() {
         ))
         .expect("room");
     let mut neighbors = Cache::new();
+    neighbors.resolve(IpAddr::V6(router), &[], at(0));
     neighbors.on_confirmed(IpAddr::V6(router), PEER_HARDWARE, at(0));
     let paths = Paths::new();
 
@@ -309,6 +313,7 @@ fn a_packet_goes_through_the_router_when_the_destination_is_not_on_this_link() {
 fn a_buffer_too_small_for_the_path_is_refused() {
     let routes = routes();
     let mut neighbors = Cache::new();
+    neighbors.resolve(IpAddr::V6(PEER), &[], at(0));
     neighbors.on_confirmed(IpAddr::V6(PEER), PEER_HARDWARE, at(0));
     let paths = Paths::new();
     let mut buffer = [0u8; 64];
@@ -331,6 +336,7 @@ fn a_buffer_too_small_for_the_path_is_refused() {
 fn an_interface_with_no_room_behind_the_two_headers_cannot_cut_a_packet() {
     let routes = routes();
     let mut neighbors = Cache::new();
+    neighbors.resolve(IpAddr::V6(PEER), &[], at(0));
     neighbors.on_confirmed(IpAddr::V6(PEER), PEER_HARDWARE, at(0));
     let paths = Paths::new();
     let mut buffer = [0u8; net_eth::MTU];
@@ -358,6 +364,7 @@ fn an_interface_with_no_room_behind_the_two_headers_cannot_cut_a_packet() {
 fn what_emit_answers_is_what_send_answers() {
     let routes = routes();
     let mut neighbors = Cache::new();
+    neighbors.resolve(IpAddr::V6(PEER), &[], at(0));
     neighbors.on_confirmed(IpAddr::V6(PEER), PEER_HARDWARE, at(0));
     let paths = Paths::new();
     let mut buffer = [0u8; net_eth::MTU];
@@ -379,6 +386,7 @@ fn what_emit_answers_is_what_send_answers() {
 fn nothing_waiting_sends_nothing() {
     let routes = routes();
     let mut neighbors = Cache::new();
+    neighbors.resolve(IpAddr::V6(PEER), &[], at(0));
     neighbors.on_confirmed(IpAddr::V6(PEER), PEER_HARDWARE, at(0));
     let paths = Paths::new();
     let mut buffer = [0u8; net_eth::MTU];
@@ -398,10 +406,16 @@ fn nothing_waiting_sends_nothing() {
 fn an_empty_payload_is_one_frame_and_not_none() {
     let routes = routes();
     let mut neighbors = Cache::new();
+    neighbors.resolve(IpAddr::V6(PEER), &[], at(0));
     neighbors.on_confirmed(IpAddr::V6(PEER), PEER_HARDWARE, at(0));
     let paths = Paths::new();
     let (sent, frames) = send(&routes, &mut neighbors, &paths, outgoing(), &[]).expect("it goes");
     assert_eq!(sent, Sent::Frames(1));
+    // The frame carries the header and the padding of RFC 894, which the
+    // payload length of the header trims.
     let packet = packet_of(&frames[0]);
-    assert_eq!(packet.len(), HEADER_LEN);
+    assert_eq!(packet.len(), net_eth::MIN_PAYLOAD_LEN);
+    let parsed = Packet::parse(&packet).expect("a well-formed packet");
+    assert!(parsed.payload().is_empty());
+    assert_eq!(packet.get(HEADER_LEN..), Some(&[0u8; 6][..]));
 }

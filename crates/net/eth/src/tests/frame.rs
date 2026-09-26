@@ -14,7 +14,12 @@ use test_support::generators::bytes;
 use test_support::property::check;
 
 use crate::error::EthError;
-use crate::frame::{Frame, HEADER_LEN, MAX_FRAME_LEN, MTU, multicast_hardware, receive};
+use crate::frame::{
+    Frame, HEADER_LEN, MAX_FRAME_LEN, MIN_PAYLOAD_LEN, MTU, multicast_hardware, receive,
+};
+
+/// The shortest frame, header and padded payload.
+const MIN_FRAME_LEN: usize = HEADER_LEN + MIN_PAYLOAD_LEN;
 
 /// The address of the station under test.
 const INTERFACE: MacAddr = MacAddr::new([0x02, 0x00, 0x5E, 0x00, 0x00, 0x01]);
@@ -25,7 +30,7 @@ const PEER: MacAddr = MacAddr::new([0x02, 0x00, 0x5E, 0x00, 0x00, 0x02]);
 /// A frame with `payload_len` bytes behind the header, addressed to the
 /// interface and carrying IPv4.
 fn frame_of(payload_len: usize) -> Vec<u8> {
-    let mut buffer = vec![0u8; HEADER_LEN + payload_len];
+    let mut buffer = vec![0xFFu8; MAX_FRAME_LEN];
     let mut writer = Writer::new(&mut buffer);
     Frame::write(
         &mut writer,
@@ -35,14 +40,31 @@ fn frame_of(payload_len: usize) -> Vec<u8> {
         &vec![0xA5; payload_len],
     )
     .expect("a frame of a length a frame may have");
+    let len = writer.position();
+    buffer.truncate(len);
     buffer
 }
 
 #[test]
-fn a_frame_of_the_minimum_length_is_a_header_and_nothing_else() {
+fn a_short_payload_is_padded_with_zeros_to_the_ethernet_minimum() {
+    // Issue #327: an ARP reply is 28 bytes of payload.
+    let bytes = frame_of(28);
+    assert_eq!(bytes.len(), MIN_FRAME_LEN);
+    let frame = Frame::parse(&bytes).expect("a frame");
+    let (payload, padding) = frame.payload().split_at(28);
+    assert!(payload.iter().all(|byte| *byte == 0xA5));
+    assert!(padding.iter().all(|byte| *byte == 0));
+
+    assert_eq!(frame_of(0).len(), MIN_FRAME_LEN);
+    assert_eq!(frame_of(MIN_PAYLOAD_LEN).len(), MIN_FRAME_LEN);
+    assert_eq!(frame_of(MIN_PAYLOAD_LEN + 1).len(), MIN_FRAME_LEN + 1);
+}
+
+#[test]
+fn a_header_alone_is_a_frame() {
     let bytes = frame_of(0);
-    assert_eq!(bytes.len(), HEADER_LEN);
-    let frame = Frame::parse(&bytes).expect("fourteen bytes are a frame");
+    let header = bytes.get(..HEADER_LEN).expect("fourteen bytes");
+    let frame = Frame::parse(header).expect("fourteen bytes are a frame");
     assert_eq!(frame.destination(), INTERFACE);
     assert_eq!(frame.source(), PEER);
     assert_eq!(frame.ether_type(), EtherType::IPV4);
@@ -84,10 +106,10 @@ fn the_destination_filter_takes_this_station_the_broadcast_and_a_group() {
         (PEER, false),
         (MacAddr::UNSPECIFIED, false),
     ] {
-        let mut buffer = [0u8; HEADER_LEN];
+        let mut buffer = [0u8; MIN_FRAME_LEN];
         let mut writer = Writer::new(&mut buffer);
         Frame::write(&mut writer, destination, PEER, EtherType::IPV4, &[])
-            .expect("a header fits in a header");
+            .expect("a minimum frame fits");
         let frame = Frame::parse(&buffer).expect("a frame");
         assert_eq!(frame.is_for(INTERFACE), accepted, "{destination}");
         assert_eq!(
@@ -100,10 +122,10 @@ fn the_destination_filter_takes_this_station_the_broadcast_and_a_group() {
 
 #[test]
 fn a_type_no_layer_here_reads_is_dropped_and_not_reported() {
-    let mut buffer = [0u8; HEADER_LEN];
+    let mut buffer = [0u8; MIN_FRAME_LEN];
     let mut writer = Writer::new(&mut buffer);
     Frame::write(&mut writer, INTERFACE, PEER, EtherType::new(0x8100), &[])
-        .expect("a header fits in a header");
+        .expect("a minimum frame fits");
     // It parses: the bytes are a frame, and nothing about them is wrong.
     let frame = Frame::parse(&buffer).expect("a frame");
     assert_eq!(frame.ether_type().get(), 0x8100);
@@ -115,26 +137,27 @@ fn a_type_no_layer_here_reads_is_dropped_and_not_reported() {
 #[test]
 fn the_types_this_system_reads_pass_the_filter() {
     for ether_type in [EtherType::IPV4, EtherType::IPV6, EtherType::ARP] {
-        let mut buffer = [0u8; HEADER_LEN];
+        let mut buffer = [0u8; MIN_FRAME_LEN];
         let mut writer = Writer::new(&mut buffer);
-        Frame::write(&mut writer, INTERFACE, PEER, ether_type, &[]).expect("a header");
+        Frame::write(&mut writer, INTERFACE, PEER, ether_type, &[]).expect("a minimum frame");
         assert!(receive(&buffer, INTERFACE).is_some(), "{ether_type}");
     }
 }
 
 #[test]
 fn a_frame_that_does_not_fit_writes_nothing() {
-    let mut buffer = [0u8; HEADER_LEN + 3];
+    // The padding counts: four bytes of payload need a minimum frame.
+    let mut buffer = [0u8; MIN_FRAME_LEN - 1];
     let mut writer = Writer::new(&mut buffer);
     assert_eq!(
         Frame::write(&mut writer, INTERFACE, PEER, EtherType::IPV4, &[1, 2, 3, 4]),
         Err(EthError::Wire(WireError::OutOfBounds {
-            needed: HEADER_LEN + 4,
-            available: HEADER_LEN + 3,
+            needed: MIN_FRAME_LEN,
+            available: MIN_FRAME_LEN - 1,
         }))
     );
     assert_eq!(writer.position(), 0);
-    assert_eq!(buffer, [0u8; HEADER_LEN + 3]);
+    assert_eq!(buffer, [0u8; MIN_FRAME_LEN - 1]);
 }
 
 #[test]
@@ -151,7 +174,7 @@ fn a_payload_past_the_mtu_is_refused_before_the_buffer_is_measured() {
 
 #[test]
 fn the_header_is_written_in_the_order_a_reader_expects() {
-    let mut buffer = [0u8; HEADER_LEN + 2];
+    let mut buffer = [0u8; MIN_FRAME_LEN];
     let mut writer = Writer::new(&mut buffer);
     Frame::write(
         &mut writer,
@@ -165,18 +188,23 @@ fn the_header_is_written_in_the_order_a_reader_expects() {
     assert_eq!(reader.read_mac(), Ok(MacAddr::BROADCAST));
     assert_eq!(reader.read_mac(), Ok(PEER));
     assert_eq!(reader.read_u16(), Ok(EtherType::ARP.get()));
-    assert_eq!(reader.rest(), &[0xDE, 0xAD]);
+    let rest = reader.rest();
+    assert_eq!(rest.get(..2), Some(&[0xDE, 0xAD][..]));
 }
 
 #[test]
 fn what_is_written_is_what_is_read_back() {
     check("frame round trip", &bytes(0..=200), |payload| {
-        let mut buffer = vec![0u8; HEADER_LEN + payload.len()];
+        let mut buffer = vec![0u8; MAX_FRAME_LEN];
         let mut writer = Writer::new(&mut buffer);
         Frame::write(&mut writer, INTERFACE, PEER, EtherType::IPV4, payload)
             .map_err(|error| error.to_string())?;
-        let frame = Frame::parse(&buffer).map_err(|error| error.to_string())?;
-        if frame.payload() == payload.as_slice()
+        let len = writer.position();
+        let written = buffer.get(..len).unwrap_or(&[]);
+        let frame = Frame::parse(written).map_err(|error| error.to_string())?;
+        // The receiver trims the padding by the length of the layer above.
+        if frame.payload().get(..payload.len()) == Some(payload.as_slice())
+            && frame.payload().len() == payload.len().max(MIN_PAYLOAD_LEN)
             && frame.destination() == INTERFACE
             && frame.source() == PEER
         {
