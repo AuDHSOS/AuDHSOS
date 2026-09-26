@@ -6166,29 +6166,25 @@ pub(crate) fn bound_into(sql: &str, bound: &BTreeMap<usize, String>) -> String {
     let bytes = sql.as_bytes();
     let mut out = String::new();
     let mut at = 0;
-    let mut place: usize = 0;
+    // The largest place any parameter so far stands for, which is `nVar`
+    // of `sqlite3ExprAssignVarNumber`: a `?` and a name not written
+    // before take the place after it, and a `?N` raises it only where
+    // `N` is larger.
+    let mut counted: usize = 0;
     let mut names: BTreeMap<String, usize> = BTreeMap::new();
-    // The places are counted as `sqlite3ExprAssignVarNumber` counts
-    // them: a `?` takes the next place, a `?N` takes the place it names,
-    // and a name takes the place it was first written at.
     for (kind, name) in held {
         let mark = find_parameter(bytes, at, kind, &name);
         out.push_str(sql.get(at..mark).unwrap_or(""));
         let width = 1usize.saturating_add(name.len());
         at = mark.saturating_add(width);
-        place = match (kind, name.as_str()) {
-            (b'?', "") => place.saturating_add(1),
-            (b'?', digits) => digits.parse().unwrap_or(place.saturating_add(1)),
-            _ => {
-                if let Some(held) = names.get(&name) {
-                    *held
-                } else {
-                    let held = place.saturating_add(1);
-                    names.insert(name.clone(), held);
-                    held
-                }
-            }
+        let place = match (kind, name.as_str()) {
+            (b'?', "") => counted.saturating_add(1),
+            (b'?', digits) => digits.parse().unwrap_or(counted.saturating_add(1)),
+            _ => *names
+                .entry(written_parameter(kind, &name))
+                .or_insert(counted.saturating_add(1)),
         };
+        counted = counted.max(place);
         out.push_str(bound.get(&place).map_or("NULL", String::as_str));
     }
     out.push_str(sql.get(at..).unwrap_or(""));
@@ -6219,25 +6215,23 @@ fn find_parameter(bytes: &[u8], at: usize, kind: u8, name: &str) -> usize {
 /// `sqlite3ExprAssignVarNumber`.
 pub(crate) fn named_parameters(sql: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
-    let mut place: usize = 0;
+    let mut counted: usize = 0;
     for (kind, name) in parameters(sql) {
         let (held, named) = match (kind, name.as_str()) {
-            (b'?', "") => (place.saturating_add(1), String::new()),
+            (b'?', "") => (counted.saturating_add(1), String::new()),
             (b'?', digits) => (
-                digits.parse().unwrap_or(place.saturating_add(1)),
+                digits.parse().unwrap_or(counted.saturating_add(1)),
                 String::new(),
             ),
             _ => {
-                let mut written = String::new();
-                written.push(char::from(kind));
-                written.push_str(&name);
+                let written = written_parameter(kind, &name);
                 match out.iter().position(|first| *first == written) {
                     Some(at) => (at.saturating_add(1), written),
-                    None => (place.saturating_add(1), written),
+                    None => (counted.saturating_add(1), written),
                 }
             }
         };
-        place = held;
+        counted = counted.max(held);
         while out.len() < held {
             out.push(String::new());
         }
@@ -6245,5 +6239,15 @@ pub(crate) fn named_parameters(sql: &str) -> Vec<String> {
             slot.clone_from(&named);
         }
     }
+    out
+}
+
+/// The text a named parameter is written as, which is the character that
+/// opens it and the name after it, and which two parameters stand for one
+/// place under.
+fn written_parameter(kind: u8, name: &str) -> String {
+    let mut out = String::new();
+    out.push(char::from(kind));
+    out.push_str(name);
     out
 }

@@ -201,6 +201,18 @@ fn the_place_of_a_parameter_is_the_one_it_was_first_written_at() {
     assert_eq!(count_binds("SELECT ?4, ?"), 5);
     assert_eq!(named_parameters("SELECT ?2, ?"), ["", "", ""]);
     assert_eq!(count_binds("SELECT 1"), 0);
+    // A name written again takes the place it stands at, and the largest
+    // place any parameter stands for is what the next one counts from,
+    // so a `?N` below it moves nothing.
+    assert_eq!(
+        named_parameters("INSERT INTO t2(a,b,c,d,e,f) VALUES(:abc,$abc,:abc,$ab,$abc,:abc)"),
+        [":abc", "$abc", "$ab"]
+    );
+    assert_eq!(named_parameters("SELECT ?4, ?2, ?"), ["", "", "", "", ""]);
+    assert_eq!(count_binds("SELECT ?4, ?2, ?"), 5);
+    // Two parameters of the same name under different characters stand
+    // at two places.
+    assert_eq!(named_parameters("SELECT :a, $a, @a"), [":a", "$a", "@a"]);
 }
 
 /// What the tester bound, written into the statement as literals.
@@ -221,6 +233,16 @@ fn what_is_bound_is_written_into_the_statement_as_a_literal() {
     let mut held = BTreeMap::new();
     held.insert(1, "7".to_owned());
     assert_eq!(bound_into("SELECT :a + :a", &held), "SELECT 7 + 7");
+    // The place a name stands at counts from the largest place so far,
+    // which a name written again does not move.
+    let mut three = BTreeMap::new();
+    three.insert(1, "1".to_owned());
+    three.insert(2, "2".to_owned());
+    three.insert(3, "3".to_owned());
+    assert_eq!(
+        bound_into("SELECT :a, $a, :a, @a", &three),
+        "SELECT 1, 2, 1, 3"
+    );
 }
 
 /// The name `sqlite3_next_stmt` answers for each name a connection

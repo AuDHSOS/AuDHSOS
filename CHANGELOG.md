@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- The suite harness counts the place a parameter stands at from the largest
+  place any parameter of the statement stands for, and reads two parameters
+  written under different characters as two. D-521 records it. Catalog 6.6.367.
+  `bind.test` goes from 98 cases passing to 103 and `trace3.test` from 25 to 30.
+
 - `db-sqlite` reads a double of a record that is no number as a null, and the
   suite harness binds an infinity as a literal no double holds. D-520 records
   it. Catalog 6.6.366. `nan.test` goes from 31 cases passing to 47, which is

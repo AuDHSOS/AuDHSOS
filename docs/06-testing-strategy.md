@@ -7836,3 +7836,14 @@ Document 16 step Q8. Every answer is the one the C library's shell writes.
 
 - The eight bytes of a NaN and of a negative NaN, which read as a null.
 - The eight bytes of an infinity, which reads as that infinity.
+
+### 6.6.367 The place a parameter stands at (`xtask`)
+
+Unit tests of `crate::suite`, against what `sqlite3_bind_parameter_name`
+and `sqlite3_bind_parameter_index` answer for the same statement.
+
+- A name written again, which stands at the place it was first written
+  at and moves the count of places nothing.
+- A `?N` below the largest place so far, which the `?` after it counts
+  from that place and not from `N`.
+- Two names under different characters, which stand at two places.
