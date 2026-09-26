@@ -7805,3 +7805,13 @@ Document 16 step Q8. Every answer is the one the C library's shell writes.
 - The two words of its own, `full` and `extra`.
 - The six truth words, `on`, `yes`, `true`, `off`, `no` and `false`.
 - A number, a negative number and a word it does not name.
+
+### 6.6.364 The cores of a recursive `WITH` term (`db-sqlite`)
+
+Document 16 step Q8. Every answer is the one the C library's shell writes.
+
+- A recursive core answering an aggregate, and one carrying a `GROUP BY`.
+- A recursive core answering a window function.
+- A term whose names count against the columns of its leftmost core, and
+  one whose leftmost core answers a `*`.
+- A term that never stops, which the count of rows held in memory ends.

@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` refuses a core of a `WITH` term that reads itself where it answers
+  an aggregate or a window function, and counts the names of a term against the
+  columns its leftmost core answers. D-518 records it. Catalog 6.6.364.
+  `with1.test` goes from 79 cases passing to 83.
+
 - `db-sqlite` takes every word `PRAGMA synchronous` names a level with, and
   changes nothing for the seven pragmas a build without `SQLITE_DEBUG` does not
   hold. D-517 records it. Catalog 6.6.363. `pragma.test` goes from 140 cases

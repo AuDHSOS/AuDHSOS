@@ -454,8 +454,15 @@ pub enum Error {
     /// of the constraint or the text of the expression.
     Check(Vec<u8>),
     /// A `WITH` term that reads itself and answered more rows than
-    /// `RECURSION_ROWS` allows.
+    /// `RECURSION_ROWS` allows, which the C library keeps answering
+    /// until the memory of the machine is gone.
+    Recursed,
+    /// A core of a `WITH` term that reads itself and answers an
+    /// aggregate.
     Recursion,
+    /// A core of a `WITH` term that reads itself and answers a window
+    /// function.
+    RecursiveWindow,
     /// A shape of statement this engine does not answer yet: a `WITH`
     /// term that reads itself under an operator other than `UNION`, a
     /// table-valued function.
@@ -1086,6 +1093,10 @@ impl Error {
                 "the \".\" operator prohibited in index expressions".to_string()
             }
             Error::Recursion => "recursive aggregate queries not supported".to_string(),
+            Error::RecursiveWindow => {
+                "cannot use window functions in recursive queries".to_string()
+            }
+            Error::Recursed => errstr(7).to_string(),
             Error::Eval(error) => error.message(),
             Error::Auth(error) => error.message(),
             other => alloc::format!("{other:?}"),
@@ -4523,12 +4534,64 @@ impl<'a> Database<'a> {
         sql: &[u8],
         scope: Scope<'_>,
     ) -> Result<Answered, Error> {
+        counted_names(arena, cte, name)?;
         let mut answered = match self.recursive(arena, cte, name, sql, scope)? {
             Some(answered) => answered,
             None => self.statement(arena, cte.select, sql, scope)?,
         };
         renamed(arena, cte.columns, (sql, name), &mut answered)?;
         Ok(answered)
+    }
+
+    /// Refuses the cores of a `WITH` term that reads itself where one is
+    /// put together under an operator that is neither `UNION` nor `UNION
+    /// ALL`, where one answers an aggregate, or where the last one
+    /// answers a window function.
+    ///
+    /// `sqlite3WindowRewrite` of `research/sqlite/src/select.c:2691`
+    /// refuses a window function of the core the walk answers a row of at
+    /// a time, and the walk over the recursive cores of
+    /// `generateWithRecursiveQuery` of `research/sqlite/src/select.c:2778`
+    /// refuses an aggregate of any of them. The C library reads the
+    /// window of the last core alone, where this reads every recursive
+    /// core, which tells a term of two cores apart from none.
+    ///
+    /// Reading them costs O(n) in the expressions of those cores.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unsupported`], [`Error::RecursiveWindow`] and
+    /// [`Error::Recursion`] name which of the three stands there.
+    fn recursed(
+        &self,
+        arena: &Arena,
+        links: &[Link],
+        (first, split): (usize, Compound),
+        sql: &[u8],
+    ) -> Result<(), Error> {
+        // `multiSelect` refuses a recursive core under an operator that
+        // is neither `UNION` nor `UNION ALL`.
+        if links.iter().skip(first).any(|link| {
+            link.operator
+                .is_some_and(|operator| !matches!(operator, Compound::Union | Compound::UnionAll))
+        }) || !matches!(split, Compound::Union | Compound::UnionAll)
+        {
+            return Err(Error::Unsupported);
+        }
+        for core in links
+            .iter()
+            .skip(first)
+            .filter_map(|link| arena.select(link.id))
+        {
+            if !overs(arena, &core, sql, self.grouped)?.is_empty() {
+                return Err(Error::RecursiveWindow);
+            }
+            let calls = aggregates(arena, &core, sql, None, self.grouped)?;
+            if !calls.is_empty() || !core.group.is_empty() {
+                return Err(Error::Recursion);
+            }
+        }
+        Ok(())
     }
 
     /// A `WITH` term that reads itself, which is
@@ -4562,15 +4625,7 @@ impl<'a> Database<'a> {
         let Some(split) = before(&links, first) else {
             return Err(Error::Unsupported);
         };
-        // `multiSelect` refuses a recursive core under an operator that
-        // is neither `UNION` nor `UNION ALL`.
-        if links.iter().skip(first).any(|link| {
-            link.operator
-                .is_some_and(|operator| !matches!(operator, Compound::Union | Compound::UnionAll))
-        }) || !matches!(split, Compound::Union | Compound::UnionAll)
-        {
-            return Err(Error::Unsupported);
-        }
+        self.recursed(arena, &links, (first, split), sql)?;
         let mut answered = self.started(arena, &links, first, sql, scope)?;
         renamed(arena, cte.columns, (sql, name), &mut answered)?;
         let collations = self.collations(&answered.shape);
@@ -4656,7 +4711,7 @@ impl<'a> Database<'a> {
                     add(&mut rows, new, once, &collations);
                 }
                 if rows.len() > RECURSION_ROWS {
-                    return Err(Error::Recursion);
+                    return Err(Error::Recursed);
                 }
             }
         }
@@ -9659,6 +9714,33 @@ fn renamed(
         *name = dequote(span.text(sql));
     }
     Ok(())
+}
+
+/// Refuses a `WITH` term whose names count against the columns its
+/// leftmost core answers.
+///
+/// `sqlite3WalkSelect` of `research/sqlite/src/select.c:5826` reads the
+/// leftmost core of the term for the columns it answers and counts the
+/// names against that core, so `WITH i(x) AS (SELECT 1,2 UNION ALL
+/// SELECT 1)` is refused for the two values of the leftmost core before
+/// the cores are put together. A core whose width a `*` stands for is
+/// counted where the rows are read.
+///
+/// The count costs O(n) in the columns of that core.
+fn counted_names(arena: &Arena, cte: &crate::ast::Cte, name: &[u8]) -> Result<(), Error> {
+    let written = arena.names(cte.columns);
+    if written.is_empty() {
+        return Ok(());
+    }
+    let links = chain(arena, cte.select);
+    let counted = links
+        .first()
+        .and_then(|link| width_of(arena, link.id))
+        .filter(|width| *width != written.len());
+    match counted {
+        Some(width) => Err(Error::Names(name.to_vec(), width, written.len())),
+        None => Ok(()),
+    }
 }
 
 /// Puts one row behind the rows a recursive term has answered, unless

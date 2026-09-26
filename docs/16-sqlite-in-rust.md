@@ -1206,6 +1206,8 @@ Size: L.
 217. The levels a `PRAGMA synchronous` takes, and the seven pragmas a
      build without `SQLITE_DEBUG` does not hold. Built, which D-517
      records.
+218. The refusals the cores of a recursive `WITH` term are held to.
+     Built, which D-518 records.
 
 ### Done when
 
@@ -1215,8 +1217,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 123 545 cases in 844 files, 118 758
-pass, 2576 answer differently, and 2211 name something the engine
+under the `tclsh` of the machine. Of 123 550 cases in 844 files, 118 768
+pass, 2571 answer differently, and 2211 name something the engine
 refuses or a command that needs the C library's internals. The files
 that answer for tens of thousands of rows reach the five-minute
 deadline and are counted with the cases they ran by then. One run over

@@ -3259,13 +3259,67 @@ fn what_a_with_term_that_reads_itself_refuses() {
         assert!(database.query(sql).is_err(), "{sql:?}");
     }
     // A term that does not stop is stopped by the count this crate
-    // answers rows into memory up to.
+    // answers rows into memory up to, where the C library answers rows
+    // until the memory of the machine is gone.
+    let runaway = database.query(
+        b"WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c) SELECT * FROM c LIMIT 3",
+    );
+    assert_eq!(runaway, Err(crate::db::Error::Recursed));
+    assert_eq!(runaway.unwrap_err().message(), "out of memory");
+    // A core that reads the term and answers an aggregate, and the last
+    // core answering a window function.
     assert_eq!(
         database.query(
-            b"WITH RECURSIVE c(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM c) SELECT * FROM c LIMIT 3"
+            b"WITH RECURSIVE c(x) AS (VALUES(1) UNION SELECT count(*) OVER () FROM c) \
+              SELECT * FROM c"
         ),
-        Err(crate::db::Error::Recursion)
+        Err(crate::db::Error::RecursiveWindow)
     );
+    for (sql, message) in [
+        (
+            b"WITH RECURSIVE c(x) AS (VALUES(1) UNION SELECT count(*) FROM c) SELECT * FROM c"
+                .as_slice(),
+            "recursive aggregate queries not supported",
+        ),
+        (
+            b"WITH RECURSIVE c(x) AS (VALUES(1) UNION SELECT x FROM c GROUP BY x) SELECT * FROM c",
+            "recursive aggregate queries not supported",
+        ),
+        (
+            b"WITH RECURSIVE c(x) AS (VALUES(1) UNION SELECT count(*) OVER () FROM c) \
+              SELECT * FROM c",
+            "cannot use window functions in recursive queries",
+        ),
+    ] {
+        assert_eq!(
+            database.query(sql).unwrap_err().message(),
+            message,
+            "{sql:?}"
+        );
+    }
+    // The names of a term are counted against the columns its leftmost
+    // core answers, and against the rows where a `*` stands for the
+    // width of that core.
+    let mut writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t5(a,b)").unwrap();
+    let written = writer.written();
+    let database = Database::open(&written).unwrap();
+    for (sql, message) in [
+        (
+            b"WITH i(x) AS (SELECT 1,2 UNION ALL SELECT 1) SELECT * FROM i".as_slice(),
+            "table i has 2 values for 1 columns",
+        ),
+        (
+            b"WITH i(x) AS (SELECT * FROM t5) SELECT * FROM i",
+            "table i has 2 values for 1 columns",
+        ),
+    ] {
+        assert_eq!(
+            database.query(sql).unwrap_err().message(),
+            message,
+            "{sql:?}"
+        );
+    }
 }
 
 #[test]
