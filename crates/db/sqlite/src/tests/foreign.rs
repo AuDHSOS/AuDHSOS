@@ -922,3 +922,155 @@ fn what_a_row_that_points_at_itself_is_held_to() {
     writer.run(b"UPDATE two SET a = 'z', b = 'z'").unwrap();
     assert_eq!(answered(&writer, "SELECT a, b FROM two"), ["z", "z"]);
 }
+
+/// A `DROP TABLE` takes the rows of the table away before the table
+/// goes, so a key of another table decides whether it may go.
+#[test]
+fn what_a_drop_of_a_table_rows_point_at_does() {
+    let (mut writer, _) = ran(&[
+        "PRAGMA foreign_keys=ON",
+        "CREATE TABLE p(x PRIMARY KEY)",
+        "CREATE TABLE held(y REFERENCES p)",
+        "CREATE TABLE gone(y REFERENCES p ON DELETE CASCADE)",
+        "INSERT INTO p VALUES(1),(2)",
+        "INSERT INTO gone VALUES(1),(2)",
+    ])
+    .unwrap();
+    // A row of a table whose key says `CASCADE` goes with the parent.
+    writer.run(b"DROP TABLE p").unwrap();
+    assert_eq!(answered(&writer, "SELECT count(*) FROM gone"), ["0"]);
+    // A row of a table whose key says nothing refuses the drop.
+    let (mut writer, _) = ran(&[
+        "PRAGMA foreign_keys=ON",
+        "CREATE TABLE p(x PRIMARY KEY)",
+        "CREATE TABLE held(y REFERENCES p)",
+        "INSERT INTO p VALUES(1)",
+        "INSERT INTO held VALUES(1)",
+    ])
+    .unwrap();
+    assert_eq!(writer.run(b"DROP TABLE p"), Err(Error::Foreign));
+    assert_eq!(answered(&writer, "SELECT count(*) FROM p"), ["1"]);
+    // The rows go where nothing points at them, and a table that keeps
+    // its rows under a key of its own is emptied the same way.
+    writer.run(b"DELETE FROM held").unwrap();
+    writer.run(b"DROP TABLE p").unwrap();
+    let (mut writer, _) = ran(&[
+        "PRAGMA foreign_keys=ON",
+        "CREATE TABLE p(x PRIMARY KEY) WITHOUT ROWID",
+        "CREATE TABLE held(y REFERENCES p)",
+        "INSERT INTO p VALUES(1)",
+        "INSERT INTO held VALUES(1)",
+    ])
+    .unwrap();
+    assert_eq!(writer.run(b"DROP TABLE p"), Err(Error::Foreign));
+    // A trigger over the table fires for none of those rows.
+    let (mut writer, _) = ran(&[
+        "PRAGMA foreign_keys=ON",
+        "CREATE TABLE p(x PRIMARY KEY)",
+        "CREATE TABLE held(y REFERENCES p ON DELETE CASCADE)",
+        "CREATE TABLE log(what)",
+        "CREATE TRIGGER t AFTER DELETE ON p BEGIN INSERT INTO log VALUES(old.x); END",
+        "INSERT INTO p VALUES(1)",
+        "INSERT INTO held VALUES(1)",
+    ])
+    .unwrap();
+    writer.run(b"DROP TABLE p").unwrap();
+    assert_eq!(answered(&writer, "SELECT count(*) FROM log"), ["0"]);
+    // A table nothing points at goes with its rows, and a `DROP INDEX`
+    // reads no key.
+    let (mut writer, _) = ran(&[
+        "PRAGMA foreign_keys=ON",
+        "CREATE TABLE alone(x)",
+        "CREATE INDEX i ON alone(x)",
+        "INSERT INTO alone VALUES(1)",
+    ])
+    .unwrap();
+    writer.run(b"DROP INDEX i").unwrap();
+    writer.run(b"DROP TABLE alone").unwrap();
+    // A name the schema holds no table under reads no key: a view, and
+    // a name nothing stands under.
+    writer.run(b"CREATE TABLE t(x)").unwrap();
+    writer.run(b"CREATE VIEW v AS SELECT x FROM t").unwrap();
+    assert!(writer.run(b"DROP TABLE v").is_err());
+    writer.run(b"DROP TABLE IF EXISTS nosuch").unwrap();
+    what_a_drop_reads_of_a_deferred_key();
+}
+
+/// The second half: what a drop reads of a deferred key, of a key the
+/// schema answers no places for, and of the counters.
+fn what_a_drop_reads_of_a_deferred_key() {
+    // A key of the table's own that is deferred is counted down by the
+    // rows the drop takes away.
+    let (mut writer, _) = ran(&[
+        "PRAGMA foreign_keys=ON",
+        "CREATE TABLE p(x PRIMARY KEY)",
+        "CREATE TABLE child(y REFERENCES p DEFERRABLE INITIALLY DEFERRED)",
+        "BEGIN",
+        "INSERT INTO child VALUES(7)",
+        "DROP TABLE child",
+    ])
+    .unwrap();
+    writer.run(b"COMMIT").unwrap();
+    // The parent of a deferred key the drop of the parent left is read
+    // as a table of no rows, so the count the drop of the parent raised
+    // is taken back down and the transaction holds.
+    let (mut writer, _) = ran(&[
+        "PRAGMA foreign_keys=ON",
+        "CREATE TABLE pp(x PRIMARY KEY)",
+        "CREATE TABLE cc(y REFERENCES pp DEFERRABLE INITIALLY DEFERRED)",
+        "CREATE TABLE nn(y REFERENCES pp DEFERRABLE INITIALLY DEFERRED)",
+        "INSERT INTO pp VALUES('abc')",
+        "INSERT INTO cc VALUES('abc')",
+        "INSERT INTO nn VALUES(NULL)",
+        "BEGIN",
+        "DROP TABLE pp",
+        "DROP TABLE nn",
+        "DROP TABLE cc",
+    ])
+    .unwrap();
+    writer.run(b"COMMIT").unwrap();
+    // A key whose parent columns are no key of the parent refuses every
+    // statement but the `DELETE` of a `DROP TABLE`.
+    let (mut writer, _) = ran(&[
+        "PRAGMA foreign_keys=ON",
+        "CREATE TABLE p2(a, b)",
+        "INSERT INTO p2 VALUES(1, 2)",
+        "CREATE TABLE c2(c, d, FOREIGN KEY(c, d) REFERENCES p2(a, b))",
+    ])
+    .unwrap();
+    assert_eq!(
+        writer.run(b"DELETE FROM p2").unwrap_err().message(),
+        "foreign key mismatch - \"c2\" referencing \"p2\""
+    );
+    writer.run(b"DROP TABLE p2").unwrap();
+    // The same where the key belongs to the table the drop takes away,
+    // which the drop of the parent's unique index left unplaceable.
+    let (mut writer, _) = ran(&[
+        "PRAGMA foreign_keys=ON",
+        "CREATE TABLE p4(a, b)",
+        "CREATE UNIQUE INDEX p4i ON p4(a, b)",
+        "CREATE TABLE c4(c, d, e PRIMARY KEY, FOREIGN KEY(c, d) REFERENCES p4(a, b))",
+        "CREATE TABLE g4(z REFERENCES c4)",
+        "INSERT INTO p4 VALUES(1, 2)",
+        "INSERT INTO c4 VALUES(1, 2, 9)",
+        "DROP INDEX p4i",
+    ])
+    .unwrap();
+    writer.run(b"DROP TABLE c4").unwrap();
+    // The rows a drop takes away count as changes.
+    let (mut writer, _) = ran(&[
+        "PRAGMA foreign_keys=ON",
+        "CREATE TABLE p3(x PRIMARY KEY)",
+        "CREATE TABLE c3(y REFERENCES p3)",
+        "INSERT INTO p3 VALUES(1),(2),(3)",
+    ])
+    .unwrap();
+    writer.run(b"DROP TABLE p3").unwrap();
+    let image = writer.written();
+    let counted = Database::open(&image)
+        .unwrap()
+        .counting(writer.counts())
+        .query(b"SELECT changes()")
+        .unwrap();
+    assert_eq!(counted.rows, [[Value::Int(3)]]);
+}

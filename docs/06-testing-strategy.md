@@ -7856,6 +7856,31 @@ Document 16 step Q8. Every answer is the one the C library's shell writes.
 - A `FROM` of 65 and of 100 sides, which are refused.
 - Two statements of 64 sides, one written inside the other, which stand.
 
+### 6.6.371 A `DROP TABLE` of a table rows point at (`db-sqlite`)
+
+Document 16 step Q8. Every answer is the one the C library's shell writes.
+
+- A parent whose child key says `ON DELETE CASCADE`: the drop stands and
+  the child holds no row.
+- A parent whose child key says nothing: the drop is refused
+  `FOREIGN KEY constraint failed` and the parent keeps its rows.
+- The same parent once the child holds no row: the drop stands.
+- A parent that keeps its rows under a key of its own: refused the same
+  way.
+- A parent carrying an `AFTER DELETE` trigger: the trigger's body writes
+  no row.
+- A table no key points at, and the index over it: both drops stand.
+- A table holding a deferred key of its own, dropped inside a
+  transaction: the `COMMIT` stands.
+- A view and a name nothing stands under, under `DROP TABLE`: no key is
+  read.
+- A parent of a deferred key taken away before the child: the `COMMIT`
+  holds, because the child's key is read as one that points at no row.
+- A key whose parent columns are no key of the parent: every statement is
+  refused `foreign key mismatch` and the drop stands, on the parent's
+  side and on the child's.
+- The rows a drop takes away: `changes()` counts them.
+
 ### 6.6.370 A frame that ends before it begins (`db-sqlite`)
 
 Document 16 step Q8. Every answer is the one the C library's shell writes.

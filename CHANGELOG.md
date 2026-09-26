@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` takes every row of a table away before a `DROP TABLE` takes the
+  table, where a key of another table points at it or a deferred key of its own
+  stands, so a child key decides whether the table may go. D-525 records it.
+  Catalog 6.6.371. `e_fkey.test` goes from 882 cases passing to 896,
+  `fkey2.test` from 1184 to 1188 and `without_rowid3.test` from 1168 to 1172.
+
 - `db-sqlite` refuses a frame whose end comes before its beginning with
   `unsupported frame specification` rather than as a syntax error. D-524 records
   it. Catalog 6.6.370. `window6.test` goes from 63 cases passing to 67.

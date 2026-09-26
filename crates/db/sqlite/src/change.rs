@@ -904,6 +904,18 @@ pub struct Peeked<'a> {
 /// `sqlite3_update_hook` told the connection is not.
 pub type Peeking = fn(&Peeked<'_>);
 
+/// Whether a trigger of the table a statement writes runs, which
+/// `disableTriggers` of `research/sqlite/src/sqliteInt.h:3905` holds off
+/// for the `DELETE` a `DROP TABLE` writes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Triggers {
+    /// Every trigger of the table runs.
+    #[default]
+    Run,
+    /// The triggers of the table are held off.
+    Off,
+}
+
 /// A database being written, statement by statement.
 pub struct Writer {
     /// The file the statement running now writes, which is `main` where
@@ -1000,6 +1012,8 @@ pub struct Writer {
     /// this row carries, so every key a `REPLACE` answered is held
     /// against the table again where the count is not nought.
     replacing: u64,
+    /// Whether a trigger of the table a statement writes runs.
+    triggers: Triggers,
     /// The functions the application defined on this connection.
     defined: &'static [crate::func::Defined],
     /// The aggregates the application defined on this connection.
@@ -1149,6 +1163,7 @@ impl Writer {
             firing: Conflict::Unspecified,
             aliased: None,
             replacing: 0,
+            triggers: Triggers::Run,
             defined: &[],
             grouped: &[],
             collating: &[],
@@ -1285,6 +1300,7 @@ impl Writer {
             firing: Conflict::Unspecified,
             aliased: None,
             replacing: 0,
+            triggers: Triggers::Run,
             defined: &[],
             grouped: &[],
             collating: &[],
@@ -2948,6 +2964,59 @@ impl Writer {
         Ok(())
     }
 
+    /// Every row of a table taken away before the table goes, where a
+    /// key of another table points at it or a deferred key of its own
+    /// stands.
+    ///
+    /// `sqlite3FkDropTable` of `research/sqlite/src/fkey.c:736` writes
+    /// that `DELETE` under `disableTriggers`, so the rows fire no
+    /// trigger: a row of a child table is written or the statement is
+    /// refused by what the key says, and a deferred key is counted down.
+    ///
+    /// Taking the rows away costs O(n·m) in the rows of the table and
+    /// the rows of each table that points at it.
+    fn emptied(&mut self, name: &[u8]) -> Result<(), Error> {
+        if !self.holding() {
+            return Ok(());
+        }
+        self.triggers = Triggers::Off;
+        let answered = self.emptying(name);
+        self.triggers = Triggers::Run;
+        answered
+    }
+
+    /// The same once the triggers of the table stand held off.
+    fn emptying(&mut self, name: &[u8]) -> Result<(), Error> {
+        let deferred = {
+            let bytes = self.image();
+            let database = self.reading(&bytes)?;
+            let Some((table, _)) = database.table(name) else {
+                return Ok(());
+            };
+            table.foreign.iter().any(|key| self.deferring(key))
+        };
+        if !deferred && self.pointing(name)?.is_empty() {
+            return Ok(());
+        }
+        let statement = crate::rename::quoted(name);
+        let mut sql = b"DELETE FROM ".to_vec();
+        let start = sql.len();
+        sql.extend_from_slice(&statement);
+        let delete = crate::ast::Delete {
+            schema: None,
+            name: crate::ast::Span {
+                start,
+                len: statement.len(),
+            },
+            alias: None,
+            indexed: crate::ast::Indexed::Unspecified,
+            filter: None,
+            returning: crate::ast::Range::default(),
+        };
+        let arena = Arena::new();
+        self.delete(&arena, &delete, &sql, None).map(|_| ())
+    }
+
     /// `DROP TABLE` and `DROP INDEX`: the rows of `sqlite_schema` that
     /// name it go, and every page of every tree they named goes on the
     /// free list.
@@ -2969,6 +3038,9 @@ impl Writer {
         ) && kept_name(&name)
         {
             return Err(Error::NotDroppable(name));
+        }
+        if asked.kind == crate::ast::Dropped::Table {
+            self.emptied(&name)?;
         }
         let (rowids, mut roots) = self.named(&name, asked.kind)?;
         if rowids.is_empty() {
@@ -6165,6 +6237,12 @@ impl Writer {
         event: crate::ast::TriggerEvent,
         time: crate::ast::TriggerTime,
     ) -> Result<Vec<Firing>, Error> {
+        // `sqlite3FkDropTable` of `research/sqlite/src/fkey.c:736`
+        // writes the `DELETE` of a `DROP TABLE` under
+        // `disableTriggers`, so those rows fire nothing.
+        if self.triggers == Triggers::Off {
+            return Ok(Vec::new());
+        }
         let bytes = self.image();
         let temp = self.called.place == TEMP_PLACE;
         let mut held = Vec::new();
@@ -6757,16 +6835,6 @@ impl Writer {
         let bytes = self.image();
         let database = self.reading(&bytes)?;
         for key in &table.foreign {
-            // The statement was held to keys that point at a table
-            // that is there before a row was read, so the name is one
-            // the schema holds and the refusal is what this reads it
-            // with. `sqlite3FkLocateIndex` names the schema the table
-            // would stand in, which is `main` for every table this
-            // crate holds.
-            let (parent, _) = database
-                .table(&key.table)
-                .ok_or(Error::NoTable(schema_named_as(&key.table)))?;
-            let places = parent_places(&database, (&table.name, key), parent)?;
             let mut wanted = Vec::new();
             for at in &key.columns {
                 wanted.push(at_place(table, values, rowid, *at));
@@ -6776,20 +6844,34 @@ impl Writer {
             if wanted.contains(&Value::Null) {
                 continue;
             }
-            // A row of a table that points at itself is its own parent
-            // where its parent key answers what its child key holds,
-            // which `sqlite3FkCheck` of `research/sqlite/src/fkey.c:379`
-            // compares before it counts the key.
-            if by > 0 && key.table.eq_ignore_ascii_case(&table.name) {
+            // `sqlite3FkCheck` of `research/sqlite/src/fkey.c:936` reads
+            // the parent of a key with `sqlite3FindTable` while the
+            // `DELETE` of a `DROP TABLE` runs, so a key whose parent or
+            // whose places the schema no longer answers is read there as
+            // one that points at no row. Every other statement was held
+            // by [`Self::located`] before a row was read, so the parent
+            // and its places are there.
+            let held = match database.table(&key.table) {
+                Some((parent, _)) => self
+                    .placed_key(&database, (&table.name, key), parent)?
+                    .map(|places| (parent, places)),
+                None => None,
+            };
+            let mut found = false;
+            if let Some((parent, places)) = held {
+                // A row of a table that points at itself is its own
+                // parent where its parent key answers what its child key
+                // holds, which `sqlite3FkCheck` of
+                // `research/sqlite/src/fkey.c:379` compares before it
+                // counts the key.
                 let own: Vec<Value> = places
                     .iter()
                     .map(|at| at_place(table, values, rowid, *at))
                     .collect();
-                if own == wanted {
-                    continue;
-                }
+                let itself = by > 0 && key.table.eq_ignore_ascii_case(&table.name) && own == wanted;
+                found = itself || found_parent(&database, &key.table, parent, &places, &wanted)?;
             }
-            if found_parent(&database, &key.table, parent, &places, &wanted)? {
+            if found {
                 continue;
             }
             if !self.deferring(key) {
@@ -6889,7 +6971,11 @@ impl Writer {
     /// there, and [`Error::ForeignMismatch`] for one that points at
     /// columns that are no key of it.
     fn located(&self, name: &[u8]) -> Result<(), Error> {
-        if !self.holding() {
+        // `sqlite3FkCheck` of `research/sqlite/src/fkey.c:936` reads the
+        // parent of a key with `sqlite3FindTable` while the `DELETE` of a
+        // `DROP TABLE` runs, so a key whose parent or whose index the
+        // schema no longer holds refuses nothing there.
+        if !self.holding() || self.triggers == Triggers::Off {
             return Ok(());
         }
         let bytes = self.image();
@@ -6905,6 +6991,28 @@ impl Writer {
         }
         self.pointing(name)?;
         Ok(())
+    }
+
+    /// The places of a parent key, and nothing where the schema answers
+    /// none of them while the `DELETE` of a `DROP TABLE` runs.
+    ///
+    /// `sqlite3FkCheck` of `research/sqlite/src/fkey.c:1037` passes over
+    /// a key whose index it cannot locate there, where every other
+    /// statement is refused.
+    fn placed_key(
+        &self,
+        database: &Database<'_>,
+        over: (&[u8], &crate::schema::Foreign),
+        parent: &Table,
+    ) -> Result<Option<Vec<usize>>, Error> {
+        match parent_places(database, over, parent) {
+            Ok(places) => Ok(Some(places)),
+            Err(refused) if self.triggers == Triggers::Off => {
+                drop(refused);
+                Ok(None)
+            }
+            Err(refused) => Err(refused),
+        }
     }
 
     /// Every foreign key of every table that points at `name`.
@@ -6924,7 +7032,10 @@ impl Writer {
                 // parent's column decide, so a child column written
                 // under another collation is compared under the
                 // parent's.
-                let under = parent_places(&database, (&table.name, key), parent)?
+                let Some(places) = self.placed_key(&database, (&table.name, key), parent)? else {
+                    continue;
+                };
+                let under = places
                     .iter()
                     .map(|at| {
                         parent
