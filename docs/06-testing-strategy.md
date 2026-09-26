@@ -7856,6 +7856,16 @@ Document 16 step Q8. Every answer is the one the C library's shell writes.
 - A `FROM` of 65 and of 100 sides, which are refused.
 - Two statements of 64 sides, one written inside the other, which stand.
 
+### 6.6.370 A frame that ends before it begins (`db-sqlite`)
+
+Document 16 step Q8. Every answer is the one the C library's shell writes.
+
+- `ROWS BETWEEN CURRENT ROW AND 4 PRECEDING`, refused.
+- `ROWS 4 FOLLOWING`, whose end is the row the walk stands on, refused.
+- `ROWS BETWEEN 4 FOLLOWING AND CURRENT ROW`, refused.
+- `ROWS BETWEEN 4 FOLLOWING AND 2 PRECEDING`, refused.
+- The same under `RANGE` and under `GROUPS`, refused.
+
 ### 6.6.369 The values a `LIMIT` counts (`db-sqlite`)
 
 Document 16 step Q8. Every answer is the one the C library's shell writes.

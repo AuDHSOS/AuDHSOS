@@ -445,6 +445,30 @@ fn what_a_window_refuses() {
     }
 }
 
+/// A frame whose end comes before its beginning is refused with the
+/// words `sqlite3WindowAlloc` writes.
+#[test]
+fn what_a_frame_that_ends_before_it_begins_is_refused_with() {
+    let bytes = rows();
+    for frame in [
+        "ROWS BETWEEN CURRENT ROW AND 4 PRECEDING",
+        "ROWS 4 FOLLOWING",
+        "ROWS BETWEEN 4 FOLLOWING AND CURRENT ROW",
+        "ROWS BETWEEN 4 FOLLOWING AND 2 PRECEDING",
+        "RANGE BETWEEN CURRENT ROW AND 4 PRECEDING",
+        "GROUPS BETWEEN 4 FOLLOWING AND CURRENT ROW",
+    ] {
+        let sql = alloc::format!("SELECT count() OVER (ORDER BY a {frame}) FROM t1");
+        let refused = answered(&bytes, &sql).unwrap_err();
+        assert_eq!(refused, crate::db::Error::FrameBounds, "{sql}");
+        assert_eq!(
+            refused.message(),
+            "unsupported frame specification",
+            "{sql}"
+        );
+    }
+}
+
 #[test]
 fn what_the_parser_refuses_of_a_frame() {
     for sql in [

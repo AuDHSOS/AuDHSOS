@@ -170,6 +170,8 @@ pub enum Expected {
     Where,
     /// Where a frame begins or ends.
     Bound,
+    /// A frame whose end comes before its beginning.
+    FrameBounds,
     /// What a frame excludes, after `EXCLUDE`.
     Exclude,
 }
@@ -2925,7 +2927,7 @@ impl<'a> Parser<'a> {
                 | (Bound::Following(_), Bound::Preceding(_) | Bound::CurrentRow)
         );
         if backwards {
-            return Err(self.error(self.peek(), Expected::Bound));
+            return Err(self.error(self.peek(), Expected::FrameBounds));
         }
         let exclude = if self.eat_keyword(Keyword::Exclude) {
             self.exclude()?

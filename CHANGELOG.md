@@ -7,6 +7,10 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` refuses a frame whose end comes before its beginning with
+  `unsupported frame specification` rather than as a syntax error. D-524 records
+  it. Catalog 6.6.370. `window6.test` goes from 63 cases passing to 67.
+
 - `db-sqlite` counts a `LIMIT` and an `OFFSET` as the whole number
   `OP_MustBeInt` makes of the value, refusing `datatype mismatch` where it makes
   none. D-523 records it. Catalog 6.6.369. `e_select.test` goes from 240 cases

@@ -499,6 +499,10 @@ pub enum Error {
     /// counts in rows or in groups rather than in the values of its
     /// term.
     FrameOffset(bool, bool),
+    /// A frame whose end comes before its beginning, which
+    /// `sqlite3WindowAlloc` of `research/sqlite/src/window.c:1215`
+    /// refuses.
+    FrameBounds,
     /// An `ntile` whose count is not one or more.
     Tiles,
     /// An `nth_value` whose count is not one or more.
@@ -828,6 +832,7 @@ impl Error {
                 if *starting { "starting" } else { "ending" },
                 if *whole { "integer" } else { "number" }
             ),
+            Error::FrameBounds => alloc::string::String::from("unsupported frame specification"),
             Error::Tiles => {
                 alloc::string::String::from("argument of ntile must be a positive integer")
             }
@@ -1185,6 +1190,9 @@ impl Error {
         }
         if error.expected == parse::Expected::RaiseInTrigger {
             return Error::RaiseInTrigger;
+        }
+        if error.expected == parse::Expected::FrameBounds {
+            return Error::FrameBounds;
         }
         match held.filter(|token| !token.is_empty()) {
             Some(token) => Error::Syntax(token.to_vec()),
