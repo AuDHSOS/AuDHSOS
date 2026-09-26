@@ -173,23 +173,40 @@ fn more_rectangles_than_a_damage_set_holds_are_refused() {
     );
 }
 
-#[test]
-fn a_surface_number_above_its_field_is_refused() {
-    let mut bytes = buffer();
-    let mut view = BufferMut::new(&mut bytes);
+/// Encodes `words` under `message` of the display protocol.
+fn words_under(bytes: &mut [u8; SIZE], message: u16, words: &[u64]) {
+    let mut view = BufferMut::new(bytes);
     let mut writer = user_rt::message::Writer::new();
+    for word in words {
+        writer.word(&mut view, *word).unwrap();
+    }
     writer
-        .word(&mut view, u64::from(u32::MAX).saturating_add(1))
+        .finish(&mut view, Label::new(Protocol::Display, message).raw())
         .unwrap();
-    writer
-        .finish(
-            &mut view,
-            Label::new(Protocol::Display, DESTROY_SURFACE).raw(),
-        )
-        .unwrap();
+}
+
+/// A surface number one above its `u32` field.
+const TOO_WIDE: u64 = 0x1_0000_0000;
+
+#[test]
+fn a_surface_number_above_its_field_is_refused_under_its_request() {
+    for message in [PRESENT, DESTROY_SURFACE] {
+        let mut bytes = buffer();
+        words_under(&mut bytes, message, &[TOO_WIDE, 0]);
+        assert_eq!(
+            Request::decode(Buffer::new(&bytes)),
+            Err(ProtoError::Message(Protocol::Display, message))
+        );
+    }
+}
+
+#[test]
+fn a_surface_number_above_its_field_is_refused_under_its_reply() {
+    let mut bytes = buffer();
+    words_under(&mut bytes, CREATE_SURFACE, &[0, TOO_WIDE]);
     assert_eq!(
-        Request::decode(Buffer::new(&bytes)),
-        Err(ProtoError::Message(Protocol::Display, PRESENT))
+        Reply::decode(Buffer::new(&bytes)),
+        Err(ProtoError::Message(Protocol::Display, CREATE_SURFACE))
     );
 }
 

@@ -2458,7 +2458,9 @@ against a checksum table in the test file.
 
 `Protocol::Display = 5` in `user-proto::label`, with catalog rows in
 6.6.56 for the new encodings. Messages: `Info -> { width, height, format }`;
-`CreateSurface { width, height } -> { surface id, memory handle }` (the
+`CreateSurface { width, height, process } -> { surface id, memory handle }`
+(`process` is a handle to the client process with `INFO` only, which the
+server watches to free the surface when the client ends; the
 display server allocates the backing store from the memory server and
 transfers a handle with `READ | WRITE | MAP`); `Present { surface id,
 damage: up to 16 rects }`; `DestroySurface { surface id }`; `SetCursor {
@@ -2466,7 +2468,7 @@ x, y, visible, shape }`, where the shape is the arrow or the double arrow
 of a resize. One full-screen surface per client in this phase; the
 client with the most recent `Present` owns the screen. Errors: `NotFound`
 when no framebuffer exists, `InvalidArgument` for a surface larger than
-the screen, `PermissionDenied` for a surface of another badge.
+the screen, `AccessDenied` for a surface of another badge.
 
 ### 10.9.3 `server-display` (`crates/user/servers/display`)
 

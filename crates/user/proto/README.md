@@ -1,8 +1,9 @@
 # user-proto
 
 The messages the servers of `AuDHSOS` speak, each one a type with `encode`
-and `decode` and no system call in it: the name protocol, the console
-protocol, and the memory protocol.
+and `decode` and no system call in it. `label::Protocol::ALL` lists the
+eight protocols: name, console, memory, parent, display, input, file, and
+socket.
 
 A label carries the version in its high sixteen bits, the protocol in the
 next sixteen, and the message in the low sixteen, so a server can tell a

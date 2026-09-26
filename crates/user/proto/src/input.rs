@@ -132,6 +132,17 @@ pub const RING_PAGE_LEN: usize = 4096;
 /// is 254 records of sixteen and eight bytes over.
 pub const RING_CAPACITY: u32 = 254;
 
+/// [`RING_CAPACITY`] as the array length of [`RingPage::records`].
+#[expect(
+    clippy::as_conversions,
+    reason = "a capacity of 254 widened to the type an array length has, in a const"
+)]
+pub const RING_RECORDS: usize = RING_CAPACITY as usize;
+
+/// Bytes of the page after the records; a capacity that overfills the
+/// page fails to compile here.
+const RING_TAIL: usize = RING_PAGE_LEN - RING_HEADER_LEN - RING_RECORDS * EVENT_LEN;
+
 /// The header of a ring, as it stands in the first twenty-four bytes.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct RingHeader {
@@ -164,9 +175,9 @@ pub struct RingPage {
     /// The fixed capacity; changed values make the ring invalid.
     pub capacity: AtomicU32,
     /// Event records in wire format.
-    pub records: [[AtomicU8; EVENT_LEN]; 254],
+    pub records: [[AtomicU8; EVENT_LEN]; RING_RECORDS],
     /// The unused tail of the page.
-    reserved: [u8; 8],
+    reserved: [u8; RING_TAIL],
 }
 
 const _: () = assert!(core::mem::size_of::<RingPage>() == RING_PAGE_LEN);
@@ -187,8 +198,8 @@ impl RingPage {
             read_seq: AtomicU64::new(0),
             overflow: AtomicU32::new(0),
             capacity: AtomicU32::new(RING_CAPACITY),
-            records: [const { [const { AtomicU8::new(0) }; EVENT_LEN] }; 254],
-            reserved: [0; 8],
+            records: [const { [const { AtomicU8::new(0) }; EVENT_LEN] }; RING_RECORDS],
+            reserved: [0; RING_TAIL],
         }
     }
 

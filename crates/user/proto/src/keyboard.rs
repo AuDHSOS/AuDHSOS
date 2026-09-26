@@ -11,9 +11,12 @@
 //! stands for one.
 //!
 //! Two layouts are carried, `us` and `de`. They differ in the punctuation,
-//! in the two letters the German layout swaps, and in nothing else; a
-//! layout is a table of key, unshifted character, and shifted character,
-//! and a key that is not in the table stands for no character.
+//! in the umlauts and `ß`, in the two letters the German layout swaps, and
+//! in the third level: `de` with the right alt key (`AltGr`) held types the
+//! twelve characters of [`Keyboard::character`] (`@`, `€`, `{` and more)
+//! and nothing on any other key; `us` ignores `AltGr`. A layout is a table
+//! of key, unshifted character, and shifted character, and a key that is
+//! not in the table stands for no character.
 //!
 //! Invariants: the modifier state follows presses and releases and never
 //! goes out of step, because a release of a modifier that was never pressed

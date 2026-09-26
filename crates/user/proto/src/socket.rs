@@ -485,10 +485,10 @@ impl Request {
             UDP_SEND_TO => Ok(Request::UdpSendTo {
                 socket: word32(reader.word()?),
                 len: word32(reader.word()?),
-                remote: read_endpoint(&mut reader)?,
+                remote: read_endpoint(&mut reader, UDP_SEND_TO)?,
             }),
             TCP_CONNECT => Ok(Request::TcpConnect {
-                remote: read_endpoint(&mut reader)?,
+                remote: read_endpoint(&mut reader, TCP_CONNECT)?,
             }),
             UDP_CLOSE => Ok(Request::UdpClose {
                 socket: word32(reader.word()?),
@@ -637,15 +637,15 @@ impl Reply {
                         capacity: octets.len(),
                     });
                 }
-                let addresses = read_addresses(&mut reader)?;
+                let addresses = read_addresses(&mut reader, INTERFACE)?;
                 Ok(Reply::Interface(Ok(Interface {
                     mac: MacAddr::new(octets),
                     addresses,
-                    gateway: read_addresses(&mut reader)?.iter().next(),
+                    gateway: read_addresses(&mut reader, INTERFACE)?.iter().next(),
                     lease,
                 })))
             }
-            (RESOLVE, Ok(())) => Ok(Reply::Resolved(Ok(read_addresses(&mut reader)?))),
+            (RESOLVE, Ok(())) => Ok(Reply::Resolved(Ok(read_addresses(&mut reader, RESOLVE)?))),
             (UDP_BIND, Ok(())) => Ok(Reply::Bound(Ok(read_opened(&mut reader)?))),
             (TCP_CONNECT, Ok(())) => Ok(Reply::Connected(Ok(read_opened(&mut reader)?))),
             (TCP_ACCEPT, Ok(())) => Ok(Reply::Accepted(Ok(read_opened(&mut reader)?))),
@@ -794,17 +794,18 @@ fn write_addresses(
     Ok(())
 }
 
-/// The endpoint that stands next in the message.
-fn read_endpoint(reader: &mut Reader<'_>) -> Result<Endpoint, ProtoError> {
+/// The endpoint that stands next in message `message`.
+fn read_endpoint(reader: &mut Reader<'_>, message: u16) -> Result<Endpoint, ProtoError> {
     let port = port_of(reader.word()?);
     Ok(Endpoint {
-        address: read_address(reader)?,
+        address: read_address(reader, message)?,
         port,
     })
 }
 
-/// The address that stands next in the message.
-fn read_address(reader: &mut Reader<'_>) -> Result<IpAddr, ProtoError> {
+/// The address that stands next in message `message`; an unknown family
+/// or an octet count that does not match it is refused under `message`.
+fn read_address(reader: &mut Reader<'_>, message: u16) -> Result<IpAddr, ProtoError> {
     let family = reader.word()?;
     let mut octets = [0u8; 16];
     let len = reader.bytes(&mut octets)?;
@@ -813,12 +814,12 @@ fn read_address(reader: &mut Reader<'_>) -> Result<IpAddr, ProtoError> {
             octets[0], octets[1], octets[2], octets[3],
         ]))),
         (FAMILY_V6, 16) => Ok(IpAddr::V6(Ipv6Addr::from_octets(octets))),
-        _other => Err(ProtoError::Message(Protocol::Socket, 0)),
+        _other => Err(ProtoError::Message(Protocol::Socket, message)),
     }
 }
 
-/// The list of addresses that stands next in the message.
-fn read_addresses(reader: &mut Reader<'_>) -> Result<Addresses, ProtoError> {
+/// The list of addresses that stands next in message `message`.
+fn read_addresses(reader: &mut Reader<'_>, message: u16) -> Result<Addresses, ProtoError> {
     let count = reader.word()?;
     if count > u64::try_from(MAX_ADDRESSES).unwrap_or(0) {
         return Err(ProtoError::TooLong {
@@ -828,7 +829,7 @@ fn read_addresses(reader: &mut Reader<'_>) -> Result<Addresses, ProtoError> {
     }
     let mut addresses = Addresses::new();
     for _ in 0..count {
-        let _kept = addresses.push(read_address(reader)?);
+        let _kept = addresses.push(read_address(reader, message)?);
     }
     Ok(addresses)
 }

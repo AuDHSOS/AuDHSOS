@@ -10,8 +10,8 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use crate::input::{
     EVENT_LEN, Event, KIND_KEY, KIND_POINTER, KeyCode, KeyEvent, PointerEvent, RING_CAPACITY,
-    RING_HEADER_LEN, RING_PAGE_LEN, Reply, Request, RingReader, RingWriter, SUBSCRIBE, UNSUBSCRIBE,
-    capacity_for,
+    RING_HEADER_LEN, RING_PAGE_LEN, RING_RECORDS, Reply, Request, RingReader, RingWriter,
+    SUBSCRIBE, UNSUBSCRIBE, capacity_for,
 };
 use crate::label::{Label, ProtoError, Protocol};
 
@@ -197,6 +197,14 @@ fn a_ring_over_one_page_holds_the_records_that_fit_into_it() {
     assert_eq!(writer.header().write_seq, 0);
     assert_eq!(writer.header().read_seq, 0);
     assert_eq!(writer.header().overflow, 0);
+}
+
+#[test]
+fn the_page_has_one_record_slot_per_unit_of_capacity() {
+    let slots = RingPage::new().records.len();
+    assert_eq!(slots, RING_RECORDS);
+    assert_eq!(u32::try_from(slots).unwrap(), RING_CAPACITY);
+    assert_eq!(u32::try_from(slots).unwrap(), capacity_for(RING_PAGE_LEN));
 }
 
 #[test]
