@@ -244,10 +244,10 @@ Modules:
 - `enumerate.rs`: the walk over buses, devices and functions, bounded by
   the bus range the MCFG named; a multi-function device is recognized by
   bit 7 of the header type, and a function that is not present ends the
-  walk of that device rather than the bus. Bridges are read and reported
-  and not descended into: the machine of 3.1.1 puts its devices on bus 0,
-  and a walk that follows secondary bus numbers is work with no consumer
-  (D-112).
+  walk of that device rather than the bus. `walk` reports a bridge and
+  does not descend into it; `Buses` names the first bus and the
+  secondary bus of every bridge, so a program that maps one bus at a
+  time maps bus 0 alone on the machine of 3.1.1 (D-196, amending D-112).
 - `bar.rs`: base address register decoding. Bit 0 separates memory from
   I/O; bits 2 and 1 say whether a memory register is 32 or 64 bits wide,
   and a 64-bit register takes the next register as its upper half, which

@@ -11,7 +11,13 @@
 //! Invariants: the walk is bounded by the bus range of the window and ends
 //! after at most thirty-two devices of eight functions of each bus; a
 //! function that is not there ends the walk of its device and not of the
-//! bus; a bridge is reported and not descended into (D-112).
+//! bus; [`walk`] reports a bridge and does not descend into it.
+//!
+//! [`Buses`] names the buses a caller that maps one bus at a time walks:
+//! the first bus of the window and every bus behind a bridge found on a
+//! bus walked before (D-196). Each bus comes out at most once, so a walk
+//! over B reachable buses costs O(B) bus mappings, not one per bus of the
+//! window. A bus-numbering loop of bridges ends there.
 
 use crate::address::{Address, MAX_DEVICE, MAX_FUNCTION, Window};
 use crate::error::PciError;
@@ -85,4 +91,70 @@ pub fn find(
         }
     })?;
     Ok(found)
+}
+
+/// The buses a walk one bus at a time reaches, lowest first.
+///
+/// The first bus of the window is reached from the start; [`Buses::reach`]
+/// adds a bus inside the window. A bus [`Buses::next_bus`] gave out is not
+/// given out again.
+#[derive(Clone, Copy, Debug)]
+pub struct Buses {
+    /// The range a bus must lie in.
+    window: Window,
+    /// One bit per bus reached.
+    reached: [u64; 4],
+    /// One bit per bus given out.
+    taken: [u64; 4],
+}
+
+impl Buses {
+    /// The walk of `window`, holding its first bus.
+    #[must_use]
+    pub fn new(window: Window) -> Buses {
+        let mut buses = Buses {
+            window,
+            reached: [0; 4],
+            taken: [0; 4],
+        };
+        buses.reach(window.first_bus());
+        buses
+    }
+
+    /// The lowest bus reached and not given out, or `None` when there is
+    /// none.
+    pub fn next_bus(&mut self) -> Option<u8> {
+        for (index, (reached, taken)) in self.reached.iter().zip(self.taken.iter_mut()).enumerate()
+        {
+            let open = *reached & !*taken;
+            if open != 0 {
+                let bit = open.trailing_zeros();
+                *taken |= 1u64.wrapping_shl(bit);
+                let base = u32::try_from(index).unwrap_or(0).wrapping_mul(64);
+                return u8::try_from(base.wrapping_add(bit)).ok();
+            }
+        }
+        None
+    }
+
+    /// Adds `bus` when it lies in the window.
+    pub fn reach(&mut self, bus: u8) {
+        if bus < self.window.first_bus() || bus > self.window.last_bus() {
+            return;
+        }
+        let word = usize::from(bus.wrapping_shr(6));
+        let bit = 1u64.wrapping_shl(u32::from(bus & 63));
+        for (index, reached) in self.reached.iter_mut().enumerate() {
+            if index == word {
+                *reached |= bit;
+            }
+        }
+    }
+
+    /// Adds the secondary bus of `function` when it is a bridge.
+    pub fn reach_behind(&mut self, function: &Function) {
+        if let Some(bus) = function.header.secondary_bus {
+            self.reach(bus);
+        }
+    }
 }
