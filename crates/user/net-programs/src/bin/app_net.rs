@@ -36,7 +36,7 @@ use virtio_queue as _;
 use audhsos_abi::Error;
 use net_http::{Decoder, Event, Method, Request as HttpRequest};
 use net_wire::Writer as WireWriter;
-use user_programs::client::{lookup, write_line};
+use user_programs::client::write_line;
 use user_programs::socket::{Idle, Listener, Stream};
 use user_proto::socket::{Name, Reply, Request};
 use user_rt::{EndpointHandle, Line, ProcessHandle, Startup};
@@ -79,7 +79,7 @@ const CHUNK: usize = 512;
 )]
 fn main(mut gate: Gate, startup: Startup) -> ! {
     let voice = startup.log;
-    let Some(server) = server_endpoint(&mut gate, &startup) else {
+    let Some(server) = server_endpoint(&startup) else {
         say(
             &mut gate,
             voice,
@@ -134,14 +134,12 @@ fn main(mut gate: Gate, startup: Startup) -> ! {
     gate.thread_exit()
 }
 
-/// The endpoint of the network server: the one the root task gave, or the
-/// one the name server knows.
-fn server_endpoint(gate: &mut Gate, startup: &Startup) -> Option<EndpointHandle> {
-    if let Some(endpoint) = startup.net_server {
-        return Some(endpoint);
-    }
-    let names = startup.name_server?;
-    lookup(gate, names, b"net").ok()
+/// The endpoint of the network server, badged by the root task.
+///
+/// A capability found under the name `net` carries no badge, and the
+/// server refuses a request that names nobody.
+const fn server_endpoint(startup: &Startup) -> Option<EndpointHandle> {
+    startup.net_server
 }
 
 /// Asks what the interface is until a lease is there, and says so.
@@ -247,7 +245,7 @@ fn echo_and_fetch(
     voice: Option<EndpointHandle>,
     idle: Idle,
 ) -> Result<(), Error> {
-    let listener = Listener::bind(gate, server, PORT)?;
+    let listener = Listener::bind(gate, server, process, PORT)?;
     say(
         gate,
         voice,
@@ -289,7 +287,7 @@ fn echo_and_fetch(
     );
 
     fetch(gate, &stream, voice, until, idle)?;
-    let _shut = stream.shutdown_write(gate);
+    let _shut = stream.shutdown_write(gate, idle, until);
     let _closed = stream.close(gate);
     say(gate, voice, &Report::of(format_args!("[net-app] closed\n")));
     Ok(())

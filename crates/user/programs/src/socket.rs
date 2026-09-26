@@ -31,8 +31,8 @@
 //! same address reaches a kernel that has the range and the handle slot
 //! and a server that has the socket.
 
-use audhsos_abi::Error;
 use audhsos_abi::layout::PAGE_SIZE;
+use audhsos_abi::{Error, Rights};
 use user_proto::ring::{SOCKET_PAGE_LEN, SocketPage};
 use user_proto::socket::{Direction, Endpoint, Reply, Request, State};
 use user_rt::{EndpointHandle, MemoryHandle, NotificationHandle, ProcessHandle, Typed as _};
@@ -123,13 +123,23 @@ pub struct Listener {
 }
 
 impl Listener {
-    /// Takes connections on `port`.
+    /// Takes connections on `port`; `process` is this program, which the
+    /// server watches for its end.
     ///
     /// # Errors
     ///
     /// Whatever the server answered, and the errors of the call itself.
-    pub fn bind(gate: &mut Gate, server: EndpointHandle, port: u16) -> Result<Listener, Error> {
-        let Reply::Listening(outcome) = call(gate, server, &Request::TcpListen { port })? else {
+    pub fn bind(
+        gate: &mut Gate,
+        server: EndpointHandle,
+        process: ProcessHandle,
+        port: u16,
+    ) -> Result<Listener, Error> {
+        let reply = call_watched(gate, server, process, |process| Request::TcpListen {
+            port,
+            process,
+        })?;
+        let Reply::Listening(outcome) = reply else {
             return Err(Error::InvalidArgument);
         };
         Ok(Listener {
@@ -253,7 +263,11 @@ impl Stream {
         idle: Idle,
         until: u64,
     ) -> Result<Stream, Error> {
-        let Reply::Connected(outcome) = call(gate, server, &Request::TcpConnect { remote })? else {
+        let reply = call_watched(gate, server, process, |process| Request::TcpConnect {
+            remote,
+            process,
+        })?;
+        let Reply::Connected(outcome) = reply else {
             return Err(Error::InvalidArgument);
         };
         let opened = outcome?;
@@ -482,32 +496,40 @@ impl Stream {
         else {
             return Err(Error::InvalidArgument);
         };
-        let _held = outcome?;
+        let _moved = outcome?;
         Ok(page.inbound.read(into))
     }
 
-    /// Says this side will send no more.
+    /// Says this side will send no more, once every byte of the
+    /// outbound ring is in the connection.
     ///
     /// # Errors
     ///
-    /// Whatever the server answered, and the errors of the call itself.
-    pub fn shutdown_write(&self, gate: &mut Gate) -> Result<(), Error> {
-        let Reply::ShutDown(outcome) = call(
-            gate,
-            self.server,
-            &Request::TcpShutdown {
-                socket: self.socket,
-                direction: Direction::Write,
-            },
-        )?
-        else {
-            return Err(Error::InvalidArgument);
-        };
-        outcome
+    /// [`Error::Cancelled`] when `until` passes first, whatever the server
+    /// answered, and the errors of the call itself.
+    pub fn shutdown_write(&self, gate: &mut Gate, idle: Idle, until: u64) -> Result<(), Error> {
+        loop {
+            let Reply::ShutDown(outcome) = call(
+                gate,
+                self.server,
+                &Request::TcpShutdown {
+                    socket: self.socket,
+                    direction: Direction::Write,
+                },
+            )?
+            else {
+                return Err(Error::InvalidArgument);
+            };
+            match outcome {
+                Err(Error::WouldBlock) => idle.wait(gate, until)?,
+                done => return done,
+            }
+        }
     }
 
     /// Gives the connection back, and the window its rings were mapped
-    /// in with it.
+    /// in with it. A peer still joined to the connection receives a reset,
+    /// after the acknowledgment of the `FIN` of a [`Stream::shutdown_write`].
     ///
     /// The socket goes first, so that the server has stopped writing into
     /// the rings before they leave the address space. The window is taken
@@ -546,6 +568,23 @@ impl Stream {
 /// way out with an error of its own.
 fn discard(gate: &mut Gate, server: EndpointHandle, socket: u32) {
     let _closed = call(gate, server, &Request::TcpClose { socket });
+}
+
+/// Sends a request that opens a socket, carrying `process` reduced to
+/// `INFO` and `TRANSFER`, so that the server learns of this program's end
+/// (D-106).
+fn call_watched(
+    gate: &mut Gate,
+    server: EndpointHandle,
+    process: ProcessHandle,
+    request: impl FnOnce(audhsos_abi::Handle) -> Request,
+) -> Result<Reply, Error> {
+    let watched = gate.handle_duplicate(process.handle(), Rights::INFO.union(Rights::TRANSFER))?;
+    let reply = call(gate, server, &request(watched));
+    // The server holds a copy. A failed close leaves one slot taken and
+    // is not worth losing the rings of the reply over.
+    let _closed = gate.handle_close(watched);
+    reply
 }
 
 /// Sends one request of the socket protocol and reads the reply.

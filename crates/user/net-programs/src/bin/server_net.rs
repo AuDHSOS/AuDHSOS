@@ -15,6 +15,11 @@
 //! apart by the badge, which is the console driver's arrangement with one
 //! thread more.
 //!
+//! The end of a client that holds a socket slot is watched on bits of the
+//! timer's notification above [`TICK_BIT`] (D-106); the timer thread sends
+//! those bits under a fourth badge, and the serving thread gives up the
+//! sockets of each client that ended.
+//!
 //! The deadline is one aligned word both the serving thread and the timer
 //! thread reach. The two are threads of one process, so the word is a
 //! `static` of this program and needs no memory object: one thread writes
@@ -38,9 +43,9 @@ use net_http as _;
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use audhsos_abi::Error;
 use audhsos_abi::layout::PAGE_SIZE;
 use audhsos_abi::startup::Location;
+use audhsos_abi::{Error, Handle};
 use audhsos_time::Instant;
 use crypto_rng::ChaChaRng;
 use driver_virtio_net::queues::Side;
@@ -48,7 +53,7 @@ use driver_virtio_net::{Net, Vectors};
 use net_stack::{Config, FRAME_LEN};
 use net_wire::MacAddr;
 use server_net::memory::REGION_BYTES;
-use server_net::server::{Rings, Server};
+use server_net::server::{NOBODY, Rings, Server};
 use server_net::sockets::MAX_SOCKETS;
 use user_net_programs::net_dma::{NetDma, QUEUE_SIZE, REGION_BYTES as DMA_BYTES};
 use user_net_programs::net_registers::{NET_DMA, NET_WINDOW, Window};
@@ -78,6 +83,9 @@ const DEVICE_BADGE: u64 = 0x4E45_54DE;
 /// The badge the timer thread sends under.
 const TICK_BADGE: u64 = 0x4E45_5471;
 
+/// The badge the timer thread sends the ends of clients under.
+const GONE_BADGE: u64 = 0x4E45_5460;
+
 /// Words of the free set of a queue: one bit per descriptor, which
 /// [`QUEUE_SIZE`] of them fit in one.
 const QUEUE_WORDS: usize = 1;
@@ -87,6 +95,13 @@ const SLOTS: usize = user_net_programs::net_dma::BUFFERS;
 
 /// The bit of the notification the serving thread signals the timer with.
 const TICK_BIT: u64 = 0;
+
+/// The first bit of the timer's notification a client's end is watched on;
+/// watch `index` is bit `WATCH_BIT + index`.
+const WATCH_BIT: u64 = 1;
+
+/// The bits of every watch.
+const WATCH_MASK: u64 = ((1 << MAX_SOCKETS) - 1) << WATCH_BIT;
 
 /// Where the stack of the interrupt thread ends.
 const INTERRUPT_STACK_TOP: u64 = 0x0080_0000;
@@ -350,6 +365,7 @@ fn serve(
     let mut serving = Serving::default();
     let mut reported = false;
     let mut messages = ReseedCounter::default();
+    let mut watches = Watches::default();
     // One round before the first message: the address configuration
     // client has a discover to send, and nothing has asked this server
     // for anything yet.
@@ -358,20 +374,24 @@ fn serve(
     tell_the_timer(gate, server, now);
     loop {
         receive(gate, endpoint, &mut serving)?;
-        // No request of this protocol takes a handle, and the kernel
-        // installs whatever the sender attached; one left installed costs a
-        // slot of a table of sixty-four and holds a reference the sender
-        // chose. The message is read out first, because closing a handle is
-        // a call and a call overwrites the buffer it stands in.
-        let carried = Carried::read(gate.reader());
         let now = Instant::from_micros(gate.clock_now().unwrap_or(0));
+        // The timer thread says which watched clients ended. The message
+        // is a send, and the serving thread owes no reply.
+        if serving.badge == GONE_BADGE {
+            let gone = gate.reader().word(0).unwrap_or(0);
+            watches.release(gate, server, gone, now);
+            run(server, driver, generator, now);
+            tell_the_timer(gate, server, now);
+            continue;
+        }
+        // The kernel installs every handle the sender attached. The server
+        // keeps the process of an opening request and closes the rest: each
+        // costs a slot of a table of sixty-four.
+        let carried = Carried::read(gate.reader());
         let decoded = match serving.badge {
             DEVICE_BADGE | TICK_BADGE => None,
             _client => Some(Request::decode(gate.reader())),
         };
-        carried.give_up(&[], |handle| {
-            let _closed = gate.handle_close(handle);
-        });
         if messages.due() {
             *generator = seed(gate)?;
         }
@@ -386,19 +406,136 @@ fn serve(
         // answer sees; what the answer gives the stack goes out in the
         // round after it.
         run(server, driver, generator, now);
-        if let Some(decoded) = decoded {
-            let reply = match decoded {
-                Ok(request) => server.answer(serving.badge, &request, now, generator),
-                Err(_unreadable) => {
-                    server.forget(serving.badge);
-                    Reply::Closed(Err(Error::InvalidArgument))
+        let mut kept = None;
+        let reply = decoded.map(|decoded| match decoded {
+            Ok(request) => match watches.admit(gate, serving.badge, &request) {
+                Ok(admitted) => {
+                    kept = admitted;
+                    let reply = server.answer(serving.badge, &request, now, generator);
+                    watches.settle(gate, server, serving.badge);
+                    reply
                 }
-            };
+                Err(error) => refuse(&request, error),
+            },
+            // A client that sends what cannot be read is alive, so its
+            // sockets stay: its end is what the watch reports.
+            Err(_unreadable) => Reply::Closed(Err(Error::InvalidArgument)),
+        });
+        carried.give_up(kept.as_slice(), |handle| {
+            let _closed = gate.handle_close(handle);
+        });
+        if let Some(reply) = reply {
             let _encoded = reply.encode(&mut gate.writer());
         }
         run(server, driver, generator, now);
         tell_the_timer(gate, server, now);
     }
+}
+
+/// The process of every client that holds a socket slot, watched on bit
+/// `WATCH_BIT + index` of the timer's notification.
+///
+/// Invariant: a badge has a watch exactly while the server holds a slot
+/// for it, so [`MAX_SOCKETS`] watches cover every client.
+#[derive(Default)]
+struct Watches {
+    entries: [Option<(u64, ProcessHandle)>; MAX_SOCKETS],
+}
+
+impl Watches {
+    /// Watches the process an opening request of `badge` carries, and
+    /// answers the handle that is now kept, if one is.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::OutOfHandles`] when every watch is taken, and whatever the
+    /// kernel answered to the watch.
+    fn admit(
+        &mut self,
+        gate: &mut Gate,
+        badge: u64,
+        request: &Request,
+    ) -> Result<Option<Handle>, Error> {
+        let (Request::UdpBind { process, .. }
+        | Request::TcpConnect { process, .. }
+        | Request::TcpListen { process, .. }) = *request
+        else {
+            return Ok(None);
+        };
+        let Some(notification) = SHARED.timer() else {
+            return Ok(None);
+        };
+        if badge == NOBODY || self.of(badge).is_some() {
+            return Ok(None);
+        }
+        let (index, entry) = self
+            .entries
+            .iter_mut()
+            .enumerate()
+            .find(|(_, entry)| entry.is_none())
+            .ok_or(Error::OutOfHandles)?;
+        let client = ProcessHandle::from_handle(process);
+        gate.process_watch(client, notification, bit_of(index))?;
+        *entry = Some((badge, client));
+        Ok(Some(process))
+    }
+
+    /// Ends the watch of `badge` once the server holds no slot for it.
+    fn settle(&mut self, gate: &mut Gate, server: &Server<'_>, badge: u64) {
+        if server.holds(badge) {
+            return;
+        }
+        let Some(index) = self.of(badge) else {
+            return;
+        };
+        if let Some(Some((_, process))) = self.entries.get_mut(index).map(Option::take)
+            && let Some(notification) = SHARED.timer()
+        {
+            let _ended = gate.process_unwatch(process, notification, bit_of(index));
+            let _closed = gate.handle_close(process.handle());
+        }
+    }
+
+    /// Gives up the sockets of every client whose bit stands in `gone`.
+    ///
+    /// Only a client whose unwatch answers `true` has ended; a bit can
+    /// outlive the watch that armed it, and a live client is watched again.
+    fn release(&mut self, gate: &mut Gate, server: &mut Server<'_>, gone: u64, now: Instant) {
+        let Some(notification) = SHARED.timer() else {
+            return;
+        };
+        for (index, entry) in self.entries.iter_mut().enumerate() {
+            let bit = bit_of(index);
+            if gone & (1 << bit) == 0 {
+                continue;
+            }
+            let Some((badge, process)) = *entry else {
+                continue;
+            };
+            match gate.process_unwatch(process, notification, bit) {
+                Ok(true) | Err(Error::InvalidHandle) => {
+                    server.forget(badge, now);
+                    let _closed = gate.handle_close(process.handle());
+                    *entry = None;
+                }
+                _alive => {
+                    let _watched = gate.process_watch(process, notification, bit);
+                }
+            }
+        }
+    }
+
+    /// The watch of `badge`.
+    fn of(&self, badge: u64) -> Option<usize> {
+        self.entries
+            .iter()
+            .position(|entry| entry.is_some_and(|(whose, _)| whose == badge))
+    }
+}
+
+/// The bit of watch `index`.
+fn bit_of(index: usize) -> u64 {
+    WATCH_BIT.wrapping_add(u64::try_from(index).unwrap_or(0))
 }
 
 /// Writes the instant the stack next has work at and wakes the timer
@@ -681,8 +818,16 @@ fn start_threads(
     // notification it handed over, as it does for a block device.
     let device = gate.endpoint_badge(endpoint, DEVICE_BADGE)?;
     let tick = gate.endpoint_badge(endpoint, TICK_BADGE)?;
+    let gone = gate.endpoint_badge(endpoint, GONE_BADGE)?;
     let timer = gate.notification_create()?;
-    SHARED.set(device, tick, given.notification, given.interrupt, timer);
+    SHARED.set(Handles {
+        device,
+        tick,
+        gone,
+        device_notification: given.notification,
+        interrupt: given.interrupt,
+        timer,
+    });
 
     let bytes = STACK_PAGES.wrapping_mul(PAGE_SIZE);
     for (top, entry) in [
@@ -765,13 +910,19 @@ unsafe extern "sysv64" fn on_deadline(ipc_buffer: u64) -> ! {
     loop {
         let deadline = DEADLINE.load(Ordering::SeqCst);
         let woken = if deadline == 0 {
-            gate.notification_wait(shared.timer).map(|_bits| ())
+            gate.notification_wait(shared.timer)
         } else {
             gate.notification_wait_until(shared.timer, deadline)
-                .map(|_bits| ())
         };
-        if woken.is_err() {
-            gate.thread_exit()
+        let Ok(bits) = woken else { gate.thread_exit() };
+        if bits & WATCH_MASK != 0 {
+            let mut writer = user_rt::message::Writer::new();
+            {
+                let mut buffer = gate.writer();
+                let _written = writer.word(&mut buffer, bits & WATCH_MASK);
+                let _finished = writer.finish(&mut buffer, GONE_LABEL);
+            }
+            let _sent = gate.ipc_send(shared.gone);
         }
         // A wake-up before the deadline is the serving thread saying the
         // deadline moved; the loop re-reads it and sleeps again.
@@ -793,12 +944,16 @@ const DEVICE_LABEL: u64 = 1;
 /// The label the timer thread sends under.
 const TICK_LABEL: u64 = 2;
 
+/// The label the timer thread sends the ends of clients under.
+const GONE_LABEL: u64 = 3;
+
 /// What the two other threads need, which they cannot be told any other
 /// way: a thread starts with nothing but the address of its own IPC
 /// buffer.
 struct Shared {
     device: AtomicU64,
     tick: AtomicU64,
+    gone: AtomicU64,
     device_notification: AtomicU64,
     interrupt: AtomicU64,
     timer: AtomicU64,
@@ -809,6 +964,7 @@ struct Shared {
 struct Handles {
     device: EndpointHandle,
     tick: EndpointHandle,
+    gone: EndpointHandle,
     device_notification: NotificationHandle,
     interrupt: InterruptHandle,
     timer: NotificationHandle,
@@ -819,32 +975,29 @@ impl Shared {
         Shared {
             device: AtomicU64::new(0),
             tick: AtomicU64::new(0),
+            gone: AtomicU64::new(0),
             device_notification: AtomicU64::new(0),
             interrupt: AtomicU64::new(0),
             timer: AtomicU64::new(0),
         }
     }
 
-    fn set(
-        &self,
-        device: EndpointHandle,
-        tick: EndpointHandle,
-        device_notification: NotificationHandle,
-        interrupt: InterruptHandle,
-        timer: NotificationHandle,
-    ) {
-        self.device.store(device.raw(), Ordering::SeqCst);
-        self.tick.store(tick.raw(), Ordering::SeqCst);
+    fn set(&self, handles: Handles) {
+        self.device.store(handles.device.raw(), Ordering::SeqCst);
+        self.tick.store(handles.tick.raw(), Ordering::SeqCst);
+        self.gone.store(handles.gone.raw(), Ordering::SeqCst);
         self.device_notification
-            .store(device_notification.raw(), Ordering::SeqCst);
-        self.interrupt.store(interrupt.raw(), Ordering::SeqCst);
-        self.timer.store(timer.raw(), Ordering::SeqCst);
+            .store(handles.device_notification.raw(), Ordering::SeqCst);
+        self.interrupt
+            .store(handles.interrupt.raw(), Ordering::SeqCst);
+        self.timer.store(handles.timer.raw(), Ordering::SeqCst);
     }
 
     fn get(&self) -> Option<Handles> {
         Some(Handles {
             device: EndpointHandle::from_raw(self.device.load(Ordering::SeqCst))?,
             tick: EndpointHandle::from_raw(self.tick.load(Ordering::SeqCst))?,
+            gone: EndpointHandle::from_raw(self.gone.load(Ordering::SeqCst))?,
             device_notification: NotificationHandle::from_raw(
                 self.device_notification.load(Ordering::SeqCst),
             )?,

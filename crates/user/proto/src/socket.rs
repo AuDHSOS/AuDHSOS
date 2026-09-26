@@ -223,6 +223,9 @@ pub enum Request {
     UdpBind {
         /// The port to take.
         port: u16,
+        /// The client's process, reduced to `INFO` and `TRANSFER`, for
+        /// its watch.
+        process: Handle,
     },
     /// Sends what the client put into the outbound ring to `remote`.
     UdpSendTo {
@@ -242,11 +245,15 @@ pub enum Request {
     TcpConnect {
         /// Where to connect to.
         remote: Endpoint,
+        /// As [`Request::UdpBind`].
+        process: Handle,
     },
     /// Takes connections on `port`.
     TcpListen {
         /// The port to listen on.
         port: u16,
+        /// As [`Request::UdpBind`].
+        process: Handle,
     },
     /// The next connection of a listener.
     TcpAccept {
@@ -388,7 +395,8 @@ pub enum Reply {
     Sent(Result<u32, Error>),
     /// How many bytes of the connection went into the ring.
     Received(Result<u32, Error>),
-    /// One direction of the connection is closed.
+    /// One direction of the connection is closed, or
+    /// [`Error::WouldBlock`] while the outbound ring still holds bytes.
     ShutDown(Result<(), Error>),
     /// The connection is gone.
     Closed(Result<(), Error>),
@@ -429,8 +437,9 @@ impl Request {
         match self {
             Request::Interface => {}
             Request::Resolve { name } => writer.bytes(buffer, name.as_bytes())?,
-            Request::UdpBind { port } | Request::TcpListen { port } => {
+            Request::UdpBind { port, process } | Request::TcpListen { port, process } => {
                 writer.word(buffer, u64::from(*port))?;
+                writer.handle(buffer, *process)?;
             }
             Request::UdpSendTo {
                 socket,
@@ -441,7 +450,10 @@ impl Request {
                 writer.word(buffer, u64::from(*len))?;
                 write_endpoint(&mut writer, buffer, *remote)?;
             }
-            Request::TcpConnect { remote } => write_endpoint(&mut writer, buffer, *remote)?,
+            Request::TcpConnect { remote, process } => {
+                write_endpoint(&mut writer, buffer, *remote)?;
+                writer.handle(buffer, *process)?;
+            }
             Request::UdpClose { socket }
             | Request::TcpAccept { socket }
             | Request::TcpRecv { socket }
@@ -478,9 +490,11 @@ impl Request {
             }),
             UDP_BIND => Ok(Request::UdpBind {
                 port: port_of(reader.word()?),
+                process: reader.handle()?,
             }),
             TCP_LISTEN => Ok(Request::TcpListen {
                 port: port_of(reader.word()?),
+                process: reader.handle()?,
             }),
             UDP_SEND_TO => Ok(Request::UdpSendTo {
                 socket: word32(reader.word()?),
@@ -489,6 +503,7 @@ impl Request {
             }),
             TCP_CONNECT => Ok(Request::TcpConnect {
                 remote: read_endpoint(&mut reader)?,
+                process: reader.handle()?,
             }),
             UDP_CLOSE => Ok(Request::UdpClose {
                 socket: word32(reader.word()?),

@@ -824,6 +824,39 @@ fn an_abort_sends_a_reset_and_closes_at_once() {
 }
 
 #[test]
+fn an_abort_before_the_handshake_sends_no_reset() {
+    let now = start();
+    let (mut s, mut r) = (vec![0u8; 64], vec![0u8; 64]);
+    let mut opening = Connection::new(CLIENT_END, Config::DEFAULT, &mut s, &mut r);
+    let (mut ls, mut lr) = (vec![0u8; 64], vec![0u8; 64]);
+    let mut listening = Connection::new(SERVER_END, Config::DEFAULT, &mut ls, &mut lr);
+    let script = [sequence(1), sequence(2)].concat();
+    let mut rng = ScriptedRng::new(&script);
+    opening.connect(SERVER_END, &mut rng).expect("an open");
+    listening.listen(&mut rng).expect("a listen");
+    // RFC 9293, section 3.10.5: `SYN-SENT` and `LISTEN` delete the TCB
+    // and send nothing.
+    opening.abort();
+    listening.abort();
+    assert_eq!(opening.state(), State::Closed);
+    assert!(drain(&mut opening, now).is_empty());
+    assert!(drain(&mut listening, now).is_empty());
+}
+
+#[test]
+fn a_closing_end_says_so_and_takes_no_more_bytes() {
+    let now = start();
+    pair!(client, server, now, 512, 1460);
+    assert!(!client.is_closing());
+    client.close().expect("a close");
+    assert!(client.is_closing());
+    assert_eq!(
+        client.write(b"late"),
+        Err(TcpError::WrongState(State::Established))
+    );
+}
+
+#[test]
 fn nagle_holds_a_short_segment_back_while_something_is_outstanding() {
     let now = start();
     let (mut cs, mut cr) = (vec![0u8; 512], vec![0u8; 512]);
