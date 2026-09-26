@@ -32,6 +32,10 @@ pub enum Kind {
     /// A connection waiting for a peer to open it. It has no rings until
     /// an accept turns it into one.
     Listener,
+    /// A connection the client closed while the peer had not acknowledged
+    /// its `FIN`. No number names it; the server gives it up once the
+    /// acknowledgment arrives.
+    Draining,
 }
 
 /// One socket.
@@ -128,12 +132,19 @@ impl Sockets {
         }
     }
 
+    /// Whether a slot is held for `badge`, open or not.
+    #[must_use]
+    pub fn holds(&self, badge: u64) -> bool {
+        self.owners.contains(&Some(badge))
+    }
+
     /// The slot `number` names, for the client `badge` names.
     #[must_use]
     pub fn slot(&self, badge: u64, number: u32) -> Option<usize> {
         let (index, generation) = parts(number)?;
         let entry = self.slots.get(index)?.as_ref()?;
-        (entry.badge == badge && entry.generation == generation).then_some(index)
+        (entry.badge == badge && entry.generation == generation && entry.kind != Kind::Draining)
+            .then_some(index)
     }
 
     /// The socket `number` names, for the client `badge` names.

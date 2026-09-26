@@ -165,7 +165,7 @@ fn work(
     voice: Option<EndpointHandle>,
     setup: &Setup,
 ) -> Result<(), Error> {
-    let server = network(gate, startup).ok_or(Error::Unavailable)?;
+    let server = network(startup).ok_or(Error::Unavailable)?;
     let process = startup.own_process.ok_or(Error::Unavailable)?;
     let idle = Idle::new(gate)?;
     let until = gate.clock_now()?.saturating_add(DEADLINE);
@@ -182,7 +182,7 @@ fn work(
     );
 
     let outcome = speak(gate, &stream, voice, setup, until, idle);
-    let _shut = stream.shutdown_write(gate);
+    let _shut = stream.shutdown_write(gate, idle, until);
     let _closed = stream.close(gate);
     outcome
 }
@@ -637,13 +637,12 @@ impl crypto_rng::Entropy for Entropy {
     }
 }
 
-/// The endpoint of the network server.
-fn network(gate: &mut Gate, startup: &Startup) -> Option<EndpointHandle> {
-    if let Some(endpoint) = startup.net_server {
-        return Some(endpoint);
-    }
-    let names = startup.name_server?;
-    lookup(gate, names, b"net").ok()
+/// The endpoint of the network server, badged by the root task.
+///
+/// A capability found under the name `net` carries no badge, and the
+/// server refuses a request that names nobody.
+const fn network(startup: &Startup) -> Option<EndpointHandle> {
+    startup.net_server
 }
 
 /// The endpoint of the file system server, badged by the root task.

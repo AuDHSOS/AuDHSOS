@@ -10,8 +10,8 @@ use net_wire::{IpAddr, Ipv4Addr, Ipv6Addr, MacAddr};
 use crate::label::{Label, ProtoError, Protocol};
 use crate::socket::{
     Addresses, DATAGRAM_HEADER_LEN, Direction, Endpoint, INTERFACE, Interface, MAX_ADDRESSES, Name,
-    Opened, RESOLVE, Reply, Request, State, TCP_CONNECT, TCP_STATE, UDP_SEND_TO, datagram_header,
-    read_datagram_header,
+    Opened, RESOLVE, Reply, Request, State, TCP_CONNECT, TCP_LISTEN, TCP_STATE, UDP_BIND,
+    UDP_SEND_TO, datagram_header, read_datagram_header,
 };
 
 /// A buffer of zeros to work on.
@@ -33,7 +33,7 @@ fn round_trip_reply(reply: &Reply) -> Result<Reply, ProtoError> {
     Reply::decode(Buffer::new(&bytes))
 }
 
-/// A handle a reply carries.
+/// A handle a message carries.
 fn handle() -> Handle {
     Handle::new(3, 1).expect("a handle")
 }
@@ -60,7 +60,10 @@ fn requests() -> Vec<Request> {
         Request::Resolve {
             name: Name::new(b"example.test").expect("a short name"),
         },
-        Request::UdpBind { port: 5353 },
+        Request::UdpBind {
+            port: 5353,
+            process: handle(),
+        },
         Request::UdpSendTo {
             socket: 2,
             remote: endpoint(),
@@ -74,8 +77,12 @@ fn requests() -> Vec<Request> {
                 ])),
                 443,
             ),
+            process: handle(),
         },
-        Request::TcpListen { port: 7 },
+        Request::TcpListen {
+            port: 7,
+            process: handle(),
+        },
         Request::TcpAccept { socket: 1 },
         Request::TcpSend {
             socket: 1,
@@ -227,11 +234,26 @@ fn a_truncated_request_is_refused_rather_than_read_short() {
 }
 
 #[test]
+fn an_opening_request_without_the_process_is_refused() {
+    for message in [UDP_BIND, TCP_LISTEN] {
+        let mut bytes = buffer();
+        let mut out = BufferMut::new(&mut bytes);
+        out.set_label(Label::new(Protocol::Socket, message).raw());
+        out.set_counts(1, 0).expect("a header");
+        assert!(out.set_word(0, 7));
+        assert!(Request::decode(Buffer::new(&bytes)).is_err());
+    }
+}
+
+#[test]
 fn an_address_family_the_message_does_not_name_is_refused() {
     let mut bytes = buffer();
-    Request::TcpConnect { remote: endpoint() }
-        .encode(&mut BufferMut::new(&mut bytes))
-        .expect("the request fits");
+    Request::TcpConnect {
+        remote: endpoint(),
+        process: handle(),
+    }
+    .encode(&mut BufferMut::new(&mut bytes))
+    .expect("the request fits");
     // The second word of the message is the family; nine names none.
     let mut out = BufferMut::new(&mut bytes);
     assert!(out.set_word(1, 9));

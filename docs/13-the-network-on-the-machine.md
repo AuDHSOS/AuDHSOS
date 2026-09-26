@@ -435,8 +435,9 @@ reads as a decision (D-50's rule, applied here).
 ## 13.10 `server-net`
 
 A layer-u2 logic crate at `crates/user/servers/net`, host-tested, no
-system call in it — the process around it is a binary of `user-programs`,
-as every other server is.
+system call in it. The process around it is the binary `server-net` of
+`user-net-programs`, a package apart from `user-programs` so that no other
+program links the stack (D-97, D-144).
 
 It runs three threads, because a thread of this kernel waits on exactly
 one thing: `Wait` names an endpoint or a notification, never both. That is
@@ -451,7 +452,11 @@ more than it does.
   that the serving thread tells a device interrupt from a client's
   request by the badge — the console driver's arrangement exactly.
 - The **timer thread** waits with `notification_wait_until` and sends a
-  tick under a third badge when the deadline passes.
+  tick under a third badge when the deadline passes. The same
+  notification carries the process watches of the clients that hold a
+  socket slot, one bit each above the tick bit (D-106); the timer thread
+  sends those bits under a fourth badge, and the serving thread gives up
+  the sockets of each client that ended.
 
 One round of the serving thread is then: take the message; if it is the
 device badge, drain the receive queue and hand each frame to
@@ -489,16 +494,22 @@ than through one IPC call per byte (D-31's shape, D-116).
 | Message | Answer |
 |---------|--------|
 | `Interface` | the MAC address, the addresses, the router of the link, whether the address configuration client has a lease |
-| `UdpBind { port }` | a socket number and the memory object of its two rings, or `AddressInUse` for a port a socket holds |
+| `UdpBind { port, process }` | a socket number and the memory object of its two rings, or `AddressInUse` for a port a socket holds |
 | `UdpSendTo { socket, remote, len }` | how many bytes of the outbound ring went out, or `BufferTooSmall` for a `len` above 1472, which is one datagram of the link |
 | `UdpClose { socket }` | - |
-| `TcpConnect { remote }` | a socket number and its rings; the connection is still being opened |
-| `TcpListen { port }` | a listener number, or `AddressInUse` for a port a listener holds |
+| `TcpConnect { remote, process }` | a socket number and its rings, or `AddressInUse` for a remote a connection already joins; the connection is still being opened |
+| `TcpListen { port, process }` | a listener number, or `AddressInUse` for a port a listener holds |
 | `TcpAccept { socket }` | the same number, now a connection, and its rings; or `WouldBlock` |
-| `TcpSend { socket, len }`, `TcpRecv { socket }` | how many bytes moved through the ring |
-| `TcpShutdown { socket, direction }`, `TcpClose { socket }` | - |
+| `TcpSend { socket, len }`, `TcpRecv { socket }` | how many bytes moved through the ring; `TcpSend` moves at most `len` |
+| `TcpShutdown { socket, direction }` | `WouldBlock` while the outbound ring still holds bytes; the `FIN` follows the last of them |
+| `TcpClose { socket }` | - (a peer still joined to the connection receives the reset of RFC 9293, section 3.10.5; after a `TcpShutdown`, the reset waits until the peer acknowledged the `FIN`) |
 | `TcpState { socket }` | where the connection stands |
-| `Resolve { name }` | the addresses of both families, `WouldBlock` while the resolution runs, `Busy` for any other name while one runs, or a failure |
+| `Resolve { name }` | the addresses of both families, `WouldBlock` while the resolution runs, `Busy` for any other name while one runs, or a failure; a resolution that ended and was not collected gives way to the next |
+
+`process` is the client's own process reduced to `INFO` and `TRANSFER`,
+which the server watches for the client's end (D-106). Every request under
+badge `0` answers `AccessDenied`: a capability found under a name carries
+that badge, and two such clients would be one client to the socket table.
 
 Two rings per socket in one memory object of two pages: the one the server
 writes and the client reads, and the one the client writes and the server

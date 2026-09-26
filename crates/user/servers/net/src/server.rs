@@ -28,7 +28,7 @@ use net_wire::{IpAddr, Port};
 use user_proto::ring::SocketPage;
 use user_proto::socket::{
     Addresses, DATAGRAM_HEADER_LEN, Direction, Endpoint, Interface, Name, Opened, Reply, Request,
-    State, datagram_header,
+    State, datagram_header, refuse,
 };
 
 use crate::memory::{CONNECTIONS, Pool, SOCKETS};
@@ -46,6 +46,11 @@ pub struct Rings<'a> {
 
 /// How many bytes one round moves between a ring and a connection.
 const CHUNK: usize = 1024;
+
+/// The badge of a capability that carries none, which a capability found
+/// under a name is. Two clients under `NOBODY` are one client to the socket
+/// table, so the server refuses every request under `NOBODY`.
+pub const NOBODY: u64 = 0;
 
 /// The longest datagram this server sends in one call: one IPv4 datagram
 /// over a link of 1500 bytes, less the twenty bytes of the header and the
@@ -113,7 +118,7 @@ impl<'a> Server<'a> {
         tx: &'t mut [u8],
         rng: &mut R,
     ) -> Result<Option<&'t [u8]>, StackError> {
-        self.pump();
+        self.pump(now);
         self.stack.poll(now, rx, tx, rng)
     }
 
@@ -128,8 +133,9 @@ impl<'a> Server<'a> {
     /// What a connection holds goes into the inbound ring as far as the
     /// ring has room; what the client put into the outbound ring goes into
     /// the connection as far as its window allows. A ring with no room is
-    /// what stops the window from advancing.
-    pub fn pump(&mut self) {
+    /// what stops the window from advancing. A draining connection whose
+    /// `FIN` was acknowledged is given up.
+    pub fn pump(&mut self, now: Instant) {
         // The pages are taken out of the table first, so that the loop
         // holds one page per slot without asking for it by index.
         let pages = self.rings.map(|rings| rings.page);
@@ -139,16 +145,22 @@ impl<'a> Server<'a> {
             };
             match entry.kind {
                 Kind::Connection => {
-                    let _sent = self.push(page, entry.handle);
+                    let _sent = self.push(page, entry.handle, CHUNK);
                     let _taken = self.take(page, entry.handle);
                 }
                 Kind::Datagram => self.take_datagrams(page, entry.handle),
                 Kind::Listener => {}
+                Kind::Draining => {
+                    if !self.fin_unacknowledged(entry.handle) {
+                        self.give_up(index, now);
+                    }
+                }
             }
         }
     }
 
-    /// Answers one request of the client `badge` names.
+    /// Answers one request of the client `badge` names, and
+    /// [`Error::AccessDenied`] to every request under [`NOBODY`].
     pub fn answer<R: Rng + ?Sized>(
         &mut self,
         badge: u64,
@@ -156,31 +168,46 @@ impl<'a> Server<'a> {
         now: Instant,
         rng: &mut R,
     ) -> Reply {
+        if badge == NOBODY {
+            return refuse(request, Error::AccessDenied);
+        }
         match request {
             Request::Interface => Reply::Interface(Ok(self.interface())),
             Request::Resolve { name } => Reply::Resolved(self.resolve(badge, name, now, rng)),
-            Request::UdpBind { port } => Reply::Bound(self.bind(badge, *port, rng)),
+            Request::UdpBind { port, .. } => Reply::Bound(self.bind(badge, *port, rng)),
             Request::UdpSendTo {
                 socket,
                 remote,
                 len,
             } => Reply::UdpSent(self.send_to(badge, *socket, *remote, *len, now)),
             Request::UdpClose { socket } => Reply::UdpClosed(self.close_datagram(badge, *socket)),
-            Request::TcpConnect { remote } => Reply::Connected(self.connect(badge, *remote, rng)),
-            Request::TcpListen { port } => Reply::Listening(self.listen(badge, *port, rng)),
+            Request::TcpConnect { remote, .. } => {
+                Reply::Connected(self.connect(badge, *remote, now, rng))
+            }
+            Request::TcpListen { port, .. } => {
+                Reply::Listening(self.listen(badge, *port, now, rng))
+            }
             Request::TcpAccept { socket } => Reply::Accepted(self.accept(badge, *socket)),
             Request::TcpSend { socket, len } => Reply::Sent(self.send(badge, *socket, *len)),
             Request::TcpRecv { socket } => Reply::Received(self.receive(badge, *socket)),
             Request::TcpShutdown { socket, direction } => {
                 Reply::ShutDown(self.shutdown(badge, *socket, *direction))
             }
-            Request::TcpClose { socket } => Reply::Closed(self.close_connection(badge, *socket)),
+            Request::TcpClose { socket } => {
+                Reply::Closed(self.close_connection(badge, *socket, now))
+            }
             Request::TcpState { socket } => Reply::State(self.state(badge, *socket)),
         }
     }
 
+    /// Whether a slot is held for `badge`, open or not.
+    #[must_use]
+    pub fn holds(&self, badge: u64) -> bool {
+        self.sockets.holds(badge)
+    }
+
     /// Gives up every socket of a client that is gone.
-    pub fn forget(&mut self, badge: u64) {
+    pub fn forget(&mut self, badge: u64, now: Instant) {
         let slots: [bool; MAX_SOCKETS] = core::array::from_fn(|index| {
             self.sockets
                 .at(index)
@@ -188,7 +215,7 @@ impl<'a> Server<'a> {
         });
         for (index, mine) in slots.into_iter().enumerate() {
             if mine {
-                self.give_up(index);
+                self.give_up(index, now);
             }
         }
         // The client is gone, so the rings it was given may go to another.
@@ -224,14 +251,19 @@ impl<'a> Server<'a> {
         rng: &mut R,
     ) -> Result<Addresses, Error> {
         if let Some((whose, socket, running)) = self.resolving {
-            // One resolution runs at a time, and the answer that is coming
-            // is the answer to the name it began with; a client asking for
-            // another name is told the server is busy, as another client
-            // is.
-            if whose != badge || running != *name {
+            if whose == badge && running == *name {
+                return self.resolution(socket);
+            }
+            // One resolution runs at a time. One that has ended and was
+            // not collected gives way, so a client that asks once and
+            // never again holds the resolver no longer than it runs.
+            if !matches!(
+                self.stack.resolution(),
+                Some(Status::Done | Status::Failed(_)) | None
+            ) {
                 return Err(Error::Busy);
             }
-            return self.resolution(socket);
+            self.forget_resolution(socket);
         }
         let text = core::str::from_utf8(name.as_bytes()).map_err(|_| Error::InvalidArgument)?;
         let asked = DnsName::from_ascii(text).map_err(|_| Error::InvalidArgument)?;
@@ -313,10 +345,14 @@ impl<'a> Server<'a> {
         &mut self,
         badge: u64,
         remote: Endpoint,
+        now: Instant,
         rng: &mut R,
     ) -> Result<Opened, Error> {
         if self.stack.source_for(remote.address).is_none() {
             return Err(Error::Unavailable);
+        }
+        if self.stack.holds(remote.address, remote.port()) {
+            return Err(Error::AddressInUse);
         }
         let (send, receive) = self.pool.take_window().ok_or(Error::OutOfMemory)?;
         let handle = match self
@@ -328,7 +364,7 @@ impl<'a> Server<'a> {
         };
         self.hand_out(badge, Kind::Connection, handle)
             .inspect_err(|_refused| {
-                self.release_connection(handle);
+                self.release_connection(handle, now);
             })
     }
 
@@ -337,6 +373,7 @@ impl<'a> Server<'a> {
         &mut self,
         badge: u64,
         port: u16,
+        now: Instant,
         rng: &mut R,
     ) -> Result<u32, Error> {
         let local = self.stack.addresses().next().ok_or(Error::Unavailable)?;
@@ -354,7 +391,7 @@ impl<'a> Server<'a> {
         match self.hand_out(badge, Kind::Listener, handle) {
             Ok(opened) => Ok(opened.socket),
             Err(error) => {
-                self.release_connection(handle);
+                self.release_connection(handle, now);
                 Err(error)
             }
         }
@@ -388,23 +425,23 @@ impl<'a> Server<'a> {
         }
     }
 
-    /// Moves what the client put into the outbound ring into the
-    /// connection.
-    fn send(&mut self, badge: u64, number: u32, _len: u32) -> Result<u32, Error> {
+    /// Moves at most `len` bytes of the outbound ring into the
+    /// connection, and answers how many.
+    fn send(&mut self, badge: u64, number: u32, len: u32) -> Result<u32, Error> {
         let entry = self.connection(badge, number)?;
         let index = self.sockets.slot(badge, number).ok_or(Error::NotFound)?;
         let page = self.page(index)?;
-        Ok(self.push(page, entry.handle))
+        let limit = usize::try_from(len).unwrap_or(CHUNK).min(CHUNK);
+        Ok(self.push(page, entry.handle, limit))
     }
 
-    /// Moves what the connection holds into the inbound ring and answers
-    /// how many bytes are waiting there.
+    /// Moves what the connection holds into the inbound ring, and answers
+    /// how many bytes moved.
     fn receive(&mut self, badge: u64, number: u32) -> Result<u32, Error> {
         let entry = self.connection(badge, number)?;
         let index = self.sockets.slot(badge, number).ok_or(Error::NotFound)?;
         let page = self.page(index)?;
-        let _taken = self.take(page, entry.handle);
-        Ok(page.inbound.held())
+        Ok(self.take(page, entry.handle))
     }
 
     /// Sends what the client put into the outbound ring to one address.
@@ -443,25 +480,51 @@ impl<'a> Server<'a> {
         if direction == Direction::Read {
             return Ok(());
         }
-        // What the client left in the ring goes into the connection first:
-        // the `FIN` follows everything the send buffer holds, and a
-        // connection that is closing takes nothing more.
+        // The `FIN` follows every byte of the ring, and a connection that
+        // is closing takes no more: the ring is emptied first, one chunk
+        // per request, and the client asks again on `WouldBlock`.
         let index = self.sockets.slot(badge, number).ok_or(Error::NotFound)?;
         let page = self.page(index)?;
-        let _sent = self.push(page, entry.handle);
+        let _sent = self.push(page, entry.handle, CHUNK);
         let connection = self.stack.connection(entry.handle).map_err(refusal)?;
+        if connection.state().is_open() && !connection.is_closing() && page.outbound.held() > 0 {
+            return Err(Error::WouldBlock);
+        }
         connection.close().map_err(|_| Error::InvalidState)
     }
 
-    /// Gives a connection back.
-    fn close_connection(&mut self, badge: u64, number: u32) -> Result<(), Error> {
+    /// Gives a connection back, with a reset to a peer that is still
+    /// joined to it.
+    ///
+    /// A connection whose `FIN` the peer has not acknowledged drains
+    /// first, so that the bytes before the `FIN` are not lost to the
+    /// reset: [`pump`](Server::pump) gives it up after the acknowledgment.
+    fn close_connection(&mut self, badge: u64, number: u32, now: Instant) -> Result<(), Error> {
         let index = self.sockets.slot(badge, number).ok_or(Error::NotFound)?;
         let entry = self.sockets.at(index).copied().ok_or(Error::NotFound)?;
         if entry.kind == Kind::Datagram {
             return Err(Error::WrongObjectType);
         }
-        self.give_up(index);
+        if entry.kind == Kind::Connection && self.fin_unacknowledged(entry.handle) {
+            if let Some(slot) = self.sockets.at_mut(index) {
+                slot.kind = Kind::Draining;
+            }
+            return Ok(());
+        }
+        self.give_up(index, now);
         Ok(())
+    }
+
+    /// Whether this end closed and the peer has not acknowledged its `FIN`
+    /// yet, sent or still queued.
+    fn fin_unacknowledged(&mut self, handle: Handle) -> bool {
+        self.stack.connection(handle).is_ok_and(|connection| {
+            connection.is_closing()
+                && !matches!(
+                    connection.state(),
+                    TcpState::FinWait2 | TcpState::TimeWait | TcpState::Closed
+                )
+        })
     }
 
     /// Gives a datagram socket back.
@@ -471,7 +534,8 @@ impl<'a> Server<'a> {
         if entry.kind != Kind::Datagram {
             return Err(Error::WrongObjectType);
         }
-        self.give_up(index);
+        let _closed = self.sockets.close(index);
+        self.release_datagram(entry.handle);
         Ok(())
     }
 
@@ -562,22 +626,25 @@ impl<'a> Server<'a> {
 
     /// Closes the socket in `index`, whatever it is, and gives its
     /// buffers back.
-    fn give_up(&mut self, index: usize) {
+    fn give_up(&mut self, index: usize, now: Instant) {
         let Some(entry) = self.sockets.close(index) else {
             return;
         };
         match entry.kind {
             Kind::Datagram => self.release_datagram(entry.handle),
-            Kind::Connection | Kind::Listener => self.release_connection(entry.handle),
+            Kind::Connection | Kind::Listener | Kind::Draining => {
+                self.release_connection(entry.handle, now);
+            }
         }
     }
 
-    /// Closes one connection of the stack and takes its windows back.
+    /// Aborts one connection of the stack and takes its windows back.
     ///
-    /// The close is what ends the connection; nothing resets it first,
-    /// because a listener that never opened has nobody to reset.
-    fn release_connection(&mut self, handle: Handle) {
-        if let Ok(window) = self.stack.close_connection(handle) {
+    /// The stack queues the reset of RFC 9293, section 3.10.5 for a peer
+    /// that is still joined to it; a listener and an unanswered `SYN` get
+    /// none.
+    fn release_connection(&mut self, handle: Handle, now: Instant) {
+        if let Ok(window) = self.stack.abort_connection(handle, now) {
             let _kept = self.pool.put_window(window);
         }
     }
@@ -589,19 +656,19 @@ impl<'a> Server<'a> {
         }
     }
 
-    /// Moves bytes of the outbound ring into the connection, and answers
-    /// how many.
-    fn push(&mut self, page: &SocketPage, handle: Handle) -> u32 {
+    /// Moves at most `limit` bytes of the outbound ring into the
+    /// connection, and answers how many.
+    fn push(&mut self, page: &SocketPage, handle: Handle, limit: usize) -> u32 {
         let Ok(connection) = self.stack.connection(handle) else {
             return 0;
         };
-        // A connection that is not open yet takes nothing, and the bytes
-        // stay in the ring until it is: the room below is the send buffer
-        // and says nothing about the state.
-        if !connection.state().can_send() {
+        // A connection that is not open yet or is closing takes nothing,
+        // and the bytes stay in the ring: the room below is the send
+        // buffer and says nothing about the state.
+        if !connection.state().can_send() || connection.is_closing() {
             return 0;
         }
-        let room = connection.writable().min(CHUNK);
+        let room = connection.writable().min(limit).min(CHUNK);
         if room == 0 {
             return 0;
         }
