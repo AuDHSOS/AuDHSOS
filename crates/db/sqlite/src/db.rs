@@ -415,8 +415,9 @@ pub enum Error {
     /// An `ALTER TABLE ... ADD CONSTRAINT` of a name the statement that
     /// made the table already holds.
     HeldConstraint(Vec<u8>),
-    /// A value written where the key of the table stands that is no
-    /// whole number, which `sqlite3_column_int64` of the key refuses.
+    /// A value `OP_MustBeInt` makes no whole number of: one written
+    /// where the key of the table stands, which `sqlite3_column_int64`
+    /// of the key refuses, or the count of a `LIMIT` or an `OFFSET`.
     Mismatch,
     /// An `ON CONFLICT` clause whose columns are the columns of no key
     /// of the table, which `sqlite3UpsertAnalyzeTarget` refuses.
@@ -9561,6 +9562,16 @@ fn waiting(rows: &[Vec<Value>], taken: &[bool], order: &[Ordered]) -> Option<usi
     best
 }
 
+/// The whole number a `LIMIT` or `OFFSET` counts.
+///
+/// # Errors
+///
+/// [`Error::Mismatch`] where the value stands for no whole number, which
+/// `OP_MustBeInt` of `computeLimitRegisters` in `src/select.c` refuses.
+fn counted(arena: &Arena, id: ExprId, sql: &[u8], row: &dyn eval::Row) -> Result<i64, Error> {
+    whole_of(&evaluate_row(arena, id, sql, row)?).ok_or(Error::Mismatch)
+}
+
 /// How many rows a `LIMIT` on a recursive term passes over and how many
 /// it takes, which is nothing where it takes them all.
 fn bounds(
@@ -9572,10 +9583,10 @@ fn bounds(
     let Some(limit) = select.limit else {
         return Ok((0, None));
     };
-    let count = evaluate_row(arena, limit.count, sql, row)?.to_integer();
+    let count = counted(arena, limit.count, sql, row)?;
     let skip = match limit.offset {
         None => 0,
-        Some(offset) => evaluate_row(arena, offset, sql, row)?.to_integer(),
+        Some(offset) => counted(arena, offset, sql, row)?,
     };
     let most = (count >= 0).then(|| usize::try_from(count).unwrap_or(0));
     Ok((usize::try_from(skip).unwrap_or(0), most))
@@ -9592,10 +9603,10 @@ fn limit(
     let Some(limit) = select.limit else {
         return Ok(());
     };
-    let count = evaluate_row(arena, limit.count, sql, row)?.to_integer();
+    let count = counted(arena, limit.count, sql, row)?;
     let skip = match limit.offset {
         None => 0,
-        Some(offset) => evaluate_row(arena, offset, sql, row)?.to_integer(),
+        Some(offset) => counted(arena, offset, sql, row)?,
     };
     let skip = usize::try_from(skip).unwrap_or(0);
     rows.drain(..skip.min(rows.len()));

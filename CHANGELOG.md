@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` counts a `LIMIT` and an `OFFSET` as the whole number
+  `OP_MustBeInt` makes of the value, refusing `datatype mismatch` where it makes
+  none. D-523 records it. Catalog 6.6.369. `e_select.test` goes from 240 cases
+  passing to 245 and `limit.test` from 118 to 120.
+
 - `db-sqlite` refuses a statement whose `FROM` holds more than 64 sides, and the
   suite harness names `allow_rowid_in_view` among the capabilities it holds none
   of. D-522 records it. Catalog 6.6.368. `rowid.test` goes from 241 cases passing

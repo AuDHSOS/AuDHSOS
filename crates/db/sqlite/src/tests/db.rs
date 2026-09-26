@@ -952,6 +952,74 @@ fn the_order_by_of_a_recursive_term_says_which_row_is_taken_next() {
     assert_eq!(rows, [[Value::Int(1)], [Value::Int(3)], [Value::Int(5)]]);
 }
 
+/// A `LIMIT` or an `OFFSET` counts a whole number, and a value that
+/// stands for none is refused.
+#[test]
+fn which_values_a_limit_counts() {
+    use crate::change::Writer;
+    use crate::header::Encoding;
+    // `computeLimitRegisters` writes `OP_MustBeInt` over each count, so
+    // a real that carries a fraction, a text that spells no number, a
+    // blob and `NULL` are all refused before the walk answers a row.
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(x)").unwrap();
+    writer.run(b"INSERT INTO t VALUES(1),(2),(3)").unwrap();
+    let written = writer.written();
+    let database = Database::open(&written).unwrap();
+    let held = |rest: &str| -> Result<Vec<i64>, crate::db::Error> {
+        let mut sql = b"SELECT x FROM t ".to_vec();
+        sql.extend_from_slice(rest.as_bytes());
+        Ok(database
+            .query(&sql)?
+            .rows
+            .iter()
+            .filter_map(|row| match row.first() {
+                Some(Value::Int(number)) => Some(*number),
+                _ => None,
+            })
+            .collect())
+    };
+    assert_eq!(held("LIMIT 2").unwrap(), [1, 2]);
+    assert_eq!(held("LIMIT 2.0").unwrap(), [1, 2]);
+    assert_eq!(held("LIMIT '2'").unwrap(), [1, 2]);
+    assert_eq!(held("LIMIT '2.0'").unwrap(), [1, 2]);
+    assert_eq!(held("LIMIT 2 OFFSET 1.0").unwrap(), [2, 3]);
+    // A count under zero takes every row, and an offset under zero
+    // passes over none.
+    assert_eq!(held("LIMIT '-2'").unwrap(), [1, 2, 3]);
+    assert_eq!(held("LIMIT 2 OFFSET -1").unwrap(), [1, 2]);
+    // A real no integer holds is refused, where the largest one an
+    // integer holds stands.
+    assert_eq!(held("LIMIT 9e18").unwrap(), [1, 2, 3]);
+    for rest in [
+        "LIMIT NULL",
+        "LIMIT 1.5",
+        "LIMIT 1e19",
+        "LIMIT 'hello'",
+        "LIMIT '2abc'",
+        "LIMIT ''",
+        "LIMIT X'32'",
+        "LIMIT 2 OFFSET NULL",
+        "LIMIT 2 OFFSET 'x'",
+        "WHERE 0 LIMIT NULL",
+    ] {
+        let refused = held(rest).unwrap_err();
+        assert_eq!(refused, crate::db::Error::Mismatch, "{rest}");
+        assert_eq!(refused.message(), "datatype mismatch", "{rest}");
+    }
+    // The count of a recursive term is read the same way.
+    let recursive =
+        b"WITH RECURSIVE c(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM c LIMIT ".as_slice();
+    let recursed = |rest: &str| -> Result<usize, crate::db::Error> {
+        let mut sql = recursive.to_vec();
+        sql.extend_from_slice(rest.as_bytes());
+        sql.extend_from_slice(b") SELECT * FROM c");
+        Ok(database.query(&sql)?.rows.len())
+    };
+    assert_eq!(recursed("'3'").unwrap(), 3);
+    assert_eq!(recursed("'x'").unwrap_err().message(), "datatype mismatch");
+}
+
 #[test]
 fn the_schema_is_a_table_that_is_read_and_not_written() {
     use crate::change::Writer;

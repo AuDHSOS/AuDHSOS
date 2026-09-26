@@ -7855,3 +7855,17 @@ Document 16 step Q8. Every answer is the one the C library's shell writes.
 - A `FROM` of one, 30, 63 and 64 sides, which stand.
 - A `FROM` of 65 and of 100 sides, which are refused.
 - Two statements of 64 sides, one written inside the other, which stand.
+
+### 6.6.369 The values a `LIMIT` counts (`db-sqlite`)
+
+Document 16 step Q8. Every answer is the one the C library's shell writes.
+
+- A count of `2`, `2.0`, `'2'` and `'2.0'`, and an offset of `1.0`,
+  which stand.
+- A count of `'-2'` and an offset of `-1`, which are under zero.
+- A count of `9e18`, the largest an integer holds, which stands.
+- A count of `NULL`, `1.5`, `1e19`, `'hello'`, `'2abc'`, `''` and
+  `X'32'`, and an offset of `NULL` and of `'x'`, which are refused.
+- A count of `NULL` under a `WHERE` no row holds to, which is refused
+  before the walk answers a row.
+- A count of `'3'` and of `'x'` on a recursive term.
