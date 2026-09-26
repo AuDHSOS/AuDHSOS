@@ -146,6 +146,14 @@ fn every_area_and_error_says_what_it_is() {
         "the device has not settled its feature set"
     );
     assert_eq!(
+        QueueError::ChainBytes(1 << 32).to_string(),
+        "a chain of 4294967296 bytes exceeds 2^32 - 1 bytes"
+    );
+    assert_eq!(
+        QueueError::UsedIndexNotZero(3).to_string(),
+        "the used index is 3 before the queue is built"
+    );
+    assert_eq!(
         QueueError::UnknownDescriptor(9).to_string(),
         "the used ring names the unknown descriptor 9"
     );

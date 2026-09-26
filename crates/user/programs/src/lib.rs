@@ -70,3 +70,9 @@ pub mod permissions {
     /// Readable and executable.
     pub const EXECUTE: u64 = 0b10;
 }
+
+#[cfg(test)]
+extern crate std;
+
+#[cfg(test)]
+mod tests;

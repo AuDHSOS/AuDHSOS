@@ -106,6 +106,11 @@ impl RamQueue {
         self.available.truncate(length);
     }
 
+    /// Shortens the used ring.
+    pub fn truncate_used(&mut self, length: usize) {
+        self.used.truncate(length);
+    }
+
     /// Acts as the device: gives the chain at `head` back with `length`
     /// bytes written, and advances the used index.
     pub fn complete(&mut self, head: u32, length: u32) {

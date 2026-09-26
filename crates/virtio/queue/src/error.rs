@@ -58,6 +58,10 @@ pub enum QueueError {
         /// How many descriptors the queue has in total.
         size: u16,
     },
+    /// The buffer lengths of a chain sum past `u32::MAX`, which virtio
+    /// 1.4 section 2.7.5.2 forbids and the used `len` cannot represent.
+    /// Carries the sum.
+    ChainBytes(u64),
     /// Not enough free descriptors for this chain right now. The chain
     /// that was half built has been given back, and the request fits once
     /// enough completions have been taken.
@@ -74,9 +78,14 @@ pub enum QueueError {
     NotConfigured,
     /// The device has not reached `DRIVER_OK`, or it has failed since.
     NotLive,
-    /// A used element names a descriptor this queue never handed out:
-    /// one outside the table, or one that is free.
+    /// A used element names a descriptor that is not the head of an
+    /// outstanding chain: one outside the table, one that is free, or one
+    /// inside a chain.
     UnknownDescriptor(u32),
+    /// The used index was not zero when the queue was built. Virtio 1.4
+    /// section 2.7.10.1 has the driver zero the used ring first. Carries
+    /// the index.
+    UsedIndexNotZero(u16),
     /// The used index moved backwards, or forwards past the number of
     /// chains the driver has outstanding.
     UsedIndex {
@@ -136,6 +145,9 @@ impl fmt::Display for QueueError {
                 f,
                 "{buffers} buffers do not fit a queue of {size} descriptors"
             ),
+            QueueError::ChainBytes(bytes) => {
+                write!(f, "a chain of {bytes} bytes exceeds 2^32 - 1 bytes")
+            }
             QueueError::QueueFull { free, needed } => {
                 write!(f, "{needed} descriptors are needed and {free} are free")
             }
@@ -143,6 +155,9 @@ impl fmt::Display for QueueError {
             QueueError::NotLive => f.write_str("the device is not live"),
             QueueError::UnknownDescriptor(id) => {
                 write!(f, "the used ring names the unknown descriptor {id}")
+            }
+            QueueError::UsedIndexNotZero(index) => {
+                write!(f, "the used index is {index} before the queue is built")
             }
             QueueError::UsedIndex {
                 last,

@@ -895,9 +895,11 @@ pub(crate) const CRATES: &[Crate] = &[
         // `docs/15-the-disk-on-the-machine.md`. Phase 14 added the socket
         // page of `Mapping`, which is one site more, and `socket::Stream`
         // one more again — the reference into the rings that the two
-        // programs of the network used to take each for itself.
+        // programs of the network used to take each for itself. `Dma`
+        // over a raw pointer, for volatile reads of device-written bytes
+        // (issue 295), added five sites and its tests three.
         kind: Kind::Adapter {
-            unsafe_budget: 43,
+            unsafe_budget: 51,
             asm_budget: 0,
         },
         deps: &[

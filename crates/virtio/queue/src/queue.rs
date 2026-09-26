@@ -9,7 +9,8 @@
 //! section 2.7.13 and taking one back is section 2.7.14.
 //!
 //! Invariants: a descriptor is either free or in exactly one chain, and
-//! the free set says which; the chain walk terminates, because every step
+//! the free set says which; the head set holds the head of every published
+//! chain and nothing else; the chain walk terminates, because every step
 //! frees one descriptor that was in use and a step onto one that is
 //! already free is refused; no operation indexes without a bound.
 
@@ -88,6 +89,8 @@ pub struct Queue<const WORDS: usize> {
     size: u16,
     /// One bit per descriptor: set means free.
     free: BitSet<WORDS>,
+    /// One bit per descriptor: set means the head of a published chain.
+    heads: BitSet<WORDS>,
     /// The next available index the driver will publish.
     avail_idx: u16,
     /// The used index the driver has read up to.
@@ -108,10 +111,8 @@ impl<const WORDS: usize> Queue<WORDS> {
     /// before it tells the device where they are. That is not only
     /// tidiness: section 2.7.10.1 requires the driver to initialize the
     /// flags of the used ring to zero when it allocates the ring, and
-    /// zeroing the region is how that requirement is met here. A used
-    /// index that starts at something other than zero is refused by
-    /// [`Queue::next_used`] rather than believed — but it is refused for
-    /// the rest of the queue's life.
+    /// zeroing the region is how that requirement is met here. This
+    /// reads the used index and refuses a queue whose index is not zero.
     ///
     /// A region is checked where it is used and not here, so that every
     /// refusal names the byte it wanted; the one exception is the
@@ -125,7 +126,8 @@ impl<const WORDS: usize> Queue<WORDS> {
     /// the size from above on its own: the largest power of two it holds
     /// is 32768, which is [`MAX_QUEUE_SIZE`](crate::memory::MAX_QUEUE_SIZE).
     /// [`QueueError::Region`] when the available ring cannot hold its
-    /// flags and its index.
+    /// flags and its index, or the used ring cannot hold its index.
+    /// [`QueueError::UsedIndexNotZero`] when the used index is not zero.
     pub fn new(memory: &mut impl QueueMemory, size: u16) -> Result<Queue<WORDS>, QueueError> {
         if size == 0 || !size.is_power_of_two() {
             return Err(QueueError::Size(size));
@@ -135,9 +137,14 @@ impl<const WORDS: usize> Queue<WORDS> {
             free.set(usize::from(index))
                 .map_err(|_| QueueError::Size(size))?;
         }
+        let used = memory.read_used_u16(INDEX_AT)?;
+        if used != 0 {
+            return Err(QueueError::UsedIndexNotZero(used));
+        }
         let queue = Queue {
             size,
             free,
+            heads: BitSet::new(),
             avail_idx: 0,
             last_used: 0,
             in_flight: 0,
@@ -210,9 +217,10 @@ impl<const WORDS: usize> Queue<WORDS> {
     /// when the descriptor table or the available ring is too short.
     /// [`QueueError::EmptyChain`] for no buffers,
     /// [`QueueError::ChainTooLong`] for more than the queue has
-    /// descriptors, which no completion would make fit, and
+    /// descriptors, which no completion would make fit,
     /// [`QueueError::BufferOrder`] for a buffer the device writes that
-    /// stands before one it reads.
+    /// stands before one it reads, and [`QueueError::ChainBytes`] for
+    /// buffer lengths that sum past `u32::MAX` (section 2.7.5.2).
     /// [`QueueError::QueueFull`] when the free descriptors run out; the
     /// part of the chain already taken is given back first, and so is a
     /// whole chain that could not be published.
@@ -233,6 +241,13 @@ impl<const WORDS: usize> Queue<WORDS> {
         }
         if !buffers.is_sorted_by_key(|buffer| buffer.direction) {
             return Err(QueueError::BufferOrder);
+        }
+        let bytes = buffers
+            .iter()
+            .map(|buffer| u64::from(buffer.length))
+            .fold(0u64, u64::saturating_add);
+        if bytes > u64::from(u32::MAX) {
+            return Err(QueueError::ChainBytes(bytes));
         }
         self.check_table(memory)?;
 
@@ -342,7 +357,7 @@ impl<const WORDS: usize> Queue<WORDS> {
     /// is too short. [`QueueError::UsedIndex`] when the used index moved
     /// backwards or past the outstanding chains.
     /// [`QueueError::UnknownDescriptor`] when the element names a
-    /// descriptor outside the table or one that is already free.
+    /// descriptor that is not the head of an outstanding chain.
     /// [`QueueError::CorruptChain`] when the chain does not end where it
     /// should; the element is consumed either way, so the queue does not
     /// stall on it, and what the walk reached is back in the free set.
@@ -378,7 +393,7 @@ impl<const WORDS: usize> Queue<WORDS> {
         let id = memory.read_used_u32(at)?;
         let length = memory.read_used_u32(at.saturating_add(USED_LENGTH_AT))?;
         let head = u16::try_from(id).unwrap_or(u16::MAX);
-        if head >= self.size || self.free.test(usize::from(head)).unwrap_or(true) {
+        if head >= self.size || !self.heads.test(usize::from(head)).unwrap_or(false) {
             return Err(QueueError::UnknownDescriptor(id));
         }
         self.last_used = self.last_used.wrapping_add(1);
@@ -417,6 +432,8 @@ impl<const WORDS: usize> Queue<WORDS> {
             next,
         )
         .map(|()| {
+            // `take_free` bounds the head below the size.
+            let _ = self.heads.set(usize::from(head));
             self.avail_idx = next;
             self.in_flight = self.in_flight.saturating_add(1);
         })
@@ -438,10 +455,10 @@ impl<const WORDS: usize> Queue<WORDS> {
     /// onto one that is already free is refused, so the loop cannot run
     /// longer than the queue is wide.
     ///
-    /// The sum saturates. A chain whose writable descriptors add up past
-    /// four gigabytes bounds nothing in practice, and saturating there
-    /// says so without a branch that no queue can reach.
+    /// The sum saturates: [`Queue::add`] bounds it by `u32::MAX`, and
+    /// only a caller that rewrote the table exceeds that bound.
     fn free_chain(&mut self, memory: &impl QueueMemory, head: u16) -> Result<u32, QueueError> {
+        let _ = self.heads.clear(usize::from(head));
         let table = memory.descriptor_table();
         let mut current = head;
         let mut writable: u32 = 0;
