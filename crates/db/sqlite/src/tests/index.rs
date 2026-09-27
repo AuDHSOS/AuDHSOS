@@ -1312,7 +1312,7 @@ fn a_side_is_keyed_by_what_the_sides_before_it_answer() {
             super::INDEXED,
             b"EXPLAIN QUERY PLAN SELECT m.p FROM (SELECT b FROM k) AS s, m WHERE m.p=s.b"
         ),
-        "SCAN k|SCAN s|SEARCH m USING COVERING INDEX mpq (p=?)"
+        "SCAN k USING COVERING INDEX kb|SCAN s|SEARCH m USING COVERING INDEX mpq (p=?)"
     );
     // A side held to a range of rowids is read out of the table, which
     // holds every column the index holds and the ones it does not.
@@ -1355,7 +1355,7 @@ fn what_names_no_key_of_a_side_the_sides_before_it_answer() {
             super::INDEXED,
             b"EXPLAIN QUERY PLAN SELECT m.q FROM (SELECT b FROM k) AS s, m WHERE s.b=m.q"
         ),
-        "SCAN k|SCAN s|SCAN m USING COVERING INDEX mq"
+        "SCAN k USING COVERING INDEX kb|SCAN s|SCAN m USING COVERING INDEX mq"
     );
     // `ea` is over an expression, `eb` holds fewer entries than the table
     // has rows, and `ec` compares under another collation than the column

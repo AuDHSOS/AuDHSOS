@@ -1316,21 +1316,22 @@ Size: L.
      clause and for a chain of `UNION ALL`. Built, which D-570 records.
 272. The terms of an `ORDER BY` a walk answers, counted, and the sorter
      that takes the terms after them. Built, which D-571 records.
-273. The lines a plan names for a merge of the cores of a compound, for a
-     statement written inside a `FROM`, and for one written inside an
-     expression. `MERGE` with `LEFT` and `RIGHT` stands over the cores of
-     every compound but a `UNION ALL` of no `ORDER BY`, each core
-     building a sorter for the order of that merge, which
-     `multiSelectByMerge` of `research/sqlite/src/select.c:3574` writes;
-     `CO-ROUTINE` and `MATERIALIZE` stand over a statement of a `FROM`
-     that `flattenSubquery` of `research/sqlite/src/select.c:4290` does
-     not write into the statement above it; and `SCALAR SUBQUERY`,
-     `LIST SUBQUERY` and `CORRELATED LIST SUBQUERY` stand over a
-     statement written inside an expression. A statement of no `FROM`
-     answers one row, which `sqlite3WhereBegin` counts as every term of
-     the `ORDER BY` answered, so the C library builds no sorter for it
-     where this engine builds one. `eqp.test` holds thirty-seven cases of
-     them.
+273. The lines a plan names for a merge of the cores of a compound. Built,
+     which D-572 records.
+274. The indexes a name of another statement left uncovering. Built, which
+     D-573 records.
+275. The lines a plan names for a statement written inside a `FROM` and for
+     one written inside an expression. `CO-ROUTINE` and `MATERIALIZE` stand
+     over a statement of a `FROM` that `flattenSubquery` of
+     `research/sqlite/src/select.c:4290` does not write into the statement
+     above it, and `SCALAR SUBQUERY`, `LIST SUBQUERY` and
+     `CORRELATED LIST SUBQUERY` over a statement written inside an
+     expression. `eqp.test` holds seventeen cases of them.
+276. The order a walk of a table that keeps its rows in the key's own tree
+     answers, and the order a term whose `NULLS` clause moves its nulls
+     asks for, which `KEYINFO_ORDER_BIGNULL` of `sqlite3WhereIsOrdered`
+     answers by reading the nulls of an index at the end. Both leave the
+     whole order to the sorter here.
 
 ### Done when
 

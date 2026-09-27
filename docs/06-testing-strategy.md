@@ -7888,6 +7888,26 @@ Unit tests of `crate::db` over `fixtures/indexed.db`.
 - `WHERE NULL` under an aggregate, which answers one row.
 - `WHERE abs(0)`, which is read against every row.
 
+### 6.6.412 The tree of a merge of the cores of a compound (`db-sqlite`)
+
+Unit tests of `crate::db` over `fixtures/indexed.db`, drawn as
+`query_plan_graph` of the suite's `tester.tcl` draws the lines. Every
+answer is the one the C library's shell writes, but for the lines item 273
+of document 16 records as missing.
+
+- A `UNION` of two cores and an `EXCEPT` of three, whose right side takes
+  one core.
+- A `UNION` of four cores, split near its middle.
+- A chain of `UNION ALL`, `UNION` and `UNION ALL`, whose merge stands
+  beside the operator of the trailing run.
+- `SELECT * FROM m UNION SELECT * FROM m`, whose cores read the index over
+  the first two columns and sort by the third.
+- `SELECT q FROM m UNION SELECT b FROM k`, whose cores are read out of a
+  covering index, one of them answering the order.
+- A term of the order that reaches the rowid, one that reaches a column of
+  no side, a table that keeps its rows in the key's own tree, and a term
+  whose `NULLS` clause moves its nulls.
+
 ### 6.6.411 The terms of an order a walk answers (`db-sqlite`)
 
 Unit tests of `crate::db` over `fixtures/indexed.db`, against the plan

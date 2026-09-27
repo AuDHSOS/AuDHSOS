@@ -4023,11 +4023,14 @@ impl<'a> Database<'a> {
     /// hangs, which is `sqlite3VdbeExplainPop`.
     fn plan_over(&self) {
         let held = self.planned.borrow();
+        let Some(lines) = held.as_ref() else {
+            return;
+        };
         let over = self
             .hanging
             .get()
             .checked_sub(1)
-            .and_then(|at| held.as_ref().and_then(|lines| lines.get(at)))
+            .and_then(|at| lines.get(at))
             .map_or(0, |line| line.0);
         self.hanging.set(over);
     }
@@ -4257,7 +4260,7 @@ impl<'a> Database<'a> {
             schema: scope.schema,
         };
         if first.compound.is_none() {
-            return self.core(arena, id, sql, true, scope);
+            return self.core(arena, id, sql, scope, (true, &[]));
         }
         let mut chain = alloc::vec![id];
         let mut operators: Vec<Compound> = Vec::new();
@@ -4267,13 +4270,22 @@ impl<'a> Database<'a> {
             chain.push(next);
             at = arena.select(next).ok_or(Error::Unsupported)?.compound;
         }
+        let sorted = !first.order.is_empty();
+        let merged = merging(&operators, sorted);
+        // The plan names the sorter every core of a merge builds, which
+        // asks for the order of the merge before any core is answered.
+        let key = if merged > 1 {
+            self.merged_key(arena, sql, scope, (&chain, &operators, &first), merged)?
+        } else {
+            Vec::new()
+        };
         let mut answers: Vec<Answered> = Vec::new();
-        self.compounded(
+        self.chained(
             arena,
             sql,
             scope,
-            (&chain, &operators),
-            !first.order.is_empty(),
+            (&chain, &operators, &key),
+            sorted,
             &mut answers,
         )?;
         self.plan_over();
@@ -4320,13 +4332,13 @@ impl<'a> Database<'a> {
     /// `multiSelect` of `research/sqlite/src/select.c:3012` writes
     /// `COMPOUND QUERY` over a chain of `UNION ALL` that carries no
     /// `ORDER BY`, with `LEFT-MOST SUBQUERY` over the core on the left
-    /// and the operator over each core after it. It answers the cores to
-    /// the left of the last operator by calling itself, and a level of
-    /// any other operator merges its cores and hands the order of that
-    /// merge to the level under it, which merges too: the levels that
-    /// write an operator are the trailing run of `UNION ALL`, and
-    /// `COMPOUND QUERY` stands where that run reaches the core on the
-    /// left.
+    /// and the operator over each core after it. A level of any other
+    /// operator merges its cores and hands the order of that merge to the
+    /// level under it, which merges too, so the levels that write an
+    /// operator are the trailing run of `UNION ALL` and `COMPOUND QUERY`
+    /// stands where that run reaches the core on the left. The cores the
+    /// levels above that run answer are merged, which [`Self::merged`]
+    /// writes the lines of.
     ///
     /// Answering `n` cores costs what those cores cost.
     ///
@@ -4334,39 +4346,30 @@ impl<'a> Database<'a> {
     ///
     /// Whatever a core refuses, and the words two cores of different
     /// widths are refused with.
-    fn compounded(
+    fn chained(
         &self,
         arena: &Arena,
         sql: &[u8],
         scope: Scope<'_>,
-        held: (&[SelectId], &[Compound]),
+        held: (&[SelectId], &[Compound], &[Ordered]),
         sorted: bool,
         out: &mut Vec<Answered>,
     ) -> Result<(), Error> {
-        let (chain, operators) = held;
-        let run = if sorted {
-            0
-        } else {
-            operators
-                .iter()
-                .rev()
-                .take_while(|operator| **operator == Compound::UnionAll)
-                .count()
-        };
-        // How many cores the levels above that run answer, which is the
-        // core on the left alone where the run reaches it.
-        let merged = chain.len().saturating_sub(run);
-        let whole = run == operators.len();
-        if whole {
+        let (chain, operators, key) = held;
+        let merged = merging(operators, sorted);
+        if merged <= 1 {
             self.plan_under(b"COMPOUND QUERY".to_vec());
             self.plan_under(b"LEFT-MOST SUBQUERY".to_vec());
-        }
-        for (at, id) in chain.iter().enumerate().take(merged) {
-            let joined = at.checked_sub(1).and_then(|at| operators.get(at)).copied();
-            self.cored(arena, sql, scope, (*id, joined), out)?;
-        }
-        if whole {
+            self.cored(
+                arena,
+                sql,
+                scope,
+                (*chain.first().ok_or(Error::Unsupported)?, None, key),
+                out,
+            )?;
             self.plan_over();
+        } else {
+            self.merged(arena, sql, scope, (chain, operators, key), merged, out)?;
         }
         for (at, id) in chain.iter().enumerate().skip(merged) {
             let joined = at
@@ -4375,10 +4378,218 @@ impl<'a> Database<'a> {
                 .copied()
                 .ok_or(Error::Unsupported)?;
             self.plan_under(compound_named(joined));
-            self.cored(arena, sql, scope, (*id, Some(joined)), out)?;
+            self.cored(arena, sql, scope, (*id, Some(joined), &[]), out)?;
             self.plan_over();
         }
         Ok(())
+    }
+
+    /// Answers the `merged` cores on the left of a compound, writing the
+    /// tree of the merge the plan names them under.
+    ///
+    /// `multiSelectByMerge` of `research/sqlite/src/select.c:3574` writes
+    /// `MERGE` with the operator, `LEFT` over the cores to the left of the
+    /// split and `RIGHT` over the cores from it on, and answers each side
+    /// through `sqlite3Select`, so a side of several cores is a merge of
+    /// its own. The split takes one core for the right side, except that
+    /// `SQLITE_BalancedMerge` splits a run of `UNION` or of `UNION ALL`
+    /// longer than three cores near its middle.
+    ///
+    /// The tree is written from the top down with a stack of its own and
+    /// not by calling itself, a chain of `EXCEPT` of five hundred cores
+    /// reaching five hundred levels deep. Writing it costs O(n) in the
+    /// cores.
+    ///
+    /// # Errors
+    ///
+    /// Whatever a core refuses, and the words two cores of different
+    /// widths are refused with.
+    fn merged(
+        &self,
+        arena: &Arena,
+        sql: &[u8],
+        scope: Scope<'_>,
+        held: (&[SelectId], &[Compound], &[Ordered]),
+        merged: usize,
+        out: &mut Vec<Answered>,
+    ) -> Result<(), Error> {
+        let (chain, operators, key) = held;
+        // Each level of the tree is the cores from `lo` to `hi`, with
+        // nothing written of it yet, its left side answered, or both.
+        let mut stack = alloc::vec![(0_usize, merged.saturating_sub(1), 0_u8)];
+        while let Some((lo, hi, state)) = stack.pop() {
+            if lo >= hi {
+                let joined = lo.checked_sub(1).and_then(|at| operators.get(at)).copied();
+                let id = *chain.get(lo).ok_or(Error::Unsupported)?;
+                self.cored(arena, sql, scope, (id, joined, key), out)?;
+                continue;
+            }
+            let operator = *hi
+                .checked_sub(1)
+                .and_then(|at| operators.get(at))
+                .ok_or(Error::Unsupported)?;
+            let split = split_of(operators, (lo, hi), operator);
+            match state {
+                0 => {
+                    self.plan_under(merged_named(operator));
+                    self.plan_under(b"LEFT".to_vec());
+                    stack.push((lo, hi, 1));
+                    stack.push((lo, split.saturating_sub(1), 0));
+                }
+                1 => {
+                    self.plan_over();
+                    self.plan_under(b"RIGHT".to_vec());
+                    stack.push((lo, hi, 2));
+                    stack.push((split, hi, 0));
+                }
+                _ => {
+                    self.plan_over();
+                    self.plan_over();
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The rows a `VALUES` answers, with the line the plan names it by.
+    ///
+    /// A `VALUES` of several rows is named as the clause it is, and one of
+    /// a single row as the one row a statement of no `FROM` answers.
+    ///
+    /// # Errors
+    ///
+    /// Whatever reading one of the values refuses.
+    fn listed_rows(
+        &self,
+        arena: &Arena,
+        held: (&Select, SelectId),
+        sql: &[u8],
+        reach: Reach<'_>,
+    ) -> Result<Answered, Error> {
+        let (select, id) = held;
+        let cursor = Cursor::new(self.collation(), self.encoding, reach);
+        let answered = listed(arena, select, sql, &cursor)?;
+        let mut named = valued(arena, id);
+        if named.is_empty() {
+            named = b"CONSTANT ROW".to_vec();
+        }
+        self.plan_line(scanned(&named, b"", false));
+        Ok(answered)
+    }
+
+    /// How many terms the sorter of one core takes and how many terms the
+    /// order it sorts by holds.
+    ///
+    /// A core of a compound that merges sorts its rows by the order of the
+    /// merge, which `multiSelectByMerge` hands every core, and not by an
+    /// `ORDER BY` of its own: it has none.
+    ///
+    /// Costs what [`in_merged_order`] costs.
+    fn sorting(
+        &self,
+        arena: &Arena,
+        select: &Select,
+        sql: &[u8],
+        sides: &mut [Side<'_>],
+        held: ((usize, usize), &[Ordered]),
+    ) -> (usize, usize) {
+        let ((terms, answered), merged) = held;
+        if merged.is_empty() {
+            return (terms, answered);
+        }
+        let settling = Settling {
+            format: self.schema_format(),
+            collating: self.collating,
+        };
+        (
+            merged.len(),
+            in_merged_order(arena, select, sql, sides, (settling, merged)),
+        )
+    }
+
+    /// The columns one core of a compound answers, read without answering
+    /// its rows.
+    ///
+    /// The order of a merge counts the columns of the answer, which the
+    /// core on the left names, so they are read before any core is
+    /// answered. Reading them costs what the sides of that core cost.
+    ///
+    /// # Errors
+    ///
+    /// Whatever reading the sides or the columns of the core refuses.
+    fn shaped(
+        &self,
+        arena: &Arena,
+        id: SelectId,
+        sql: &[u8],
+        scope: Scope<'_>,
+    ) -> Result<Shape, Error> {
+        let select = arena.select(id).ok_or(Error::Unsupported)?;
+        let reach = Reach {
+            database: self,
+            arena,
+            sql,
+            scope,
+            columns: select.columns,
+            filter: select.filter,
+        };
+        if !select.values.is_empty() {
+            let cursor = Cursor::new(self.collation(), self.encoding, reach);
+            return Ok(listed(arena, &select, sql, &cursor)?.shape);
+        }
+        let sides = self.sides(arena, &select, sql, scope)?;
+        shape(arena, &select, sql, &sides, self.naming, self.collating)
+    }
+
+    /// The order a merge of the cores of a compound puts its rows in,
+    /// which every core of that merge sorts its rows by.
+    ///
+    /// `multiSelectByMerge` of `research/sqlite/src/select.c:3462` adds to
+    /// the `ORDER BY` every column of the answer it does not name, for
+    /// every operator but `UNION ALL`, so the merge tells two rows apart
+    /// by every column of them. The columns are read off the core on the
+    /// left, which answers as many as every other core and names the
+    /// collation of each where it names one, and its rows are not
+    /// answered: reading them costs what [`Self::shaped`] costs.
+    ///
+    /// # Errors
+    ///
+    /// Whatever reading the columns of that core refuses.
+    fn merged_key(
+        &self,
+        arena: &Arena,
+        sql: &[u8],
+        scope: Scope<'_>,
+        held: (&[SelectId], &[Compound], &Select),
+        merged: usize,
+    ) -> Result<Vec<Ordered>, Error> {
+        let (chain, operators, first) = held;
+        let shape = self.shaped(arena, *chain.first().ok_or(Error::Unsupported)?, sql, scope)?;
+        let cores = alloc::vec![named_of(&shape)];
+        let collations = self.collations(&shape);
+        // A term that names a column no core on the left answers is one
+        // this order cannot count, and the statement is refused for it
+        // once the cores are answered.
+        let Ok(mut key) = matched(arena, first, sql, &cores, &collations, self.collating) else {
+            return Ok(Vec::new());
+        };
+        // The operator of the level above the run of `UNION ALL` decides:
+        // a merge of that operator tells its rows apart by every column,
+        // one of `UNION ALL` by the terms written alone.
+        let operator = operators.get(merged.saturating_sub(2)).copied();
+        if operator != Some(Compound::UnionAll) {
+            for at in 0..collations.len() {
+                if !key.iter().any(|term| term.at == at) {
+                    key.push(Ordered {
+                        at,
+                        descending: false,
+                        collation: collation_at(&collations, at),
+                        nulls: Nulls::Unspecified,
+                    });
+                }
+            }
+        }
+        Ok(key)
     }
 
     /// Answers one core of a compound and keeps what it answered.
@@ -4396,11 +4607,11 @@ impl<'a> Database<'a> {
         arena: &Arena,
         sql: &[u8],
         scope: Scope<'_>,
-        held: (SelectId, Option<Compound>),
+        held: (SelectId, Option<Compound>, &[Ordered]),
         out: &mut Vec<Answered>,
     ) -> Result<(), Error> {
-        let (id, joined) = held;
-        let mine = self.core(arena, id, sql, false, scope)?;
+        let (id, joined, merged) = held;
+        let mine = self.core(arena, id, sql, scope, (false, merged))?;
         let width = mine.answer.names.len();
         if out
             .first()
@@ -4564,9 +4775,10 @@ impl<'a> Database<'a> {
         arena: &Arena,
         id: SelectId,
         sql: &[u8],
-        whole: bool,
         scope: Scope<'_>,
+        held: (bool, &[Ordered]),
     ) -> Result<Answered, Error> {
+        let (whole, merged) = held;
         let select = arena.select(id).ok_or(Error::Unsupported)?;
         let reach = Reach {
             database: self,
@@ -4577,17 +4789,7 @@ impl<'a> Database<'a> {
             filter: select.filter,
         };
         if !select.values.is_empty() {
-            let cursor = Cursor::new(self.collation(), self.encoding, reach);
-            let answered = listed(arena, &select, sql, &cursor)?;
-            // A `VALUES` of several rows is named as the clause it is,
-            // and one of a single row as the one row a statement of no
-            // `FROM` answers.
-            let mut named = valued(arena, id);
-            if named.is_empty() {
-                named = b"CONSTANT ROW".to_vec();
-            }
-            self.plan_line(scanned(&named, b"", false));
-            return Ok(answered);
+            return self.listed_rows(arena, (&select, id), sql, reach);
         }
         self.within_terms(arena, &select)?;
         let mut sides = self.sides(arena, &select, sql, scope)?;
@@ -4629,12 +4831,13 @@ impl<'a> Database<'a> {
         // `research/sqlite/src/select.c:1702` counts.
         let terms = arena.orders(select.order).len();
         let held = terms > 0 && answered >= terms;
+        let sorting = self.sorting(arena, &select, sql, &mut sides, ((terms, answered), merged));
         let smallest = self.described(
             arena,
             &select,
             sql,
             (&mut sides, &calls),
-            (gathered, answered, alone),
+            (gathered, sorting, alone),
         );
         // `EXPLAIN QUERY PLAN` names the plan of the statement and runs
         // no loop of it, so the walks are left where they stand and the
@@ -5311,7 +5514,7 @@ impl<'a> Database<'a> {
                 schema: scope.schema,
             };
             for (step, link) in links.iter().enumerate().skip(first) {
-                let answer = self.core(arena, link.id, sql, false, mine)?;
+                let answer = self.core(arena, link.id, sql, mine, (false, &[]))?;
                 if answer.answer.names.len() != width {
                     return Err(unjoined(before(&links, step), false));
                 }
@@ -5342,7 +5545,7 @@ impl<'a> Database<'a> {
     ) -> Result<Answered, Error> {
         let mut answered = Answered::default();
         for (at, link) in links.get(..first).unwrap_or_default().iter().enumerate() {
-            let mine = self.core(arena, link.id, sql, false, scope)?;
+            let mine = self.core(arena, link.id, sql, scope, (false, &[]))?;
             let Some(operator) = before(links, at) else {
                 answered = mine;
                 continue;
@@ -5770,10 +5973,10 @@ impl<'a> Database<'a> {
         select: &Select,
         sql: &[u8],
         over: (&mut [Side<'_>], &[Call]),
-        held: (bool, usize, bool),
+        held: (bool, (usize, usize), bool),
     ) -> Option<ExprId> {
         let (sides, calls) = over;
-        let (gathered, answered, windowless) = held;
+        let (gathered, (terms, answered), windowless) = held;
         let smallest = windowless
             .then(|| self.smallest_side(arena, select, sql, sides, calls))
             .flatten();
@@ -5784,12 +5987,15 @@ impl<'a> Database<'a> {
         // walk answers, a bare `min` or `max` the walk answers the value
         // of, and a window function that reads the rows as the statement
         // left them each read that order.
-        let free = windowless
-            && !gathered
-            && smallest.is_none()
-            && (select.order.is_empty() || answered == 0);
+        // A statement of no `FROM` answers one row, which
+        // `sqlite3WhereBegin` of `research/sqlite/src/where.c:6946` counts
+        // as every term of the order answered and builds no sorter for;
+        // one that gathers groups or aggregates sorts once the groups
+        // stand and builds one all the same.
+        let single = sides.is_empty() && calls.is_empty() && select.group.is_empty();
+        let answered = if single { terms } else { answered };
+        let free = windowless && !gathered && smallest.is_none() && (terms == 0 || answered == 0);
         covered(arena, select, sql, sides, free);
-        let terms = arena.orders(select.order).len();
         self.explain(
             sides,
             Sorting {
@@ -7164,25 +7370,27 @@ fn in_order_of(
 /// the sides for each of them.
 fn covered(arena: &Arena, select: &Select, sql: &[u8], sides: &mut [Side<'_>], free: bool) {
     let mut reading: Vec<Vec<usize>> = alloc::vec![Vec::new(); sides.len()];
-    // A `*` answers every column of the side it names, and a column no
-    // side of this statement answers is one this reading cannot place,
-    // so neither leaves an index covering.
+    // A `*` answers every column of the side it names, which no index of
+    // it covers unless it holds every column.
     let results = arena.results(select.columns);
     if results.iter().any(|held| expression_of(held).is_none()) {
         return;
     }
+    // Every name the file writes is read against these sides: a name
+    // another core of the compound or another statement writes reaches
+    // none of them and reads none of their columns, and a name two of
+    // them answer is refused before a row is answered. A name this
+    // reading places on the wrong side leaves fewer indexes covering and
+    // never more.
     for id in arena.column_places() {
         match reached(arena, id, sql, sides) {
             // A rowid is what every entry of an index ends with.
-            Some((_, Reached::Key)) => {}
+            Some((_, Reached::Key)) | None => {}
             Some((at, Reached::Column(place))) => {
                 for held in reading.iter_mut().skip(at).take(1) {
                     held.push(place);
                 }
             }
-            // A name no side of this statement answers is one this
-            // reading cannot place, so no index of it covers.
-            None => return,
         }
     }
     // A `USING` or a `NATURAL` matches two sides by columns the
@@ -7702,20 +7910,126 @@ fn ordering(
             break;
         }
     }
+    let (held, many) = answered_by(side, stored, &places, settling.format);
+    if whole && many == places.len() {
+        return (held, terms.len());
+    }
+    (held, many)
+}
+
+/// What the walk of the one side answers of the longest run of the terms
+/// at `places`, counting from the first, and how many terms that is.
+///
+/// `sqlite3WhereIsOrdered` counts the terms one loop answers, so a walk
+/// that answers the first term alone is taken and the terms after it are
+/// sorted by. Costs O(t) runs of [`placed`], each O(i*c) in the indexes
+/// of the table and their columns.
+fn answered_by(
+    side: &Side<'_>,
+    stored: &Stored,
+    places: &[Termed],
+    format: u32,
+) -> (Ordering, usize) {
     for many in (1..=places.len()).rev() {
         let run: Vec<Termed> = places.iter().take(many).copied().collect();
-        let held = placed(side, stored, run, settling.format);
-        if matches!(held, Ordering::Sorted) {
-            continue;
+        let held = placed(side, stored, run, format);
+        if !matches!(held, Ordering::Sorted) {
+            return (held, many);
         }
-        let answered = if whole && many == places.len() {
-            terms.len()
-        } else {
-            many
-        };
-        return (held, answered);
     }
     (Ordering::Sorted, 0)
+}
+
+/// How many terms of the order a merge of the cores of a compound puts
+/// its rows in the walk of the one side answers, counting from the first.
+///
+/// A term of that order counts a column of the answer, which a `*` stands
+/// for as many of as its table holds columns, so each is read against the
+/// side as [`counted_at`] reads it and compares under the collation the
+/// merge compares that column under. Costs what [`answered_by`] costs.
+fn merged_order(
+    arena: &Arena,
+    select: &Select,
+    sql: &[u8],
+    sides: &[Side<'_>],
+    held: (Settling, &[Ordered]),
+) -> (Ordering, usize) {
+    let (settling, key) = held;
+    let [side] = sides else {
+        return (Ordering::Sorted, 0);
+    };
+    let Source::Table(stored) = &side.source else {
+        return (Ordering::Sorted, 0);
+    };
+    if stored.table.without_rowid {
+        return (Ordering::Sorted, 0);
+    }
+    let results = arena.results(select.columns);
+    let mut places: Vec<Termed> = Vec::new();
+    let mut whole = false;
+    for term in key {
+        // A term whose nulls are put where the order does not put them
+        // asks about another order.
+        if term.nulls != Nulls::Unspecified {
+            break;
+        }
+        let named = counted_at(results, side, term.at).and_then(|held| match held {
+            Counted::Starred(held) => Some(held),
+            Counted::Expr(id) => {
+                reached(arena, uncollated(arena, id), sql, sides).map(|(_, held)| held)
+            }
+        });
+        let Some(named) = named else {
+            break;
+        };
+        let place = match named {
+            Reached::Key => None,
+            Reached::Column(place) => Some(place),
+        };
+        whole = place.is_none();
+        places.push(Termed {
+            place,
+            descending: term.descending,
+            collation: term.collation,
+        });
+        if whole {
+            break;
+        }
+    }
+    let (held, many) = answered_by(side, stored, &places, settling.format);
+    if many == places.len() {
+        // A term that names the rowid answers every term after it, a
+        // rowid standing once in the table.
+        if whole {
+            return (held, key.len());
+        }
+    }
+    (held, many)
+}
+
+/// How many terms of the order a merge puts its rows in the walk of the
+/// one side answers, reading that side out of the index that answers them
+/// where one index does.
+///
+/// `multiSelectByMerge` of `research/sqlite/src/select.c:3549` hands that
+/// order to `sqlite3Select` for each side of the merge, which chooses the
+/// walk by it as it would for an `ORDER BY` written on the core.
+///
+/// Costs what [`merged_order`] costs.
+fn in_merged_order(
+    arena: &Arena,
+    select: &Select,
+    sql: &[u8],
+    sides: &mut [Side<'_>],
+    held: (Settling, &[Ordered]),
+) -> usize {
+    let (held, many) = merged_order(arena, select, sql, sides, held);
+    if let Ordering::Index(plan) = held {
+        for side in sides.iter_mut().take(1) {
+            side.plan = plan.clone();
+        }
+    }
+    many
 }
 
 /// The value the one aggregate of a statement reads, and whether the
@@ -11109,6 +11423,61 @@ fn unjoined(joined: Option<Compound>, values: bool) -> Error {
         return Error::Values;
     }
     Error::Compound(compound_named(joined.unwrap_or(Compound::Union)))
+}
+
+/// How many cores of a chain the plan merges, which are the cores to the
+/// left of the trailing run of `UNION ALL` where the compound carries no
+/// `ORDER BY`, and every core of it otherwise.
+fn merging(operators: &[Compound], sorted: bool) -> usize {
+    let cores = operators.len().saturating_add(1);
+    if sorted {
+        return cores;
+    }
+    let run = operators
+        .iter()
+        .rev()
+        .take_while(|operator| **operator == Compound::UnionAll)
+        .count();
+    cores.saturating_sub(run)
+}
+
+/// `MERGE (UNION)`, which stands over the two sides of a merge of the
+/// cores of a compound.
+fn merged_named(operator: Compound) -> Vec<u8> {
+    let mut held = b"MERGE (".to_vec();
+    held.extend_from_slice(&compound_named(operator));
+    held.push(b')');
+    held
+}
+
+/// Where the right side of a merge of the cores from `lo` to `hi` begins.
+///
+/// `multiSelectByMerge` of `research/sqlite/src/select.c:3529` takes one
+/// core for the right side, except that `SQLITE_BalancedMerge` splits a
+/// run of `UNION` or of `UNION ALL` longer than three cores near its
+/// middle: it walks left over the run one core for every two of them.
+///
+/// Counting the run costs O(n) in the cores.
+fn split_of(operators: &[Compound], held: (usize, usize), operator: Compound) -> usize {
+    let (lo, hi) = held;
+    if operator != Compound::Union && operator != Compound::UnionAll {
+        return hi;
+    }
+    let mut run = 1_usize;
+    let mut at = hi;
+    while at > lo
+        && at
+            .checked_sub(1)
+            .and_then(|at| operators.get(at))
+            .is_some_and(|held| *held == operator)
+    {
+        run = run.saturating_add(1);
+        at = at.saturating_sub(1);
+    }
+    if run <= 3 {
+        return hi;
+    }
+    hi.saturating_sub(run.saturating_sub(1) / 2)
 }
 
 /// The word one compound operator is written as, which is

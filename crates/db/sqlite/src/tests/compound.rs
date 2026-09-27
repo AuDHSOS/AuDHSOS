@@ -54,6 +54,12 @@ fn what_two_cores_of_different_widths_are_refused_with() {
             b"VALUES(1),(2,3)",
             "all VALUES must have the same number of terms",
         ),
+        // The core on the left is answered first, so what it refuses is
+        // what the compound is refused with.
+        (
+            b"SELECT zz FROM t1 UNION ALL SELECT 1",
+            "no such column: zz",
+        ),
         (
             b"VALUES(1) UNION VALUES(2,3)",
             "all VALUES must have the same number of terms",

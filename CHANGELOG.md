@@ -7,6 +7,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` names in a plan the merge a compound of any operator but a
+  `UNION ALL` of no `ORDER BY` answers its cores by: `MERGE` with the operator
+  over `LEFT` and `RIGHT`, with every core sorting its rows by the order of the
+  merge and read out of the index that answers the longest run of its terms.
+  D-572 records it. Catalog 6.6.412. `eqp.test` goes from 28 cases passing to
+  39 and `orderby1.test` from 53 to 55.
+
 - `db-sqlite` counts the terms of an `ORDER BY` the walk answers from the first
   and leaves the sorter the rest, taking the walk that answers the longest run
   and naming in the plan how many terms the sorter takes. D-571 records it.
@@ -835,6 +842,10 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   `with2.test` from 59 to 61 and `select3.test` from 83 to 84.
 
 ### Fixed
+
+- `db-sqlite` reads a side out of a covering index where another core of the
+  compound or another statement of the file writes a name no side of the
+  statement answers, which left every index uncovering. D-573 records it.
 
 - `db-sqlite` answers `reserved` from `PRAGMA lock_status` for a database
   whose transaction has opened a page to write, where every database
