@@ -137,6 +137,12 @@ fn is_text(
 /// The table `ANALYZE` writes its counts into.
 const STAT: &[u8] = b"sqlite_stat1";
 
+/// The column of `sqlite_stat1` that names the table the counts are of.
+const STAT_TABLE: usize = 0;
+
+/// The column of `sqlite_stat1` that names the index the counts are of.
+const STAT_INDEX: usize = 1;
+
 /// The table a key that counts up is counted in.
 const SEQUENCE: &[u8] = b"sqlite_sequence";
 
@@ -146,7 +152,12 @@ const SCHEMA_TABLE: &[u8] = b"sqlite_schema";
 
 /// Whether a row of `sqlite_sequence` names the table `wanted`.
 fn named_row(values: &[Value], wanted: &[u8]) -> bool {
-    matches!(values.first(), Some(Value::Text(text)) if text.eq_ignore_ascii_case(wanted))
+    named_column(values, 0, wanted)
+}
+
+/// Whether the column at `at` of a row is the text `wanted`.
+fn named_column(values: &[Value], at: usize, wanted: &[u8]) -> bool {
+    matches!(values.get(at), Some(Value::Text(text)) if text.eq_ignore_ascii_case(wanted))
 }
 
 /// Which rows of a schema a rename writes again.
@@ -3543,6 +3554,10 @@ impl Writer {
         // that names the table away with the table.
         if asked.kind == crate::ast::Dropped::Table {
             self.uncount(&name)?;
+            self.uncounted(&name, STAT_TABLE)?;
+        }
+        if asked.kind == crate::ast::Dropped::Index {
+            self.uncounted(&name, STAT_INDEX)?;
         }
         roots.sort_unstable();
         for root in roots.into_iter().rev() {
@@ -4437,6 +4452,28 @@ impl Writer {
         answered
     }
 
+    /// The database an `ANALYZE` names, which is the schema it wrote or
+    /// the name it wrote where the connection holds a database under it.
+    ///
+    /// `sqlite3Analyze` of `research/sqlite/src/analyze.c:1770` reads a
+    /// bare name with `sqlite3FindDb` first, so `ANALYZE main` counts
+    /// every table of `main` and no table named `main`.
+    ///
+    /// Reading the name costs O(n) in the databases the connection holds.
+    fn analyzed_schema(&self, asked: &crate::ast::Analyze, sql: &[u8]) -> Option<Span> {
+        asked.schema.or_else(|| {
+            asked
+                .name
+                .filter(|span| self.holds_database(&crate::schema::dequote(span.text(sql))))
+        })
+    }
+
+    /// Whether the connection holds a database under `name`.
+    fn holds_database(&self, name: &[u8]) -> bool {
+        self.called.name.eq_ignore_ascii_case(name)
+            || self.attached.iter().any(|held| named_as(held, name))
+    }
+
     /// Which database of the list the statement writes, and nothing where
     /// it writes the one the connection already writes.
     ///
@@ -4469,10 +4506,20 @@ impl Writer {
                         // with `sqlite3TwoPartName`, so the statement
                         // writes the database it named.
                         Ok(asked) => Names::made(asked.schema, None, false),
-                        // A statement neither reading takes is one that
-                        // writes no database of its own, which a `SELECT`
-                        // is.
-                        Err(_) => Names::made(None, None, false),
+                        // `sqlite3Analyze` reads the schema of an
+                        // `ANALYZE` the same way, and reads a bare name
+                        // as a database of the connection with
+                        // `sqlite3FindDb` before it reads the name as a
+                        // table or an index.
+                        Err(_) => match crate::parse::analyze(sql) {
+                            Ok(asked) => {
+                                Names::made(self.analyzed_schema(&asked, sql), None, false)
+                            }
+                            // A statement neither reading takes is one
+                            // that writes no database of its own, which a
+                            // `SELECT` is.
+                            Err(_) => Names::made(None, None, false),
+                        },
                     },
                 },
             },
@@ -4986,6 +5033,16 @@ impl Writer {
     /// Counting costs what [`crate::analyze::stats_of`] costs per
     /// table.
     fn analyze(&mut self, asked: &crate::ast::Analyze, sql: &[u8]) -> Result<(), Error> {
+        // `sqlite3TwoPartName` refuses a schema the connection holds no
+        // database under before the name after it is read, so a name of
+        // no table under a database of no name is refused for the
+        // database.
+        if let Some(span) = asked.schema {
+            let schema = crate::schema::dequote(span.text(sql));
+            if !self.holds_database(&schema) {
+                return Err(Error::NoSchema(schema));
+            }
+        }
         let named = asked
             .name
             .map(|span| crate::schema::dequote(span.text(sql)));
@@ -4997,6 +5054,10 @@ impl Writer {
         {
             return Ok(());
         }
+        // A name the connection holds a database under is that database,
+        // which the caller switched to, so the count is over every table
+        // of it.
+        let named = named.filter(|name| !self.holds_database(name));
         let (Analyzed { tables, only }, held) = {
             let bytes = self.image();
             let database = self.reading(&bytes)?;
@@ -10658,6 +10719,46 @@ impl Writer {
                 .map(|(rowid, _)| (root, *rowid))
         };
         if let Some((root, rowid)) = found {
+            crate::tree::remove(&mut self.held.pages, root, rowid)?;
+        }
+        Ok(())
+    }
+
+    /// Every row of `sqlite_stat1` whose column at `at` names the object
+    /// taken away, with the counts it held.
+    ///
+    /// `sqlite3ClearStatTables` of `research/sqlite/src/build.c:3364`
+    /// writes a `DELETE` over the counts of each object it takes away: a
+    /// `DROP TABLE` names the table in `tbl`, which the rows of its
+    /// indexes carry as well, and a `DROP INDEX` names the index in
+    /// `idx`.
+    ///
+    /// Taking the rows out costs O(n) in the rows of that table.
+    ///
+    /// # Errors
+    ///
+    /// Whatever reading or writing a page of the tree refuses.
+    fn uncounted(&mut self, name: &[u8], at: usize) -> Result<(), Error> {
+        let wanted = crate::value::stored(name, self.held.header.encoding);
+        let found: Vec<(u32, i64)> = {
+            let bytes = self.image();
+            let database = self.reading(&bytes)?;
+            let Some((_, root)) = database.table(STAT) else {
+                // A database no `ANALYZE` ever ran over holds no counts.
+                return Ok(());
+            };
+            // A `sqlite_stat1` another writer made of other columns is
+            // read for its rows alone, and a shape no reader walks holds
+            // no counts this drop takes out.
+            let Ok(rows) = database.rows_of(STAT) else {
+                return Ok(());
+            };
+            rows.iter()
+                .filter(|(_, values)| named_column(values, at, &wanted))
+                .map(|(rowid, _)| (root, *rowid))
+                .collect()
+        };
+        for (root, rowid) in found {
             crate::tree::remove(&mut self.held.pages, root, rowid)?;
         }
         Ok(())

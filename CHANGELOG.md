@@ -7,6 +7,15 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` reads a bare name of an `ANALYZE` as a database of the connection
+  before it reads the name as a table or an index, and refuses a schema the
+  connection holds no database under. D-542 records it. Catalog 6.6.386.
+  `analyze.test` goes from 35 cases passing to 39.
+
+- `db-sqlite` takes the counts of an object out of `sqlite_stat1` where a
+  `DROP TABLE` or a `DROP INDEX` takes the object away. D-541 records it.
+  Catalog 6.6.385. `analyze.test` goes from 29 cases passing to 35.
+
 - `db-sqlite` reads the new name of an `ALTER TABLE ... RENAME TO` as a
   `CREATE TABLE` of it would, so a name that opens with `sqlite_` is refused
   `object name reserved for internal use`. D-540 records it. Catalog 6.6.383.

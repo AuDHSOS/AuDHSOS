@@ -4252,6 +4252,15 @@ fn what_analyze_refuses_and_what_it_passes_over() {
         Some(crate::db::Error::NoTable(b"nosuch".to_vec()))
     );
     assert!(crate::parse::analyze(b"ANALYZE t junk").is_err());
+    // A schema the connection holds no database under is refused before
+    // the name is read.
+    assert_eq!(
+        writer.run(b"ANALYZE nodb.nosuch").unwrap_err().message(),
+        "unknown database nodb"
+    );
+    // A bare name the connection holds a database under counts every
+    // table of that database, so no name of a table is read.
+    writer.run(b"ANALYZE main").unwrap();
     // `ANALYZE` makes `sqlite_stat1` whatever it counts, so a database
     // whose one table holds no row carries the table and no row.
     writer.run(b"ANALYZE main.t").unwrap();

@@ -1406,3 +1406,38 @@ fn what_a_statement_that_names_another_database_is_refused_with() {
         });
     }
 }
+
+/// An `ANALYZE` counts the tables of the database its schema names, and
+/// of the database a bare name of it names.
+#[test]
+fn which_database_an_analyze_counts_the_tables_of() {
+    let mut writer = opened();
+    writer.run(b"INSERT INTO t VALUES(1)").unwrap();
+    writer.run(b"ATTACH 'one.db' AS aux").unwrap();
+    writer.run(b"INSERT INTO aux.u VALUES('a')").unwrap();
+    // The counts of a database stand in that database, so the one the
+    // statement did not name holds none.
+    writer.run(b"ANALYZE aux").unwrap();
+    let image = writer.attached_written(b"aux").expect("an image");
+    let database = crate::db::Database::open(&image).unwrap();
+    assert_eq!(
+        database
+            .query(b"SELECT tbl,idx FROM sqlite_stat1")
+            .unwrap()
+            .rows
+            .len(),
+        1
+    );
+    let held = writer.written();
+    assert!(
+        crate::db::Database::open(&held)
+            .unwrap()
+            .table(b"sqlite_stat1")
+            .is_none()
+    );
+    // A schema the connection holds no database under is refused.
+    assert_eq!(
+        refused(&mut writer, b"ANALYZE nodb.u"),
+        "unknown database nodb"
+    );
+}

@@ -83,6 +83,15 @@ fn an_index_over_an_expression_holds_what_the_expression_answers() {
             [Value::Text(b"t1p".to_vec()), Value::Text(b"1 1".to_vec())],
         ]
     );
+    // A `DROP INDEX` takes the counts of that index away, and a `DROP
+    // TABLE` the counts of the table and of every index over it.
+    writer.run(b"DROP INDEX t1p").unwrap();
+    assert_eq!(
+        query(&writer, b"SELECT idx FROM sqlite_stat1 ORDER BY idx"),
+        [[Value::Text(b"t1a1".to_vec())]]
+    );
+    writer.run(b"DROP TABLE t").unwrap();
+    assert!(query(&writer, b"SELECT idx FROM sqlite_stat1").is_empty());
 }
 
 #[test]
@@ -310,4 +319,26 @@ fn what_a_unique_index_holding_a_null_answers_the_integrity_check() {
             .message(),
         "UNIQUE constraint failed: index 't9x1'"
     );
+}
+
+/// A `sqlite_stat1` another writer made of other columns is read for its
+/// rows alone, so a drop takes no count out of one no reader walks and
+/// refuses nothing.
+#[test]
+fn what_a_drop_takes_out_of_a_sqlite_stat1_of_other_columns() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"PRAGMA writable_schema=ON".as_slice(),
+        b"CREATE TABLE sqlite_stat1(tbl INTEGER PRIMARY KEY DESC, \
+          idx UNIQUE DEFAULT NULL) WITHOUT ROWID",
+        b"PRAGMA writable_schema=OFF",
+        b"CREATE TABLE t(a)",
+        b"CREATE INDEX ta ON t(a)",
+    ] {
+        writer.run(sql).unwrap_or_else(|error| {
+            panic!("{sql:?}: {}", error.message());
+        });
+    }
+    writer.run(b"DROP INDEX ta").unwrap();
+    writer.run(b"DROP TABLE t").unwrap();
 }

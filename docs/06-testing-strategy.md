@@ -7856,6 +7856,26 @@ Document 16 step Q8. Every answer is the one the C library's shell writes.
 - A `FROM` of 65 and of 100 sides, which are refused.
 - Two statements of 64 sides, one written inside the other, which stand.
 
+### 6.6.386 The database an `ANALYZE` names (`db-sqlite`)
+
+Unit tests of `crate::change`. Every answer is the one the C library's
+shell writes.
+
+- `ANALYZE main`, which counts every table of `main`.
+- `ANALYZE nodb.nosuch`: refused `unknown database nodb`.
+- `ANALYZE nosuch`: refused `no such table: nosuch`.
+
+### 6.6.385 The counts a drop takes out of `sqlite_stat1` (`db-sqlite`)
+
+Unit tests of `crate::change`.
+
+- `DROP INDEX` over one of two indexes counted, after which the counts
+  of the other stand alone.
+- `DROP TABLE` over the table both stand on, after which no count
+  stands.
+- A `sqlite_stat1` of other columns, over which the drop takes no count
+  out and refuses nothing.
+
 ### 6.6.384 The names a `CHECK` an `ALTER TABLE` adds reads (`db-sqlite`)
 
 Unit tests of `crate::change`.

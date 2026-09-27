@@ -1257,6 +1257,10 @@ Size: L.
      records.
 240. The new name an `ALTER TABLE ... RENAME TO` reads. Built, which
      D-540 records.
+241. The counts a `DROP TABLE` and a `DROP INDEX` take out of
+     `sqlite_stat1`. Built, which D-541 records.
+242. The database an `ANALYZE` names, by its schema or by a bare name.
+     Built, which D-542 records.
 
 ### Done when
 
@@ -1266,8 +1270,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 123 554 cases in 844 files, 118 929
-pass, 2432 answer differently, and 2193 name something the engine
+under the `tclsh` of the machine. Of 123 562 cases in 844 files, 118 946
+pass, 2424 answer differently, and 2192 name something the engine
 refuses or a command that needs the C library's internals. The files
 that answer for tens of thousands of rows reach the five-minute
 deadline and are counted with the cases they ran by then. One run over
