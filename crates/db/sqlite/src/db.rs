@@ -6068,6 +6068,17 @@ struct Pattern {
     numeric: bool,
 }
 
+/// What one term of an `ORDER BY` or a `GROUP BY` names among the
+/// columns the statement answers.
+#[derive(Clone, Copy)]
+enum Counted {
+    /// The expression written for that column.
+    Expr(ExprId),
+    /// What a `*` answers there, which no expression of the statement
+    /// names.
+    Starred(Reached),
+}
+
 /// What a name in a `WHERE` reaches.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Reached {
@@ -7386,7 +7397,7 @@ fn ordering(
             arena,
             select,
             sql,
-            sides,
+            side,
             (settling, stored),
             term.expr,
             descending,
@@ -7467,7 +7478,7 @@ fn smallest_order(
         return Ordering::Sorted;
     }
     let held = (settling, &**stored);
-    let Some(term) = termed(arena, select, sql, sides, held, value, descending) else {
+    let Some(term) = termed(arena, select, sql, side, held, value, descending) else {
         return Ordering::Sorted;
     };
     placed(side, stored, alloc::vec![term], settling.format)
@@ -7498,7 +7509,7 @@ fn grouping_order(
     }
     let mut places: Vec<Termed> = Vec::new();
     for term in terms {
-        let Some(held) = termed(arena, select, sql, sides, (settling, stored), *term, false) else {
+        let Some(held) = termed(arena, select, sql, side, (settling, stored), *term, false) else {
             return Ordering::Sorted;
         };
         let keyed = held.place.is_none();
@@ -7520,21 +7531,29 @@ fn termed(
     arena: &Arena,
     select: &Select,
     sql: &[u8],
-    sides: &[Side<'_>],
+    side: &Side<'_>,
     held: (Settling, &Stored),
     expr: ExprId,
     descending: bool,
 ) -> Option<Termed> {
     let (settling, stored) = held;
+    let sides = core::slice::from_ref(side);
     // A term that counts or names a column of the answer sorts by what
     // that column answers, which `resolveOrderGroupBy` of
     // `research/sqlite/src/resolve.c` matches before it reads the term
     // against the row.
-    let named = counted_to(arena, select, sql, expr).unwrap_or(expr);
+    let counted = counted_to(arena, select, sql, side, expr);
+    let named = match counted {
+        Some(Counted::Expr(id)) => id,
+        _ => expr,
+    };
     // A `COLLATE` names what the term compares under and leaves the
     // column it is written on, which `sqlite3ExprSkipCollate` reads
     // through.
-    let (_, reached) = reached(arena, uncollated(arena, named), sql, sides)?;
+    let reached = match counted {
+        Some(Counted::Starred(reached)) => reached,
+        _ => reached(arena, uncollated(arena, named), sql, sides)?.1,
+    };
     let place = match reached {
         Reached::Key => None,
         Reached::Column(place) => Some(place),
@@ -7657,25 +7676,56 @@ fn placed(side: &Side<'_>, stored: &Stored, mut places: Vec<Termed>, format: u32
     }
 }
 
-/// The expression one term of an `ORDER BY` names among the answered
-/// columns, and nothing where it names none.
+/// What one term of an `ORDER BY` names among the answered columns, and
+/// nothing where it names none.
 ///
 /// `resolveOrderGroupBy` of `research/sqlite/src/resolve.c` reads a
 /// whole number as a count of the answered columns from one and a bare
 /// name as the name one of them is answered under, before it reads the
-/// term against the row. A `*` answers as many columns as its table has
-/// columns, so a number counts to a column no result column of the
-/// statement stands for and the term is left as it stands.
-fn counted_to(arena: &Arena, select: &Select, sql: &[u8], id: ExprId) -> Option<ExprId> {
-    let results = arena.results(select.columns);
+/// term against the row. It counts the columns a `*` stands for, which
+/// `sqlite3SelectPrep` wrote out before the term was read.
+fn counted_to(
+    arena: &Arena,
+    select: &Select,
+    sql: &[u8],
+    side: &Side<'_>,
+    id: ExprId,
+) -> Option<Counted> {
     if let Some(place) = whole_number(arena, id, sql) {
-        if results.iter().any(|held| expression_of(held).is_none()) {
-            return None;
-        }
         let at = usize::try_from(place.checked_sub(1)?).ok()?;
-        return expression_of(results.get(at)?);
+        return counted_at(arena.results(select.columns), side, at);
     }
-    aliased_to(arena, select.columns, sql, id)
+    aliased_to(arena, select.columns, sql, id).map(Counted::Expr)
+}
+
+/// What the answered column at `at` names, counting the columns a `*`
+/// stands for as the columns of the one side it answers.
+///
+/// Reading the result columns costs O(n) in them and in the columns of
+/// the side.
+fn counted_at(results: &[crate::ast::ResultColumn], side: &Side<'_>, at: usize) -> Option<Counted> {
+    let mut held = at;
+    for result in results {
+        if let Some(expr) = expression_of(result) {
+            if held == 0 {
+                return Some(Counted::Expr(expr));
+            }
+            held = held.saturating_sub(1);
+            continue;
+        }
+        let named: Vec<&[u8]> = side
+            .shape
+            .columns
+            .iter()
+            .filter(|column| !column.hidden)
+            .map(|column| column.name.as_slice())
+            .collect();
+        if let Some(name) = named.get(held) {
+            return side.shape.reaches(name).map(Counted::Starred);
+        }
+        held = held.saturating_sub(named.len());
+    }
+    None
 }
 
 /// The expression the statement answers under the name an expression

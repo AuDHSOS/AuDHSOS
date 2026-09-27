@@ -7888,6 +7888,19 @@ Unit tests of `crate::db` over `fixtures/indexed.db`.
 - `WHERE NULL` under an aggregate, which answers one row.
 - `WHERE abs(0)`, which is read against every row.
 
+### 6.6.409 The column a number in an order counts to (`db-sqlite`)
+
+Unit tests of `crate::db` over `fixtures/indexed.db` and
+`fixtures/keys.db`, against the steps and the sorts each statement
+counts. Every answer is the one the C library's shell writes.
+
+- `SELECT * FROM m ORDER BY 2` and `SELECT *, q FROM m ORDER BY 4`, both
+  answered by the walk of the index over `q`.
+- `SELECT * FROM r ORDER BY 1`, which counts to the column the rowid is
+  another name for, against `ORDER BY 2`, which sorts.
+- `SELECT * FROM m, k ORDER BY 2`, whose `*` answers the columns of two
+  sides and which sorts.
+
 ### 6.6.408 The walk a term whose value is null holds (`db-sqlite`)
 
 Unit tests of `crate::db` over `fixtures/indexed.db`, against the plan

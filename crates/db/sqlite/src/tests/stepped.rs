@@ -116,15 +116,36 @@ fn an_order_by_the_walk_of_an_index_read_backwards_answers_needs_no_sort() {
 }
 
 #[test]
+fn what_a_number_that_counts_to_the_key_of_the_table_asks_of_the_walk() {
+    // `r` keeps its rows by `id`, so the walk of its own tree answers
+    // the order a number counting to that column asks for, and the walk
+    // answers no order of the column after it.
+    let keyed = |sql: &[u8]| {
+        let held = Database::open(super::KEYS)
+            .unwrap()
+            .query(sql)
+            .unwrap()
+            .stepped;
+        (held.steps, held.sorts)
+    };
+    assert_eq!(keyed(b"SELECT * FROM r ORDER BY 1"), (2, 0));
+    assert_eq!(keyed(b"SELECT * FROM r ORDER BY 2"), (2, 1));
+}
+
+#[test]
 fn what_column_of_the_answer_a_term_of_an_order_by_counts_to() {
     // A whole number counts the answered columns from one, and a name
     // one of them is answered under names it.
     assert_eq!(pair(b"SELECT q FROM m ORDER BY 1"), (4, 0));
     assert_eq!(pair(b"SELECT q AS z FROM m ORDER BY z"), (4, 0));
     assert_eq!(pair(b"SELECT p, q FROM m ORDER BY 1, 2"), (4, 0));
-    // A `*` answers as many columns as its table has, so the number
-    // counts to a column no result column stands for.
-    assert_eq!(pair(b"SELECT *, q FROM m ORDER BY 4"), (4, 1));
+    // The number counts the columns a `*` stands for, so `mq` answers
+    // both of these orders.
+    assert_eq!(pair(b"SELECT * FROM m ORDER BY 2"), (4, 0));
+    assert_eq!(pair(b"SELECT *, q FROM m ORDER BY 4"), (4, 0));
+    // A statement of two sides sorts, no walk of one side answering an
+    // order over the columns of both.
+    assert_eq!(pair(b"SELECT * FROM m, k ORDER BY 2"), (499, 1));
     // The name answers what the alias names and not the column of that
     // name, so `mr` and not `mq` answers this order.
     assert_eq!(pair(b"SELECT r AS q FROM m ORDER BY q"), (4, 0));

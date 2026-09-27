@@ -1310,6 +1310,8 @@ Size: L.
      of: the index the terms name the most columns of is taken instead.
      `analyze4.test`, `unordered.test` and `orderby1.test` each hold one
      case of it.
+270. The column a whole number in an `ORDER BY` or a `GROUP BY` counts
+     to, where a `*` answers it. Built, which D-569 records.
 
 ### Done when
 

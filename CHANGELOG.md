@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` counts the columns a `*` stands for when a whole number in an
+  `ORDER BY` or a `GROUP BY` names one, so the walk of an index answers the order
+  and sorts nothing. D-569 records it. Catalog 6.6.409. `where.test` goes from
+  284 cases passing to 286.
+
 - `db-sqlite` answers an `ORDER BY` of the rowid by a walk held to one value of
   every column of an index, whose entries end with the rowid, and one written
   `DESC` by the walk of those entries from the last back. D-568 records it.
