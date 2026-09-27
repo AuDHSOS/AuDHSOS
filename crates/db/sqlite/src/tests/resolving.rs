@@ -93,6 +93,11 @@ fn which_names_the_triggers_a_statement_may_fire_read() {
         refused(&mut writer, b"DELETE FROM t1"),
         "no such column: old.nosuch"
     );
+    // The bytes the schema is read out of are taken again where a
+    // statement has changed the schema since the last one read them.
+    writer.run(b"INSERT INTO t1 VALUES(7,8)").unwrap();
+    writer.run(b"CREATE TABLE t4(k)").unwrap();
+    writer.run(b"INSERT INTO t1 VALUES(9,10)").unwrap();
     // A table that keeps its rows in the key's own tree has no key of
     // its own to name, so a step that writes one names no column.
     writer

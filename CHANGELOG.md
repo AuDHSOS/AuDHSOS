@@ -7,6 +7,29 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` answers `expr IN ()` as false and `expr NOT IN ()` as true without
+  reading what stands on the left, so an index over a statement there stands.
+  D-553 records it. Catalog 6.6.397. `altertab3.test` goes from 89 cases passing
+  to 92.
+
+- `db-sqlite` names the column a `REFERENCES` is written on where the key points
+  at more than one column of the other table. D-552 records it. Catalog 6.6.396.
+  `e_fkey.test` goes from 896 cases passing to 897.
+
+- `db-sqlite` holds the terms of an `ORDER BY`, and of the one an aggregate reads
+  its rows in the order of, to the columns the connection takes. D-551 records
+  it. Catalog 6.6.395. `aggorderby.test` goes from 28 cases passing to 29.
+
+- `db-sqlite` refuses a statement written in an expression the schema holds by
+  the words that name where it stands. D-550 records it. Catalog 6.6.394.
+  `check.test` goes from 91 cases passing to 100 and `indexexpr1.test` from 89
+  to 90.
+
+- `db-sqlite` takes a name after `AS` for the table an `INSERT` writes, which is
+  then the only name a qualified name of an upsert's `SET` reaches it by. D-549
+  records it. Catalog 6.6.393. `upsert4.test` goes from 110 cases passing to 118,
+  `upsert2.test` from 12 to 13 and `upsert3.test` from 5 to 6.
+
 - `db-sqlite` reads the `WHEN` and the body of every trigger a statement may
   fire before it writes a row, so a name neither the tables nor the two rows of
   the trigger hold refuses the statement. D-548 records it. Catalog 6.6.392.

@@ -977,3 +977,27 @@ fn what_an_on_conflict_clause_that_writes_a_collation_on_the_key_names() {
         .unwrap();
     assert_eq!(rows.rows, [[Value::Int(1)]]);
 }
+
+/// The name an `AS` gave the table an `INSERT` writes is what the `SET`
+/// of an upsert writes the columns of that table under, where `excluded`
+/// names the row the clause did not write.
+#[test]
+fn which_name_the_set_of_an_upsert_writes_the_table_under() {
+    let mut writer = writer();
+    writer
+        .run(
+            b"INSERT INTO t AS held VALUES(1,'y',20) ON CONFLICT(a) \
+              DO UPDATE SET c=held.c+excluded.c",
+        )
+        .unwrap();
+    assert_eq!(rows(&writer), "1|1|x|30\n");
+    // The table's own name no longer reaches it, which is what
+    // `sqlite3SrcListAppend` leaves of a table an `AS` renamed.
+    assert_eq!(
+        writer
+            .run(b"INSERT INTO t AS held VALUES(1,'y',5) ON CONFLICT(a) DO UPDATE SET c=t.c")
+            .unwrap_err()
+            .message(),
+        "no such column: t.c"
+    );
+}

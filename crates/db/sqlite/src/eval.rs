@@ -1276,6 +1276,12 @@ fn listed(
     row: &dyn Row,
     deeper: u32,
 ) -> Result<Answer, Error> {
+    // `X IN ()` is the value false and `X NOT IN ()` the value true,
+    // which the grammar of `research/sqlite/src/parse.y:1492` writes in
+    // place of the whole expression, so `X` is read for nothing.
+    if arena.children(list).is_empty() {
+        return Ok(Answer::plain(crate::value::Value::Int(i64::from(negated))));
+    }
     if is_row(arena, value) {
         return rows_listed(arena, value, list, negated, sql, row, deeper).map(Answer::plain);
     }
@@ -2172,12 +2178,10 @@ fn between(
     Ok(Answer::plain(Value::Int(i64::from(inside))))
 }
 
-/// `x IN (a, b)`. An empty list answers false whatever is looked for in
-/// it, nothing included.
+/// `x IN (a, b)`, whose list holds at least one member, because
+/// [`listed`] answers an empty one without reading what is looked for in
+/// it.
 fn in_list(left: &Answer, list: &[Answer], negated: bool, default: Collation) -> Value {
-    if list.is_empty() {
-        return Value::Int(i64::from(negated));
-    }
     let mut unknown = false;
     for member in list {
         // The affinity is the left side's alone, which is what

@@ -7856,6 +7856,53 @@ Document 16 step Q8. Every answer is the one the C library's shell writes.
 - A `FROM` of 65 and of 100 sides, which are refused.
 - Two statements of 64 sides, one written inside the other, which stand.
 
+### 6.6.396 A `REFERENCES` of a column that points at two (`db-sqlite`)
+
+Unit tests of `crate::change`. Every answer is the one the C library's
+shell writes.
+
+- `jj REFERENCES keyed(x, y)`: refused by the column it is written on.
+- The same with the other table in quotes, which the refusal keeps.
+- `FOREIGN KEY(a) REFERENCES keyed(x, y)`: refused by the two lists.
+
+### 6.6.395 How many terms an `ORDER BY` may hold (`db-sqlite`)
+
+Unit tests of `crate::db`.
+
+- An `ORDER BY` of 2000 terms, which stands, and one of 2001, which is
+  refused.
+- An aggregate whose own `ORDER BY` holds 2001 terms, refused the same
+  way.
+
+### 6.6.397 What an `IN` over an empty list answers (`db-sqlite`)
+
+Unit tests of `crate::change` and of `crate::db`. Every answer is the one
+the C library's shell writes.
+
+- An index over a statement on the left of an `IN ()`, which stands.
+- The same where the left side calls a function: refused for the place.
+- `1 IN ()`, `1 NOT IN ()`, `NULL IN ()` and `NULL NOT IN ()`.
+
+### 6.6.394 A statement written in an expression of the schema (`db-sqlite`)
+
+Unit tests of `crate::change`. Every answer is the one the C library's
+shell writes.
+
+- A subquery, an `IN` and an `EXISTS` in a `CHECK`, all refused for the
+  `CHECK`.
+- A statement in a generated column, in an index expression and in the
+  `WHERE` of a partial index, each refused by the words for that place.
+- A name of a table on the right of an `IN`, refused for the place.
+
+### 6.6.393 The name an `AS` gives the table an `INSERT` writes (`db-sqlite`)
+
+Unit tests of `crate::change`. Every answer is the one the C library's
+shell writes.
+
+- `INSERT INTO t AS held ... DO UPDATE SET c=held.c+excluded.c`, which
+  reads both rows.
+- The table's own name in the same `SET`: refused `no such column: t.c`.
+
 ### 6.6.392 The names a statement that writes reads (`db-sqlite`)
 
 Unit tests of `crate::change`. Every answer is the one the C library's

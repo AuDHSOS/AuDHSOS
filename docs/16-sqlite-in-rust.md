@@ -1271,6 +1271,15 @@ Size: L.
      which D-547 records.
 248. The `WHEN` and the body of every trigger a statement may fire.
      Built, which D-548 records.
+249. The name an `AS` gives the table an `INSERT` writes. Built, which
+     D-549 records.
+250. A statement written in an expression the schema holds. Built, which
+     D-550 records.
+251. How many terms an `ORDER BY` may hold. Built, which D-551 records.
+252. A `REFERENCES` of a column that points at more than one column.
+     Built, which D-552 records.
+253. What an `IN` over an empty list answers, and what it reads. Built,
+     which D-553 records.
 
 ### Done when
 
@@ -1280,8 +1289,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 123 557 cases in 844 files, 118 963
-pass, 2405 answer differently, and 2189 name something the engine
+under the `tclsh` of the machine. Of 123 555 cases in 844 files, 118 985
+pass, 2393 answer differently, and 2177 name something the engine
 refuses or a command that needs the C library's internals. The files
 that answer for tens of thousands of rows reach the five-minute
 deadline and are counted with the cases they ran by then. One run over

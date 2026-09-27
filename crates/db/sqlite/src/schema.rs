@@ -70,6 +70,10 @@ pub enum Error {
     /// A `FOREIGN KEY` that names a different number of columns from
     /// the ones it points at.
     ForeignWidth,
+    /// A `REFERENCES` written on a column that points at more than one
+    /// column of the other table, with the column it is written on and
+    /// the table it points at.
+    ForeignOne(Vec<u8>, Vec<u8>),
     /// A primary key whose term is an expression rather than a name.
     KeyExpression,
     /// An index term that names a column the table it is over does not
@@ -850,7 +854,7 @@ pub fn table(
     let mut written_keys: Vec<Written> = Vec::new();
     // Every `REFERENCES`, in the order they were written, each with the
     // columns of this table that point.
-    let mut pointed: Vec<(Vec<Vec<u8>>, crate::ast::Foreign)> = Vec::new();
+    let mut pointed: Vec<(Vec<Vec<u8>>, crate::ast::Foreign, bool)> = Vec::new();
     // Every `CHECK`, in the order they were written, each under the
     // name the `CONSTRAINT` in front of it gave it.
     let mut checks: Vec<Checked> = Vec::new();
@@ -940,7 +944,7 @@ pub fn table(
                     column.computed = Some(value);
                 }
                 ColumnConstraint::References(foreign) => {
-                    pointed.push((alloc::vec![named.clone()], foreign));
+                    pointed.push((alloc::vec![named.clone()], foreign, true));
                 }
                 _ => {}
             }
@@ -971,7 +975,7 @@ pub fn table(
             for column in arena.names(columns) {
                 named.push(dequote(column.text(sql)));
             }
-            pointed.push((named, foreign));
+            pointed.push((named, foreign, false));
         }
         let (TableConstraint::PrimaryKey {
             columns, conflict, ..
@@ -1289,11 +1293,11 @@ fn named_or(named: Option<Span>, text: Span, sql: &[u8]) -> Vec<u8> {
 fn pointing(
     arena: &Arena,
     table: &Table,
-    written: &[(Vec<Vec<u8>>, crate::ast::Foreign)],
+    written: &[(Vec<Vec<u8>>, crate::ast::Foreign, bool)],
     sql: &[u8],
 ) -> Result<Vec<Foreign>, Error> {
     let mut out = Vec::new();
-    for (names, foreign) in written {
+    for (names, foreign, on_column) in written {
         let mut columns = Vec::new();
         for name in names {
             let at = table
@@ -1311,6 +1315,18 @@ fn pointing(
         // against each other, so a key of one width pointing at
         // another is refused where the statement is read and whatever
         // the table it points at holds.
+        // `sqlite3CreateForeignKey` of `research/sqlite/src/build.c:3639`
+        // names the column a `REFERENCES` is written on where the key
+        // points at more than one column of the other table, because the
+        // statement wrote no list of columns for this one.
+        if *on_column && parent.len() > 1 {
+            // `%T` of `sqlite3ErrorMsg` writes the token as the
+            // statement wrote it, so a name in quotes keeps them.
+            return Err(Error::ForeignOne(
+                names.first().cloned().unwrap_or_default(),
+                foreign.table.text(sql).to_vec(),
+            ));
+        }
         if !parent.is_empty() && parent.len() != columns.len() {
             return Err(Error::ForeignWidth);
         }

@@ -3322,6 +3322,13 @@ impl Writer {
             if holds_parameter(arena, id) {
                 return Err(Error::VariableIn(held));
             }
+            // `notValidImpl` of `research/sqlite/src/resolve.c:908` names
+            // the same four places for a statement written in one of
+            // them, which `resolveExprStep` refuses at
+            // `research/sqlite/src/resolve.c:1398`.
+            if schema_select(arena, id) {
+                return Err(Error::SubqueriesIn(held));
+            }
         }
         // `sqlite3ExprFunctionUsable` of
         // `research/sqlite/src/expr.c:1276` holds the expressions a
@@ -9379,6 +9386,7 @@ impl Writer {
             table,
             held: (&held, 0),
             proposed: (wanted.proposed, 0),
+            named: self.aliased.as_deref(),
             encoding: self.held.header.encoding,
         };
         // The `WHERE` of the clause is read against the row the conflict
@@ -10163,7 +10171,11 @@ impl Writer {
         outer: Option<&dyn crate::eval::Row>,
     ) -> Result<i64, Error> {
         let held = core::mem::replace(&mut self.firing, statement.conflict);
+        // The name an `AS` gave the table is what the `SET` of an upsert
+        // writes the columns of that table under.
+        let named = core::mem::replace(&mut self.aliased, aliased(statement.alias, sql));
         let answered = self.inserted(arena, statement, sql, outer);
+        self.aliased = named;
         self.firing = held;
         answered
     }
@@ -10676,6 +10688,7 @@ impl Writer {
             table,
             held: (&held, rowid),
             proposed: (wanted.proposed, wanted.given),
+            named: self.aliased.as_deref(),
             encoding: self.held.header.encoding,
         };
         // The `WHERE` of the clause is read against the row the conflict
@@ -11478,6 +11491,10 @@ struct Excluded<'a> {
     /// The row the statement would have written, with the key it was
     /// given.
     proposed: (&'a [Value], i64),
+    /// The name an `AS` gave the table, where the statement wrote one,
+    /// which is then the only name a qualified name of the row reaches
+    /// it by.
+    named: Option<&'a [u8]>,
     /// What encoding the file keeps its text in.
     encoding: Encoding,
 }
@@ -11498,9 +11515,10 @@ impl crate::eval::Row for Excluded<'_> {
         let excluded = table
             .filter(|_| schema.is_none())
             .is_some_and(|name| name.eq_ignore_ascii_case(b"excluded"));
+        let wanted = self.named.unwrap_or(&self.table.name);
         if !excluded
             && let Some(name) = table
-            && !name.eq_ignore_ascii_case(&self.table.name)
+            && !name.eq_ignore_ascii_case(wanted)
         {
             return None;
         }
@@ -13968,6 +13986,58 @@ fn reads_statement(arena: &Arena, columns: crate::ast::Range) -> bool {
     arena.results(columns).iter().any(|column| match *column {
         crate::ast::ResultColumn::Expr { expr, .. } => holds_statement(arena, expr),
         _ => false,
+    })
+}
+
+/// Whether an expression the schema holds carries a statement
+/// `resolveExprStep` refuses there.
+///
+/// `resolveExprStep` of `research/sqlite/src/resolve.c:1398` refuses a
+/// subquery, an `EXISTS` and an `IN` whose right side is a statement.
+/// `expr IN ()` stands for the value false, which the grammar of
+/// `research/sqlite/src/parse.y:1492` writes in place of the whole
+/// expression where the left side calls no function and beside that
+/// value where it calls one, so a statement of a left side that calls
+/// none is read for nothing.
+///
+/// Walking the tree costs O(n) in its nodes.
+fn schema_select(arena: &Arena, id: ExprId) -> bool {
+    arena.node(id).is_some_and(|node| {
+        if matches!(
+            node,
+            Node::Subquery(_) | Node::Exists(_) | Node::InSelect { .. } | Node::InTable { .. }
+        ) {
+            return true;
+        }
+        if let Node::InList { value, list, .. } = node
+            && arena.children(list).is_empty()
+            && !holds_call(arena, value)
+        {
+            return false;
+        }
+        let mut found = false;
+        arena.under(node, |child| {
+            found |= schema_select(arena, child);
+        });
+        found
+    })
+}
+
+/// Whether an expression calls a function, which `EP_HasFunc` marks and
+/// which holds the left side of an `IN` over an empty list where the
+/// grammar writes the value false.
+///
+/// Walking the tree costs O(n) in its nodes.
+fn holds_call(arena: &Arena, id: ExprId) -> bool {
+    arena.node(id).is_some_and(|node| {
+        if matches!(node, Node::Call { .. } | Node::Over { .. }) {
+            return true;
+        }
+        let mut found = false;
+        arena.under(node, |child| {
+            found |= holds_call(arena, child);
+        });
+        found
     })
 }
 

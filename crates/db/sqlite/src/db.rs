@@ -225,6 +225,9 @@ pub enum Error {
     /// An expression of the schema that holds a bound parameter, named by
     /// the words for where it stands.
     VariableIn(&'static [u8]),
+    /// A statement written in an expression the schema holds, with the
+    /// words that name where it stands.
+    SubqueriesIn(&'static [u8]),
     /// A write of a trigger's body that names a schema.
     QualifiedInTrigger,
     /// An `UPDATE` or a `DELETE` of a trigger's body that names an
@@ -341,6 +344,8 @@ pub enum Error {
     /// A table written with more columns than the connection's limit,
     /// with its name.
     TableColumns(Vec<u8>),
+    /// An `ORDER BY` written with more terms than the connection's limit.
+    OrderTerms,
     /// An index written with more columns than the connection's limit.
     IndexColumns,
     /// A `VACUUM` on a connection with a transaction open.
@@ -706,6 +711,11 @@ impl Error {
                 "unknown column \"{}\" in foreign key definition",
                 shown(name)
             ),
+            Error::Schema(schema::Error::ForeignOne(column, table)) => alloc::format!(
+                "foreign key on {} should reference only one column of table {}",
+                shown(column),
+                shown(table)
+            ),
             Error::Schema(schema::Error::ForeignWidth) => alloc::string::String::from(
                 "number of columns in foreign key does not match the number of columns in the referenced table",
             ),
@@ -781,6 +791,7 @@ impl Error {
                 alloc::format!("too many columns on {}", shown(name))
             }
             Error::IndexColumns => alloc::string::String::from("too many columns in index"),
+            Error::OrderTerms => alloc::string::String::from("too many terms in ORDER BY clause"),
             Error::VacuumInTransaction => {
                 alloc::string::String::from("cannot VACUUM from within a transaction")
             }
@@ -832,6 +843,9 @@ impl Error {
             }
             Error::VariableIn(held) => {
                 alloc::format!("parameters prohibited in {}", shown(held))
+            }
+            Error::SubqueriesIn(held) => {
+                alloc::format!("subqueries prohibited in {}", shown(held))
             }
             Error::Schema(schema::Error::UnsetDefault(name)) => {
                 alloc::format!("default value of column [{}] is not constant", shown(name))
@@ -2759,6 +2773,52 @@ impl<'a> Database<'a> {
         self
     }
 
+    /// Every aggregate the statement answers with, and a refusal where
+    /// one of it or of a statement written inside it stands somewhere no
+    /// group has been made.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the walk over the aggregates refuses.
+    fn aggregated(
+        &self,
+        arena: &Arena,
+        select: &Select,
+        sql: &[u8],
+        sides: &[Side<'_>],
+    ) -> Result<Vec<Call>, Error> {
+        let most = self.most_columns();
+        nested_aggregates(arena, select, sql, most, self.grouped)?;
+        aggregates(arena, select, sql, Some(sides), self.grouped, most)
+    }
+
+    /// Raises where one core holds more sides than a join takes, or more
+    /// terms in its `ORDER BY` than the connection takes columns.
+    ///
+    /// `resolveOrderGroupBy` of `research/sqlite/src/resolve.c:1629`
+    /// holds the terms to `SQLITE_LIMIT_COLUMN`.
+    ///
+    /// Counting them costs O(1).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::OrderTerms`], which names no count.
+    fn within_terms(&self, arena: &Arena, select: &Select) -> Result<(), Error> {
+        counted_sides(arena, select)?;
+        if arena.orders(select.order).len() > self.most_columns() {
+            return Err(Error::OrderTerms);
+        }
+        Ok(())
+    }
+
+    /// How many columns the connection takes, which every count of terms
+    /// an `ORDER BY` or an index holds is read against.
+    ///
+    /// Reading it costs O(1).
+    fn most_columns(&self) -> usize {
+        usize::try_from(self.limits.of(Limit::Column)).unwrap_or(0)
+    }
+
     /// The same database, read under the limits the connection holds,
     /// which `sqlite3_limit` sets and a value the statement answers is
     /// held to.
@@ -4251,8 +4311,7 @@ impl<'a> Database<'a> {
         let collations = self.collations(&shape);
         keys(arena, &select, sql, &names, &collations, self.collating)?;
         subqueries(arena, &select)?;
-        nested_aggregates(arena, &select, sql, self.grouped)?;
-        let calls = aggregates(arena, &select, sql, Some(&sides), self.grouped)?;
+        let calls = self.aggregated(arena, &select, sql, &sides)?;
         let overs = overs(arena, &select, sql, self.grouped)?;
         // The pass over a row of nulls reads every expression, and an
         // aggregate answers a value there only where the walk gathered
@@ -4284,7 +4343,7 @@ impl<'a> Database<'a> {
             let cursor = Cursor::new(self.collation(), self.encoding, reach);
             return listed(arena, &select, sql, &cursor);
         }
-        counted_sides(arena, &select)?;
+        self.within_terms(arena, &select)?;
         let mut sides = self.sides(arena, &select, sql, scope)?;
         planned(
             arena,
@@ -4312,8 +4371,7 @@ impl<'a> Database<'a> {
             Vec::new()
         };
         subqueries(arena, &select)?;
-        nested_aggregates(arena, &select, sql, self.grouped)?;
-        let calls = aggregates(arena, &select, sql, Some(&sides), self.grouped)?;
+        let calls = self.aggregated(arena, &select, sql, &sides)?;
         let overs = overs(arena, &select, sql, self.grouped)?;
         let alone = overs.is_empty();
         let (gathered, held) = self.ordering(arena, &select, sql, (&mut sides, alone, &calls));
@@ -4874,7 +4932,7 @@ impl<'a> Database<'a> {
             if !overs(arena, &core, sql, self.grouped)?.is_empty() {
                 return Err(Error::RecursiveWindow);
             }
-            let calls = aggregates(arena, &core, sql, None, self.grouped)?;
+            let calls = aggregates(arena, &core, sql, None, self.grouped, self.most_columns())?;
             if !calls.is_empty() || !core.group.is_empty() {
                 return Err(Error::Recursion);
             }
@@ -9159,6 +9217,7 @@ fn aggregates(
     sql: &[u8],
     sides: Option<&[Side<'_>]>,
     grouped: &'static [crate::func::Grouped],
+    most: usize,
 ) -> Result<Vec<Call>, Error> {
     let walk = Gathering {
         arena,
@@ -9166,6 +9225,7 @@ fn aggregates(
         results: arena.results(select.columns),
         sides,
         grouped,
+        most,
     };
     let mut calls = Vec::new();
     for column in walk.results {
@@ -9276,18 +9336,19 @@ fn nested_aggregates(
     arena: &Arena,
     select: &Select,
     sql: &[u8],
+    most: usize,
     grouped: &'static [crate::func::Grouped],
 ) -> Result<(), Error> {
     for root in roots(arena, select) {
-        nested_columns(arena, root, sql, grouped)?;
+        nested_columns(arena, root, sql, most, grouped)?;
     }
     for source in arena.sources(select.from) {
         if let SourceKind::Select(id) = source.kind {
-            standing(arena, id, sql, grouped)?;
+            standing(arena, id, sql, grouped, most)?;
         }
     }
     if let Some((_, id)) = select.compound {
-        standing(arena, id, sql, grouped)?;
+        standing(arena, id, sql, grouped, most)?;
     }
     Ok(())
 }
@@ -9297,11 +9358,12 @@ fn nested_columns(
     arena: &Arena,
     id: ExprId,
     sql: &[u8],
+    most: usize,
     grouped: &'static [crate::func::Grouped],
 ) -> Result<(), Error> {
     arena
         .node(id)
-        .map_or(Ok(()), |node| nested_node(arena, node, sql, grouped))
+        .map_or(Ok(()), |node| nested_node(arena, node, sql, most, grouped))
 }
 
 /// The same for one node the arena holds.
@@ -9309,15 +9371,16 @@ fn nested_node(
     arena: &Arena,
     node: Node,
     sql: &[u8],
+    most: usize,
     grouped: &'static [crate::func::Grouped],
 ) -> Result<(), Error> {
     if let Node::Subquery(id) | Node::Exists(id) | Node::InSelect { select: id, .. } = node {
-        standing(arena, id, sql, grouped)?;
+        standing(arena, id, sql, grouped, most)?;
     }
     let mut deeper = Ok(());
     arena.under(node, |child| {
         if deeper.is_ok() {
-            deeper = nested_columns(arena, child, sql, grouped);
+            deeper = nested_columns(arena, child, sql, most, grouped);
         }
     });
     deeper
@@ -9330,10 +9393,11 @@ fn standing(
     id: SelectId,
     sql: &[u8],
     grouped: &'static [crate::func::Grouped],
+    most: usize,
 ) -> Result<(), Error> {
     let select = arena.select(id).ok_or(Error::Unsupported)?;
-    aggregates(arena, &select, sql, None, grouped)?;
-    nested_aggregates(arena, &select, sql, grouped)
+    aggregates(arena, &select, sql, None, grouped, most)?;
+    nested_aggregates(arena, &select, sql, most, grouped)
 }
 
 /// What the walk for the aggregate calls of one statement reads.
@@ -9351,6 +9415,9 @@ struct Gathering<'a> {
     sides: Option<&'a [Side<'a>]>,
     /// The aggregates the application defined on the connection.
     grouped: &'static [crate::func::Grouped],
+    /// How many columns the connection takes, which the terms an
+    /// aggregate reads its rows in the order of are held to.
+    most: usize,
 }
 
 impl Gathering<'_> {
@@ -9401,6 +9468,13 @@ impl Gathering<'_> {
                 // has to be exactly one for them to go through.
                 if distinct && count != 1 {
                     return Err(Error::DistinctAggregate);
+                }
+                // `sqlite3ExprAddFunctionOrderBy` of
+                // `research/sqlite/src/expr.c:1248` holds the terms an
+                // aggregate reads its rows in the order of to
+                // `SQLITE_LIMIT_COLUMN`.
+                if self.arena.orders(ordered).len() > self.most {
+                    return Err(Error::OrderTerms);
                 }
                 out.push(Call {
                     id,

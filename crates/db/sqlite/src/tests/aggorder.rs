@@ -110,3 +110,28 @@ fn what_order_an_aggregate_reads_its_group_in() {
         "misuse of aggregate function max()"
     );
 }
+
+/// The terms of an `ORDER BY`, and of the one an aggregate reads its
+/// rows in the order of, each held to the columns the connection takes.
+#[test]
+fn how_many_terms_an_order_by_may_hold() {
+    let image = written();
+    let terms = |count: usize| -> String {
+        core::iter::repeat_n("a", count)
+            .collect::<alloc::vec::Vec<_>>()
+            .join(",")
+    };
+    let held = alloc::format!("SELECT b FROM t ORDER BY {}", terms(2000));
+    let database = Database::open(&image).expect("a database");
+    assert!(database.query(held.as_bytes()).is_ok());
+    let over = alloc::format!("SELECT b FROM t ORDER BY {}", terms(2001));
+    assert_eq!(
+        refused(&image, over.as_bytes()),
+        "too many terms in ORDER BY clause"
+    );
+    let over = alloc::format!("SELECT group_concat(a ORDER BY {}) FROM t", terms(2001));
+    assert_eq!(
+        refused(&image, over.as_bytes()),
+        "too many terms in ORDER BY clause"
+    );
+}

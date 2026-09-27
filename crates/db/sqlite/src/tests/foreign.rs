@@ -170,6 +170,7 @@ fn a_foreign_key_that_points_at_no_unique_columns_is_a_mismatch() {
             .message(),
         "unknown column \"c\" in foreign key definition"
     );
+
     // A key that points at a table the schema does not hold names that
     // table under the schema it would stand in.
     let (mut writer, _) = ran(&[
@@ -1073,4 +1074,37 @@ fn what_a_drop_reads_of_a_deferred_key() {
         .query(b"SELECT changes()")
         .unwrap();
     assert_eq!(counted.rows, [[Value::Int(3)]]);
+}
+
+/// A `REFERENCES` written on a column names that column where the key
+/// points at more than one column of the other table, because the
+/// statement wrote no list of columns for this one.
+#[test]
+fn what_a_references_of_a_column_that_points_at_two_is_refused_with() {
+    let (mut writer, _) = ran(&["CREATE TABLE keyed(x PRIMARY KEY, y)"]).unwrap();
+    assert_eq!(
+        writer
+            .run(b"CREATE TABLE one(jj REFERENCES keyed(x, y))")
+            .unwrap_err()
+            .message(),
+        "foreign key on jj should reference only one column of table keyed"
+    );
+    // The name of that table keeps the quotes it was written under,
+    // which `%T` of `sqlite3ErrorMsg` writes.
+    assert_eq!(
+        writer
+            .run(b"CREATE TABLE one(jj REFERENCES \"keyed\"(x, y))")
+            .unwrap_err()
+            .message(),
+        "foreign key on jj should reference only one column of table \"keyed\""
+    );
+    // A key written on the table names the two lists against each
+    // other, whatever the other table holds.
+    assert_eq!(
+        writer
+            .run(b"CREATE TABLE two(a, FOREIGN KEY(a) REFERENCES keyed(x, y))")
+            .unwrap_err()
+            .message(),
+        "number of columns in foreign key does not match the number of columns in the referenced table"
+    );
 }

@@ -617,6 +617,48 @@ fn where_a_bound_parameter_of_the_schema_is_refused() {
             b"CREATE INDEX i2 ON t1(a) WHERE a>$three",
             "parameters prohibited in partial index WHERE clauses",
         ),
+        // A statement written in one of the four places is refused by
+        // the same words, whichever shape of statement it is.
+        (
+            b"CREATE TABLE t6(a, CHECK(a<(SELECT 1)))",
+            "subqueries prohibited in CHECK constraints",
+        ),
+        (
+            b"CREATE TABLE t7(a, CHECK(a IN (SELECT 1)))",
+            "subqueries prohibited in CHECK constraints",
+        ),
+        (
+            b"CREATE TABLE t8(a, CHECK(EXISTS(SELECT 1)))",
+            "subqueries prohibited in CHECK constraints",
+        ),
+        (
+            b"CREATE TABLE t9(a, b AS ((SELECT 1)))",
+            "subqueries prohibited in generated columns",
+        ),
+        (
+            b"CREATE INDEX i4 ON t1((SELECT 1))",
+            "subqueries prohibited in index expressions",
+        ),
+        (
+            b"CREATE INDEX i5 ON t1(a) WHERE a<(SELECT 1)",
+            "subqueries prohibited in partial index WHERE clauses",
+        ),
+        // A left side that calls a function stands beside the value the
+        // grammar writes, so a statement of it is read.
+        (
+            b"CREATE INDEX i10 ON t1(abs((SELECT 1)) IN ())",
+            "subqueries prohibited in index expressions",
+        ),
+        (
+            b"CREATE INDEX i13 ON t1((1 + abs((SELECT 1))) IN ())",
+            "subqueries prohibited in index expressions",
+        ),
+        // A name of a table on the right of an `IN` is a statement over
+        // that table.
+        (
+            b"CREATE INDEX i11 ON t1(a IN t1)",
+            "subqueries prohibited in index expressions",
+        ),
     ] {
         assert_eq!(writer.run(sql).unwrap_err().message(), message, "{sql:?}");
     }
@@ -624,6 +666,17 @@ fn where_a_bound_parameter_of_the_schema_is_refused() {
     // parameter of a statement a caller wrote, which answers a null.
     for sql in [
         b"CREATE TABLE t5(a CHECK(a>0), b AS (a+1))".as_slice(),
+        // An `IN` over a list of values holds no statement, which
+        // `ExprUseXSelect` of `resolveExprStep` reads.
+        b"CREATE INDEX i6 ON t1('1' IN ())",
+        b"CREATE INDEX i7 ON t1((likelihood(a, 1.0) IN ()))",
+        b"CREATE TABLE t11(a, b AS (a IN (1,2)), CHECK(a IN ()))",
+        // `expr IN ()` stands for the value false, so a statement of the
+        // left side is read for nothing where that side calls no
+        // function.
+        b"CREATE INDEX i8 ON t1((SELECT 1) IN ())",
+        b"CREATE INDEX i9 ON t1((WITH x AS (SELECT 1) VALUES(2)) IN ())",
+        b"CREATE INDEX i12 ON t1(((SELECT 1) + a) IN ())",
         b"CREATE INDEX i3 ON t1(a+1) WHERE a>0",
         b"INSERT INTO t1 VALUES(1,2)",
     ] {

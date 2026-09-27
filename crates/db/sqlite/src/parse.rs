@@ -959,6 +959,13 @@ impl<'a> Parser<'a> {
         };
         self.expect_keyword(Keyword::Into, Expected::Into)?;
         let (schema, name) = self.qualified_name()?;
+        // `xfullname` of `research/sqlite/src/parse.y:844` takes a name
+        // after `AS`, which is what the `SET` of an upsert names the
+        // table it writes by where `excluded` names the row it did not.
+        let alias = self
+            .eat_keyword(Keyword::As)
+            .then(|| self.name())
+            .transpose()?;
         let mut columns = Vec::new();
         if self.at(Kind::Lp) {
             self.bump();
@@ -991,6 +998,7 @@ impl<'a> Parser<'a> {
             conflict,
             schema,
             name,
+            alias,
             columns,
             select,
             defaults,

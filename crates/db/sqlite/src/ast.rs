@@ -686,6 +686,8 @@ pub struct Insert {
     pub schema: Option<Span>,
     /// The table the rows go in.
     pub name: Span,
+    /// The name an `AS` gave that table, where one was written.
+    pub alias: Option<Span>,
     /// The columns the rows are for, or an empty run for every column
     /// of the table in the order the table was created with.
     pub columns: Range,
