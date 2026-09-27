@@ -1320,14 +1320,17 @@ Size: L.
      which D-572 records.
 274. The indexes a name of another statement left uncovering. Built, which
      D-573 records.
-275. The lines a plan names for a statement written inside a `FROM` and for
-     one written inside an expression. `CO-ROUTINE` and `MATERIALIZE` stand
-     over a statement of a `FROM` that `flattenSubquery` of
-     `research/sqlite/src/select.c:4290` does not write into the statement
-     above it, and `SCALAR SUBQUERY`, `LIST SUBQUERY` and
-     `CORRELATED LIST SUBQUERY` over a statement written inside an
-     expression. `eqp.test` holds seventeen cases of them.
-276. The order a walk of a table that keeps its rows in the key's own tree
+275. The lines a plan names for a statement written inside a `FROM`, and
+     `SEARCH` for a walk held to a bare `min` or `max`. Built, which D-574
+     and D-575 record.
+276. The lines a plan names for a statement written inside an expression:
+     `SCALAR SUBQUERY`, `LIST SUBQUERY` and `CORRELATED LIST SUBQUERY`
+     stand over one, which this engine answers where the row it reads
+     stands and names no line for. A statement of a `FROM` that names a
+     view or a `WITH` term is named no `CO-ROUTINE` or `MATERIALIZE`
+     either, its rows being answered before the statement that reads them.
+     `eqp.test` holds sixteen cases of them.
+277. The order a walk of a table that keeps its rows in the key's own tree
      answers, and the order a term whose `NULLS` clause moves its nulls
      asks for, which `KEYINFO_ORDER_BIGNULL` of `sqlite3WhereIsOrdered`
      answers by reading the nulls of an index at the end. Both leave the
@@ -1341,8 +1344,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 123 551 cases in 844 files, 119 130
-pass, 2244 answer differently, and 2177 name something the engine
+under the `tclsh` of the machine. Of 123 525 cases in 843 files, 119 133
+pass, 2216 answer differently, and 2176 name something the engine
 refuses or a command that needs the C library's internals. The files
 that answer for tens of thousands of rows reach the five-minute
 deadline and are counted with the cases they ran by then. One run over

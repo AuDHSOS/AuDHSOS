@@ -115,14 +115,15 @@ fn what_the_cores_of_a_union_all_hang_under() {
 
 #[test]
 fn what_a_statement_written_inside_a_from_is_named() {
-    // The alias names it, and its own place where it carries none.
+    // A statement the plan writes into the one above it is named no line
+    // of its own, whether or not it carries an alias.
     assert_eq!(
         plan(super::INDEXED, b"SELECT * FROM (SELECT p FROM m) AS z"),
-        tree(&["|--SCAN m USING COVERING INDEX mpq", "`--SCAN z",])
+        tree(&["`--SCAN m USING COVERING INDEX mpq"])
     );
     assert_eq!(
         plan(super::INDEXED, b"SELECT * FROM (SELECT p FROM m)"),
-        tree(&["|--SCAN m USING COVERING INDEX mpq", "`--SCAN (subquery-0)",])
+        tree(&["`--SCAN m USING COVERING INDEX mpq"])
     );
 }
 
@@ -358,6 +359,188 @@ fn what_the_order_of_a_merge_reads_of_one_core() {
             "   `--RIGHT",
             "      |--SCAN k USING COVERING INDEX ka",
             "      `--USE TEMP B-TREE FOR ORDER BY",
+        ])
+    );
+}
+
+#[test]
+fn what_a_walk_held_to_a_bare_min_or_max_is_named() {
+    // `sqlite3WhereExplainOneScan` writes `SEARCH` for a walk held to the
+    // one row a bare `min` or `max` reads, as it does for a key or a
+    // bound, and `SCAN` where two aggregates read every row.
+    assert_eq!(
+        plan(super::INDEXED, b"SELECT max(q) FROM m"),
+        tree(&["`--SEARCH m USING COVERING INDEX mq"])
+    );
+    assert_eq!(
+        plan(super::INDEXED, b"SELECT min(r) FROM m"),
+        tree(&["`--SEARCH m USING COVERING INDEX mr"])
+    );
+    assert_eq!(
+        plan(super::INDEXED, b"SELECT max(rowid) FROM m"),
+        tree(&["`--SEARCH m"])
+    );
+    assert_eq!(
+        plan(super::INDEXED, b"SELECT min(rowid) FROM m"),
+        tree(&["`--SEARCH m"])
+    );
+    assert_eq!(
+        plan(super::INDEXED, b"SELECT min(q), max(q) FROM m"),
+        tree(&["`--SCAN m USING COVERING INDEX mq"])
+    );
+}
+
+#[test]
+fn how_a_statement_written_inside_a_from_is_read() {
+    // A statement the plan does not write into the one above it is read a
+    // row at a time, which `CO-ROUTINE` names, and kept in a table of its
+    // own where a statement stands in front of it, which `MATERIALIZE`
+    // names. An aggregate statement is never written into the one above
+    // it.
+    assert_eq!(
+        plan(super::INDEXED, b"SELECT * FROM (SELECT 1), k"),
+        tree(&[
+            "|--CO-ROUTINE (subquery-0)",
+            "|  `--SCAN CONSTANT ROW",
+            "|--SCAN (subquery-0)",
+            "`--SCAN k",
+        ])
+    );
+    assert_eq!(
+        plan(super::INDEXED, b"SELECT * FROM (SELECT count(*) FROM m)"),
+        tree(&[
+            "|--CO-ROUTINE (subquery-0)",
+            // The C library reads the rows out of `mr`, which holds as
+            // few columns as `mq`: item 269 of document 16 records the
+            // costing this tie is broken by.
+            "|  `--SCAN m USING COVERING INDEX mq",
+            "`--SCAN (subquery-0)",
+        ])
+    );
+    assert_eq!(
+        plan(
+            super::INDEXED,
+            b"SELECT * FROM (SELECT count(*) FROM m), (SELECT count(*) FROM k)"
+        ),
+        tree(&[
+            "|--CO-ROUTINE (subquery-0)",
+            "|  `--SCAN m USING COVERING INDEX mq",
+            "|--MATERIALIZE (subquery-1)",
+            "|  `--SCAN k USING COVERING INDEX kb",
+            "|--SCAN (subquery-0)",
+            "`--SCAN (subquery-1)",
+        ])
+    );
+}
+
+#[test]
+fn where_the_lines_of_a_statement_written_into_the_one_above_it_stand() {
+    // They stand in the place that statement stands in the `FROM`, and a
+    // `LIMIT` on it stops nothing where the statement above it reads one
+    // side and writes no `WHERE`.
+    assert_eq!(
+        plan(super::INDEXED, b"SELECT * FROM k, (SELECT p FROM m)"),
+        tree(&["|--SCAN k", "`--SCAN m USING COVERING INDEX mpq"])
+    );
+    assert_eq!(
+        plan(super::INDEXED, b"SELECT * FROM (SELECT p FROM m LIMIT 3)"),
+        tree(&["`--SCAN m USING COVERING INDEX mpq"])
+    );
+}
+
+#[test]
+fn what_stops_a_statement_of_a_from_being_written_into_the_one_above_it() {
+    // One statement per condition `flattenSubquery` reads: the plan names
+    // the statement `CO-ROUTINE` or `MATERIALIZE` where it is left as it
+    // stands, and the C library leaves each of these as it stands too.
+    for sql in [
+        // (7) it reads no table of its own.
+        b"SELECT * FROM (SELECT 1)".as_slice(),
+        // (4) it keeps the rows that differ.
+        b"SELECT * FROM (SELECT DISTINCT p FROM m)",
+        // (17) it is a compound.
+        b"SELECT * FROM (SELECT p FROM m UNION ALL SELECT a FROM k)",
+        // It gathers groups or reads an aggregate over them.
+        b"SELECT * FROM (SELECT count(*) FROM m)",
+        b"SELECT * FROM (SELECT p FROM m GROUP BY p)",
+        // (25) either statement calls a window function.
+        b"SELECT * FROM (SELECT row_number() OVER () FROM m)",
+        b"SELECT row_number() OVER () FROM (SELECT p FROM m)",
+        // (14)(13)(19)(21)(8)(9)(15): what a `LIMIT` on it stops.
+        b"SELECT * FROM (SELECT p FROM m LIMIT 3 OFFSET 1)",
+        b"SELECT * FROM (SELECT p FROM m LIMIT 3) LIMIT 2",
+        b"SELECT * FROM (SELECT p FROM m LIMIT 3) WHERE p>0",
+        b"SELECT DISTINCT * FROM (SELECT p FROM m LIMIT 3)",
+        b"SELECT * FROM (SELECT p FROM m LIMIT 3), k",
+        b"SELECT count(*) FROM (SELECT p FROM m LIMIT 3)",
+        b"SELECT * FROM (SELECT p FROM m LIMIT 3) UNION SELECT a FROM k",
+        // (11)(16): what an `ORDER BY` on it stops.
+        b"SELECT * FROM (SELECT p FROM m ORDER BY q) ORDER BY 1",
+        b"SELECT count(*) FROM (SELECT p FROM m ORDER BY q)",
+        // (3a)(3d)(26): it stands on the far side of an outer join.
+        b"SELECT * FROM k LEFT JOIN (SELECT p FROM m, f) ON 1",
+        b"SELECT DISTINCT * FROM k LEFT JOIN (SELECT p FROM m) ON 1",
+        b"SELECT * FROM k RIGHT JOIN (SELECT p FROM m) ON 1",
+    ] {
+        let held = plan(super::INDEXED, sql);
+        assert!(
+            held.contains("CO-ROUTINE") || held.contains("MATERIALIZE"),
+            "{}: {held}",
+            String::from_utf8_lossy(sql)
+        );
+    }
+    // A `WINDOW` clause no call names is no window function, so the
+    // statement is written into the one above it.
+    assert_eq!(
+        plan(
+            super::INDEXED,
+            b"SELECT * FROM (SELECT p FROM m WINDOW w AS ())"
+        ),
+        tree(&["`--SCAN m USING COVERING INDEX mpq"])
+    );
+    // An alias names the statement where the plan names how its rows are
+    // read.
+    assert_eq!(
+        plan(
+            super::INDEXED,
+            b"SELECT * FROM (SELECT count(*) FROM m) AS z"
+        ),
+        tree(&[
+            "|--CO-ROUTINE z",
+            "|  `--SCAN m USING COVERING INDEX mq",
+            "`--SCAN z",
+        ])
+    );
+}
+
+#[test]
+fn what_the_lines_under_a_statement_written_into_the_one_above_it_hang_under() {
+    // A line that hung under another line of that statement hangs under it
+    // still, which the branches of an `OR` hang under.
+    assert_eq!(
+        plan(
+            super::INDEXED,
+            b"SELECT * FROM (SELECT * FROM m WHERE q='b' OR p=2)"
+        ),
+        tree(&[
+            "`--MULTI-INDEX OR",
+            "   |--INDEX 1",
+            "   |  `--SEARCH m USING INDEX mq (q=?)",
+            "   `--INDEX 2",
+            "      `--SEARCH m USING INDEX mpq (p=?)",
+        ])
+    );
+    // A `HAVING` with no `GROUP BY` in front of it aggregates, so the
+    // statement is left as it stands.
+    assert_eq!(
+        plan(
+            super::INDEXED,
+            b"SELECT * FROM (SELECT count(*) FROM m HAVING count(*)>0)"
+        ),
+        tree(&[
+            "|--CO-ROUTINE (subquery-0)",
+            "|  `--SCAN m USING COVERING INDEX mq",
+            "`--SCAN (subquery-0)",
         ])
     );
 }

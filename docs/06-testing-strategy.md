@@ -7888,11 +7888,29 @@ Unit tests of `crate::db` over `fixtures/indexed.db`.
 - `WHERE NULL` under an aggregate, which answers one row.
 - `WHERE abs(0)`, which is read against every row.
 
+### 6.6.413 How a statement of a `FROM` is read (`db-sqlite`)
+
+Unit tests of `crate::db` over `fixtures/indexed.db`, drawn as
+`query_plan_graph` of the suite's `tester.tcl` draws the lines. Every
+answer is the one the C library's shell writes, but for the index a tie in
+the costing is broken by, which item 269 of document 16 records.
+
+- A statement written into the one above it, with an alias and without
+  one, and one whose lines stand after the side in front of it.
+- One statement per condition that stops the writing in: nineteen of them,
+  each named `CO-ROUTINE` or `MATERIALIZE`.
+- A `WINDOW` clause no call names, which stops nothing.
+- A statement read a row at a time beside one kept in a table of its own,
+  and one an outer join keeps.
+- The branches of an `OR` under a statement written into the one above it.
+- A walk held to the one row a bare `min` or `max` reads, over an index and
+  over the table's own tree, against two aggregates that read every row.
+
 ### 6.6.412 The tree of a merge of the cores of a compound (`db-sqlite`)
 
 Unit tests of `crate::db` over `fixtures/indexed.db`, drawn as
 `query_plan_graph` of the suite's `tester.tcl` draws the lines. Every
-answer is the one the C library's shell writes, but for the lines item 273
+answer is the one the C library's shell writes, but for the lines item 276
 of document 16 records as missing.
 
 - A `UNION` of two cores and an `EXCEPT` of three, whose right side takes
@@ -7928,7 +7946,7 @@ counts. Every answer is the one the C library's shell writes.
 Unit tests of `crate::db` over `fixtures/indexed.db`, drawn as
 `query_plan_graph` of the suite's `tester.tcl` draws the lines and their
 parents. Every answer is the one the C library's shell writes, but for
-the lines item 272 of document 16 records as missing.
+the lines item 276 of document 16 records as missing.
 
 - `SELECT 1` and `VALUES(1)`, each the one row a statement of no `FROM`
   answers.

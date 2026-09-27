@@ -7,6 +7,15 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` writes a statement of a `FROM` into the statement above it where
+  nothing of what the two hold stops it, naming no line of its own for it, and
+  names what is left `CO-ROUTINE` or `MATERIALIZE` with the lines of the
+  statement under it. D-575 records it. Catalog 6.6.413. `eqp.test` goes from 39
+  cases passing to 44, counting D-574 with it.
+
+- `db-sqlite` names `SEARCH` and not `SCAN` for a walk held to the one row a bare
+  `min` or `max` reads. D-574 records it.
+
 - `db-sqlite` names in a plan the merge a compound of any operator but a
   `UNION ALL` of no `ORDER BY` answers its cores by: `MERGE` with the operator
   over `LEFT` and `RIGHT`, with every core sorting its rows by the order of the

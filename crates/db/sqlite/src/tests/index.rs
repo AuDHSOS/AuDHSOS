@@ -913,12 +913,9 @@ fn explain_query_plan_names_the_walk_of_every_side() {
             super::INDEXED,
             b"EXPLAIN QUERY PLAN SELECT * FROM (SELECT * FROM m)"
         ),
-        // A statement written inside a `FROM` that carries no alias is
-        // named after its own place, which is `%S` of
-        // `research/sqlite/src/printf.c:999`. The C library writes the
-        // statement into the one above it and names `SCAN m` alone, which
-        // item 273 of document 16 records as missing.
-        "SCAN m|SCAN (subquery-0)"
+        // The statement is written into the one above it, which the plan
+        // names no line of its own for.
+        "SCAN m"
     );
     assert_eq!(
         planned(
@@ -1312,7 +1309,7 @@ fn a_side_is_keyed_by_what_the_sides_before_it_answer() {
             super::INDEXED,
             b"EXPLAIN QUERY PLAN SELECT m.p FROM (SELECT b FROM k) AS s, m WHERE m.p=s.b"
         ),
-        "SCAN k USING COVERING INDEX kb|SCAN s|SEARCH m USING COVERING INDEX mpq (p=?)"
+        "SCAN k USING COVERING INDEX kb|SEARCH m USING COVERING INDEX mpq (p=?)"
     );
     // A side held to a range of rowids is read out of the table, which
     // holds every column the index holds and the ones it does not.
@@ -1355,7 +1352,7 @@ fn what_names_no_key_of_a_side_the_sides_before_it_answer() {
             super::INDEXED,
             b"EXPLAIN QUERY PLAN SELECT m.q FROM (SELECT b FROM k) AS s, m WHERE s.b=m.q"
         ),
-        "SCAN k USING COVERING INDEX kb|SCAN s|SCAN m USING COVERING INDEX mq"
+        "SCAN k USING COVERING INDEX kb|SCAN m USING COVERING INDEX mq"
     );
     // `ea` is over an expression, `eb` holds fewer entries than the table
     // has rows, and `ec` compares under another collation than the column
