@@ -729,6 +729,89 @@ fn a_walk_of_a_tall_index_held_between_bounds_is_read_backwards_as_well() {
     }
 }
 
+/// A term of a `WHERE` that names a column the statement answers under
+/// another name holds the walk as the column itself would, which
+/// `where-1.1.7` of `test/where.test` reads. Every answer is the one the
+/// C library's shell writes.
+#[test]
+fn what_a_term_that_names_a_column_of_the_answer_holds_the_walk_to() {
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT r, p AS abc FROM m WHERE abc=2"
+        ),
+        "SEARCH m USING INDEX mpq (p=?)"
+    );
+    // The two sides of the comparison either way round, and a name the
+    // statement answers a column under that another name of it stands
+    // for.
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT r, p AS abc FROM m WHERE 2=abc"
+        ),
+        "SEARCH m USING INDEX mpq (p=?)"
+    );
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT abs(a) AS abc FROM e WHERE abc=2"
+        ),
+        "SEARCH e USING INDEX ea (<expr>=?)"
+    );
+    // A name with a table in front of it names a column of that table
+    // and no column of the answer.
+    assert_eq!(
+        Database::open(super::INDEXED)
+            .unwrap()
+            .query(b"SELECT p AS abc FROM m WHERE m.abc=2")
+            .unwrap_err()
+            .message(),
+        "no such column: m.abc"
+    );
+    // The rows are the ones the column itself answers.
+    assert_eq!(
+        Database::open(super::INDEXED)
+            .unwrap()
+            .query(b"SELECT r, p AS abc FROM m WHERE abc=2")
+            .unwrap()
+            .rows,
+        Database::open(super::INDEXED)
+            .unwrap()
+            .query(b"SELECT r, p FROM m WHERE p=2")
+            .unwrap()
+            .rows
+    );
+}
+
+/// A `WHERE` no row can make true leaves the walk unread, which
+/// `where-4.1` of `test/where.test` counts no search for.
+#[test]
+fn what_a_where_no_row_can_make_true_reads() {
+    let answer = Database::open(super::INDEXED)
+        .unwrap()
+        .query(b"SELECT * FROM m WHERE 0")
+        .unwrap();
+    assert!(answer.rows.is_empty());
+    assert_eq!(answer.stepped.searched, 0);
+    // A statement that aggregates over no row still answers one row.
+    assert_eq!(
+        Database::open(super::INDEXED)
+            .unwrap()
+            .query(b"SELECT count(*) FROM m WHERE NULL")
+            .unwrap()
+            .rows,
+        [alloc::vec![Value::Int(0)]]
+    );
+    // A `WHERE` that calls a function is read against every row.
+    let answer = Database::open(super::INDEXED)
+        .unwrap()
+        .query(b"SELECT * FROM m WHERE abs(0)")
+        .unwrap();
+    assert!(answer.rows.is_empty());
+    assert_eq!(answer.stepped.searched, 4);
+}
+
 /// The lines `EXPLAIN QUERY PLAN` answers for `sql`.
 fn planned(bytes: &[u8], sql: &[u8]) -> alloc::string::String {
     Database::open(bytes)

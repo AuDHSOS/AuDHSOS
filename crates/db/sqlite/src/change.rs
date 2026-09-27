@@ -14078,7 +14078,7 @@ fn schema_select(arena: &Arena, id: ExprId) -> bool {
 /// grammar writes the value false.
 ///
 /// Walking the tree costs O(n) in its nodes.
-fn holds_call(arena: &Arena, id: ExprId) -> bool {
+pub(crate) fn holds_call(arena: &Arena, id: ExprId) -> bool {
     arena.node(id).is_some_and(|node| {
         if matches!(node, Node::Call { .. } | Node::Over { .. }) {
             return true;

@@ -1777,6 +1777,9 @@ struct Reach<'a> {
     /// What the statement answers, whose names a bare name no side holds
     /// stands for.
     columns: crate::ast::Range,
+    /// The `WHERE` of the statement, which the walk reads to see whether
+    /// no row can make it true.
+    filter: Option<ExprId>,
 }
 
 /// Where a side of a `FROM` draws its rows.
@@ -4238,6 +4241,7 @@ impl<'a> Database<'a> {
             sql,
             scope,
             columns: first.columns,
+            filter: first.filter,
         };
         let cursor = Cursor::new(self.collation(), self.encoding, reach);
         limit(arena, &first, sql, &mut answer.rows, &cursor)?;
@@ -4365,6 +4369,7 @@ impl<'a> Database<'a> {
             sql,
             scope,
             columns: select.columns,
+            filter: select.filter,
         };
         counted_sides(arena, &select)?;
         let sides = self.sides(arena, &select, sql, scope)?;
@@ -4404,6 +4409,7 @@ impl<'a> Database<'a> {
             sql,
             scope,
             columns: select.columns,
+            filter: select.filter,
         };
         if !select.values.is_empty() {
             let cursor = Cursor::new(self.collation(), self.encoding, reach);
@@ -4411,13 +4417,16 @@ impl<'a> Database<'a> {
         }
         self.within_terms(arena, &select)?;
         let mut sides = self.sides(arena, &select, sql, scope)?;
+        let settled = Settled {
+            sensitive: self.sensitive,
+            format: self.schema_format(),
+        };
         planned(
             arena,
-            select.filter,
+            (select.filter, select.columns),
             sql,
             &mut sides,
-            self.sensitive,
-            self.schema_format(),
+            settled,
         );
         let shape = shape(arena, &select, sql, &sides, self.naming, self.collating)?;
         let collations = self.collations(&shape);
@@ -5047,6 +5056,7 @@ impl<'a> Database<'a> {
             sql,
             scope,
             columns: head.columns,
+            filter: head.filter,
         };
         let cursor = Cursor::new(self.collation(), self.encoding, reach);
         let (skip, most) = bounds(arena, &head, sql, &cursor)?;
@@ -5159,6 +5169,15 @@ impl<'a> Database<'a> {
         reach: Reach<'b>,
         each: &mut dyn FnMut(&Cursor<'b>) -> Result<Flow, Error>,
     ) -> Result<(), Error> {
+        // `sqlite3WhereBegin` of `research/sqlite/src/where.c` writes no
+        // loop for a `WHERE` no row can make true, which is its
+        // `WHERE_ALWAYS_FALSE`, so the walk reads no page.
+        if reach
+            .filter
+            .is_some_and(|filter| always_false(arena, sql, filter))
+        {
+            return Ok(());
+        }
         let mut cursor = Cursor::new(self.collation(), self.encoding, reach);
         if sides.is_empty() {
             // A statement with no `FROM` reads one row of nothing.
@@ -5847,12 +5866,13 @@ fn listed(
 /// answers.
 fn planned(
     arena: &Arena,
-    filter: Option<ExprId>,
+    held: (Option<ExprId>, Range),
     sql: &[u8],
     sides: &mut [Side<'_>],
-    sensitive: bool,
-    format: u32,
+    settled: Settled,
 ) {
+    let (filter, columns) = held;
+    let format = settled.format;
     let terms = filter.map_or_else(
         || Planning {
             held: Vec::new(),
@@ -5860,7 +5880,7 @@ fn planned(
             arena,
             sql,
         },
-        |filter| terms_of(arena, filter, sql, sides, sensitive),
+        |filter| terms_of(arena, (filter, columns), sql, sides, settled),
     );
     // A rowid range is what a table's own tree is walked by, and it
     // answers a row where an index answers only where the row is, so it
@@ -5906,15 +5926,7 @@ fn planned(
                 // range of rowids reads no branch at all.
                 better.or(held).or_else(|| {
                     filter.filter(|_| !between).and_then(|filter| {
-                        union_of(
-                            arena,
-                            filter,
-                            sql,
-                            sides,
-                            at,
-                            stored,
-                            Settled { sensitive, format },
-                        )
+                        union_of(arena, (filter, columns), sql, sides, (at, stored), settled)
                     })
                 })
             }
@@ -6047,11 +6059,13 @@ enum Reached {
 /// one side against a value no row is needed to read.
 fn terms_of<'a>(
     arena: &'a Arena,
-    filter: ExprId,
+    held: (ExprId, Range),
     sql: &'a [u8],
     sides: &[Side<'_>],
-    sensitive: bool,
+    settled: Settled,
 ) -> Planning<'a> {
+    let (filter, columns) = held;
+    let sensitive = settled.sensitive;
     let mut out = Vec::new();
     let mut over = Vec::new();
     let mut spine = alloc::vec![filter];
@@ -6105,7 +6119,16 @@ fn terms_of<'a>(
         let op = if op == BinaryOp::Is { BinaryOp::Eq } else { op };
         // `a < 5` and `5 > a` say the same thing about `a`, so the
         // operator turns over with the operands.
-        for (op, column, value) in [(op, left, right), (flipped(op), right, left)] {
+        for (op, held, value) in [(op, left, right), (flipped(op), right, left)] {
+            // `resolveExprStep` of `research/sqlite/src/resolve.c` reads a
+            // name no side of the `FROM` answers against the names the
+            // statement answers its columns under, so a term that names
+            // one stands for the expression that column answers.
+            let column = reached(arena, held, sql, sides)
+                .is_none()
+                .then(|| aliased_to(arena, columns, sql, held))
+                .flatten()
+                .unwrap_or(held);
             let Some((at, reached)) = reached(arena, column, sql, sides) else {
                 // An index over an expression names a key of a term that
                 // holds that same expression at one value.
@@ -7327,7 +7350,14 @@ fn ordering(
         let Some(held) = held else {
             return Ordering::Sorted;
         };
+        let keyed = held.place.is_none();
         places.push(held);
+        // A rowid stands once in the table, so the terms after one say
+        // nothing about the order the rows come in, which
+        // `sqlite3WhereIsOrdered` counts as the whole `ORDER BY` answered.
+        if keyed {
+            break;
+        }
     }
     placed(side, stored, places, settling.format)
 }
@@ -7427,7 +7457,14 @@ fn grouping_order(
         let Some(held) = termed(arena, select, sql, sides, (settling, stored), *term, false) else {
             return Ordering::Sorted;
         };
+        let keyed = held.place.is_none();
         places.push(held);
+        // A rowid stands once in the table, so every row a term naming it
+        // reaches is a group of its own and the terms after it say
+        // nothing about which rows share a group.
+        if keyed {
+            break;
+        }
     }
     placed(side, stored, places, settling.format)
 }
@@ -7505,9 +7542,6 @@ fn placed(side: &Side<'_>, stored: &Stored, mut places: Vec<Termed>, format: u32
     if tail.is_some() {
         places.pop();
     }
-    if places.iter().any(|term| term.place.is_none()) {
-        return Ordering::Sorted;
-    }
     let wanted = places;
     // A side already held to a key by an index answers its entries in
     // that index's order, so the key is kept where that order is the one
@@ -7563,15 +7597,24 @@ fn counted_to(arena: &Arena, select: &Select, sql: &[u8], id: ExprId) -> Option<
         let at = usize::try_from(place.checked_sub(1)?).ok()?;
         return expression_of(results.get(at)?);
     }
-    let named = dequote(column_named(arena, uncollated(arena, id))?.text(sql));
-    results.iter().find_map(|held| match held {
-        crate::ast::ResultColumn::Expr {
-            expr,
-            alias: Some(alias),
-            ..
-        } if dequote(alias.text(sql)).eq_ignore_ascii_case(&named) => Some(*expr),
-        _ => None,
-    })
+    aliased_to(arena, select.columns, sql, id)
+}
+
+/// The expression the statement answers under the name an expression
+/// spells, and nothing where the name is no name it answers a column
+/// under.
+///
+/// A name with a table in front of it names a column of that table and
+/// no column of the answer, which `sqlite3ResolveExprNames` refuses where
+/// the table holds no such column.
+///
+/// Reading the names costs O(n) in the columns the statement answers.
+fn aliased_to(arena: &Arena, columns: Range, sql: &[u8], id: ExprId) -> Option<ExprId> {
+    let (table, column) = column_parts(arena, uncollated(arena, id))?;
+    if table.is_some() {
+        return None;
+    }
+    aliased(arena.results(columns), sql, &dequote(column.text(sql)))
 }
 
 /// The expression one result column answers, and nothing for a `*`,
@@ -7771,13 +7814,13 @@ struct Settled {
 /// Finding the branches costs O(n) in the nodes of the `WHERE`.
 fn union_of(
     arena: &Arena,
-    filter: ExprId,
+    held: (ExprId, Range),
     sql: &[u8],
     sides: &[Side<'_>],
-    at: usize,
-    stored: &Stored,
+    over: (usize, &Stored),
     settled: Settled,
 ) -> Option<Plan> {
+    let (filter, columns) = held;
     let mut spine = alloc::vec![filter];
     while let Some(id) = spine.pop() {
         match arena.node(id) {
@@ -7792,7 +7835,7 @@ fn union_of(
             Some(Node::Binary {
                 op: BinaryOp::Or, ..
             }) => {
-                if let Some(plan) = ored(arena, id, sql, sides, at, stored, settled) {
+                if let Some(plan) = ored(arena, (id, columns), sql, sides, over, settled) {
                     return Some(plan);
                 }
             }
@@ -7808,13 +7851,14 @@ fn union_of(
 /// Reading one branch costs what [`plan_of`] costs over its terms.
 fn ored(
     arena: &Arena,
-    id: ExprId,
+    held: (ExprId, Range),
     sql: &[u8],
     sides: &[Side<'_>],
-    at: usize,
-    stored: &Stored,
+    over: (usize, &Stored),
     settled: Settled,
 ) -> Option<Plan> {
+    let (id, columns) = held;
+    let (at, stored) = over;
     let mut plans = Vec::new();
     let mut spine = alloc::vec![id];
     while let Some(held) = spine.pop() {
@@ -7828,7 +7872,7 @@ fn ored(
             spine.push(left);
             continue;
         }
-        let terms = terms_of(arena, held, sql, sides, settled.sensitive);
+        let terms = terms_of(arena, (held, columns), sql, sides, settled);
         // A branch that names the rowid is read out of the table's own
         // tree, which is the `OP_SeekRowid` loop `sqlite3WhereBegin`
         // writes for `WHERE_IPK`.
@@ -10893,6 +10937,21 @@ fn compared(
             }),
         _ => (Affinity::None, None),
     }
+}
+
+/// Whether no row can make the `WHERE` at `filter` true, which
+/// `sqlite3WhereBegin` writes no loop for.
+///
+/// A `WHERE` that calls a function is read against every row, because
+/// `sqlite3ExprIsConstant` of `research/sqlite/src/expr.c` folds a call
+/// only where the function is deterministic, which the walk here does not
+/// read.
+///
+/// Reading the expression costs O(n) in its nodes.
+fn always_false(arena: &Arena, sql: &[u8], filter: ExprId) -> bool {
+    !crate::change::holds_call(arena, filter)
+        && evaluate_row(arena, filter, sql, &eval::NoRow(None))
+            .is_ok_and(|value| !value.truth(false))
 }
 
 /// Whether a `WHERE` or a `HAVING` keeps this row.

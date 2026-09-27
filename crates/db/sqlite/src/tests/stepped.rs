@@ -82,6 +82,10 @@ fn what_the_walk_from_the_last_row_back_answers() {
 #[test]
 fn an_order_by_the_walk_of_an_index_answers_needs_no_sort() {
     assert_eq!(pair(b"SELECT * FROM m ORDER BY q"), (4, 0));
+    // A rowid stands once in the table, so the terms after one say
+    // nothing about the order.
+    assert_eq!(pair(b"SELECT * FROM m ORDER BY q, rowid, p"), (4, 0));
+    assert_eq!(pair(b"SELECT * FROM m ORDER BY rowid, q DESC"), (4, 0));
     assert_eq!(pair(b"SELECT * FROM m ORDER BY q, rowid"), (4, 0));
     assert_eq!(pair(b"SELECT * FROM m ORDER BY p, q"), (4, 0));
     assert_eq!(pair(b"SELECT * FROM m ORDER BY p"), (4, 0));
@@ -166,8 +170,7 @@ fn what_order_by_the_walk_does_not_answer() {
     assert_eq!(pair(b"SELECT * FROM m ORDER BY p, q DESC"), (4, 1));
     assert_eq!(pair(b"SELECT * FROM m ORDER BY r+1"), (4, 1));
     assert_eq!(pair(b"SELECT * FROM m ORDER BY q COLLATE binary"), (4, 1));
-    // A rowid between two columns leaves the terms after it unanswered.
-    assert_eq!(pair(b"SELECT * FROM m ORDER BY q, rowid, p"), (4, 1));
+
     // A side already held to a key answers fewer rows than a walk of
     // the index whole.
     assert_eq!(pair(b"SELECT * FROM m WHERE q='A' ORDER BY p"), (0, 1));

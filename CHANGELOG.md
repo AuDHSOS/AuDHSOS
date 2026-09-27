@@ -7,6 +7,18 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` answers the whole of an `ORDER BY` or a `GROUP BY` by the walk that
+  answers its terms up to one naming the rowid, the terms after which say
+  nothing. D-565 records it. `where.test` goes from 283 cases passing to 284.
+
+- `db-sqlite` leaves the walk unread where no row can make the `WHERE` true, so
+  such a statement reads no page. D-564 records it. Catalog 6.6.407.
+  `where.test` goes from 282 cases passing to 283 and `in.test` from 116 to 118.
+
+- `db-sqlite` holds the walk by a term of a `WHERE` that names a column the
+  statement answers under another name, as the column itself would. D-563
+  records it. Catalog 6.6.406. `where.test` goes from 275 cases passing to 282.
+
 - `db-sqlite` reads a table's own tree from its last row back where the rows are
   asked for in that order, so an `ORDER BY` of the rowid written `DESC` sorts
   nothing and a bare `max` of the rowid reads one row. D-562 records it. Catalog

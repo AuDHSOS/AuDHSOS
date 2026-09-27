@@ -1294,6 +1294,11 @@ Size: L.
 261. The rows a bare `min` or `max` reads. Built, which D-561 records.
 262. The walk of a table from its last row back. Built, which D-562
      records.
+263. A term of a `WHERE` that names a column of the answer. Built, which
+     D-563 records.
+264. A `WHERE` no row can make true. Built, which D-564 records.
+265. The terms of an order after one that names the rowid. Built, which
+     D-565 records.
 
 ### Done when
 
@@ -1303,8 +1308,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 123 597 cases in 844 files, 119 072
-pass, 2348 answer differently, and 2177 name something the engine
+under the `tclsh` of the machine. Of 123 551 cases in 844 files, 119 037
+pass, 2337 answer differently, and 2177 name something the engine
 refuses or a command that needs the C library's internals. The files
 that answer for tens of thousands of rows reach the five-minute
 deadline and are counted with the cases they ran by then. One run over
@@ -1354,9 +1359,10 @@ file reached in three minutes and not a fixed number. A deadline of one
 minute cut `rowvalue2.test` at some 2900 of the 3834 cases it answers and
 cut `in2.test`, `joinD.test`, `savepoint6.test` and `tkt2686.test` at a
 different case each run. At three minutes `crash2.test`, `crash6.test`,
-`savepoint6.test` and `trans2.test` are the files a run still ends, each
-at a different case: three runs read 354, 388 and 400 cases of
-`savepoint6.test`, which is 46 cases of the total, so two runs are
+`joinD.test`, `savepoint6.test` and `trans2.test` are the files a run
+still ends, each at a different case: three runs read 354, 388 and 400
+cases of `savepoint6.test`, and two runs read 372 and 418 cases of
+`joinD.test`, which is 46 cases of the total each, so two runs are
 comparable to about a twentieth of a percent and a file that loses cases
 is measured again on its own.
 

@@ -7869,6 +7869,25 @@ Unit tests of `crate::image` and of `crate::db`.
 - The same with a `WHERE` that holds the walk to a range of rowids,
   which sorts.
 
+### 6.6.406 A term that names a column of the answer (`db-sqlite`)
+
+Unit tests of `crate::db` over `fixtures/indexed.db`, against the plan
+`EXPLAIN QUERY PLAN` names. Every answer is the one the C library's shell
+writes.
+
+- `WHERE abc=2` over `p AS abc`, and the two sides the other way round.
+- The same over an index on an expression.
+- `WHERE m.abc=2`, which names a column the table does not hold.
+- The rows, which are the ones the column itself answers.
+
+### 6.6.407 A `WHERE` no row can make true (`db-sqlite`)
+
+Unit tests of `crate::db` over `fixtures/indexed.db`.
+
+- `WHERE 0`, which answers no row and counts no search.
+- `WHERE NULL` under an aggregate, which answers one row.
+- `WHERE abs(0)`, which is read against every row.
+
 ### 6.6.404 The walk a bare `min` or `max` reads (`db-sqlite`)
 
 Unit tests of `crate::db` over `fixtures/indexed.db`, against the
