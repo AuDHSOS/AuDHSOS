@@ -1261,6 +1261,16 @@ Size: L.
      `sqlite_stat1`. Built, which D-541 records.
 242. The database an `ANALYZE` names, by its schema or by a bare name.
      Built, which D-542 records.
+243. The cores of a compound written inside an `IN`. Built, which D-543
+     records.
+244. A `DISTINCT` written before no argument. Built, which D-544 records.
+245. How many columns a table and an index may hold. Built, which D-545
+     records.
+246. The two refusals a `FILTER` answers. Built, which D-546 records.
+247. The names a `DELETE` and an `UPDATE` read against the table. Built,
+     which D-547 records.
+248. The `WHEN` and the body of every trigger a statement may fire.
+     Built, which D-548 records.
 
 ### Done when
 
@@ -1270,8 +1280,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 123 562 cases in 844 files, 118 946
-pass, 2424 answer differently, and 2192 name something the engine
+under the `tclsh` of the machine. Of 123 557 cases in 844 files, 118 963
+pass, 2405 answer differently, and 2189 name something the engine
 refuses or a command that needs the C library's internals. The files
 that answer for tens of thousands of rows reach the five-minute
 deadline and are counted with the cases they ran by then. One run over

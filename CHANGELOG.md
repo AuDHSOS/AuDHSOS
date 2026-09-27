@@ -7,6 +7,35 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` reads the `WHEN` and the body of every trigger a statement may
+  fire before it writes a row, so a name neither the tables nor the two rows of
+  the trigger hold refuses the statement. D-548 records it. Catalog 6.6.392.
+  `update.test` goes from 135 cases passing to 137.
+
+- `db-sqlite` reads the names of the expressions of a `DELETE` and of an
+  `UPDATE` against the table before it walks the rows, so a name no column
+  carries refuses the statement over a table of no rows. D-547 records it.
+  Catalog 6.6.392. `delete.test` goes from 61 cases passing to 62.
+
+- `db-sqlite` names the function a `FILTER` stands on where the call carries no
+  `OVER`. D-546 records it. Catalog 6.6.391. `filter1.test` goes from 33 cases
+  passing to 34.
+
+- `db-sqlite` holds the columns of a table and of an index to the limit the
+  connection carries for them. D-545 records it. Catalog 6.6.390.
+  `createtab.test` goes from 56 cases passing to 57 and `e_createtable.test`
+  from 146 to 150.
+
+- `db-sqlite` reads a `DISTINCT` before no argument as an empty argument list,
+  which the count of arguments is then read against. D-544 records it. Catalog
+  6.6.389. `count.test` goes from 24 cases passing to 26 and `distinctagg.test`
+  from 40 to 41.
+
+- `db-sqlite` reads the cores of a compound written inside an `IN` before it
+  counts the columns the place takes, so cores of two widths are refused for the
+  word that joins them. D-543 records it. Catalog 6.6.388. `in.test` goes from
+  111 cases passing to 116.
+
 - `db-sqlite` reads a bare name of an `ANALYZE` as a database of the connection
   before it reads the name as a table or an index, and refuses a schema the
   connection holds no database under. D-542 records it. Catalog 6.6.386.

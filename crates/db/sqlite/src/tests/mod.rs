@@ -68,6 +68,7 @@ mod regexp;
 mod rename;
 mod renamecol;
 mod reopen;
+mod resolving;
 mod returning;
 mod rowvalue;
 mod savepoint;

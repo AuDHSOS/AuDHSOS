@@ -39,9 +39,12 @@ pub enum Error {
     /// An aggregate written where no group has been made, with the name
     /// it was called under.
     MisusedAggregate(Vec<u8>),
-    /// A scalar function carrying a `FILTER`, which only an aggregate
-    /// reads, with the name it was called under.
+    /// One of the eleven built-in window functions carrying a `FILTER`,
+    /// which only an aggregate reads, with the name it was called under.
     Filtered(Vec<u8>),
+    /// A scalar function carrying a `FILTER` and no `OVER`, with the name
+    /// it was called under.
+    FilteredCall(Vec<u8>),
     /// A collation the connection does not hold, which is what a
     /// `COLLATE` naming one the C library would have been given
     /// through its API names.
@@ -173,6 +176,15 @@ impl Error {
             }
             Error::Filtered(_) => {
                 "FILTER clause may only be used with aggregate window functions".to_string()
+            }
+            // `resolveExprStep` of `research/sqlite/src/resolve.c:1309`
+            // names the function where no `OVER` stands beside the
+            // `FILTER`, which `sqlite3WindowRewrite` never reads.
+            Error::FilteredCall(name) => {
+                alloc::format!(
+                    "FILTER may not be used with non-aggregate {}()",
+                    shown(name)
+                )
             }
             Error::RowValue => "row value misused".to_string(),
             Error::InTerms(held, wanted) => alloc::format!(
@@ -862,7 +874,7 @@ fn calling(
     let (filter, ordered) = written;
     match row.aggregate(id) {
         Some(value) => Ok(answered_under(value, arena, id, sql, row)),
-        None if filter.is_some() => Err(Error::Filtered(named_as(name, sql))),
+        None if filter.is_some() => Err(Error::FilteredCall(named_as(name, sql))),
         None if !ordered.is_empty() => Err(Error::OrderedCall(named_as(name, sql))),
         None => called(arena, name, args, sql, row, deeper),
     }

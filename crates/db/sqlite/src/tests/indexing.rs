@@ -531,3 +531,38 @@ fn what_a_unique_index_over_rows_that_share_a_key_is_refused_with() {
         writer.run(b"REINDEX").expect("both indexes written again");
     }
 }
+
+/// The columns of a table and of an index, each held to the limit the
+/// connection carries for them, which is 2000 for this build.
+#[test]
+fn how_many_columns_a_table_and_an_index_may_hold() {
+    let named = |count: usize| -> alloc::string::String {
+        (0..count)
+            .map(|at| alloc::format!("c{at}"))
+            .collect::<alloc::vec::Vec<_>>()
+            .join(",")
+    };
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    let held = alloc::format!("CREATE TABLE t2000({})", named(2000));
+    writer.run(held.as_bytes()).unwrap();
+    let over = alloc::format!("CREATE TABLE t2001({})", named(2001));
+    assert_eq!(
+        refused(&mut writer, over.as_bytes()),
+        "too many columns on t2001"
+    );
+    // The index a `UNIQUE` of the table makes is held to the same limit,
+    // and so is the one a `CREATE INDEX` writes.
+    let keyed = alloc::format!("CREATE TABLE t3(x,UNIQUE({}x))", "x,".repeat(2000));
+    assert_eq!(
+        refused(&mut writer, keyed.as_bytes()),
+        "too many columns in index"
+    );
+    let over = alloc::format!("CREATE INDEX i2001 ON t2000({}c0)", "c0,".repeat(2000));
+    assert_eq!(
+        refused(&mut writer, over.as_bytes()),
+        "too many columns in index"
+    );
+    // An index of as many columns as the limit takes stands.
+    let held = alloc::format!("CREATE INDEX i2000 ON t2000({})", named(2000));
+    writer.run(held.as_bytes()).unwrap();
+}

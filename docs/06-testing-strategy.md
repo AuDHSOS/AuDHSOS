@@ -7856,6 +7856,58 @@ Document 16 step Q8. Every answer is the one the C library's shell writes.
 - A `FROM` of 65 and of 100 sides, which are refused.
 - Two statements of 64 sides, one written inside the other, which stand.
 
+### 6.6.392 The names a statement that writes reads (`db-sqlite`)
+
+Unit tests of `crate::change`. Every answer is the one the C library's
+shell writes.
+
+- A `DELETE` and an `UPDATE` over a table of no rows whose `WHERE` or
+  whose `SET` value names no column: refused `no such column: nosuch`.
+- The key of the table under each of its three names, a name under the
+  name an `AS` gave the table, and an `UPDATE ... FROM`, which all stand.
+- A trigger whose `WHEN` names no column, which refuses the `UPDATE` that
+  may fire it.
+- A step that reads and writes the key of the table it writes.
+- A step that writes the key of a table that keeps its rows in the key's
+  own tree: refused `no such column: rowid`.
+- A step that names a column no table of it holds, which refuses the
+  statement that fires it.
+
+### 6.6.391 The two refusals a `FILTER` answers (`db-sqlite`)
+
+Unit tests of `crate::db`.
+
+- `lag(a) FILTER (WHERE a>1) OVER (ORDER BY a)`: refused for the
+  functions a `FILTER` may stand on.
+- `upper(a) FILTER (WHERE a>1)`: refused for the function it stands on.
+
+### 6.6.390 How many columns a table and an index may hold (`db-sqlite`)
+
+Unit tests of `crate::change`.
+
+- A table of 2000 columns and an index over 2000 of them, which stand.
+- A table of 2001 columns: refused `too many columns on t2001`.
+- A `UNIQUE` over 2001 columns and a `CREATE INDEX` over 2001 terms, both
+  refused `too many columns in index`.
+
+### 6.6.389 A `DISTINCT` before no argument (`db-sqlite`)
+
+Unit tests of `crate::db`.
+
+- `count(DISTINCT)`: refused for the count of arguments a `DISTINCT`
+  aggregate takes.
+- `sum(DISTINCT)` and `upper(DISTINCT)`: refused for the count of
+  arguments the function takes.
+
+### 6.6.388 The cores of a compound inside an `IN` (`db-sqlite`)
+
+Unit tests of `crate::db`.
+
+- Cores of two widths inside an `IN`: refused for the word that joins
+  them.
+- A `VALUES` core of another width inside one: refused for the rows.
+- Cores that agree and are wider than the place: refused for the place.
+
 ### 6.6.386 The database an `ANALYZE` names (`db-sqlite`)
 
 Unit tests of `crate::change`. Every answer is the one the C library's

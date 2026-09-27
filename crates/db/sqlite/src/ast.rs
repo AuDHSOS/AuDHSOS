@@ -547,6 +547,23 @@ pub struct CreateTable {
     pub add_at: Option<usize>,
 }
 
+impl CreateTable {
+    /// The columns and the constraints the statement wrote out, and
+    /// nothing where the columns come from a statement.
+    ///
+    /// Reading them costs O(1).
+    #[must_use]
+    pub const fn written_columns(&self) -> Option<(Range, Range)> {
+        match self.body {
+            TableBody::Columns {
+                columns,
+                constraints,
+            } => Some((columns, constraints)),
+            TableBody::Select(_) => None,
+        }
+    }
+}
+
 /// `ALTER TABLE [schema.]name ADD [COLUMN] <column>`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct AddColumn {

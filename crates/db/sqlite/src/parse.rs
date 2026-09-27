@@ -2767,8 +2767,11 @@ impl<'a> Parser<'a> {
                 // `ALL` is the default and means nothing.
             }
             // `count(ORDER BY x)` names no argument and an order all
-            // the same, which `aggregate_orderby` of the grammar takes.
-            if !self.at_keyword(Keyword::Order) {
+            // the same, which `aggregate_orderby` of the grammar takes,
+            // and `count(DISTINCT)` names none at all, which the empty
+            // `exprlist` of the grammar takes and the count of arguments
+            // is read against after.
+            if !self.at_keyword(Keyword::Order) && !self.at(Kind::Rp) {
                 loop {
                     args.push(self.expression()?);
                     if !self.eat(Kind::Comma) {

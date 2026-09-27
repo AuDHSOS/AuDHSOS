@@ -58,6 +58,22 @@ fn what_two_cores_of_different_widths_are_refused_with() {
             b"VALUES(1) UNION VALUES(2,3)",
             "all VALUES must have the same number of terms",
         ),
+        // The cores of a compound inside an `IN` are read before the
+        // columns the place takes are counted, so the refusal names the
+        // word that joins them and not the place.
+        (
+            b"SELECT n FROM t2 WHERE n IN (SELECT a,b FROM t1 UNION ALL SELECT n FROM t2)",
+            "SELECTs to the left and right of UNION ALL do not have the same number of result columns",
+        ),
+        (
+            b"SELECT n FROM t2 WHERE n IN (SELECT a FROM t1 UNION VALUES(1,2))",
+            "all VALUES must have the same number of terms",
+        ),
+        // A compound whose cores agree is counted against the place.
+        (
+            b"SELECT n FROM t2 WHERE n IN (SELECT a,b FROM t1 UNION ALL SELECT a,b FROM t1)",
+            "sub-select returns 2 columns - expected 1",
+        ),
     ] {
         assert_eq!(refused(&image, sql), message, "{sql:?}");
     }

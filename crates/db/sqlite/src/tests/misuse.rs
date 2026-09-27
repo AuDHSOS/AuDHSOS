@@ -149,6 +149,22 @@ fn what_a_distinct_before_the_arguments_is_refused_with() {
         refused(&image, b"SELECT count(DISTINCT a) OVER () FROM t1"),
         "DISTINCT is not supported for window functions"
     );
+    // A `DISTINCT` before no argument at all is what the count of
+    // arguments is read against, and `count` takes none, so the refusal
+    // is the one a `DISTINCT` answers; a function that takes one is
+    // refused for the count first.
+    assert_eq!(
+        refused(&image, b"SELECT count(DISTINCT) FROM t1"),
+        "DISTINCT aggregates must have exactly one argument"
+    );
+    assert_eq!(
+        refused(&image, b"SELECT sum(DISTINCT) FROM t1"),
+        "wrong number of arguments to function sum()"
+    );
+    assert_eq!(
+        refused(&image, b"SELECT upper(DISTINCT) FROM t1"),
+        "wrong number of arguments to function upper()"
+    );
     let database = Database::open(&image).expect("a database");
     let answered = database.query(b"SELECT abs(DISTINCT -1) FROM t1").unwrap();
     assert_eq!(

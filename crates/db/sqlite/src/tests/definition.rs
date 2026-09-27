@@ -324,6 +324,11 @@ fn the_two_table_options_are_the_only_two() {
 fn a_table_may_take_its_columns_from_a_statement() {
     let (_, table) = table_of("CREATE TABLE t AS SELECT 1 AS x");
     assert!(matches!(table.body, TableBody::Select(_)));
+    // Such a body wrote no column out, so the columns the statement
+    // holds to a limit are the ones a body of columns names.
+    assert!(table.written_columns().is_none());
+    let (_, table) = table_of("CREATE TABLE t(x, UNIQUE(x))");
+    assert!(table.written_columns().is_some());
     let (_, table) = table_of("CREATE TEMP TABLE t(x)");
     assert!(table.temporary);
     let (_, table) = table_of("CREATE TEMPORARY TABLE t(x)");

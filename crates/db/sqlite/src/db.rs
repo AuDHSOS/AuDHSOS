@@ -338,6 +338,11 @@ pub enum Error {
     /// A statement that writes on a connection `PRAGMA query_only` holds
     /// to reading.
     ReadOnlyDatabase,
+    /// A table written with more columns than the connection's limit,
+    /// with its name.
+    TableColumns(Vec<u8>),
+    /// An index written with more columns than the connection's limit.
+    IndexColumns,
     /// A `VACUUM` on a connection with a transaction open.
     VacuumInTransaction,
     /// A `PRAGMA synchronous = value` on a connection with a transaction
@@ -772,6 +777,10 @@ impl Error {
                 if *view { "view" } else { "table" },
                 shown(name)
             ),
+            Error::TableColumns(name) => {
+                alloc::format!("too many columns on {}", shown(name))
+            }
+            Error::IndexColumns => alloc::string::String::from("too many columns in index"),
             Error::VacuumInTransaction => {
                 alloc::string::String::from("cannot VACUUM from within a transaction")
             }
@@ -9085,6 +9094,24 @@ fn counted_columns(arena: &Arena, id: ExprId) -> Result<(), Error> {
         .map_or(Ok(()), |node| counted_node(arena, node))
 }
 
+/// The refusal a compound whose cores answer different numbers of
+/// columns answers, and nothing where every core answers as many as the
+/// first or where a `*` leaves a count unknown.
+///
+/// Reading the cores costs O(n) in them.
+fn unjoined_cores(arena: &Arena, id: SelectId) -> Option<Error> {
+    let first = width_of(arena, id)?;
+    let mut at = arena.select(id)?.compound;
+    while let Some((operator, next)) = at {
+        let held = arena.select(next)?;
+        if width_of(arena, next)? != first {
+            return Some(unjoined(Some(operator), !held.values.is_empty()));
+        }
+        at = held.compound;
+    }
+    None
+}
+
 /// The same for one node the arena holds.
 fn counted_node(arena: &Arena, node: Node) -> Result<(), Error> {
     // Only an `IN` says on its own how many columns the statement it
@@ -9101,11 +9128,19 @@ fn counted_node(arena: &Arena, node: Node) -> Result<(), Error> {
         },
         _ => None,
     };
-    if let Some((inner, wanted)) = wanted
-        && let Some(answered) = width_of(arena, inner)
-        && answered != wanted
-    {
-        return Err(Error::Columns(answered, wanted));
+    if let Some((inner, wanted)) = wanted {
+        // `sqlite3SelectPrep` reads the cores of a compound before
+        // `sqlite3SubselectError` counts the columns the place takes, so
+        // cores of two widths are refused for the compound and not for
+        // the place.
+        if let Some(refused) = unjoined_cores(arena, inner) {
+            return Err(refused);
+        }
+        if let Some(answered) = width_of(arena, inner)
+            && answered != wanted
+        {
+            return Err(Error::Columns(answered, wanted));
+        }
     }
     let mut deeper = Ok(());
     arena.under(node, |child| {

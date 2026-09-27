@@ -443,6 +443,25 @@ fn what_a_window_refuses() {
     ] {
         assert!(answered(&bytes, sql).is_err(), "{sql}");
     }
+    // A `FILTER` beside an `OVER` names the window functions it may
+    // stand on, and one without an `OVER` names the function it stands
+    // on.
+    for (sql, message) in [
+        (
+            "SELECT lag(a) FILTER (WHERE a>1) OVER (ORDER BY a) FROM t1",
+            "FILTER clause may only be used with aggregate window functions",
+        ),
+        (
+            "SELECT upper(a) FILTER (WHERE a>1) FROM t1",
+            "FILTER may not be used with non-aggregate upper()",
+        ),
+    ] {
+        assert_eq!(
+            answered(&bytes, sql).unwrap_err().message(),
+            message,
+            "{sql}"
+        );
+    }
 }
 
 /// A frame whose end comes before its beginning is refused with the

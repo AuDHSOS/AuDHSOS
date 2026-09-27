@@ -362,6 +362,38 @@ fn alterable(
     Ok(())
 }
 
+/// Raises where the columns a `CREATE TABLE` wrote out, or the columns of
+/// an index one of its constraints makes, are more than `most`.
+///
+/// Counting the columns costs O(n) in them.
+///
+/// # Errors
+///
+/// [`Error::TableColumns`] names the table and [`Error::IndexColumns`]
+/// names no index, which is what each message carries.
+fn within_written(
+    arena: &Arena,
+    held: (crate::ast::Range, crate::ast::Range),
+    name: &[u8],
+    most: usize,
+) -> Result<(), Error> {
+    let (columns, constraints) = held;
+    if arena.columns(columns).len() > most {
+        return Err(Error::TableColumns(crate::schema::dequote(name)));
+    }
+    for held in arena.table_constraints(constraints) {
+        let (crate::ast::TableConstraint::PrimaryKey { columns: keyed, .. }
+        | crate::ast::TableConstraint::Unique { columns: keyed, .. }) = *held
+        else {
+            continue;
+        };
+        if arena.orders(keyed).len() > most {
+            return Err(Error::IndexColumns);
+        }
+    }
+    Ok(())
+}
+
 /// The refusal a table SQLite keeps for itself answers an alter with, and
 /// nothing for every other name.
 ///
@@ -1055,6 +1087,10 @@ pub struct Writer {
     uri: bool,
     /// The limits the connection holds, which `sqlite3_limit` sets.
     limits: crate::db::Limits,
+    /// Which triggers of the schema a statement read for their names
+    /// already: the cookie the schema stood under, and the table and the
+    /// event of each statement that read them.
+    fired: (u32, Vec<(Vec<u8>, crate::ast::TriggerEvent)>),
     /// Whether a database an `ATTACH` adds is held under an exclusive
     /// lock, which `PRAGMA locking_mode` written under no schema names
     /// and `db->dfltLockMode` of `research/sqlite/src/pragma.c:1560`
@@ -1253,6 +1289,7 @@ impl Writer {
             zone: None,
             uri: false,
             limits: crate::db::Limits::new(),
+            fired: (0, Vec::new()),
             locking: false,
             kept: alloc::vec![None; crate::pragma::HELD.len()],
             running: Vec::new(),
@@ -1390,6 +1427,7 @@ impl Writer {
             zone: None,
             uri: false,
             limits: crate::db::Limits::new(),
+            fired: (0, Vec::new()),
             locking: false,
             kept: alloc::vec![None; crate::pragma::HELD.len()],
             running: Vec::new(),
@@ -2376,6 +2414,13 @@ impl Writer {
         };
         let arena = &trigger.arena;
         let sql = &trigger.sql;
+        // `renameResolveTrigger` resolves the `WHEN` against those two
+        // rows alone, so a name of it reaches no table of the schema.
+        trigger
+            .written
+            .condition
+            .into_iter()
+            .try_for_each(|id| names_read(database, (arena, sql), id, &fired))?;
         for step in arena.steps(trigger.written.body) {
             self.step_reads(database, (arena, sql), step, &fired)?;
         }
@@ -2410,8 +2455,10 @@ impl Writer {
             return Ok(());
         };
         let nulls = alloc::vec![Value::Null; into.columns.len()];
+        // The row carries a key, because `sqlite3RowidAlias` names the
+        // key of a table that has one and a step may read or write it.
         let row = self.reading_row(
-            (into, &nulls, None),
+            (into, &nulls, Some(0)),
             Some(fired),
             Some(Reading {
                 database,
@@ -2422,11 +2469,16 @@ impl Writer {
         let reads = |expr| names_read(database, (arena, sql), expr, &row);
         let column = |written: crate::ast::Span| {
             let name = crate::schema::dequote(written.text(sql));
-            into.columns
-                .iter()
-                .any(|held| held.name.eq_ignore_ascii_case(&name))
-                .then_some(())
-                .ok_or(Error::Eval(crate::eval::Error::NoColumn(name)))
+            // A step may write the key of a table that has one under each
+            // of the three names `sqlite3RowidAlias` reads.
+            let keyed = !into.without_rowid && crate::schema::rowid_named(&name);
+            (keyed
+                || into
+                    .columns
+                    .iter()
+                    .any(|held| held.name.eq_ignore_ascii_case(&name)))
+            .then_some(())
+            .ok_or(Error::Eval(crate::eval::Error::NoColumn(name)))
         };
         match written {
             Written::Insert(statement) => {
@@ -2446,7 +2498,7 @@ impl Writer {
                 // clause did not write beside the table under the name
                 // `excluded`, whose columns are the table's own.
                 let mut beside = self.reading_row(
-                    (into, &nulls, None),
+                    (into, &nulls, Some(0)),
                     Some(fired),
                     Some(Reading {
                         database,
@@ -3256,6 +3308,7 @@ impl Writer {
             self.indexable(over)?;
             windowless(arena, &index, sql)?;
         }
+        self.within_columns(arena, definition, sql)?;
         // `sqlite3CreateView` of `research/sqlite/src/build.c:3009`
         // refuses a statement that holds a bound parameter before it reads
         // the name, a view having no caller to bind one against.
@@ -4357,6 +4410,31 @@ impl Writer {
             Some(seconds) => database.clocked(seconds),
             None => database,
         })
+    }
+
+    /// `read` run against the bytes of the file the statement writes,
+    /// taken under the schema cookie they hold and kept for the next
+    /// caller that reads the schema alone.
+    ///
+    /// Building the bytes costs O(n) in the pages of the file, so a
+    /// statement that reads the schema takes the bytes the last one took
+    /// where no commit has changed the schema since.
+    ///
+    /// # Errors
+    ///
+    /// Whatever `read` answers.
+    fn in_schema<T>(
+        &mut self,
+        read: impl FnOnce(&mut Self, &[u8]) -> Result<T, Error>,
+    ) -> Result<T, Error> {
+        let cookie = self.held.header.schema_cookie;
+        let bytes = match self.held.schema_bytes.take() {
+            Some((held, bytes)) if held == cookie => bytes,
+            _ => self.image(),
+        };
+        let answered = read(self, &bytes);
+        self.held.schema_bytes = Some((cookie, bytes));
+        answered
     }
 
     /// The files the connection holds: the one the statement writes, and
@@ -8338,6 +8416,44 @@ impl Writer {
         self.already(held, if_not_exists, making)
     }
 
+    /// Raises where a table or an index is written with more columns
+    /// than the connection's limit takes.
+    ///
+    /// `sqlite3AddColumn` of `research/sqlite/src/build.c:1503` holds the
+    /// columns of a table to `SQLITE_LIMIT_COLUMN`, which is 2000 for
+    /// this build, and `sqlite3ExprListCheckLength` of
+    /// `research/sqlite/src/expr.c:2250` holds the columns of an index to
+    /// the same limit, the index a `PRIMARY KEY` or a `UNIQUE` of the
+    /// table makes among them.
+    ///
+    /// Counting the columns costs O(n) in them.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::TableColumns`] names the table and
+    /// [`Error::IndexColumns`] names no index, which is what each
+    /// message carries.
+    fn within_columns(
+        &self,
+        arena: &Arena,
+        definition: Definition,
+        sql: &[u8],
+    ) -> Result<(), Error> {
+        let most = usize::try_from(self.limits.of(crate::db::Limit::Column)).unwrap_or(0);
+        if let Definition::Index(index) = definition
+            && arena.orders(index.columns).len() > most
+        {
+            return Err(Error::IndexColumns);
+        }
+        let Definition::Table(table) = definition else {
+            return Ok(());
+        };
+        table
+            .written_columns()
+            .into_iter()
+            .try_for_each(|held| within_written(arena, held, table.name.text(sql), most))
+    }
+
     /// Whether a `CREATE INDEX` may be over this table, which is
     /// `sqlite3CreateIndex`: the table has to be there, a name SQLite
     /// keeps for itself may not be indexed, and a view holds no row of
@@ -10062,6 +10178,9 @@ impl Writer {
     ) -> Result<i64, Error> {
         let name = crate::schema::dequote(statement.name.text(sql));
         self.located(&name)?;
+        if outer.is_none() {
+            self.resolves_fired(&name, crate::ast::TriggerEvent::Insert)?;
+        }
         if self.is_view(&name)? {
             return self.insert_view(arena, statement, sql, &name, outer);
         }
@@ -11747,6 +11866,152 @@ impl Writer {
         answered
     }
 
+    /// Raises where the `WHEN` or the body of a trigger the statement
+    /// may fire names a column no table of it holds.
+    ///
+    /// `sqlite3CodeRowTrigger` of `research/sqlite/src/trigger.c:1006`
+    /// compiles the body of every trigger a statement fires as part of
+    /// that statement, so the names are read where the statement is
+    /// compiled and not where a row fires the trigger: an `UPDATE` over a
+    /// table of no rows is refused for a `WHEN` that names no column.
+    ///
+    /// Reading the triggers costs O(n) in them and O(m) in the nodes of
+    /// each.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::eval::Error::NoColumn`] names the column.
+    fn resolves_fired(
+        &mut self,
+        over: &[u8],
+        event: crate::ast::TriggerEvent,
+    ) -> Result<(), Error> {
+        // The triggers of one schema read the same way for every
+        // statement over the same table and event, so the pass runs once
+        // per schema and the statements after it read nothing.
+        let cookie = self.held.header.schema_cookie;
+        if self.fired.0 != cookie {
+            self.fired = (cookie, Vec::new());
+        }
+        let key = (over.to_vec(), event);
+        if self.fired.1.contains(&key) {
+            return Ok(());
+        }
+        self.in_schema(|writer, bytes| {
+            let database = writer.reading(bytes)?;
+            for time in [
+                crate::ast::TriggerTime::Before,
+                crate::ast::TriggerTime::After,
+                crate::ast::TriggerTime::InsteadOf,
+            ] {
+                for firing in writer.triggers_for(over, event, time)? {
+                    writer.trigger_reads(&database, &firing.trigger)?;
+                }
+            }
+            Ok(())
+        })?;
+        self.fired.1.push(key);
+        Ok(())
+    }
+
+    /// Raises where an expression of an `UPDATE` over the table `name`,
+    /// or of a trigger it may fire, names a column no table of it holds.
+    ///
+    /// An `UPDATE ... FROM` reads the columns of the tables its `FROM`
+    /// names as well, so the names of one are left to the walk over the
+    /// rows.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::eval::Error::NoColumn`] names the column.
+    fn resolves_update(
+        &mut self,
+        name: &[u8],
+        arena: &Arena,
+        statement: &crate::ast::Update,
+        sql: &[u8],
+    ) -> Result<(), Error> {
+        if statement.from.is_none() {
+            let mut held: Vec<crate::ast::ExprId> = statement.filter.into_iter().collect();
+            held.extend(arena.sets(statement.sets).iter().map(|set| set.value));
+            self.resolves_over(name, (arena, sql), &held)?;
+        }
+        self.resolves_fired(name, crate::ast::TriggerEvent::Update)
+    }
+
+    /// Raises where an expression of a statement over the table `name`
+    /// names a column the table does not hold.
+    ///
+    /// `sqlite3ResolveExprNames` reads the `WHERE` of an `UPDATE` and of
+    /// a `DELETE` where the statement is compiled, so a table of no rows
+    /// refuses the name all the same, where the walk over the rows reads
+    /// the expression for no row and answers nothing.
+    ///
+    /// Reading the expressions costs O(n) in their nodes.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::eval::Error::NoColumn`] names the column.
+    fn resolves_over(
+        &mut self,
+        name: &[u8],
+        read: (&Arena, &[u8]),
+        held: &[crate::ast::ExprId],
+    ) -> Result<(), Error> {
+        let (arena, _) = read;
+        if held.is_empty() {
+            return Ok(());
+        }
+        // A statement written inside an expression may name a table of
+        // another database, which the reader beside this one holds and
+        // which costs O(n) in the pages of each; an expression that holds
+        // none is read against the bytes of this database alone, which the
+        // last statement that read the schema took.
+        if held.iter().any(|id| holds_statement(arena, *id)) {
+            let bytes = self.images();
+            let database = self.reading_beside(&bytes)?;
+            return self.resolved_over(&database, name, read, held);
+        }
+        self.in_schema(|writer, bytes| {
+            let database = writer.reading(bytes)?;
+            writer.resolved_over(&database, name, read, held)
+        })
+    }
+
+    /// The same against one reader, with the expressions of the statement
+    /// read against a row of nulls of the table.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::eval::Error::NoColumn`] names the column.
+    fn resolved_over(
+        &self,
+        database: &Database<'_>,
+        name: &[u8],
+        read: (&Arena, &[u8]),
+        held: &[crate::ast::ExprId],
+    ) -> Result<(), Error> {
+        let (arena, sql) = read;
+        let Some((table, _)) = database.table_held(name) else {
+            return Ok(());
+        };
+        // The row carries a key, because `sqlite3RowidAlias` names the
+        // key of a table that has one, and the reader beside it resolves
+        // a statement written inside an expression.
+        let nulls = alloc::vec![Value::Null; table.columns.len()];
+        let row = self.reading_row(
+            (table, &nulls, Some(0)),
+            None,
+            Some(Reading {
+                database,
+                arena,
+                sql,
+            }),
+        );
+        held.iter()
+            .try_for_each(|id| names_read(database, (arena, sql), *id, &row))
+    }
+
     /// `DELETE` once the trigger policy stands.
     fn deleted(
         &mut self,
@@ -11761,6 +12026,17 @@ impl Writer {
         self.holds_index(&name, statement.indexed, sql)?;
         if self.is_view(&name)? {
             return self.delete_view(arena, statement, sql, &name, outer);
+        }
+        // A statement of a trigger's body reads the two rows the trigger
+        // stands on as well, which [`Self::trigger_reads`] reads it
+        // against, so the names of one are left to that pass.
+        if outer.is_none() {
+            self.resolves_over(
+                &name,
+                (arena, sql),
+                &statement.filter.into_iter().collect::<Vec<_>>(),
+            )?;
+            self.resolves_fired(&name, crate::ast::TriggerEvent::Delete)?;
         }
         if self.keeps_rows(&name)? {
             return self.delete_keyed(arena, statement, sql, outer, &name);
@@ -12012,6 +12288,9 @@ impl Writer {
         self.located(&name)?;
         self.holds_index(&name, statement.indexed, sql)?;
         assigned(arena, arena.sets(statement.sets))?;
+        if outer.is_none() {
+            self.resolves_update(&name, arena, statement, sql)?;
+        }
         if self.is_view(&name)? {
             return self.update_view(arena, statement, sql, &name, outer);
         }
@@ -12316,14 +12595,7 @@ impl Writer {
         // statement writes under it. Building them per row costs O(n)
         // in the pages of the file, which is O(n²) over a statement that
         // writes n rows.
-        let cookie = self.held.header.schema_cookie;
-        let bytes = match self.held.schema_bytes.take() {
-            Some((held, bytes)) if held == cookie => bytes,
-            _ => self.image(),
-        };
-        let answered = self.checked(&bytes, table, values, rowid, written);
-        self.held.schema_bytes = Some((cookie, bytes));
-        answered
+        self.in_schema(|writer, bytes| writer.checked(bytes, table, values, rowid, written))
     }
 
     /// The same, against the bytes the schema was read out of.
