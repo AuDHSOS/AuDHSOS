@@ -1299,6 +1299,17 @@ Size: L.
 264. A `WHERE` no row can make true. Built, which D-564 records.
 265. The terms of an order after one that names the rowid. Built, which
      D-565 records.
+266. The walk a term whose value is null holds. Built, which D-566
+     records.
+267. The walk a term that names the rowid at no whole number holds.
+     Built, which D-567 records.
+268. The order of rowids a walk held to one key answers. Built, which
+     D-568 records.
+269. The rows `sqlite_stat1` says an index answers, which
+     `whereLoopAddBtree` costs an index by and this engine reads no row
+     of: the index the terms name the most columns of is taken instead.
+     `analyze4.test`, `unordered.test` and `orderby1.test` each hold one
+     case of it.
 
 ### Done when
 
@@ -1308,8 +1319,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 123 551 cases in 844 files, 119 037
-pass, 2337 answer differently, and 2177 name something the engine
+under the `tclsh` of the machine. Of 123 551 cases in 844 files, 119 130
+pass, 2244 answer differently, and 2177 name something the engine
 refuses or a command that needs the C library's internals. The files
 that answer for tens of thousands of rows reach the five-minute
 deadline and are counted with the cases they ran by then. One run over

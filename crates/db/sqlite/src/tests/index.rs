@@ -1048,27 +1048,73 @@ fn an_is_holds_a_column_at_a_value_that_is_not_null() {
         listed(super::INDEXED, b"SELECT rowid FROM m WHERE q IS 'b'"),
         "2"
     );
-    // An index holds no entry a `=` against null reaches, so the table
-    // is scanned.
+    // An index holds its entries for the rows that hold no value under
+    // the null the term names, so the walk reaches them by that key.
     assert_eq!(
         planned(
             super::INDEXED,
             b"EXPLAIN QUERY PLAN SELECT rowid FROM m WHERE q IS NULL"
         ),
-        "SCAN m USING COVERING INDEX mq"
+        "SEARCH m USING COVERING INDEX mq (q=?)"
+    );
+    // A `=` against null reaches the same entries and keeps no row of
+    // them, because a comparison against null answers null.
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT rowid FROM m WHERE q = NULL"
+        ),
+        "SEARCH m USING COVERING INDEX mq (q=?)"
+    );
+    assert_eq!(
+        listed(super::INDEXED, b"SELECT rowid FROM m WHERE q = NULL"),
+        ""
+    );
+    // A parameter this crate binds nothing to stands for a null, which
+    // holds the walk to the same key.
+    assert_eq!(
+        planned(
+            super::INDEXED,
+            b"EXPLAIN QUERY PLAN SELECT rowid FROM m WHERE q = ?"
+        ),
+        "SEARCH m USING COVERING INDEX mq (q=?)"
+    );
+    // A term that names the rowid at a value that is no whole number
+    // holds the walk to that one rowid, which no row carries, and is
+    // taken over a range of rowids.
+    for sql in [
+        b"EXPLAIN QUERY PLAN SELECT rowid FROM m WHERE rowid = ?".as_slice(),
+        b"EXPLAIN QUERY PLAN SELECT rowid FROM m WHERE rowid = 'x'",
+        b"EXPLAIN QUERY PLAN SELECT rowid FROM m WHERE rowid = 2.5",
+        b"EXPLAIN QUERY PLAN SELECT rowid FROM m WHERE rowid > 2 AND rowid = 'x'",
+    ] {
+        assert_eq!(
+            planned(super::INDEXED, sql),
+            "SEARCH m USING INTEGER PRIMARY KEY (rowid=?)",
+            "{sql:?}"
+        );
+    }
+    assert_eq!(
+        listed(super::INDEXED, b"SELECT rowid FROM m WHERE rowid = 'x'"),
+        ""
+    );
+    // A value that is a whole number written as a real names that row.
+    assert_eq!(
+        listed(super::INDEXED, b"SELECT rowid FROM m WHERE rowid = 2.0"),
+        "2"
     );
     assert_eq!(
         listed(super::INDEXED, b"SELECT rowid FROM m WHERE q IS NULL"),
         "5"
     );
-    // An end of a `BETWEEN` that is null holds the column at no value
-    // either, and the statement answers no row.
+    // An end of a `BETWEEN` that is null holds the column at the null,
+    // which the walk reaches past, and the statement answers no row.
     assert_eq!(
         planned(
             super::INDEXED,
             b"EXPLAIN QUERY PLAN SELECT rowid FROM m WHERE q BETWEEN NULL AND 'c'"
         ),
-        "SEARCH m USING COVERING INDEX mq (q<?)"
+        "SEARCH m USING COVERING INDEX mq (q>? AND q<?)"
     );
     assert_eq!(
         listed(

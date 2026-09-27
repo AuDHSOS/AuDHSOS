@@ -7888,6 +7888,25 @@ Unit tests of `crate::db` over `fixtures/indexed.db`.
 - `WHERE NULL` under an aggregate, which answers one row.
 - `WHERE abs(0)`, which is read against every row.
 
+### 6.6.408 The walk a term whose value is null holds (`db-sqlite`)
+
+Unit tests of `crate::db` over `fixtures/indexed.db`, against the plan
+`EXPLAIN QUERY PLAN` names and the rows each statement answers. Every
+answer is the one the C library's shell writes.
+
+- `q IS NULL`, which reads the index and answers the row that holds no
+  value.
+- `q = NULL`, which reads the same entries and answers no row.
+- `q = ?`, the parameter standing for a null.
+- `q BETWEEN NULL AND 'c'`, which answers no row.
+- `rowid = ?`, `rowid = 'x'`, `rowid = 2.5` and a range beside one of
+  them: each holds the walk to one rowid no row carries, where
+  `rowid = 2.0` names the row rowid two carries.
+- `WHERE q='A' ORDER BY rowid` and the same written `DESC`, which the
+  walk of the entries of that one key answers; `WHERE p=1 ORDER BY
+  rowid`, whose key holds fewer columns than the index; and a walk of
+  two branches of an `OR`: the last two sort.
+
 ### 6.6.404 The walk a bare `min` or `max` reads (`db-sqlite`)
 
 Unit tests of `crate::db` over `fixtures/indexed.db`, against the

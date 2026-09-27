@@ -5894,6 +5894,22 @@ fn planned(
             narrow(&mut range.0, &mut range.1, term.op, *bound);
         }
     }
+    // `OP_SeekRowid` reads the value the term names as a number and
+    // takes no row where it is not a whole one, which is the walk
+    // `sqlite3WhereBegin` writes for a `WHERE_IPK` term whatever the
+    // value turns out to be.
+    let mut rowids: Vec<Option<ExprId>> = alloc::vec![None; sides.len()];
+    for term in &terms.held {
+        if term.reached != Reached::Key
+            || term.op != BinaryOp::Eq
+            || matches!(term.value, Value::Int(_))
+        {
+            continue;
+        }
+        for held in rowids.iter_mut().skip(term.at).take(1) {
+            *held = Some(term.id);
+        }
+    }
     let mut plans: Vec<Plan> = Vec::new();
     for ((at, side), range) in sides.iter().enumerate().zip(&ranges) {
         // An index over a table that keeps its rows in the key's own
@@ -5932,7 +5948,10 @@ fn planned(
             }
             Source::Table(_) | Source::Rows(_) => None,
         };
-        plans.push(keyed.unwrap_or(Plan::Rows(range.0, range.1)));
+        // A term that names one rowid answers one row, so it is taken
+        // over a range of rowids and over any index.
+        let named = rowids.get(at).copied().flatten().map(Plan::Rowid);
+        plans.push(named.or(keyed).unwrap_or(Plan::Rows(range.0, range.1)));
     }
     for (side, plan) in sides.iter_mut().zip(plans) {
         side.plan = plan;
@@ -6028,6 +6047,9 @@ struct Bound {
     op: BinaryOp,
     /// What the column is compared against.
     value: Value,
+    /// The expression that value was read from, which a term about the
+    /// rowid is read again from where the value is no whole number.
+    id: ExprId,
     /// What the term asks of the column, where the term was read out of
     /// a `LIKE` or a `GLOB` rather than written.
     needs: Option<Pattern>,
@@ -6119,7 +6141,7 @@ fn terms_of<'a>(
         let op = if op == BinaryOp::Is { BinaryOp::Eq } else { op };
         // `a < 5` and `5 > a` say the same thing about `a`, so the
         // operator turns over with the operands.
-        for (op, held, value) in [(op, left, right), (flipped(op), right, left)] {
+        for (op, held, value_id) in [(op, left, right), (flipped(op), right, left)] {
             // `resolveExprStep` of `research/sqlite/src/resolve.c` reads a
             // name no side of the `FROM` answers against the names the
             // statement answers its columns under, so a term that names
@@ -6132,7 +6154,7 @@ fn terms_of<'a>(
             let Some((at, reached)) = reached(arena, column, sql, sides) else {
                 // An index over an expression names a key of a term that
                 // holds that same expression at one value.
-                over.extend(held_over(arena, (column, value), sql, sides, op));
+                over.extend(held_over(arena, (column, value_id), sql, sides, op));
                 continue;
             };
             // `sqlite3BinaryCompareCollSeq`: a `COLLATE` on either side
@@ -6142,19 +6164,20 @@ fn terms_of<'a>(
             // term asks about. A `COLLATE` over the column itself is
             // already no term, because `reached` reads a column and not
             // a node above one.
-            if matches!(arena.node(value), Some(Node::Collate { .. })) {
+            if matches!(arena.node(value_id), Some(Node::Collate { .. })) {
                 continue;
             }
             // A term that names a column is a term about the row, and
             // the row is what is being planned for, so only a value the
             // walk needs no row to read is one it can be held to.
-            let Ok(value) = evaluate_row(arena, value, sql, &eval::NoRow(None)) else {
+            let Ok(value) = evaluate_row(arena, value_id, sql, &eval::NoRow(None)) else {
                 continue;
             };
-            // An index holds no entry a comparison against null
-            // reaches, which is what `NULL = NULL` answering nothing
-            // means.
-            if value == Value::Null {
+            // A row an outer join left empty holds no value where the
+            // side holds one, and a term whose value is null is true of
+            // such a row, so a term that holds the walk of that side
+            // would leave those rows out.
+            if value == Value::Null && extended(sides, at) {
                 continue;
             }
             out.push(Bound {
@@ -6162,6 +6185,7 @@ fn terms_of<'a>(
                 reached,
                 op,
                 value,
+                id: value_id,
                 needs: None,
             });
         }
@@ -6228,6 +6252,28 @@ struct Planning<'a> {
     arena: &'a Arena,
     /// The text that tree was parsed from.
     sql: &'a [u8],
+}
+
+/// Whether the rows of the side at `at` may stand with no value of it,
+/// which an outer join leaves them with.
+///
+/// A side written after `LEFT JOIN` or `FULL JOIN` stands empty where the
+/// join matched it nothing, and every side before a `RIGHT JOIN` or a
+/// `FULL JOIN` stands empty where that join answers a row of its own,
+/// which `sqlite3WhereRightJoinLoop` of `research/sqlite/src/where.c`
+/// walks.
+///
+/// Reading the joins costs O(n) in the sides.
+fn extended(sides: &[Side<'_>], at: usize) -> bool {
+    sides
+        .iter()
+        .enumerate()
+        .any(|(held, side)| match side.kind {
+            JoinKind::Left => held == at,
+            JoinKind::Right => held > at,
+            JoinKind::Full => held >= at,
+            JoinKind::None | JoinKind::Inner | JoinKind::Cross => false,
+        })
 }
 
 /// One expression and the text it was written in.
@@ -6418,16 +6464,12 @@ fn bounded(
 ) -> Option<Bound> {
     let (at, reached) = reached(arena, value, sql, sides)?;
     let held = evaluate_row(arena, end, sql, &eval::NoRow(None)).ok()?;
-    // An index holds no entry a comparison against null reaches, which
-    // is what `NULL = NULL` answering nothing means.
-    if held == Value::Null {
-        return None;
-    }
     Some(Bound {
         at,
         reached,
         op,
         value: held,
+        id: end,
         needs: None,
     })
 }
@@ -6527,6 +6569,7 @@ fn liked(
             reached,
             op: BinaryOp::Ge,
             value: Value::Text(low),
+            id: pattern,
             needs: Some(needs),
         },
         Bound {
@@ -6534,6 +6577,7 @@ fn liked(
             reached,
             op: BinaryOp::Lt,
             value: Value::Blob(high),
+            id: pattern,
             needs: Some(needs),
         },
     ]
@@ -7517,6 +7561,40 @@ fn placed(side: &Side<'_>, stored: &Stored, mut places: Vec<Termed>, format: u32
     // anything, and the table's own tree holds its rows from the
     // smallest rowid up.
     if let Some(first) = places.first().filter(|term| term.place.is_none()) {
+        // An entry of an index ends with the rowid, so a walk held to one
+        // value of every column of the index answers its entries from the
+        // smallest rowid up.
+        if let Plan::Keyed {
+            root,
+            key,
+            collations,
+            rowid_at,
+            bounds,
+            backwards,
+            ..
+        } = &side.plan
+        {
+            // A bound holds the column after the key, which a key that
+            // holds every column of the index leaves none of.
+            if key.len() != *rowid_at {
+                return Ordering::Sorted;
+            }
+            if !first.descending {
+                return Ordering::Walked;
+            }
+            // The rowids run the other way round, which the walk that
+            // reads the entries of that one key from the last back
+            // answers.
+            return Ordering::Index(Plan::Keyed {
+                root: *root,
+                key: key.clone(),
+                collations: collations.clone(),
+                rowid_at: *rowid_at,
+                bounds: bounds.clone(),
+                backwards: *backwards,
+                reversed: true,
+            });
+        }
         if !matches!(side.plan, Plan::Rows(_, _)) {
             return Ordering::Sorted;
         }

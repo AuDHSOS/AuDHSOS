@@ -7,6 +7,22 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` answers an `ORDER BY` of the rowid by a walk held to one value of
+  every column of an index, whose entries end with the rowid, and one written
+  `DESC` by the walk of those entries from the last back. D-568 records it.
+
+- `db-sqlite` holds the walk to the one rowid a term names at a value that is no
+  whole number, which no row carries, over a range of rowids and over any index.
+  D-567 records it. Catalog 6.6.408. `eqp.test` goes from 25 cases passing to 27
+  and `cost.test` from 26 to 28.
+
+- `db-sqlite` holds the walk to the key a term's null value names, which the
+  entries of the rows that hold no value there stand under, so `q IS NULL` reads
+  an index and a statement written with `?` is planned as the C library plans
+  it. D-566 records it. Catalog 6.6.408. `whereH.test` goes from 0 cases passing
+  to 16, `cost.test` from 14 to 28, `where9.test` from 60 to 67 and
+  `whereG.test` from 51 to 53.
+
 - `db-sqlite` answers the whole of an `ORDER BY` or a `GROUP BY` by the walk that
   answers its terms up to one naming the rowid, the terms after which say
   nothing. D-565 records it. `where.test` goes from 283 cases passing to 284.

@@ -85,6 +85,20 @@ fn an_order_by_the_walk_of_an_index_answers_needs_no_sort() {
     // A rowid stands once in the table, so the terms after one say
     // nothing about the order.
     assert_eq!(pair(b"SELECT * FROM m ORDER BY q, rowid, p"), (4, 0));
+    // An entry of an index ends with the rowid, so a walk held to one
+    // value of every column of the index answers the rowids in order.
+    assert_eq!(pair(b"SELECT * FROM m WHERE q='A' ORDER BY rowid"), (0, 0));
+    assert_eq!(
+        pair(b"SELECT * FROM m WHERE q='A' ORDER BY rowid DESC"),
+        (0, 0)
+    );
+    assert_eq!(pair(b"SELECT * FROM m WHERE p=1 ORDER BY rowid"), (0, 1));
+    // A walk of several branches of an `OR` answers the rows of each
+    // branch one after another, which is no order of rowids.
+    assert_eq!(
+        pair(b"SELECT * FROM m WHERE q='A' OR p=1 ORDER BY rowid"),
+        (0, 1)
+    );
     assert_eq!(pair(b"SELECT * FROM m ORDER BY rowid, q DESC"), (4, 0));
     assert_eq!(pair(b"SELECT * FROM m ORDER BY q, rowid"), (4, 0));
     assert_eq!(pair(b"SELECT * FROM m ORDER BY p, q"), (4, 0));
@@ -174,8 +188,6 @@ fn what_order_by_the_walk_does_not_answer() {
     // A side already held to a key answers fewer rows than a walk of
     // the index whole.
     assert_eq!(pair(b"SELECT * FROM m WHERE q='A' ORDER BY p"), (0, 1));
-    // A rowid the walk answers, where the walk is not of the table.
-    assert_eq!(pair(b"SELECT * FROM m WHERE q='A' ORDER BY rowid"), (0, 1));
     // A table that keeps its rows in the key's own tree, a statement
     // inside the `FROM`, a join, a group, and a window.
     assert_eq!(pair(b"SELECT * FROM u ORDER BY a"), (1, 1));
