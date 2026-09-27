@@ -343,6 +343,9 @@ pub enum Error {
     /// A `PRAGMA synchronous = value` on a connection with a transaction
     /// open.
     SafetyInTransaction,
+    /// A `PRAGMA temp_store = value` that names another store on a
+    /// connection that holds the temp database and a transaction.
+    StoreInTransaction,
     /// A `PRAGMA encoding = value` naming no encoding the library holds,
     /// with the name it was written as.
     NoEncoding(Vec<u8>),
@@ -680,6 +683,31 @@ impl Error {
         })
     }
 
+    /// The words a schema the connection cannot read is refused with, or
+    /// nothing where the refusal is another.
+    fn schema_misused(&self) -> Option<alloc::string::String> {
+        let shown = |bytes: &[u8]| alloc::string::String::from_utf8_lossy(bytes).into_owned();
+        Some(match self {
+            Error::Schema(schema::Error::IndexColumn(name)) => {
+                alloc::format!("no such column: {}", shown(name))
+            }
+            Error::Schema(schema::Error::Likelihood) => alloc::string::String::from(
+                "second argument to likelihood() must be a constant between 0.0 and 1.0",
+            ),
+            Error::Schema(schema::Error::NoCollation(name)) => {
+                alloc::format!("no such collation sequence: {}", shown(name))
+            }
+            Error::Schema(schema::Error::ForeignColumn(name)) => alloc::format!(
+                "unknown column \"{}\" in foreign key definition",
+                shown(name)
+            ),
+            Error::Schema(schema::Error::ForeignWidth) => alloc::string::String::from(
+                "number of columns in foreign key does not match the number of columns in the referenced table",
+            ),
+            _ => return None,
+        })
+    }
+
     /// The words a misuse is refused with, or nothing where the refusal
     /// is another.
     fn misused(&self) -> Option<alloc::string::String> {
@@ -750,26 +778,14 @@ impl Error {
             Error::SafetyInTransaction => {
                 alloc::string::String::from("Safety level may not be changed inside a transaction")
             }
+            Error::StoreInTransaction => alloc::string::String::from(
+                "temporary storage cannot be changed from within a transaction",
+            ),
             Error::NoEncoding(name) => alloc::format!(
                 "unsupported encoding: {}",
                 alloc::string::String::from_utf8_lossy(name)
             ),
-            Error::Schema(schema::Error::IndexColumn(name)) => {
-                alloc::format!("no such column: {}", shown(name))
-            }
-            Error::Schema(schema::Error::Likelihood) => alloc::string::String::from(
-                "second argument to likelihood() must be a constant between 0.0 and 1.0",
-            ),
-            Error::Schema(schema::Error::NoCollation(name)) => {
-                alloc::format!("no such collation sequence: {}", shown(name))
-            }
-            Error::Schema(schema::Error::ForeignColumn(name)) => alloc::format!(
-                "unknown column \"{}\" in foreign key definition",
-                shown(name)
-            ),
-            Error::Schema(schema::Error::ForeignWidth) => alloc::string::String::from(
-                "number of columns in foreign key does not match the number of columns in the referenced table",
-            ),
+            Error::Schema(_) => return self.schema_misused(),
             Error::GroupedAggregate => alloc::string::String::from(
                 "aggregate functions are not allowed in the GROUP BY clause",
             ),
@@ -2162,9 +2178,9 @@ pub(crate) fn named_under(error: Error, schema: &[u8]) -> Error {
 }
 
 /// The name with the database in front of it, and the name as it stands
-/// where it carries a database already.
+/// where it carries a database already or where the caller names none.
 fn under_named(schema: &[u8], name: &[u8]) -> Vec<u8> {
-    if name.contains(&b'.') {
+    if schema.is_empty() || name.contains(&b'.') {
         return name.to_vec();
     }
     let mut out = schema.to_vec();
@@ -2619,6 +2635,35 @@ impl<'a> Database<'a> {
         }
     }
 
+    /// The table a name of a `FROM` reaches, and nothing where the name
+    /// reaches a view or no object at all.
+    ///
+    /// `sqlite3FindTable` of `research/sqlite/src/build.c:386` holds the
+    /// tables and the views of one schema in one list, so the first
+    /// database of the walk that holds the name says which of the two the
+    /// name means: a view of the temp schema stands over a table of
+    /// `main` that carries the same name.
+    ///
+    /// Reading the name costs O(n) in the databases the connection holds
+    /// and O(m) in the objects of each.
+    fn located_table(&self, place: Option<usize>, name: &[u8]) -> Option<&Stored> {
+        if place.is_some() || temp_named(name) || schema_named(name) {
+            return self.located(place, name);
+        }
+        let held = self
+            .searching()
+            .into_iter()
+            .find(|at| self.find_in(*at, name).is_some() || self.view_in(*at, name).is_some())?;
+        self.find_in(held, name)
+    }
+
+    /// The view of `name` in the database at `place`.
+    fn view_in(&self, place: usize, name: &[u8]) -> Option<&View> {
+        self.views
+            .iter()
+            .find(|view| view.place == place && view.name.eq_ignore_ascii_case(name))
+    }
+
     /// The table of `name` in the database at `place`.
     fn find_in(&self, place: usize, name: &[u8]) -> Option<&Stored> {
         let name = if schema_named(name) {
@@ -2996,12 +3041,19 @@ impl<'a> Database<'a> {
         };
         // The body of a view reads a bare name under the database that
         // holds the view, which `sqlite3FixSrcList` of
-        // `research/sqlite/src/attach.c:500` writes into every name of it.
+        // `research/sqlite/src/attach.c:500` writes into every name of
+        // it. `fixSelectCb` of `research/sqlite/src/attach.c:485` writes
+        // none into the names of a view of the temp schema, so a name of
+        // that view carries no database.
+        let under = if self.temp == Some(view.place) {
+            Vec::new()
+        } else {
+            self.named_place(view.place)
+        };
         self.viewing.borrow_mut().push(view.name.clone());
         let answered = self.statement(&view.arena, view.select, &view.sql, inner);
         self.viewing.borrow_mut().pop();
-        let mut answered =
-            answered.map_err(|error| named_under(error, &self.named_place(view.place)))?;
+        let mut answered = answered.map_err(|error| named_under(error, &under))?;
         // `sqlite3ViewGetColumnNames` refuses a column list of another
         // width than the statement answers.
         let written = view.columns.len();
@@ -4441,7 +4493,7 @@ impl<'a> Database<'a> {
                             term.clone(),
                             Vec::new(),
                         )
-                    } else if let Some(stored) = self.located(place, &named.name) {
+                    } else if let Some(stored) = self.located_table(place, &named.name) {
                         indexed_held(stored, indexed, sql)?;
                         (
                             shape_of(&self.named_place(stored.place), &stored.table),

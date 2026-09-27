@@ -7856,6 +7856,84 @@ Document 16 step Q8. Every answer is the one the C library's shell writes.
 - A `FROM` of 65 and of 100 sides, which are refused.
 - Two statements of 64 sides, one written inside the other, which stand.
 
+### 6.6.384 The names a `CHECK` an `ALTER TABLE` adds reads (`db-sqlite`)
+
+Unit tests of `crate::change`.
+
+- `ALTER TABLE b1 ADD CHECK (z>=0)` over a table of no such column,
+  which holds no row: refused `no such column: z`.
+
+### 6.6.383 The new name an `ALTER TABLE ... RENAME TO` reads (`db-sqlite`)
+
+Unit tests of `crate::change`.
+
+- A rename to `sqlite_t`: refused `object name reserved for internal
+  use: sqlite_t`.
+
+### 6.6.382 The table a `CREATE INDEX` names in its refusal (`db-sqlite`)
+
+Unit tests of `crate::change`.
+
+- `CREATE INDEX i2 ON SQLite_Master(name)` and one over
+  `sqlite_schema`, both refused `table sqlite_master may not be
+  indexed`.
+
+### 6.6.381 The alters a table SQLite keeps for itself refuses (`db-sqlite`)
+
+Unit tests of `crate::change`.
+
+- `ALTER TABLE sqlite_schema ADD COLUMN x`: refused `table
+  sqlite_master may not be altered`.
+- `ALTER TABLE sqlite_stat1 ADD COLUMN x`: refused under its own name.
+- `ALTER TABLE sqlite_nope ADD COLUMN x`: refused `no such table:
+  sqlite_nope`, because the schema is read first.
+
+### 6.6.380 The pass after an alter wrote a statement (`db-sqlite`)
+
+Unit tests of `crate::change` and of `crate::db`. Every answer is the one
+the C library's shell writes.
+
+- An index whose `WHERE` names the table by its old name, after a rename
+  under `PRAGMA legacy_alter_table`: refused `error in index t2expr
+  after rename: no such column: t2.b`.
+- A view of `main` whose statement names a table the rename took away,
+  read: refused `no such table: main.txx`.
+- A view of the temp schema in the same state: refused `no such table:
+  txx`.
+
+### 6.6.379 The database a bare name of a `FROM` reaches (`db-sqlite`)
+
+Unit tests of `crate::db`. Every answer is the one the C library's shell
+writes.
+
+- A temp view named after a table of `main`, read under `temp` and under
+  no schema: refused `view t1 is circularly defined`.
+- The same name under `main`, which reaches the table.
+
+### 6.6.378 The schema a `DROP` names in its refusal (`db-sqlite`)
+
+Unit tests of `crate::change`.
+
+- `DROP TABLE main.nosuch`: refused `no such table: main.nosuch`.
+- `DROP VIEW "main".nosuch`, whose schema is written with the quotes
+  taken off.
+
+### 6.6.377 The levels and the stores a pager pragma takes (`db-sqlite`)
+
+Unit tests of `crate::change`. Every answer is the one the C library's
+shell writes.
+
+- `PRAGMA synchronous` set to 7, 8 and 10, which answer 0, 0 and 2.
+- `PRAGMA temp_store` set to `file`, `memory`, `disk`, 1, 2 and 3.
+- A change of the store where the connection holds the temp database and
+  a transaction: refused `temporary storage cannot be changed from
+  within a transaction`.
+- The store the connection holds already, set again inside a
+  transaction, which changes nothing.
+- A change of the store outside a transaction, which takes the temp
+  database away.
+- `PRAGMA user_version = -1`, which answers -1.
+
 ### 6.6.376 The semicolon a statement of a case carries (`xtask`)
 
 Unit tests of `crate::suite`, over the text one case hands the engine.

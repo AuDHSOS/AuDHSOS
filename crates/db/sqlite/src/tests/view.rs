@@ -225,3 +225,73 @@ fn what_a_view_whose_statement_holds_a_parameter_is_refused_with() {
         alloc::vec![alloc::vec![Value::Int(0)]]
     );
 }
+
+/// A view of the temp schema stands over a table of `main` that carries
+/// the same name, so a view whose statement names that name reads itself.
+#[test]
+fn what_a_temp_view_named_after_a_table_refuses() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t1(a,b)".as_slice(),
+        b"INSERT INTO t1 VALUES(1,2)",
+        b"CREATE TEMP VIEW t1 AS SELECT a,b FROM t1",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let temp = writer.temp().expect("a temp schema");
+    let image = writer.written();
+    let database = Database::open(&image)
+        .unwrap()
+        .attaching(b"temp", &temp)
+        .unwrap();
+    assert_eq!(
+        database
+            .query(b"SELECT * FROM temp.t1")
+            .unwrap_err()
+            .message(),
+        "view t1 is circularly defined"
+    );
+    // A bare name reaches the view as well, because the walk reads the
+    // temp schema before `main`.
+    assert_eq!(
+        database.query(b"SELECT * FROM t1").unwrap_err().message(),
+        "view t1 is circularly defined"
+    );
+    // The name under `main` reaches the table.
+    assert_eq!(
+        database.query(b"SELECT * FROM main.t1").unwrap().rows,
+        [[Value::Int(1), Value::Int(2)]]
+    );
+}
+
+/// A view of `main` reads a bare name of its statement under `main`, so
+/// the table it no longer finds carries that name in front of it; a view
+/// of the temp schema reads the name under every database and names it
+/// alone.
+#[test]
+fn which_database_the_table_a_view_no_longer_finds_is_named_under() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"PRAGMA legacy_alter_table=1".as_slice(),
+        b"CREATE TABLE txx(a)",
+        b"CREATE VIEW vvv AS SELECT a FROM txx",
+        b"CREATE TEMP VIEW ttt AS SELECT a FROM txx",
+        b"ALTER TABLE txx RENAME TO other",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let temp = writer.temp().expect("a temp schema");
+    let image = writer.written();
+    let database = Database::open(&image)
+        .unwrap()
+        .attaching(b"temp", &temp)
+        .unwrap();
+    assert_eq!(
+        database.query(b"SELECT * FROM vvv").unwrap_err().message(),
+        "no such table: main.txx"
+    );
+    assert_eq!(
+        database.query(b"SELECT * FROM ttt").unwrap_err().message(),
+        "no such table: txx"
+    );
+}

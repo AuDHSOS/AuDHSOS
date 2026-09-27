@@ -265,7 +265,7 @@ fn what_a_pragma_writes_of_the_header_words() {
     );
     // Text that names no number writes nought, which `sqlite3Atoi`
     // answers for it, and a number below nought is kept as the bytes of
-    // a word of 32 bits.
+    // a word of 32 bits and answered back as the number it was.
     again.run(b"PRAGMA user_version='abc'").unwrap();
     assert_eq!(
         again.run(b"PRAGMA user_version").unwrap(),
@@ -274,7 +274,7 @@ fn what_a_pragma_writes_of_the_header_words() {
     again.run(b"PRAGMA user_version=-1").unwrap();
     assert_eq!(
         again.run(b"PRAGMA user_version").unwrap(),
-        alloc::vec![alloc::vec![Value::Int(4_294_967_295)]]
+        alloc::vec![alloc::vec![Value::Int(-1)]]
     );
     // A word `PragFlg_ReadOnly` stands against reads the file whatever
     // stands after the equals sign, and so does `PRAGMA page_count`.

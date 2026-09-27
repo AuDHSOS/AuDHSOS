@@ -1238,6 +1238,25 @@ Size: L.
      records.
 231. The semicolon a statement of the harness carries, which the parser
      names where it wanted more. Built, which D-531 records.
+232. The levels a `PRAGMA synchronous` takes, the stores a `PRAGMA
+     temp_store` names, and the sign a word of the header carries.
+     Built, which D-532 records.
+233. The schema a `DROP` names in front of the object it found none of.
+     Built, which D-533 records.
+234. The database a bare name of a `FROM` reaches, which holds the tables
+     and the views of one schema together. Built, which D-534 records.
+235. The kinds the pass after an alter wrote a statement reads, and the
+     mode that holds it to the indexes. Built, which D-535 records.
+236. The database the table a view no longer finds is named under. Built,
+     which D-536 records.
+237. The alters a table SQLite keeps for itself refuses. Built, which
+     D-537 records.
+238. The table a `CREATE INDEX` names in its refusal. Built, which D-538
+     records.
+239. The names a `CHECK` an `ALTER TABLE` adds reads. Built, which D-539
+     records.
+240. The new name an `ALTER TABLE ... RENAME TO` reads. Built, which
+     D-540 records.
 
 ### Done when
 
@@ -1247,8 +1266,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 123 557 cases in 844 files, 118 909
-pass, 2458 answer differently, and 2190 name something the engine
+under the `tclsh` of the machine. Of 123 554 cases in 844 files, 118 929
+pass, 2432 answer differently, and 2193 name something the engine
 refuses or a command that needs the C library's internals. The files
 that answer for tens of thousands of rows reach the five-minute
 deadline and are counted with the cases they ran by then. One run over
@@ -1295,11 +1314,14 @@ is ended after three minutes, with the cases it ran counted;
 
 The deadline is wall-clock, so the score of a file it ends is what that
 file reached in three minutes and not a fixed number. A deadline of one
-minute cut `rowvalue2.test` at some 2900 of the 3834 cases it answers,
-and cut `in2.test`, `joinD.test`, `savepoint6.test` and `tkt2686.test`
-at a different case each run, so a total was exact to about a tenth of a
-percent; at three minutes those five files run to their end and a
-comparison of two runs reads the same number.
+minute cut `rowvalue2.test` at some 2900 of the 3834 cases it answers and
+cut `in2.test`, `joinD.test`, `savepoint6.test` and `tkt2686.test` at a
+different case each run. At three minutes `crash2.test`, `crash6.test`,
+`savepoint6.test` and `trans2.test` are the files a run still ends, each
+at a different case: three runs read 354, 388 and 400 cases of
+`savepoint6.test`, which is 46 cases of the total, so two runs are
+comparable to about a twentieth of a percent and a file that loses cases
+is measured again on its own.
 
 `--why` counts what each refusal was for, by the first two words of the
 statement and what the engine answered, which is what says which missing

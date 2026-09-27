@@ -312,6 +312,16 @@ fn a_constraint_a_statement_writes_is_held_by_the_rows_it_stands_over() {
         schema(&writer, b"b1").as_deref(),
         Some("CREATE TABLE b1(a, b, CONSTRAINT abc CHECK (a!=2))")
     );
+    // The names of the clause are read against the columns of the
+    // table, so a name no column carries is refused although the table
+    // holds no row to answer it.
+    assert_eq!(
+        writer
+            .run(b"ALTER TABLE b1 ADD CHECK (z>=0)")
+            .unwrap_err()
+            .message(),
+        "no such column: z"
+    );
     // A `CHECK` with no name is written as it was.
     writer.run(b"ALTER TABLE b1 ADD CHECK (a>=0)").unwrap();
     assert_eq!(

@@ -7,6 +7,52 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` reads the new name of an `ALTER TABLE ... RENAME TO` as a
+  `CREATE TABLE` of it would, so a name that opens with `sqlite_` is refused
+  `object name reserved for internal use`. D-540 records it. Catalog 6.6.383.
+  `alter.test` goes from 111 cases passing to 112.
+
+- `db-sqlite` reads the names of a `CHECK` an `ALTER TABLE` adds against the
+  columns of the table, so a name no column carries is refused although the
+  table holds no row. D-539 records it. Catalog 6.6.384. `altercons.test` goes
+  from 175 cases passing to 176.
+
+- `db-sqlite` names the table as the schema holds it where a `CREATE INDEX` over
+  a table SQLite keeps for itself is refused. D-538 records it. Catalog 6.6.382.
+  `analyze.test` goes from 28 cases passing to 29.
+
+- `db-sqlite` refuses an `ALTER TABLE ... ADD COLUMN` over a table SQLite keeps
+  for itself. D-537 records it. Catalog 6.6.381. `alter.test` goes from 109
+  cases passing to 111.
+
+- `db-sqlite` names the table a view of the temp schema no longer finds without
+  a database in front of it, where a view of another database carries that
+  database. D-536 records it. Catalog 6.6.380. `alterlegacy.test` goes from 51
+  cases passing to 53.
+
+- `db-sqlite` reads the indexes and the triggers of the schema as well as its
+  views in the pass after an alter wrote a statement, and reads the statement of
+  a view and the body of a trigger only where `PRAGMA legacy_alter_table` is
+  off. D-535 records it. Catalog 6.6.380. `alterlegacy.test` goes from 49 cases
+  passing to 51.
+
+- `db-sqlite` reaches the table or the view of the first database of the walk
+  that holds a bare name of a `FROM`, so a view of the temp schema stands over a
+  table of `main` that carries the same name and a view whose statement names
+  that name is refused `view t1 is circularly defined`. D-534 records it.
+  Catalog 6.6.379. `view.test` goes from 91 cases passing to 93.
+
+- `db-sqlite` names the schema in front of the object a `DROP` found none of
+  where the statement wrote one. D-533 records it. Catalog 6.6.378.
+  `view.test` goes from 90 cases passing to 91.
+
+- `db-sqlite` keeps the level a `PRAGMA synchronous` is set to under three bits,
+  names the store a `PRAGMA temp_store` is set to by its first byte or by one of
+  two words, takes the temp database away where a change of the store closes it,
+  and answers `PRAGMA user_version` and `PRAGMA application_id` as numbers of 32
+  bits. D-532 records it. Catalog 6.6.377. `pragma.test` goes from 143 cases
+  passing to 148.
+
 - `db-sqlite` resolves the body of every trigger of the schema when an
   `ALTER TABLE` reads the schema, against the columns of the table each step
   writes and the `old` and `new` rows the trigger stands on. D-530 records it.

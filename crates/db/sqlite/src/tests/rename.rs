@@ -143,6 +143,27 @@ fn a_name_that_is_not_a_table_of_its_own_is_refused() {
             b"ALTER TABLE sqlite_nope RENAME TO x",
             "no such table: sqlite_nope",
         ),
+        // The new name is read as a `CREATE TABLE` of it would be, so a
+        // name that opens with `sqlite_` is reserved.
+        (
+            b"ALTER TABLE t RENAME TO sqlite_t",
+            "object name reserved for internal use: sqlite_t",
+        ),
+        // `isAlterableTable` holds every alter of such a table, so an
+        // `ADD COLUMN` over one is refused the same way, after the
+        // schema says the table is there.
+        (
+            b"ALTER TABLE sqlite_schema ADD COLUMN x",
+            "table sqlite_master may not be altered",
+        ),
+        (
+            b"ALTER TABLE sqlite_stat1 ADD COLUMN x",
+            "table sqlite_stat1 may not be altered",
+        ),
+        (
+            b"ALTER TABLE sqlite_nope ADD COLUMN x",
+            "no such table: sqlite_nope",
+        ),
     ] {
         assert_eq!(writer.run(sql).unwrap_err().message(), message, "{sql:?}");
     }
@@ -1302,5 +1323,28 @@ fn what_a_trigger_an_alter_no_longer_resolves_refuses() {
             .unwrap_err()
             .message(),
         "error in trigger g: no such table: main.nosuchtable"
+    );
+}
+
+/// The pass after an alter wrote a statement reads the indexes of the
+/// schema as well as its views, which a rename under `PRAGMA
+/// legacy_alter_table` leaves naming the table by its old name.
+#[test]
+fn what_an_index_the_rename_no_longer_resolves_refuses_after_it() {
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    ran(
+        &mut writer,
+        &[
+            b"PRAGMA legacy_alter_table=1",
+            b"CREATE TABLE t2(a,b)",
+            b"CREATE INDEX t2expr ON t2(a) WHERE t2.b>0",
+        ],
+    );
+    assert_eq!(
+        writer
+            .run(b"ALTER TABLE t2 RENAME TO t2new")
+            .unwrap_err()
+            .message(),
+        "error in index t2expr after rename: no such column: t2.b"
     );
 }

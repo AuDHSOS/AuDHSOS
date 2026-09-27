@@ -41,6 +41,16 @@ fn what_a_create_index_is_refused_with() {
             b"CREATE INDEX i2 ON sqlite_master(name)".as_slice(),
             "table sqlite_master may not be indexed",
         ),
+        // The refusal names the table as the schema holds it, so
+        // another case and `sqlite_schema` both answer that name.
+        (
+            b"CREATE INDEX i2 ON SQLite_Master(name)",
+            "table sqlite_master may not be indexed",
+        ),
+        (
+            b"CREATE INDEX i2 ON sqlite_schema(name)",
+            "table sqlite_master may not be indexed",
+        ),
         (b"CREATE INDEX i2 ON v1(a)", "views may not be indexed"),
         (
             b"CREATE INDEX i2 ON nosuch(a)",

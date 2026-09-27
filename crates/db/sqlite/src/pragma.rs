@@ -421,23 +421,40 @@ pub fn keeping(at: usize, text: &[u8]) -> Option<i64> {
         // `getSafetyLevel` of `research/sqlite/src/pragma.c:72` reads a
         // number where the first byte is a digit, else one of eight
         // words, else the level a connection opens under, which is one.
-        Some(Written::Syncing) => Some(match written.as_slice() {
+        Some(Written::Syncing) => Some(safety(match written.as_slice() {
             b"full" => 2,
             b"extra" => 3,
             held => match held.first().filter(|byte| byte.is_ascii_digit()) {
                 Some(_) => signed_number(held).unwrap_or(1),
                 None => i64::from(truth(held).unwrap_or(true)),
             },
+        })),
+        // `getTempStore` of `research/sqlite/src/pragma.c:141` reads the
+        // first byte where it is a digit up to two, else the two words,
+        // else nought, so `temp_store = 3` names the default store.
+        Some(Written::Storing) => Some(match written.as_slice() {
+            b"file" => 1,
+            b"memory" => 2,
+            held => match held.first() {
+                Some(byte @ b'0'..=b'2') => i64::from(byte.wrapping_sub(b'0')),
+                _ => 0,
+            },
         }),
-        Some(Written::Storing) => match written.as_slice() {
-            b"default" => Some(0),
-            b"file" => Some(1),
-            b"memory" => Some(2),
-            _ => signed_number(&written),
-        },
         // A whole number, and a place [`HELD`] does not have.
         _ => signed_number(&written),
     }
+}
+
+/// The level a `PRAGMA synchronous` answers for the number `written`.
+///
+/// `PragTyp_SYNCHRONOUS` of `research/sqlite/src/pragma.c:1140` keeps
+/// the number after it plus one under the three bits of
+/// `PAGER_SYNCHRONOUS_MASK`, raises a level of nought to one, and
+/// answers the level less one, so `8` answers nought and `10` answers
+/// two.
+fn safety(written: i64) -> i64 {
+    let level = written.wrapping_add(1) & 7;
+    level.max(1).saturating_sub(1)
 }
 
 /// The whole number a pragma is set to, with the minus sign a cache
@@ -715,6 +732,12 @@ impl Setting {
     #[must_use]
     pub fn read(self, header: &Header) -> Option<Value> {
         let number = |value: u32| Value::Int(i64::from(value));
+        // `OP_ReadCookie` writes the word of the header a pragma sets as
+        // an `int`, and `sqlite3Atoi` of
+        // `research/sqlite/src/pragma.c:2340` reads the same range in,
+        // so the number of the user and the number of the application
+        // answer whatever 32 bits hold.
+        let cookie = |value: u32| Value::Int(i64::from(value.cast_signed()));
         Some(match self {
             Setting::PageSize => number(header.page_size),
             Setting::Reserved => Value::Int(i64::from(header.reserved)),
@@ -733,8 +756,8 @@ impl Setting {
             Setting::PageCount => number(header.pages),
             Setting::FreelistCount => number(header.freelist_pages),
             Setting::SchemaVersion => number(header.schema_cookie),
-            Setting::UserVersion => number(header.user_version),
-            Setting::ApplicationId => number(header.application_id),
+            Setting::UserVersion => cookie(header.user_version),
+            Setting::ApplicationId => cookie(header.application_id),
             Setting::SchemaFormat => number(header.schema_format),
             Setting::DefaultCacheSize => Value::Int(default_cache(header.cache_size)),
             // A pragma the file does not hold, the ones the connection

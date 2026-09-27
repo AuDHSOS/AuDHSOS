@@ -3496,7 +3496,10 @@ fn the_pragmas_a_connection_keeps_answer_what_it_was_told() {
     // A value the pragma does not name is refused.
     assert!(writer.run(b"PRAGMA mmap_size=lots").is_err());
     assert!(writer.run(b"PRAGMA mmap_size=''").is_err());
-    assert!(writer.run(b"PRAGMA temp_store=disk").is_err());
+    // `getTempStore` reads a word it does not name as the default
+    // store, so no value of `PRAGMA temp_store` is refused.
+    assert!(writer.run(b"PRAGMA temp_store=disk").unwrap().is_empty());
+    assert_eq!(writer.run(b"PRAGMA temp_store").unwrap(), [[Value::Int(0)]]);
     // A pragma the file does not hold and the connection answers
     // nothing for is accepted and changes nothing.
     assert!(writer.run(b"PRAGMA cache_spill=0").unwrap().is_empty());
@@ -3533,6 +3536,12 @@ fn which_levels_a_pragma_synchronous_is_set_to() {
         (b"PRAGMA synchronous=-1", 1),
         (b"PRAGMA synchronous=4", 4),
         (b"PRAGMA synchronous=0", 0),
+        // The level is the number plus one under three bits, and a
+        // level of nought is raised to one, so `7` and `8` both answer
+        // nought.
+        (b"PRAGMA synchronous=7", 0),
+        (b"PRAGMA synchronous=8", 0),
+        (b"PRAGMA synchronous=10", 2),
     ] {
         assert!(writer.run(sql).unwrap().is_empty(), "{sql:?}");
         assert_eq!(
@@ -3541,6 +3550,40 @@ fn which_levels_a_pragma_synchronous_is_set_to() {
             "{sql:?}"
         );
     }
+}
+
+#[test]
+fn which_stores_a_pragma_temp_store_names_and_what_a_change_takes_away() {
+    let mut writer = crate::change::Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    for (sql, store) in [
+        (b"PRAGMA temp_store=file".as_slice(), 1),
+        (b"PRAGMA temp_store=memory", 2),
+        (b"PRAGMA temp_store=3", 0),
+        (b"PRAGMA temp_store=2", 2),
+        (b"PRAGMA temp_store=disk", 0),
+        (b"PRAGMA temp_store=1", 1),
+    ] {
+        assert!(writer.run(sql).unwrap().is_empty(), "{sql:?}");
+        assert_eq!(
+            writer.run(b"PRAGMA temp_store").unwrap(),
+            [[Value::Int(store)]],
+            "{sql:?}"
+        );
+    }
+    // A change of the store takes the temp database away, which a
+    // transaction over it refuses; the store the connection holds
+    // already changes nothing.
+    writer.run(b"CREATE TEMP TABLE t(x)").unwrap();
+    assert!(writer.temp().is_some());
+    writer.run(b"BEGIN").unwrap();
+    assert_eq!(
+        writer.run(b"PRAGMA temp_store=2").unwrap_err().message(),
+        "temporary storage cannot be changed from within a transaction"
+    );
+    assert!(writer.run(b"PRAGMA temp_store=1").unwrap().is_empty());
+    writer.run(b"COMMIT").unwrap();
+    assert!(writer.run(b"PRAGMA temp_store=2").unwrap().is_empty());
+    assert!(writer.temp().is_none());
 }
 
 #[test]
@@ -4781,6 +4824,10 @@ fn what_a_create_and_a_drop_name_in_a_refusal() {
         (b"DROP INDEX nosuch", "no such index: nosuch"),
         (b"DROP VIEW nosuch", "no such view: nosuch"),
         (b"DROP TRIGGER nosuch", "no such trigger: nosuch"),
+        // A `DROP` that wrote a schema names it in front of the name,
+        // with the quotes it was written under taken off.
+        (b"DROP TABLE main.nosuch", "no such table: main.nosuch"),
+        (b"DROP VIEW \"main\".nosuch", "no such view: main.nosuch"),
         // A trigger names the schema the table would stand in, and a
         // temporary one names no schema.
         (

@@ -336,18 +336,8 @@ fn alterable(
     if database.table(name).is_none() && !view {
         return Err(Error::NoTable(name.to_vec()));
     }
-    // A table SQLite keeps for itself is read and not altered, and the
-    // schema's own table answers under the name it is written with.
-    if name
-        .get(..7)
-        .is_some_and(|head| head.eq_ignore_ascii_case(b"sqlite_"))
-    {
-        let held = if crate::db::schema_named(name) {
-            b"sqlite_master".to_vec()
-        } else {
-            name.to_vec()
-        };
-        return Err(Error::NotAlterable(held));
+    if let Some(refused) = not_alterable(name) {
+        return Err(refused);
     }
     // A view is not a table, so it is not what these statements alter:
     // `sqlite3AlterRenameTable` refuses to rename one and `isRealTable`
@@ -359,6 +349,26 @@ fn alterable(
         });
     }
     Ok(())
+}
+
+/// The refusal a table SQLite keeps for itself answers an alter with, and
+/// nothing for every other name.
+///
+/// `isAlterableTable` of `research/sqlite/src/alter.c:31` refuses a name
+/// that opens with `sqlite_`, whatever the alter would do, and the
+/// schema's own table answers under the name it is written with.
+///
+/// Reading the name costs O(1).
+fn not_alterable(name: &[u8]) -> Option<Error> {
+    name.get(..7)
+        .filter(|head| head.eq_ignore_ascii_case(b"sqlite_"))
+        .map(|_| {
+            Error::NotAlterable(if crate::db::schema_named(name) {
+                b"sqlite_master".to_vec()
+            } else {
+                name.to_vec()
+            })
+        })
 }
 
 /// The statement of a table with the column `column` taken out of it,
@@ -1847,6 +1857,9 @@ impl Writer {
             let (table, _) = database
                 .table(&name)
                 .ok_or_else(|| Error::NoTable(name.clone()))?;
+            if let Some(refused) = not_alterable(&name) {
+                return Err(refused);
+            }
             if table
                 .columns
                 .iter()
@@ -2011,6 +2024,10 @@ impl Writer {
             return Err(Error::Named(to));
         }
         drop(database);
+        // `sqlite3AlterRenameTable` reads the new name through
+        // `sqlite3CheckObjectName`, so a rename to a name that opens
+        // with `sqlite_` is refused as a `CREATE TABLE` of it would be.
+        self.reserved(&to)?;
         // A rename resolves every statement of the schema before it
         // writes one, so a trigger that names a table no database holds
         // refuses the rename and leaves the schema as it stands.
@@ -2028,10 +2045,7 @@ impl Writer {
         };
         self.over_temp(&from, standing)?;
         self.renamed_rows(&from, &to, Renaming::Every)?;
-        if self.marking() == crate::rename::Marking::Every {
-            self.resolves_views(true)?;
-            self.in_temp(|writer| writer.resolves_views(true))?;
-        }
+        self.resolves_all()?;
         self.rename_sequence(&from, &to)?;
         self.held.header.schema_cookie = self.held.header.schema_cookie.saturating_add(1);
         Ok(())
@@ -2178,9 +2192,48 @@ impl Writer {
                 Error::NoTable(missing).message(),
             ));
         }
-        self.resolves_indexes(&images)?;
+        self.resolves_indexes(&images, Error::InObject)?;
         self.resolves_triggers(Error::InObject)?;
         self.resolves_views(false)
+    }
+
+    /// The views, the indexes and the triggers of the database the
+    /// connection writes and of the temp schema beside it resolved after
+    /// an alter wrote a statement.
+    ///
+    /// `renameTestSchema` of `research/sqlite/src/alter.c:53` reads every
+    /// row of both schemas through `sqlite3_rename_test`, which reads a
+    /// view, an index and a trigger alike, so the pass after the rename
+    /// covers the three kinds the pass before it covers.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::AfterRename`] names the statement that no longer reads.
+    fn resolves_all(&mut self) -> Result<(), Error> {
+        self.resolved_again()?;
+        self.in_temp(Self::resolved_again)
+    }
+
+    /// The three kinds of one schema resolved after an alter wrote a
+    /// statement.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::AfterRename`] names the statement that no longer reads.
+    fn resolved_again(&mut self) -> Result<(), Error> {
+        let images = self.images();
+        self.resolves_indexes(&images, Error::AfterRename)?;
+        // `sqlite3_rename_test` of `research/sqlite/src/alter.c:2078`
+        // resolves the statement of a view and the body of a trigger
+        // only where `PRAGMA legacy_alter_table` is off. The statement of
+        // an index is resolved by the parse, which
+        // `sqlite3ResolveSelfReference` reads against the table the index
+        // stands on, so a rename under either mode refuses it.
+        if self.marking() != crate::rename::Marking::Every {
+            return Ok(());
+        }
+        self.resolves_views(true)?;
+        self.resolves_triggers(Error::AfterRename)
     }
 
     /// Raises where the statement of an index of the schema the
@@ -2198,7 +2251,11 @@ impl Writer {
     /// # Errors
     ///
     /// [`Error::InObject`] names the index and what reading it refused.
-    fn resolves_indexes(&self, images: &Images) -> Result<(), Error> {
+    fn resolves_indexes(
+        &self,
+        images: &Images,
+        refused_as: fn(Vec<u8>, Vec<u8>, alloc::string::String) -> Error,
+    ) -> Result<(), Error> {
         for (_, values) in self.reading(&images.held)?.rows_of(SCHEMA_TABLE)? {
             let text = |at: usize| values.get(at).and_then(Value::text).unwrap_or_default();
             let kind = text(0);
@@ -2211,7 +2268,7 @@ impl Writer {
             let Some(refused) = self.index_reads(&text(4), images) else {
                 continue;
             };
-            return Err(Error::InObject(kind, name, refused));
+            return Err(refused_as(kind, name, refused));
         }
         Ok(())
     }
@@ -2855,6 +2912,16 @@ impl Writer {
         let (arena, value, sql) = held;
         let bytes = self.image();
         let database = self.reading(&bytes)?;
+        // `sqlite3ResolveSelfReference` reads the names of the clause
+        // against the columns of the table, so a name no column carries
+        // is refused whatever rows the table holds.
+        let nulls = alloc::vec![Value::Null; table.columns.len()];
+        let over = Indexing {
+            table,
+            values: &nulls,
+            encoding: self.held.header.encoding,
+        };
+        names_read(&database, (arena, sql), value, &over)?;
         for (_, values) in database.held_rows_of(name)? {
             let row = Indexing {
                 table,
@@ -3459,8 +3526,14 @@ impl Writer {
             } else {
                 // `sqlite3DropTable`, `sqlite3DropIndex` and
                 // `sqlite3DropTrigger` each name what the statement
-                // said it makes.
-                Err(Error::NoObject(dropped_word(asked.kind), name.clone()))
+                // said it makes, and each writes the name with `%S`,
+                // which puts the schema in front of it where the
+                // statement wrote one.
+                let shown = match asked.schema {
+                    Some(schema) => under_schema(&crate::schema::dequote(schema.text(sql)), &name),
+                    None => name.clone(),
+                };
+                Err(Error::NoObject(dropped_word(asked.kind), shown))
             };
         }
         for rowid in rowids {
@@ -6416,6 +6489,20 @@ impl Writer {
         if self.held.began.is_some() && keeps.is_some_and(|keeps| keeps.name == b"synchronous") {
             return Err(Error::SafetyInTransaction);
         }
+        // `changeTempStorage` of `research/sqlite/src/pragma.c:183`
+        // passes over a store the connection already holds and otherwise
+        // takes the temp database away, which `invalidateTempStorage` of
+        // `research/sqlite/src/pragma.c:159` refuses where a transaction
+        // stands over it.
+        if keeps.is_some_and(|keeps| keeps.name == b"temp_store")
+            && self.held(at) != Value::Int(value)
+            && self.attached.iter().any(|held| named_as(held, b"temp"))
+        {
+            if self.held.began.is_some() {
+                return Err(Error::StoreInTransaction);
+            }
+            self.attached.retain(|held| !named_as(held, b"temp"));
+        }
         let held =
             self.held.began.is_some() && keeps.is_some_and(|keeps| keeps.name == b"foreign_keys");
         if !held && !keeps.is_some_and(|keeps| keeps.fixed) {
@@ -8205,14 +8292,18 @@ impl Writer {
         if database.view(over).is_some() {
             return Err(Error::IndexedView);
         }
-        if database.table(over).is_none() {
+        let Some((table, _)) = database.table(over) else {
             return Err(Error::NoTable(schema_named_as(over)));
-        }
+        };
+        // The refusal names the table as the schema holds it, which
+        // `sqlite3CreateIndex` of `research/sqlite/src/build.c:4043`
+        // writes as `pTab->zName`, so a spelling of another case and
+        // `sqlite_schema` both answer the name the schema carries.
         if over
             .get(..7)
             .is_some_and(|head| head.eq_ignore_ascii_case(b"sqlite_"))
         {
-            return Err(Error::NotIndexable(over.to_vec()));
+            return Err(Error::NotIndexable(table.name.clone()));
         }
         Ok(())
     }
