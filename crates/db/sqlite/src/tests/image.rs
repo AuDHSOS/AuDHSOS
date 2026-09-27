@@ -219,6 +219,52 @@ fn a_hundred_rows_of_a_table_with_indexes_are_all_there() {
 }
 
 #[test]
+fn the_walk_from_the_last_row_back_answers_the_rowids_from_the_largest_down() {
+    // One page of three rows, and a tree of a hundred rows over more than
+    // one page, which the walk climbs out of.
+    let image = Image::open(SMALL).unwrap();
+    let root = root_of(&image, b"t");
+    let rowids: Vec<i64> = image
+        .rows_back(root)
+        .map(|row| row.unwrap().rowid)
+        .collect();
+    assert_eq!(rowids, [3, 2, 1]);
+    let image = Image::open(INDEXED).unwrap();
+    let root = root_of(&image, b"k");
+    let rowids: Vec<i64> = image
+        .rows_back(root)
+        .map(|row| row.unwrap().rowid)
+        .collect();
+    assert_eq!(rowids.len(), 100);
+    assert_eq!(rowids.first(), Some(&100));
+    assert_eq!(rowids.last(), Some(&1));
+    // A root that names an index tree and one the file does not have are
+    // refused as they are read forwards.
+    let mut rows = image.rows_back(99);
+    assert_eq!(rows.next(), Some(Err(Error::Page(99))));
+    assert_eq!(rows.next(), None);
+    // A tree of more than one level, which the walk descends the right
+    // edge of and climbs back out of.
+    let mut writer = crate::change::Writer::new(512, 0, crate::header::Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE deep(a)").unwrap();
+    for at in 1..=200 {
+        writer
+            .run(alloc::format!("INSERT INTO deep VALUES({at})").as_bytes())
+            .unwrap();
+    }
+    let held = writer.written();
+    let image = Image::open(&held).unwrap();
+    let root = root_of(&image, b"deep");
+    let rowids: Vec<i64> = image
+        .rows_back(root)
+        .map(|row| row.unwrap().rowid)
+        .collect();
+    assert_eq!(rowids.len(), 200);
+    assert_eq!(rowids.first(), Some(&200));
+    assert_eq!(rowids.last(), Some(&1));
+}
+
+#[test]
 fn a_chain_that_ends_before_the_payload_does_is_refused() {
     // Three thousand bytes, four hundred and sixty of them on the page —
     // which is what the threshold rule leaves there — and one overflow

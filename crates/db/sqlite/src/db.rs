@@ -1852,6 +1852,9 @@ enum Plan {
     /// The tree of the side, from the rowid the walk descends to up to
     /// the one it ends past. Both nothing is a scan of the whole tree.
     Rows(Option<i64>, Option<i64>),
+    /// The same tree read from its last row back to its first, which
+    /// answers the rowids from the largest down.
+    Backwards,
     /// The rows an index names, which a `WHERE` holds to one key.
     Keyed {
         /// The page the index's tree begins at.
@@ -1914,9 +1917,11 @@ impl Side<'_> {
     const fn range(&self) -> (Option<i64>, Option<i64>) {
         match self.plan {
             Plan::Rows(first, last) => (first, last),
-            Plan::Keyed { .. } | Plan::Joined { .. } | Plan::Rowid(_) | Plan::Union(_) => {
-                (None, None)
-            }
+            Plan::Backwards
+            | Plan::Keyed { .. }
+            | Plan::Joined { .. }
+            | Plan::Rowid(_)
+            | Plan::Union(_) => (None, None),
         }
     }
 
@@ -4436,7 +4441,13 @@ impl<'a> Database<'a> {
         let overs = overs(arena, &select, sql, self.grouped)?;
         let alone = overs.is_empty();
         let (gathered, held) = self.ordering(arena, &select, sql, (&mut sides, alone, &calls));
-        self.described(arena, &select, sql, &mut sides, (gathered, held, alone));
+        let smallest = self.described(
+            arena,
+            &select,
+            sql,
+            (&mut sides, &calls),
+            (gathered, held, alone),
+        );
         // `EXPLAIN QUERY PLAN` names the plan of the statement and runs
         // no loop of it, so the walks are left where they stand and the
         // statement answers no row: `sqlite3_step` over such a
@@ -4455,32 +4466,13 @@ impl<'a> Database<'a> {
                 rows.push(sorted(arena, &select, sql, cursor, &keys)?);
             }
         } else if calls.is_empty() && select.group.is_empty() {
-            let stops = self.stops(
-                arena,
-                &select,
-                sql,
-                (whole && (keys.is_empty() || held), reach),
-            )?;
-            // Whether the walk read a row, which is what resolved the
-            // names of the statement.
-            let mut read = false;
-            self.scan(&sides, arena, sql, reach, &mut |cursor: &Cursor<'_>| {
-                read = true;
-                if keep(arena, select.filter, sql, cursor)? {
-                    rows.push(sorted(arena, &select, sql, cursor, &keys)?);
-                    if stops.is_some_and(|stops| rows.len() >= stops) {
-                        return Ok(Flow::Stop);
-                    }
-                }
-                Ok(Flow::Go)
-            })?;
-            if !read {
-                unread(arena, &select, sql, &sides, reach, self.collation())?;
-            }
+            let stops = whole && (keys.is_empty() || held);
+            rows = self.plain(arena, &select, sql, (&sides, &keys), (stops, reach))?;
         } else {
             let gathering = Grouping {
                 calls: &calls,
                 ordered: gathered,
+                smallest,
             };
             for group in self.groups(arena, &select, sql, &sides, gathering, reach)? {
                 rows.push(sorted(arena, &select, sql, &group, &keys)?);
@@ -5242,6 +5234,9 @@ impl<'a> Database<'a> {
                 None => self.scanned(side, stored),
             };
         }
+        if matches!(side.plan, Plan::Backwards) {
+            return self.backwards(stored);
+        }
         if let Plan::Rowid(id) = &side.plan {
             // `OP_SeekRowid` reads the value as a number and takes no row
             // where it is not a whole one.
@@ -5384,6 +5379,22 @@ impl<'a> Database<'a> {
         }))
     }
 
+    /// The rows of the table's own tree from the last back to the first,
+    /// which `OP_Last` begins and counts no search for.
+    fn backwards<'f>(&self, stored: &'f Stored) -> Feed<'a, 'f> {
+        Feed::Tree(Box::new(Tree {
+            image: self.imaged(stored.place),
+            stored,
+            walk: Walk::Table(self.imaged(stored.place).rows_back(stored.root)),
+            seeking: false,
+            taken: 0,
+            encoding: self.encoding,
+            collation: self.collation(),
+            schemed: self.schemed(stored.place),
+            payload: Vec::new(),
+        }))
+    }
+
     /// The rows of a table, whichever kind of tree holds them, each with
     /// the rowid where the table has one.
     fn walk(&self, stored: &Stored, range: (Option<i64>, Option<i64>)) -> Walk<'a> {
@@ -5506,6 +5517,7 @@ impl<'a> Database<'a> {
                 Grouping {
                     calls,
                     ordered: false,
+                    smallest: None,
                 },
                 reach,
             );
@@ -5538,17 +5550,23 @@ impl<'a> Database<'a> {
         arena: &Arena,
         select: &Select,
         sql: &[u8],
-        sides: &mut [Side<'_>],
+        over: (&mut [Side<'_>], &[Call]),
         held: (bool, bool, bool),
-    ) {
+    ) -> Option<ExprId> {
+        let (sides, calls) = over;
         let (gathered, ordered, windowless) = held;
+        let smallest = windowless
+            .then(|| self.smallest_side(arena, select, sql, sides, calls))
+            .flatten();
         // A walk of an index answers the rows in the order of the index
         // and not of the rowids, so a side is read out of one only where
         // no part of the statement reads the order the walk answers: a
         // `GROUP BY` the walk gathers the groups of, an `ORDER BY` the
-        // walk answers, and a window function that reads the rows as the
-        // statement left them each read that order.
-        let free = windowless && !gathered && (select.order.is_empty() || !ordered);
+        // walk answers, a bare `min` or `max` the walk answers the value
+        // of, and a window function that reads the rows as the statement
+        // left them each read that order.
+        let free =
+            windowless && !gathered && smallest.is_none() && (select.order.is_empty() || !ordered);
         covered(arena, select, sql, sides, free);
         self.explain(
             sides,
@@ -5558,6 +5576,7 @@ impl<'a> Database<'a> {
                 ordered: !select.order.is_empty() && !ordered,
             },
         );
+        smallest
     }
 
     /// Whether the walk of the one side gathers the groups of the
@@ -5575,6 +5594,78 @@ impl<'a> Database<'a> {
         )
     }
 
+    /// The value the walk stops at the first row of, where the statement
+    /// is a bare `min` or `max` of one value and one index answers the
+    /// rows in the order of that value.
+    ///
+    /// The side is then read by that index, as it is for an `ORDER BY`
+    /// the walk answers.
+    fn smallest_side(
+        &self,
+        arena: &Arena,
+        select: &Select,
+        sql: &[u8],
+        sides: &mut [Side<'_>],
+        calls: &[Call],
+    ) -> Option<ExprId> {
+        let (value, descending) = smallest(arena, select, calls)?;
+        let settling = Settling {
+            format: self.schema_format(),
+            collating: self.collating,
+        };
+        let plan = match smallest_order(arena, select, sql, sides, (settling, value, descending)) {
+            Ordering::Sorted => return None,
+            Ordering::Walked => None,
+            Ordering::Index(plan) => Some(plan),
+        };
+        for side in sides.iter_mut().take(1) {
+            if let Some(plan) = plan.clone() {
+                side.plan = plan;
+            }
+        }
+        Some(value)
+    }
+
+    /// The rows a statement that neither aggregates nor calls a window
+    /// function answers, each with what its `ORDER BY` sorts it by.
+    ///
+    /// The walk stops once the rows a `LIMIT` takes are all there, which
+    /// `stops` says it may.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the walk or the expressions of the statement refuse.
+    fn plain(
+        &self,
+        arena: &Arena,
+        select: &Select,
+        sql: &[u8],
+        over: (&[Side<'_>], &[Key]),
+        held: (bool, Reach<'_>),
+    ) -> Result<Vec<Sorted>, Error> {
+        let (sides, keys) = over;
+        let (stops, reach) = held;
+        let stops = self.stops(arena, select, sql, (stops, reach))?;
+        let mut rows = Vec::new();
+        // Whether the walk read a row, which is what resolved the names
+        // of the statement.
+        let mut read = false;
+        self.scan(sides, arena, sql, reach, &mut |cursor: &Cursor<'_>| {
+            read = true;
+            if keep(arena, select.filter, sql, cursor)? {
+                rows.push(sorted(arena, select, sql, cursor, keys)?);
+                if stops.is_some_and(|stops| rows.len() >= stops) {
+                    return Ok(Flow::Stop);
+                }
+            }
+            Ok(Flow::Go)
+        })?;
+        if !read {
+            unread(arena, select, sql, sides, reach, self.collation())?;
+        }
+        Ok(rows)
+    }
+
     /// The groups a statement that aggregates answers: one cursor each,
     /// in the order the `GROUP BY` terms collate in, which is the order
     /// the sorter of `src/select.c` puts them in.
@@ -5587,7 +5678,11 @@ impl<'a> Database<'a> {
         gathering: Grouping<'_>,
         reach: Reach<'b>,
     ) -> Result<Vec<Cursor<'b>>, Error> {
-        let Grouping { calls, ordered } = gathering;
+        let Grouping {
+            calls,
+            ordered,
+            smallest,
+        } = gathering;
         let terms = grouping(arena, select, sql, sides)?;
         let mut groups: Vec<Group<'b>> = Vec::new();
         self.scan(sides, arena, sql, reach, &mut |cursor: &Cursor<'b>| {
@@ -5619,6 +5714,15 @@ impl<'a> Database<'a> {
             // A place read out of the list, or the end of a list just
             // pushed to: neither is ever nothing.
             group.map_or(Ok(()), |group| group.step(arena, sql, cursor, calls))?;
+            // The walk that answers the rows in the order of the value a
+            // bare `min` or `max` reads holds the answer in its first row
+            // that holds a value, the rows before it holding nulls, which
+            // neither aggregate reads.
+            if let Some(value) = smallest
+                && evaluate_row(arena, value, sql, cursor)? != Value::Null
+            {
+                return Ok(Flow::Stop);
+            }
             Ok(Flow::Go)
         })?;
         if terms.is_empty() && groups.is_empty() {
@@ -6676,7 +6780,7 @@ const NO_ROWS: &[Vec<Value>] = &[];
 const fn whole_walk(side: &Side<'_>) -> bool {
     matches!(side.source, Source::Table(_))
         && match &side.plan {
-            Plan::Rows(None, None) => true,
+            Plan::Rows(None, None) | Plan::Backwards => true,
             Plan::Keyed { key, bounds, .. } => key.is_empty() && bounds.is_empty(),
             Plan::Rows(_, _) | Plan::Joined { .. } | Plan::Rowid(_) | Plan::Union(_) => false,
         }
@@ -6909,7 +7013,7 @@ fn covering_of(side: &Side<'_>, read: &[usize]) -> Option<Vec<Option<usize>>> {
     const fn rooted(plan: &Plan) -> Option<u32> {
         match plan {
             Plan::Keyed { root, .. } | Plan::Joined { root, .. } => Some(*root),
-            Plan::Rows(_, _) | Plan::Rowid(_) | Plan::Union(_) => None,
+            Plan::Rows(_, _) | Plan::Backwards | Plan::Rowid(_) | Plan::Union(_) => None,
         }
     }
 
@@ -6989,6 +7093,10 @@ struct Grouping<'c> {
     calls: &'c [Call],
     /// Whether the walk answers the groups one after another.
     ordered: bool,
+    /// The value the one aggregate reads, where the walk answers the
+    /// rows in the order of that value and stops at the first row it
+    /// keeps that holds one.
+    smallest: Option<ExprId>,
 }
 
 /// Which trees a statement sorts its rows in, each of which
@@ -7025,7 +7133,9 @@ fn detailed(side: &Side<'_>, plan: &Plan, lines: &mut Vec<Explained>, parent: us
     // reads no row of the table.
     let covering = side.covering.is_some();
     match plan {
-        Plan::Rows(None, None) => lines.push((parent, scanned(&side.name, b"", false))),
+        Plan::Rows(None, None) | Plan::Backwards => {
+            lines.push((parent, scanned(&side.name, b"", false)));
+        }
         Plan::Rows(low, high) => {
             let mut terms: Vec<&[u8]> = Vec::new();
             if low == high {
@@ -7222,6 +7332,73 @@ fn ordering(
     placed(side, stored, places, settling.format)
 }
 
+/// The value the one aggregate of a statement reads, and whether the
+/// walk runs from the largest of them down, where the statement is a bare
+/// `min` or `max` of one value.
+///
+/// `minMaxQuery` of `research/sqlite/src/select.c:5386` reads a statement
+/// of no `GROUP BY` and no `HAVING` whose one aggregate is `min` or `max`
+/// of one value in the order of that value, and
+/// `sqlite3WhereMinMaxOptEarlyOut` of `research/sqlite/src/where.c:124`
+/// leaves the loop after the first row the walk kept, so the value comes
+/// from one row and not from every row of the table.
+///
+/// Reading the call costs O(1).
+fn smallest(arena: &Arena, select: &Select, calls: &[Call]) -> Option<(ExprId, bool)> {
+    let [call] = calls else {
+        return None;
+    };
+    if !select.group.is_empty() || select.having.is_some() || call.filter.is_some() {
+        return None;
+    }
+    let descending = match call.which {
+        crate::agg::Aggregate::Min => false,
+        crate::agg::Aggregate::Max => true,
+        _ => return None,
+    };
+    // A call of no argument is refused before the walk stands, and one
+    // of two arguments is the scalar of the same name, so the one
+    // argument is the value.
+    let values = arena.children(call.args);
+    values
+        .first()
+        .filter(|_| values.len() == 1)
+        .map(|value| (*value, descending))
+}
+
+/// What the walk of the one side answers of the value a bare `min` or
+/// `max` reads.
+///
+/// The nulls of a column stand before every value of it in an index, so
+/// a `min` reads the rows forwards and passes over the nulls, and a `max`
+/// reads them backwards and reaches the nulls last, which is the
+/// `KEYINFO_ORDER_BIGNULL` and the `KEYINFO_ORDER_DESC` of `minMaxQuery`.
+///
+/// Costs what [`termed`] and [`placed`] cost.
+fn smallest_order(
+    arena: &Arena,
+    select: &Select,
+    sql: &[u8],
+    sides: &[Side<'_>],
+    held: (Settling, ExprId, bool),
+) -> Ordering {
+    let (settling, value, descending) = held;
+    let [side] = sides else {
+        return Ordering::Sorted;
+    };
+    let Source::Table(stored) = &side.source else {
+        return Ordering::Sorted;
+    };
+    if stored.table.without_rowid {
+        return Ordering::Sorted;
+    }
+    let held = (settling, &**stored);
+    let Some(term) = termed(arena, select, sql, sides, held, value, descending) else {
+        return Ordering::Sorted;
+    };
+    placed(side, stored, alloc::vec![term], settling.format)
+}
+
 /// What the walk of the one side answers of the `GROUP BY`.
 ///
 /// The terms of a `GROUP BY` run forwards and put their nulls where that
@@ -7303,8 +7480,17 @@ fn placed(side: &Side<'_>, stored: &Stored, mut places: Vec<Termed>, format: u32
     // anything, and the table's own tree holds its rows from the
     // smallest rowid up.
     if let Some(first) = places.first().filter(|term| term.place.is_none()) {
-        return if !first.descending && matches!(side.plan, Plan::Rows(_, _)) {
-            Ordering::Walked
+        if !matches!(side.plan, Plan::Rows(_, _)) {
+            return Ordering::Sorted;
+        }
+        if !first.descending {
+            return Ordering::Walked;
+        }
+        // The rows run the other way round from the tree, which the walk
+        // that reads it from the last row back answers, and a walk held
+        // to a range of rowids is not that walk.
+        return if matches!(side.plan, Plan::Rows(None, None)) {
+            Ordering::Index(Plan::Backwards)
         } else {
             Ordering::Sorted
         };
@@ -7705,7 +7891,7 @@ struct Seek {
 /// Reading one key costs what the expression it is read from costs.
 fn sought(plan: &Plan, covering: Option<&[Option<usize>]>, cursor: &Cursor<'_>) -> Option<Seek> {
     match plan {
-        Plan::Rows(_, _) | Plan::Rowid(_) | Plan::Union(_) => None,
+        Plan::Rows(_, _) | Plan::Backwards | Plan::Rowid(_) | Plan::Union(_) => None,
         Plan::Keyed {
             root,
             key,

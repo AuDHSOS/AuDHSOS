@@ -47,6 +47,36 @@ fn a_walk_held_to_a_key_counts_no_step() {
 fn an_order_by_the_walk_of_the_tables_own_tree_answers_needs_no_sort() {
     assert_eq!(pair(b"SELECT * FROM m ORDER BY rowid"), (4, 0));
     assert_eq!(pair(b"SELECT * FROM m ORDER BY rowid, q"), (4, 0));
+    // The walk of the tree from its last row back answers the rowids
+    // from the largest down, which a `LIMIT` of one takes one row of.
+    assert_eq!(pair(b"SELECT * FROM m ORDER BY rowid DESC"), (4, 0));
+    assert_eq!(pair(b"SELECT * FROM m ORDER BY rowid DESC LIMIT 1"), (0, 0));
+    // A walk held to a range of rowids is not that walk.
+    assert_eq!(
+        pair(b"SELECT * FROM m WHERE rowid>2 ORDER BY rowid DESC"),
+        (0, 1)
+    );
+}
+
+/// The rows a walk of the tree from its last row back answers, and the
+/// rowids they carry. Every answer is the one the C library's shell
+/// writes.
+#[test]
+fn what_the_walk_from_the_last_row_back_answers() {
+    let rows = Database::open(super::INDEXED)
+        .unwrap()
+        .query(b"SELECT rowid FROM m ORDER BY rowid DESC")
+        .unwrap()
+        .rows;
+    let held: Vec<i64> = rows
+        .iter()
+        .flatten()
+        .map(|value| match value {
+            crate::value::Value::Int(held) => *held,
+            _ => panic!("a rowid is a whole number"),
+        })
+        .collect();
+    assert_eq!(held, [5, 4, 3, 2, 1]);
 }
 
 #[test]
@@ -132,9 +162,8 @@ fn what_order_by_the_walk_does_not_answer() {
     // A term with its nulls moved, over an expression, or over a column
     // under a collation of its own.
     assert_eq!(pair(b"SELECT * FROM m ORDER BY q NULLS LAST"), (4, 1));
-    // Two terms running in two directions, and a rowid read backwards.
+    // Two terms running in two directions.
     assert_eq!(pair(b"SELECT * FROM m ORDER BY p, q DESC"), (4, 1));
-    assert_eq!(pair(b"SELECT * FROM m ORDER BY rowid DESC"), (4, 1));
     assert_eq!(pair(b"SELECT * FROM m ORDER BY r+1"), (4, 1));
     assert_eq!(pair(b"SELECT * FROM m ORDER BY q COLLATE binary"), (4, 1));
     // A rowid between two columns leaves the terms after it unanswered.
@@ -200,4 +229,86 @@ fn what_a_walk_counts_as_a_search() {
     assert_eq!(searched(b"SELECT * FROM m"), 4);
     // A walk held to one rowid descends to it and counts nothing.
     assert_eq!(searched(b"SELECT * FROM m WHERE rowid=2"), 0);
+}
+
+/// What `sql` answers, as `value|` per value, and what its walks
+/// counted as searches.
+fn smallest(sql: &[u8]) -> (String, i64) {
+    let answer = Database::open(super::INDEXED).unwrap().query(sql).unwrap();
+    let mut shown = String::new();
+    for value in answer.rows.iter().flatten() {
+        shown.push_str(&String::from_utf8_lossy(
+            &value.text().unwrap_or(b"NULL".to_vec()),
+        ));
+        shown.push('|');
+    }
+    (shown, answer.stepped.searched)
+}
+
+/// A statement of no `GROUP BY` and no `HAVING` whose one aggregate is a
+/// `min` or a `max` of one value reads the rows in the order of that
+/// value and stops at the first row that holds one. Every answer is the
+/// one the C library's shell writes.
+#[test]
+fn what_a_bare_min_or_max_reads_of_the_walk() {
+    // `mq` holds the values of `q` forwards, so a `min` reads its first
+    // entry and a `max` its last; `m` holds one row whose `q` is null,
+    // which the `min` steps over and the `max` never reaches.
+    assert_eq!(smallest(b"SELECT min(q) FROM m"), ("A|".to_owned(), 1));
+    assert_eq!(smallest(b"SELECT max(q) FROM m"), ("c|".to_owned(), 0));
+    // `mr` holds the values of `r` backwards, so the walks swap.
+    assert_eq!(smallest(b"SELECT min(r) FROM m"), ("10|".to_owned(), 1));
+    assert_eq!(smallest(b"SELECT max(r) FROM m"), ("50|".to_owned(), 0));
+    // The table's own tree holds the rows from the smallest rowid up,
+    // which answers a `min` of the rowid, and the walk of it from the
+    // last row back answers a `max` of the rowid.
+    assert_eq!(smallest(b"SELECT min(rowid) FROM m"), ("1|".to_owned(), 0));
+    assert_eq!(smallest(b"SELECT max(rowid) FROM m"), ("5|".to_owned(), 0));
+    // The value stands where the aggregate is read for something else.
+    assert_eq!(smallest(b"SELECT min(q)+0 FROM m"), ("0|".to_owned(), 1));
+    assert_eq!(
+        smallest(b"SELECT min(DISTINCT q) FROM m"),
+        ("A|".to_owned(), 1)
+    );
+    // Two aggregates, a `GROUP BY`, a `HAVING`, an aggregate that is
+    // neither, and an index over an expression: each reads every row.
+    assert_eq!(
+        smallest(b"SELECT min(p), max(p) FROM m"),
+        ("1|3|".to_owned(), 4)
+    );
+    assert_eq!(
+        smallest(b"SELECT min(q) FROM m GROUP BY p"),
+        ("A|A|NULL|".to_owned(), 4)
+    );
+    assert_eq!(
+        smallest(b"SELECT min(q) FROM m HAVING min(q)>'A'"),
+        (String::new(), 4)
+    );
+    assert_eq!(smallest(b"SELECT count(*) FROM m"), ("5|".to_owned(), 4));
+    assert_eq!(smallest(b"SELECT max(a) FROM e"), ("3|".to_owned(), 2));
+    // A `WHERE` that holds the walk to a key leaves the value in no
+    // order, so every row it keeps is read.
+    assert_eq!(
+        smallest(b"SELECT min(p) FROM m WHERE q='A'"),
+        ("1|".to_owned(), 5)
+    );
+}
+
+/// The walk answers the value of a bare `min` or `max` for one table of
+/// the schema alone, and reads every row otherwise. Every answer is the
+/// one the C library's shell writes.
+#[test]
+fn what_a_bare_min_or_max_answers_where_the_walk_holds_no_order() {
+    // A join answers the product of its sides and a statement of a `FROM`
+    // answers the rows it was read for, neither in the order of a value.
+    assert_eq!(smallest(b"SELECT min(p) FROM m, k"), ("1|".to_owned(), 499));
+    assert_eq!(
+        smallest(b"SELECT min(x) FROM (SELECT p AS x FROM m)"),
+        ("1|".to_owned(), 4)
+    );
+    // A table that keeps its rows in the key's own tree ends the entries
+    // of its indexes with that key and not with a rowid.
+    assert_eq!(smallest(b"SELECT min(b) FROM u"), ("1|".to_owned(), 1));
+    // An expression is no column of an index of the table.
+    assert_eq!(smallest(b"SELECT min(p+1) FROM m"), ("2|".to_owned(), 4));
 }

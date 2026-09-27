@@ -191,6 +191,18 @@ impl<'a> Image<'a> {
         Rows::new(*self, root, None, None)
     }
 
+    /// The rows of that table from the last one back to the first, which
+    /// answers the rowids from the largest down and is the walk
+    /// `OP_Last` with `OP_Prev` of `research/sqlite/src/vdbe.c` reads a
+    /// table by.
+    ///
+    /// The walk descends the right edge of the tree, O(log n) for `n`
+    /// rows, and steps back over the rows from there.
+    #[must_use]
+    pub const fn rows_back(&self, root: u32) -> Rows<'a> {
+        Rows::backwards(*self, root)
+    }
+
     /// The rows whose rowid is at least `first` and at most `last`, each
     /// bound left out where it is nothing.
     ///
@@ -463,9 +475,18 @@ pub struct Rows<'a> {
     first: Option<i64>,
     /// The rowid the walk ends past.
     last: Option<i64>,
+    /// Whether the walk reads the rows from the last to the first. A
+    /// frame of such a walk counts how many positions of its page are
+    /// left, so zero is the page read out, and [`Rows::UNPLACED`] stands
+    /// for a page the walk has not parsed yet.
+    backwards: bool,
 }
 
 impl<'a> Rows<'a> {
+    /// What the `next` of a frame of a backwards walk holds until the
+    /// walk parses the page and counts its positions.
+    const UNPLACED: usize = usize::MAX;
+
     /// A walk that has not begun, over the tree at `root`.
     const fn new(image: Image<'a>, root: u32, first: Option<i64>, last: Option<i64>) -> Self {
         Rows {
@@ -479,6 +500,24 @@ impl<'a> Rows<'a> {
             held: None,
             first,
             last,
+            backwards: false,
+        }
+    }
+
+    /// The same, from the last row of the tree to the first.
+    const fn backwards(image: Image<'a>, root: u32) -> Self {
+        Rows {
+            image,
+            stack: [Frame {
+                number: root,
+                next: Self::UNPLACED,
+            }; MAX_DEPTH],
+            depth: 1,
+            done: false,
+            held: None,
+            first: None,
+            last: None,
+            backwards: true,
         }
     }
 
@@ -533,10 +572,42 @@ impl<'a> Rows<'a> {
         let slot = self.stack.get_mut(self.depth).ok_or(Error::Depth)?;
         *slot = Frame {
             number: child,
-            next: 0,
+            next: if self.backwards { Self::UNPLACED } else { 0 },
         };
         self.depth = self.depth.saturating_add(1);
         Ok(())
+    }
+
+    /// Counts the positions of the page a backwards walk has reached,
+    /// which is one per row of a leaf and one per subtree of an interior
+    /// page, the last subtree being the one its header names.
+    fn place(&mut self, cells: usize, interior: bool) {
+        let index = self.depth.saturating_sub(1);
+        let held = if interior {
+            cells.saturating_add(1)
+        } else {
+            cells
+        };
+        for frame in self.stack.iter_mut().skip(index).take(1) {
+            frame.next = held;
+        }
+    }
+
+    /// Which position of the page the walk acts on, or nothing where the
+    /// page is read out.
+    const fn standing(&self, next: usize, cells: usize, interior: bool) -> Option<usize> {
+        if self.backwards {
+            return next.checked_sub(1);
+        }
+        let held = if interior {
+            cells.saturating_add(1)
+        } else {
+            cells
+        };
+        if next >= held {
+            return None;
+        }
+        Some(next)
     }
 }
 
@@ -582,42 +653,47 @@ impl<'a> Iterator for Rows<'a> {
             {
                 return Some(Err(self.stop(error)));
             }
-            let frame = *self.top()?;
-            match page.kind() {
-                Kind::LeafTable if frame.next < cells => {
-                    self.bump();
-                    let (rowid, payload) = match page.row(frame.next) {
-                        Ok(row) => row,
-                        Err(error) => return Some(Err(self.stop(error))),
-                    };
-                    if self.last.is_some_and(|last| rowid > last) {
-                        // Every row after this one has a larger rowid,
-                        // so the range is read out.
-                        self.done = true;
-                        return None;
-                    }
-                    return Some(Ok(Row { rowid, payload }));
-                }
-                Kind::InteriorTable if frame.next <= cells => {
-                    self.bump();
-                    let child = if frame.next == cells {
-                        page.right_most().ok_or(Error::Overrun)
-                    } else {
-                        page.child(frame.next)
-                    };
-                    match child.and_then(|child| self.push(child)) {
-                        Ok(()) => {}
-                        Err(error) => return Some(Err(self.stop(error))),
-                    }
-                }
+            let interior = match page.kind() {
+                Kind::LeafTable => false,
+                Kind::InteriorTable => true,
+                // A table tree holds no index page; a root that leads to
+                // one is a root of the wrong tree.
                 Kind::InteriorIndex | Kind::LeafIndex => {
-                    // A table tree holds no index page; a root that leads
-                    // to one is a root of the wrong tree.
                     return Some(Err(self.stop(Error::PageKind(page.kind().byte()))));
                 }
-                Kind::InteriorTable | Kind::LeafTable => {
-                    self.depth = self.depth.saturating_sub(1);
+            };
+            if self.backwards && frame.next == Self::UNPLACED {
+                self.place(cells, interior);
+                continue;
+            }
+            let frame = *self.top()?;
+            let Some(at) = self.standing(frame.next, cells, interior) else {
+                self.depth = self.depth.saturating_sub(1);
+                continue;
+            };
+            self.bump();
+            if !interior {
+                let (rowid, payload) = match page.row(at) {
+                    Ok(row) => row,
+                    Err(error) => return Some(Err(self.stop(error))),
+                };
+                if self.last.is_some_and(|last| rowid > last) {
+                    // Every row after this one has a larger rowid, so the
+                    // range is read out.
+                    self.done = true;
+                    return None;
                 }
+                return Some(Ok(Row { rowid, payload }));
+            }
+            // The header of an interior page names the subtree after its
+            // last cell, which stands at the place one past them.
+            let child = if at == cells {
+                page.right_most().ok_or(Error::Overrun)
+            } else {
+                page.child(at)
+            };
+            if let Err(error) = child.and_then(|child| self.push(child)) {
+                return Some(Err(self.stop(error)));
             }
         }
         None
@@ -633,8 +709,13 @@ impl Rows<'_> {
     /// no test can hold to anything.
     fn bump(&mut self) {
         let index = self.depth.saturating_sub(1);
+        let backwards = self.backwards;
         for frame in self.stack.iter_mut().skip(index).take(1) {
-            frame.next = frame.next.saturating_add(1);
+            frame.next = if backwards {
+                frame.next.saturating_sub(1)
+            } else {
+                frame.next.saturating_add(1)
+            };
         }
     }
 }

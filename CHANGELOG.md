@@ -7,6 +7,19 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` reads a table's own tree from its last row back where the rows are
+  asked for in that order, so an `ORDER BY` of the rowid written `DESC` sorts
+  nothing and a bare `max` of the rowid reads one row. D-562 records it. Catalog
+  6.6.405. `where.test` goes from 264 cases passing to 275, `minmax.test` from
+  105 to 107, `minmax2.test` from 57 to 59 and `where2.test` from 58 to 59.
+
+- `db-sqlite` reads a statement whose one aggregate is a `min` or a `max` of one
+  value in the order of that value and stops at the first row it keeps that
+  holds one, which costs O(log n) in the rows of the table where an index holds
+  the value against O(n) for a walk of every row. D-561 records it. Catalog
+  6.6.404. `minmax.test` goes from 100 cases passing to 105, `minmax2.test` from
+  55 to 57 and `minmax3.test` from 36 to 44.
+
 - `db-sqlite` carries the words the C library refuses a generated column
   described wrongly with: a table of nothing but generated columns, a word
   after the expression that names neither kind, a `DEFAULT` on either side of

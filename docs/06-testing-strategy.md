@@ -7856,6 +7856,36 @@ Document 16 step Q8. Every answer is the one the C library's shell writes.
 - A `FROM` of 65 and of 100 sides, which are refused.
 - Two statements of 64 sides, one written inside the other, which stand.
 
+### 6.6.405 The walk of a table from its last row back (`db-sqlite`)
+
+Unit tests of `crate::image` and of `crate::db`.
+
+- The rowids of a tree of one page, of a tree of a hundred rows, and of
+  a tree of two hundred rows over more than one level, each from the
+  largest down.
+- A root that names an index tree and one the file does not have.
+- `ORDER BY rowid DESC`, which sorts nothing, and the same with a
+  `LIMIT` of one, which reads one row.
+- The same with a `WHERE` that holds the walk to a range of rowids,
+  which sorts.
+
+### 6.6.404 The walk a bare `min` or `max` reads (`db-sqlite`)
+
+Unit tests of `crate::db` over `fixtures/indexed.db`, against the
+searches each statement counts. Every answer is the one the C library's
+shell writes.
+
+- `min` and `max` over a column an index holds forwards and over one an
+  index holds backwards: four statements, each reading one row.
+- `min` and `max` of the rowid: the table's own tree answers the first
+  and not the second.
+- The aggregate read for something else, and one written `DISTINCT`.
+- Two aggregates, a `GROUP BY`, a `HAVING`, an aggregate that is
+  neither, an index over an expression, and a `WHERE` that holds the
+  walk to a key: each reads every row.
+- A join, a statement of a `FROM`, a table that keeps its rows in the
+  key's own tree, and a value no index holds.
+
 ### 6.6.402 Generated columns computed from each other (`db-sqlite`)
 
 Unit tests of `crate::change`. Every answer is the one the C library's
