@@ -63,6 +63,7 @@ mod number;
 mod page;
 mod parse;
 mod percentile;
+mod planned;
 mod record;
 mod regexp;
 mod rename;

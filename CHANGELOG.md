@@ -7,6 +7,17 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` counts the terms of an `ORDER BY` the walk answers from the first
+  and leaves the sorter the rest, taking the walk that answers the longest run
+  and naming in the plan how many terms the sorter takes. D-571 records it.
+  Catalog 6.6.411. `eqp2.test` goes from 2 cases passing to 4, `cost.test` from
+  28 to 29, `orderby1.test` from 52 to 53 and `where2.test` from 59 to 60.
+
+- `db-sqlite` names in a plan the one row a statement of no `FROM` answers, the
+  `VALUES` clause a `FROM` reads, and the tree a chain of `UNION ALL` puts its
+  cores in: `COMPOUND QUERY` over `LEFT-MOST SUBQUERY` and one line per
+  operator. D-570 records it. Catalog 6.6.410.
+
 - `db-sqlite` counts the columns a `*` stands for when a whole number in an
   `ORDER BY` or a `GROUP BY` names one, so the walk of an index answers the order
   and sorts nothing. D-569 records it. Catalog 6.6.409. `where.test` goes from

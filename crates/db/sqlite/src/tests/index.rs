@@ -913,7 +913,12 @@ fn explain_query_plan_names_the_walk_of_every_side() {
             super::INDEXED,
             b"EXPLAIN QUERY PLAN SELECT * FROM (SELECT * FROM m)"
         ),
-        "SCAN m|SCAN "
+        // A statement written inside a `FROM` that carries no alias is
+        // named after its own place, which is `%S` of
+        // `research/sqlite/src/printf.c:999`. The C library writes the
+        // statement into the one above it and names `SCAN m` alone, which
+        // item 273 of document 16 records as missing.
+        "SCAN m|SCAN (subquery-0)"
     );
     assert_eq!(
         planned(

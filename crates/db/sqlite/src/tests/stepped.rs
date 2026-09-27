@@ -348,3 +348,12 @@ fn what_a_bare_min_or_max_answers_where_the_walk_holds_no_order() {
     // An expression is no column of an index of the table.
     assert_eq!(smallest(b"SELECT min(p+1) FROM m"), ("2|".to_owned(), 4));
 }
+
+#[test]
+fn what_a_walk_that_answers_part_of_an_order_counts() {
+    // The walk of the index over the first term is taken and the terms
+    // after it are sorted by, so the walk reads the index and the sorter
+    // counts one.
+    assert_eq!(pair(b"SELECT * FROM m ORDER BY q, p"), (4, 1));
+    assert_eq!(pair(b"SELECT * FROM m ORDER BY q, p, r"), (4, 1));
+}

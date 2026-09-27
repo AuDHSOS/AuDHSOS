@@ -1827,6 +1827,10 @@ struct Side<'a> {
     /// table, where the index holds every column the statement reads
     /// and the row is built from the entry rather than from the table.
     covering: Option<Vec<Option<usize>>>,
+    /// The name the plan writes it under where it reads a `VALUES` of
+    /// several rows, which stands in front of the alias, and nothing
+    /// otherwise.
+    valued: Vec<u8>,
 }
 
 /// What the column after the key of a plan is held between, which is
@@ -2022,6 +2026,24 @@ fn table_of(sides: &[Side<'_>], table: Option<Span>, column: Span, sql: &[u8]) -
     }
 }
 
+/// The name a `VALUES` of several rows is written under in a plan, and
+/// nothing for anything else, a `VALUES` of one row standing for a
+/// statement of no `FROM` like any other.
+///
+/// `%!S` of `research/sqlite/src/printf.c:1024` writes the clause and
+/// not the alias, so `(VALUES(1),(2)) AS z` is named after the clause.
+fn valued(arena: &Arena, id: crate::ast::SelectId) -> Vec<u8> {
+    let rows = arena
+        .select(id)
+        .map_or(0, |select| arena.children(select.values).len());
+    if rows < 2 {
+        return Vec::new();
+    }
+    let mut named = number::integer_text(i64::try_from(rows).unwrap_or(i64::MAX));
+    named.extend_from_slice(b"-ROW VALUES CLAUSE");
+    named
+}
+
 /// The name `sqlite3SelectExpand` gives a statement written inside a
 /// `FROM` that carries no alias, which `full_column_names` writes in
 /// front of the columns it answers.
@@ -2184,6 +2206,13 @@ pub struct Database<'a> {
     /// The lines an `EXPLAIN QUERY PLAN` collects while the statement
     /// under it runs, and nothing where no such statement runs.
     planned: core::cell::RefCell<Option<Vec<Explained>>>,
+    /// Which line of the plan the lines written now hang under, counting
+    /// from one, and zero for a line that hangs under none.
+    ///
+    /// `pParse->addrExplain` of `research/sqlite/src/vdbeaux.c:534` holds
+    /// the same line, and `sqlite3VdbeExplainPop` reads that line's own
+    /// parent off it.
+    hanging: core::cell::Cell<usize>,
     /// The views whose statements are being answered now, innermost
     /// last, which is what `nCol==-1` of `sqlite3ViewGetColumnNames`
     /// marks a view with while its columns are worked out.
@@ -2596,6 +2625,7 @@ impl<'a> Database<'a> {
             ignored: core::cell::RefCell::new(Vec::new()),
             stepped: core::cell::Cell::new(Stepped::default()),
             planned: core::cell::RefCell::new(None),
+            hanging: core::cell::Cell::new(0),
             viewing: core::cell::RefCell::new(Vec::new()),
             counted: crate::func::Counted::default(),
             naming: Naming::default(),
@@ -3941,6 +3971,7 @@ impl<'a> Database<'a> {
     /// Whatever the statement under it refuses.
     fn explaining(&self, sql: &[u8]) -> Result<Answer, Error> {
         *self.planned.borrow_mut() = Some(Vec::new());
+        self.hanging.set(0);
         let answered = self.queried(sql);
         let lines = self.planned.borrow_mut().take().unwrap_or_default();
         answered?;
@@ -3968,15 +3999,54 @@ impl<'a> Database<'a> {
         })
     }
 
+    /// Writes one line of the plan under the line the lines written now
+    /// hang under.
+    fn plan_line(&self, detail: Vec<u8>) {
+        let mut held = self.planned.borrow_mut();
+        if let Some(lines) = held.as_mut() {
+            lines.push((self.hanging.get(), detail));
+        }
+    }
+
+    /// Writes one line of the plan and hangs the lines after it under
+    /// that line, which is the `bPush` of `sqlite3VdbeExplain` of
+    /// `research/sqlite/src/vdbeaux.c:537`.
+    fn plan_under(&self, detail: Vec<u8>) {
+        let mut held = self.planned.borrow_mut();
+        if let Some(lines) = held.as_mut() {
+            lines.push((self.hanging.get(), detail));
+            self.hanging.set(lines.len());
+        }
+    }
+
+    /// Hangs the lines written after this where the line they hang under
+    /// hangs, which is `sqlite3VdbeExplainPop`.
+    fn plan_over(&self) {
+        let held = self.planned.borrow();
+        let over = self
+            .hanging
+            .get()
+            .checked_sub(1)
+            .and_then(|at| held.as_ref().and_then(|lines| lines.get(at)))
+            .map_or(0, |line| line.0);
+        self.hanging.set(over);
+    }
+
     /// Writes the lines one core of a statement adds to the plan under
     /// an `EXPLAIN QUERY PLAN`.
     fn explain(&self, sides: &[Side<'_>], sorting: Sorting) {
+        let parent = self.hanging.get();
         let mut held = self.planned.borrow_mut();
         let Some(lines) = held.as_mut() else {
             return;
         };
+        // `sqlite3WhereBegin` of `research/sqlite/src/where.c:6955` names
+        // the one row a statement of no `FROM` answers.
+        if sides.is_empty() {
+            lines.push((parent, b"SCAN CONSTANT ROW".to_vec()));
+        }
         for side in sides {
-            detailed(side, &side.plan, lines, 0);
+            detailed(side, &side.plan, lines, parent);
         }
         // `sqlite3Select` writes one line per tree it sorts the rows in,
         // in the order it builds them: the groups, then the rows that
@@ -3984,11 +4054,13 @@ impl<'a> Database<'a> {
         for (held, named) in [
             (sorting.grouped, b"USE TEMP B-TREE FOR GROUP BY".as_slice()),
             (sorting.distinct, b"USE TEMP B-TREE FOR DISTINCT"),
-            (sorting.ordered, b"USE TEMP B-TREE FOR ORDER BY"),
         ] {
             if held {
-                lines.push((0, named.to_vec()));
+                lines.push((parent, named.to_vec()));
             }
+        }
+        if sorting.ordered > 0 {
+            lines.push((parent, sorted_by(sorting.ordered, sorting.terms)));
         }
     }
 
@@ -4187,31 +4259,25 @@ impl<'a> Database<'a> {
         if first.compound.is_none() {
             return self.core(arena, id, sql, true, scope);
         }
-        let mut answers: Vec<Answered> = Vec::new();
-        let mut cores: Vec<Vec<Vec<u8>>> = Vec::new();
+        let mut chain = alloc::vec![id];
         let mut operators: Vec<Compound> = Vec::new();
-        let mut at = Some(id);
-        // Every core answers as many columns as the first, and the
-        // refusal names the word that joins the one that does not to
-        // the core before it.
-        let mut joined: Option<Compound> = None;
-        while let Some(id) = at {
-            let core = arena.select(id).ok_or(Error::Unsupported)?;
-            let mine = self.core(arena, id, sql, false, scope)?;
-            if answers
-                .first()
-                .is_some_and(|first: &Answered| first.answer.names.len() != mine.answer.names.len())
-            {
-                return Err(unjoined(joined, !core.values.is_empty()));
-            }
-            cores.push(named_of(&mine.shape));
-            answers.push(mine);
-            at = core.compound.map(|(operator, next)| {
-                operators.push(operator);
-                joined = Some(operator);
-                next
-            });
+        let mut at = first.compound;
+        while let Some((operator, next)) = at {
+            operators.push(operator);
+            chain.push(next);
+            at = arena.select(next).ok_or(Error::Unsupported)?.compound;
         }
+        let mut answers: Vec<Answered> = Vec::new();
+        self.compounded(
+            arena,
+            sql,
+            scope,
+            (&chain, &operators),
+            !first.order.is_empty(),
+            &mut answers,
+        )?;
+        self.plan_over();
+        let cores: Vec<Vec<Vec<u8>>> = answers.iter().map(|mine| named_of(&mine.shape)).collect();
         let mut rest = answers.into_iter();
         let Answered {
             mut answer,
@@ -4246,6 +4312,105 @@ impl<'a> Database<'a> {
         let cursor = Cursor::new(self.collation(), self.encoding, reach);
         limit(arena, &first, sql, &mut answer.rows, &cursor)?;
         Ok(Answered { answer, shape })
+    }
+
+    /// Answers the cores of a compound left to right, writing the lines
+    /// the plan hangs them under.
+    ///
+    /// `multiSelect` of `research/sqlite/src/select.c:3012` writes
+    /// `COMPOUND QUERY` over a chain of `UNION ALL` that carries no
+    /// `ORDER BY`, with `LEFT-MOST SUBQUERY` over the core on the left
+    /// and the operator over each core after it. It answers the cores to
+    /// the left of the last operator by calling itself, and a level of
+    /// any other operator merges its cores and hands the order of that
+    /// merge to the level under it, which merges too: the levels that
+    /// write an operator are the trailing run of `UNION ALL`, and
+    /// `COMPOUND QUERY` stands where that run reaches the core on the
+    /// left.
+    ///
+    /// Answering `n` cores costs what those cores cost.
+    ///
+    /// # Errors
+    ///
+    /// Whatever a core refuses, and the words two cores of different
+    /// widths are refused with.
+    fn compounded(
+        &self,
+        arena: &Arena,
+        sql: &[u8],
+        scope: Scope<'_>,
+        held: (&[SelectId], &[Compound]),
+        sorted: bool,
+        out: &mut Vec<Answered>,
+    ) -> Result<(), Error> {
+        let (chain, operators) = held;
+        let run = if sorted {
+            0
+        } else {
+            operators
+                .iter()
+                .rev()
+                .take_while(|operator| **operator == Compound::UnionAll)
+                .count()
+        };
+        // How many cores the levels above that run answer, which is the
+        // core on the left alone where the run reaches it.
+        let merged = chain.len().saturating_sub(run);
+        let whole = run == operators.len();
+        if whole {
+            self.plan_under(b"COMPOUND QUERY".to_vec());
+            self.plan_under(b"LEFT-MOST SUBQUERY".to_vec());
+        }
+        for (at, id) in chain.iter().enumerate().take(merged) {
+            let joined = at.checked_sub(1).and_then(|at| operators.get(at)).copied();
+            self.cored(arena, sql, scope, (*id, joined), out)?;
+        }
+        if whole {
+            self.plan_over();
+        }
+        for (at, id) in chain.iter().enumerate().skip(merged) {
+            let joined = at
+                .checked_sub(1)
+                .and_then(|at| operators.get(at))
+                .copied()
+                .ok_or(Error::Unsupported)?;
+            self.plan_under(compound_named(joined));
+            self.cored(arena, sql, scope, (*id, Some(joined)), out)?;
+            self.plan_over();
+        }
+        Ok(())
+    }
+
+    /// Answers one core of a compound and keeps what it answered.
+    ///
+    /// Every core answers as many columns as the first, and the refusal
+    /// names the word that joins the one that does not to the core before
+    /// it.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the core refuses, and the words two cores of different
+    /// widths are refused with.
+    fn cored(
+        &self,
+        arena: &Arena,
+        sql: &[u8],
+        scope: Scope<'_>,
+        held: (SelectId, Option<Compound>),
+        out: &mut Vec<Answered>,
+    ) -> Result<(), Error> {
+        let (id, joined) = held;
+        let mine = self.core(arena, id, sql, false, scope)?;
+        let width = mine.answer.names.len();
+        if out
+            .first()
+            .is_some_and(|first: &Answered| first.answer.names.len() != width)
+        {
+            let values = arena.select(id).is_some_and(|core| !core.values.is_empty());
+            return Err(unjoined(joined, values));
+        }
+        out.push(mine);
+        Ok(())
     }
 
     /// The collation each column of a shape compares under, which is
@@ -4413,7 +4578,16 @@ impl<'a> Database<'a> {
         };
         if !select.values.is_empty() {
             let cursor = Cursor::new(self.collation(), self.encoding, reach);
-            return listed(arena, &select, sql, &cursor);
+            let answered = listed(arena, &select, sql, &cursor)?;
+            // A `VALUES` of several rows is named as the clause it is,
+            // and one of a single row as the one row a statement of no
+            // `FROM` answers.
+            let mut named = valued(arena, id);
+            if named.is_empty() {
+                named = b"CONSTANT ROW".to_vec();
+            }
+            self.plan_line(scanned(&named, b"", false));
+            return Ok(answered);
         }
         self.within_terms(arena, &select)?;
         let mut sides = self.sides(arena, &select, sql, scope)?;
@@ -4449,13 +4623,18 @@ impl<'a> Database<'a> {
         let calls = self.aggregated(arena, &select, sql, &sides)?;
         let overs = overs(arena, &select, sql, self.grouped)?;
         let alone = overs.is_empty();
-        let (gathered, held) = self.ordering(arena, &select, sql, (&mut sides, alone, &calls));
+        let (gathered, answered) = self.ordering(arena, &select, sql, (&mut sides, alone, &calls));
+        // The rows are sorted where the walk answers fewer terms of the
+        // `ORDER BY` than it holds, which is what `pSort->nOBSat` of
+        // `research/sqlite/src/select.c:1702` counts.
+        let terms = arena.orders(select.order).len();
+        let held = terms > 0 && answered >= terms;
         let smallest = self.described(
             arena,
             &select,
             sql,
             (&mut sides, &calls),
-            (gathered, held, alone),
+            (gathered, answered, alone),
         );
         // `EXPLAIN QUERY PLAN` names the plan of the statement and runs
         // no loop of it, so the walks are left where they stand and the
@@ -4520,12 +4699,10 @@ impl<'a> Database<'a> {
         select: &Select,
         sql: &[u8],
         held: (&mut [Side<'_>], bool, &[Call]),
-    ) -> (bool, bool) {
+    ) -> (bool, usize) {
         let (sides, alone, calls) = held;
-        let walked = alone
-            && calls.is_empty()
-            && select.group.is_empty()
-            && in_order(
+        let walked = if alone && calls.is_empty() && select.group.is_empty() {
+            in_order(
                 arena,
                 select,
                 sql,
@@ -4534,10 +4711,17 @@ impl<'a> Database<'a> {
                     format: self.schema_format(),
                     collating: self.collating,
                 },
-            );
+            )
+        } else {
+            0
+        };
         let gathered = alone && self.gathers(arena, select, sql, sides);
-        let held = walked || (alone && grouped_order(arena, select, sql, sides));
-        (gathered, held)
+        // The order of the groups answers every term of an `ORDER BY`
+        // that names them, so no term of it is left to sort by.
+        if walked == 0 && alone && grouped_order(arena, select, sql, sides) {
+            return (gathered, arena.orders(select.order).len());
+        }
+        (gathered, walked)
     }
 
     /// How many rows the walk of a statement answers before it stops,
@@ -4566,6 +4750,33 @@ impl<'a> Database<'a> {
         let cursor = Cursor::new(self.collation(), self.encoding, reach);
         let (skip, most) = bounds(arena, select, sql, &cursor)?;
         Ok(most.map(|most| skip.saturating_add(most)))
+    }
+
+    /// What a statement written inside a `FROM` answers.
+    ///
+    /// A `VALUES` of several rows stands for no plan of its own: the plan
+    /// names the clause where it names the side, which `%!S` of
+    /// `research/sqlite/src/printf.c:1024` writes, so the lines of such a
+    /// statement are left out.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the statement refuses.
+    fn sided(
+        &self,
+        arena: &Arena,
+        id: SelectId,
+        sql: &[u8],
+        scope: Scope<'_>,
+    ) -> Result<Answered, Error> {
+        let held = (!valued(arena, id).is_empty())
+            .then(|| self.planned.borrow_mut().take())
+            .flatten();
+        let answered = self.statement(arena, id, sql, scope);
+        if let Some(lines) = held {
+            *self.planned.borrow_mut() = Some(lines);
+        }
+        answered
     }
 
     /// The sides of a `FROM` clause, and how each attaches to the ones
@@ -4640,7 +4851,7 @@ impl<'a> Database<'a> {
                     }
                 }
                 SourceKind::Select(id) => {
-                    let answered = self.statement(arena, id, sql, scope)?;
+                    let answered = self.sided(arena, id, sql, scope)?;
                     (
                         answered.shape,
                         Source::Rows(answered.answer.rows),
@@ -4660,33 +4871,20 @@ impl<'a> Database<'a> {
                 .iter()
                 .map(|span| dequote(span.text(sql)))
                 .collect();
-            let using = if source.join.natural {
-                if source.on.is_some() || !written.is_empty() {
-                    return Err(Error::NaturalJoin);
-                }
-                // A `NATURAL` join matches by every name both sides
-                // hold, in the order the side read last holds them.
-                shape
-                    .columns
-                    .iter()
-                    .filter(|column| holds(&out, &column.name))
-                    .map(|column| column.name.clone())
-                    .collect()
-            } else {
-                for name in &written {
-                    if !holds(&out, name) || !shape.has(name) {
-                        return Err(Error::JoinColumn(name.clone()));
-                    }
-                }
-                written
-            };
-            // `sqlite3SelectExpand` names a statement written inside
-            // the `FROM` that carries no alias after the statement's
-            // own place, which is what stands in front of its columns
-            // where `full_column_names` is on.
-            let table = match source.kind {
-                SourceKind::Select(id) => subquery_named(id),
-                _ => name.clone(),
+            let using = matching(
+                written,
+                (&out, &shape),
+                source.join.natural,
+                source.on.is_some(),
+            )?;
+            // `sqlite3SelectExpand` names a statement written inside the
+            // `FROM` that carries no alias after the statement's own
+            // place, which is what stands in front of its columns where
+            // `full_column_names` is on; the plan names a `VALUES` of
+            // several rows as the clause it is.
+            let (table, clause) = match source.kind {
+                SourceKind::Select(id) => (subquery_named(id), valued(arena, id)),
+                _ => (name.clone(), Vec::new()),
             };
             out.push(Side {
                 shape,
@@ -4700,6 +4898,7 @@ impl<'a> Database<'a> {
                 plan: Plan::Rows(None, None),
                 pushed: Vec::new(),
                 covering: None,
+                valued: clause,
             });
         }
         rightward(arena, sql, &out)?;
@@ -4813,6 +5012,7 @@ impl<'a> Database<'a> {
                     plan: Plan::Rows(None, None),
                     pushed: Vec::new(),
                     covering: None,
+                    valued: Vec::new(),
                 };
                 let columns = side.shape.columns.clone();
                 let mut rows = Vec::new();
@@ -5570,10 +5770,10 @@ impl<'a> Database<'a> {
         select: &Select,
         sql: &[u8],
         over: (&mut [Side<'_>], &[Call]),
-        held: (bool, bool, bool),
+        held: (bool, usize, bool),
     ) -> Option<ExprId> {
         let (sides, calls) = over;
-        let (gathered, ordered, windowless) = held;
+        let (gathered, answered, windowless) = held;
         let smallest = windowless
             .then(|| self.smallest_side(arena, select, sql, sides, calls))
             .flatten();
@@ -5584,15 +5784,19 @@ impl<'a> Database<'a> {
         // walk answers, a bare `min` or `max` the walk answers the value
         // of, and a window function that reads the rows as the statement
         // left them each read that order.
-        let free =
-            windowless && !gathered && smallest.is_none() && (select.order.is_empty() || !ordered);
+        let free = windowless
+            && !gathered
+            && smallest.is_none()
+            && (select.order.is_empty() || answered == 0);
         covered(arena, select, sql, sides, free);
+        let terms = arena.orders(select.order).len();
         self.explain(
             sides,
             Sorting {
                 grouped: !select.group.is_empty() && !gathered,
                 distinct: select.distinct == Distinct::Distinct,
-                ordered: !select.order.is_empty() && !ordered,
+                ordered: terms.saturating_sub(answered),
+                terms,
             },
         );
         smallest
@@ -6875,6 +7079,7 @@ struct Settling {
 }
 
 /// One term of an `ORDER BY` over the one side.
+#[derive(Clone, Copy)]
 struct Termed {
     /// Which column of the table it names, and nothing for the rowid.
     place: Option<usize>,
@@ -6907,9 +7112,10 @@ fn in_order(
     sql: &[u8],
     sides: &mut [Side<'_>],
     settling: Settling,
-) -> bool {
-    let plan = match ordering(arena, select, sql, sides, settling) {
-        Ordering::Sorted => return false,
+) -> usize {
+    let (held, many) = ordering(arena, select, sql, sides, settling);
+    let plan = match held {
+        Ordering::Sorted => return 0,
         Ordering::Walked => None,
         Ordering::Index(plan) => Some(plan),
     };
@@ -6918,7 +7124,7 @@ fn in_order(
             side.plan = plan.clone();
         }
     }
-    true
+    many
 }
 
 /// Whether the walk of the one side answers the rows in the order the
@@ -7185,8 +7391,11 @@ struct Sorting {
     grouped: bool,
     /// Whether a `DISTINCT` keeps the rows that differ.
     distinct: bool,
-    /// Whether an `ORDER BY` sorts the rows the walk left.
-    ordered: bool,
+    /// How many terms of the `ORDER BY` the sorter takes, counting from
+    /// the last, and none where the walk answers every term.
+    ordered: usize,
+    /// How many terms the `ORDER BY` holds.
+    terms: usize,
 }
 
 /// One line of an `EXPLAIN QUERY PLAN`: which line it hangs under,
@@ -7204,7 +7413,7 @@ fn detailed(side: &Side<'_>, plan: &Plan, lines: &mut Vec<Explained>, parent: us
     // A side that reads what another statement answers names no index,
     // which is the `SCAN` `sqlite3SelectNew` writes for a co-routine.
     let Source::Table(stored) = &side.source else {
-        lines.push((parent, scanned(&side.name, b"", false)));
+        lines.push((parent, scanned(named_side(side), b"", false)));
         return;
     };
     // `sqlite3WhereExplainOneScan` says `COVERING` for a walk that
@@ -7270,6 +7479,76 @@ fn detailed(side: &Side<'_>, plan: &Plan, lines: &mut Vec<Explained>, parent: us
             }
         }
     }
+}
+
+/// `USE TEMP B-TREE FOR ORDER BY`, naming how many terms the sorter
+/// takes where the walk answers the terms in front of them.
+///
+/// `generateSortTail` of `research/sqlite/src/select.c:1702` writes the
+/// count where the sorter takes more than one term of an order the walk
+/// answers part of.
+fn sorted_by(taken: usize, terms: usize) -> Vec<u8> {
+    let mut held = b"USE TEMP B-TREE FOR ".to_vec();
+    if taken < terms {
+        if taken == 1 {
+            held.extend_from_slice(b"LAST TERM OF ");
+        } else {
+            held.extend_from_slice(b"LAST ");
+            held.extend_from_slice(&number::integer_text(
+                i64::try_from(taken).unwrap_or(i64::MAX),
+            ));
+            held.extend_from_slice(b" TERMS OF ");
+        }
+    }
+    held.extend_from_slice(b"ORDER BY");
+    held
+}
+
+/// The columns a `USING` or a `NATURAL` matches one side by, which are
+/// also the columns it does not answer a bare name with.
+///
+/// Reading the names costs O(n*m) in the columns of the side and the
+/// sides before it.
+fn matching(
+    written: Vec<Vec<u8>>,
+    held: (&[Side<'_>], &Shape),
+    natural: bool,
+    on: bool,
+) -> Result<Vec<Vec<u8>>, Error> {
+    let (sides, shape) = held;
+    if !natural {
+        for name in &written {
+            if !holds(sides, name) || !shape.has(name) {
+                return Err(Error::JoinColumn(name.clone()));
+            }
+        }
+        return Ok(written);
+    }
+    if on || !written.is_empty() {
+        return Err(Error::NaturalJoin);
+    }
+    // A `NATURAL` join matches by every name both sides hold, in the
+    // order the side read last holds them.
+    Ok(shape
+        .columns
+        .iter()
+        .filter(|column| holds(sides, &column.name))
+        .map(|column| column.name.clone())
+        .collect())
+}
+
+/// The name a plan writes one side under, which is `%S` of
+/// `research/sqlite/src/printf.c:999`: the alias, then the name of the
+/// table, and the statement's own place where the side carries neither.
+/// A `VALUES` of several rows stands in front of all three.
+fn named_side<'a>(side: &'a Side<'_>) -> &'a [u8] {
+    if !side.valued.is_empty() {
+        return &side.valued;
+    }
+    if side.name.is_empty() {
+        return &side.table;
+    }
+    &side.name
 }
 
 /// `SCAN t`, with the index the walk reads where `index` names one.
@@ -7367,30 +7646,42 @@ fn term_of(stored: &Stored, root: u32, at: usize, how: &[u8]) -> Vec<u8> {
     held
 }
 
-/// What the walk of the one side answers of the `ORDER BY`.
+/// What the walk of the one side answers of the `ORDER BY`, and how many
+/// terms of it, counting from the first.
+///
+/// `sqlite3WhereIsOrdered` counts the terms one loop answers and
+/// `pSort->nOBSat` of `research/sqlite/src/select.c:1702` leaves the
+/// sorter the terms after them, so a walk that answers the first term
+/// alone is taken and the rest are sorted by. Finding the longest run an
+/// index answers costs O(t) runs of [`placed`], each O(i*c) in the
+/// indexes of the table and their columns.
 fn ordering(
     arena: &Arena,
     select: &Select,
     sql: &[u8],
     sides: &[Side<'_>],
     settling: Settling,
-) -> Ordering {
+) -> (Ordering, usize) {
     let terms = arena.orders(select.order);
     let [side] = sides else {
-        return Ordering::Sorted;
+        return (Ordering::Sorted, 0);
     };
     let Source::Table(stored) = &side.source else {
-        return Ordering::Sorted;
+        return (Ordering::Sorted, 0);
     };
     if terms.is_empty() || stored.table.without_rowid {
-        return Ordering::Sorted;
+        return (Ordering::Sorted, 0);
     }
     let mut places: Vec<Termed> = Vec::new();
+    // A rowid stands once in the table, so the terms after one say
+    // nothing about the order the rows come in, which
+    // `sqlite3WhereIsOrdered` counts as the whole `ORDER BY` answered.
+    let mut whole = false;
     for term in terms {
         // A term whose nulls are put where the order does not put them
         // asks about another order.
         if term.nulls != crate::ast::Nulls::Unspecified {
-            return Ordering::Sorted;
+            break;
         }
         let descending = term.order == crate::ast::Order::Descending;
         let held = termed(
@@ -7403,18 +7694,28 @@ fn ordering(
             descending,
         );
         let Some(held) = held else {
-            return Ordering::Sorted;
+            break;
         };
-        let keyed = held.place.is_none();
+        whole = held.place.is_none();
         places.push(held);
-        // A rowid stands once in the table, so the terms after one say
-        // nothing about the order the rows come in, which
-        // `sqlite3WhereIsOrdered` counts as the whole `ORDER BY` answered.
-        if keyed {
+        if whole {
             break;
         }
     }
-    placed(side, stored, places, settling.format)
+    for many in (1..=places.len()).rev() {
+        let run: Vec<Termed> = places.iter().take(many).copied().collect();
+        let held = placed(side, stored, run, settling.format);
+        if matches!(held, Ordering::Sorted) {
+            continue;
+        }
+        let answered = if whole && many == places.len() {
+            terms.len()
+        } else {
+            many
+        };
+        return (held, answered);
+    }
+    (Ordering::Sorted, 0)
 }
 
 /// The value the one aggregate of a statement reads, and whether the

@@ -7888,6 +7888,40 @@ Unit tests of `crate::db` over `fixtures/indexed.db`.
 - `WHERE NULL` under an aggregate, which answers one row.
 - `WHERE abs(0)`, which is read against every row.
 
+### 6.6.411 The terms of an order a walk answers (`db-sqlite`)
+
+Unit tests of `crate::db` over `fixtures/indexed.db`, against the plan
+`EXPLAIN QUERY PLAN` names and the steps and the sorts each statement
+counts. Every answer is the one the C library's shell writes.
+
+- `ORDER BY q, +p` and `ORDER BY q DESC, p`, each answered to the first
+  term by the index over `q`, with one term left to the sorter.
+- `ORDER BY q, p, r`, with two terms left to the sorter.
+- `ORDER BY r, q`, answered to the first term by the index that holds `r`
+  backwards.
+- `ORDER BY q`, which the walk answers whole, and `ORDER BY +q, p`, which
+  it answers no term of.
+- The steps and the sorts of the two walks that answer one term of three.
+
+### 6.6.410 The tree of lines a plan answers (`db-sqlite`)
+
+Unit tests of `crate::db` over `fixtures/indexed.db`, drawn as
+`query_plan_graph` of the suite's `tester.tcl` draws the lines and their
+parents. Every answer is the one the C library's shell writes, but for
+the lines item 272 of document 16 records as missing.
+
+- `SELECT 1` and `VALUES(1)`, each the one row a statement of no `FROM`
+  answers.
+- `VALUES(1),(2)` and a `FROM` that reads one, named after the clause and
+  not after the alias.
+- A `UNION ALL` of two cores and of three, whose cores hang under the one
+  `COMPOUND QUERY`.
+- A statement written inside a `FROM` with an alias and without one.
+- A compound an `ORDER BY` reaches and one a `UNION` joins, whose cores
+  hang where the statement hangs.
+- The rows a `FROM` that reads a `VALUES` of several rows answers, which
+  no plan is named for.
+
 ### 6.6.409 The column a number in an order counts to (`db-sqlite`)
 
 Unit tests of `crate::db` over `fixtures/indexed.db` and
