@@ -139,3 +139,42 @@ fn which_column_a_term_of_the_order_by_counts_to() {
         "2nd ORDER BY term does not match any column in the result set"
     );
 }
+
+/// The cores of a compound are counted, and a compound whose last core
+/// is a `VALUES` is passed over, because the rows of a `VALUES` are
+/// cores of a compound in the C library and one core here.
+#[test]
+fn how_many_cores_one_compound_holds() {
+    let image = written();
+    let joined = |cores: usize, last: &str| {
+        let mut sql = String::from("SELECT 0");
+        for term in 1..cores {
+            sql.push_str(" UNION ALL ");
+            if term == cores.saturating_sub(1) {
+                sql.push_str(last);
+            } else {
+                sql.push_str("SELECT 0");
+            }
+        }
+        sql
+    };
+    let most = crate::parse::MAX_COMPOUND;
+    let database = Database::open(&image).expect("a database");
+    let answered = database
+        .query(joined(most, "SELECT 0").as_bytes())
+        .expect("an answer");
+    assert_eq!(answered.rows, alloc::vec![alloc::vec![Value::Int(0)]; most]);
+    assert_eq!(
+        refused(
+            &image,
+            joined(most.saturating_add(1), "SELECT 0").as_bytes()
+        ),
+        "too many terms in compound SELECT"
+    );
+    let over = joined(most.saturating_add(1), "VALUES(0)");
+    let answered = database.query(over.as_bytes()).expect("an answer");
+    assert_eq!(
+        answered.rows,
+        alloc::vec![alloc::vec![Value::Int(0)]; most.saturating_add(1)]
+    );
+}

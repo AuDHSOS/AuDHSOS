@@ -109,6 +109,14 @@ fn what_a_name_sqlite_keeps_and_a_key_that_counts_up_are_refused_with() {
             b"CREATE TABLE t9(a, PRIMARY KEY(a+1))",
             "expressions prohibited in PRIMARY KEY and UNIQUE constraints",
         ),
+        (
+            b"CREATE TABLE t9(a) WITHOUT oid",
+            "unknown table option: oid",
+        ),
+        (
+            b"CREATE TABLE t9(a) nonsense",
+            "unknown table option: nonsense",
+        ),
     ] {
         assert_eq!(refused(&mut writer, sql), message, "{sql:?}");
     }

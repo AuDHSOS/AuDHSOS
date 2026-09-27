@@ -4553,6 +4553,46 @@ impl Writer {
         })
     }
 
+    /// Raises where the name of a statement written `TEMP` carries a
+    /// schema the statement may not write it under.
+    ///
+    /// `sqlite3StartTable` of `research/sqlite/src/build.c:1231` refuses
+    /// a table and a view whose name carries a schema other than the
+    /// temp schema, after `sqlite3TwoPartName` has refused a schema the
+    /// connection does not hold; `sqlite3BeginTrigger` of
+    /// `research/sqlite/src/trigger.c:131` refuses a trigger whose name
+    /// carries any schema at all, before that.
+    ///
+    /// Reading the name costs O(1).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::QualifiedTemp`] for a table and a view under a schema the
+    /// connection holds, [`Error::NoSchema`] for one under a schema it
+    /// does not hold, and [`Error::QualifiedTrigger`] for a trigger.
+    fn qualified_temp(&self, definition: Definition, sql: &[u8]) -> Result<(), Error> {
+        let (temporary, schema, trigger) = match definition {
+            Definition::Table(made) => (made.temporary, made.schema, false),
+            Definition::View(made) => (made.temporary, made.schema, false),
+            Definition::Trigger(made) => (made.temporary, made.schema, true),
+            _ => return Ok(()),
+        };
+        let Some(span) = schema.filter(|_| temporary) else {
+            return Ok(());
+        };
+        if trigger {
+            return Err(Error::QualifiedTrigger);
+        }
+        let named = crate::schema::dequote(span.text(sql));
+        if named.eq_ignore_ascii_case(b"temp") {
+            return Ok(());
+        }
+        if self.holds_database(&named) {
+            return Err(Error::QualifiedTemp);
+        }
+        Err(Error::NoSchema(named))
+    }
+
     /// Whether the connection holds a database under `name`.
     fn holds_database(&self, name: &[u8]) -> bool {
         self.called.name.eq_ignore_ascii_case(name)
@@ -8212,6 +8252,7 @@ impl Writer {
     /// `CREATE TABLE`: a page for the tree of the table and a row of
     /// `sqlite_schema` that names it.
     fn define(&mut self, arena: &Arena, definition: Definition, sql: &[u8]) -> Result<(), Error> {
+        self.qualified_temp(definition, sql)?;
         let (kind, name, over, already, written, written_name) = match definition {
             Definition::Drop(asked) => return self.drop_object(&asked, sql),
             Definition::AddColumn(asked) => return self.add_column(arena, &asked, sql),
@@ -10024,9 +10065,10 @@ impl Writer {
             Some(_) if collation.is_some() => None,
             Some(named) if database.table(named).is_some() => Some(named.to_vec()),
             Some(named) => {
-                let kept = database
-                    .indexed(named)
-                    .ok_or_else(|| Error::NoTable(named.to_vec()))?;
+                // `sqlite3Reindex` of `research/sqlite/src/build.c:5640`
+                // names no object where the name is neither a collation,
+                // a table nor an index.
+                let kept = database.indexed(named).ok_or(Error::NoReindex)?;
                 return Ok(alloc::vec![Rebuilt {
                     index: kept.index.clone(),
                     root: kept.root,

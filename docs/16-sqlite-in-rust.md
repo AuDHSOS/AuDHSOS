@@ -1280,6 +1280,13 @@ Size: L.
      Built, which D-552 records.
 253. What an `IN` over an empty list answers, and what it reads. Built,
      which D-553 records.
+254. An `ON` or a `USING` with no join before it. Built, which D-554
+     records.
+255. The object a `REINDEX` names. Built, which D-555 records.
+256. The schema the name of a `TEMP` object carries. Built, which D-556
+     records.
+257. A word where a table's options stand. Built, which D-557 records.
+258. How many cores one compound holds. Built, which D-558 records.
 
 ### Done when
 
@@ -1289,8 +1296,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 123 555 cases in 844 files, 118 985
-pass, 2393 answer differently, and 2177 name something the engine
+under the `tclsh` of the machine. Of 123 550 cases in 844 files, 118 992
+pass, 2381 answer differently, and 2177 name something the engine
 refuses or a command that needs the C library's internals. The files
 that answer for tens of thousands of rows reach the five-minute
 deadline and are counted with the cases they ran by then. One run over

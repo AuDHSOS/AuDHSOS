@@ -4300,7 +4300,11 @@ fn what_reindex_refuses_and_what_it_passes_over() {
     // refusal, and a word written after the name is one too.
     assert_eq!(
         writer.run(b"REINDEX nosuch").err(),
-        Some(crate::db::Error::NoTable(b"nosuch".to_vec()))
+        Some(crate::db::Error::NoReindex)
+    );
+    assert_eq!(
+        writer.run(b"REINDEX nosuch").unwrap_err().message(),
+        "unable to identify the object to be reindexed"
     );
     assert!(crate::parse::reindex(b"REINDEX t junk").is_err());
     // A table with no index of its own is written again as it stands,

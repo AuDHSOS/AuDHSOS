@@ -663,6 +663,49 @@ fn what_a_transaction_over_more_than_one_database_writes() {
     writer.run(b"COMMIT").unwrap();
 }
 
+/// `temptable-1.5` of `test/temptable.test` and `trigger7-1.1` of
+/// `test/trigger7.test`: a `TEMP` table or view carries no schema other
+/// than `temp`, a `TEMP` trigger carries none at all, and a schema the
+/// connection does not hold is named as such where a table or a view
+/// carries it.
+#[test]
+fn what_schema_the_name_of_a_temp_object_carries() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t1(x, y)").unwrap();
+    for (sql, message) in [
+        (
+            b"CREATE TEMP TABLE main.t2(a)".as_slice(),
+            "temporary table name must be unqualified",
+        ),
+        (
+            b"CREATE TEMP VIEW main.v1 AS SELECT 1",
+            "temporary table name must be unqualified",
+        ),
+        (b"CREATE TEMP TABLE nosuch.t2(a)", "unknown database nosuch"),
+        (
+            b"CREATE TEMP TRIGGER temp.r1 AFTER INSERT ON t1 BEGIN SELECT 1; END",
+            "temporary trigger may not have qualified name",
+        ),
+        (
+            b"CREATE TEMP TRIGGER main.r1 AFTER INSERT ON t1 BEGIN SELECT 1; END",
+            "temporary trigger may not have qualified name",
+        ),
+        (
+            b"CREATE TRIGGER nosuch.r1 AFTER INSERT ON t1 BEGIN SELECT 1; END",
+            "unknown database nosuch",
+        ),
+    ] {
+        assert_eq!(refused(&mut writer, sql), message, "{sql:?}");
+    }
+    // The name a `TEMP` object may carry is `temp` itself.
+    for sql in [
+        b"CREATE TEMP TABLE temp.t2(a)".as_slice(),
+        b"CREATE TEMP VIEW temp.v1 AS SELECT 1",
+    ] {
+        writer.run(sql).unwrap();
+    }
+}
+
 /// `e_resolve-1.*` of `test/e_resolve.test`: a statement that names
 /// `main` writes the rows and the indexes of that database, whatever the
 /// temp schema holds under the same name, and a trigger name stands once

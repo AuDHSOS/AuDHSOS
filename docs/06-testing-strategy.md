@@ -7856,6 +7856,49 @@ Document 16 step Q8. Every answer is the one the C library's shell writes.
 - A `FROM` of 65 and of 100 sides, which are refused.
 - Two statements of 64 sides, one written inside the other, which stand.
 
+### 6.6.398 An `ON` or a `USING` with no join before it (`db-sqlite`)
+
+Unit tests of `crate::db`. Every answer is the one the C library's shell
+writes.
+
+- `FROM aa AS t ON b` and `FROM aa AS t USING(a)`: refused naming the
+  word.
+- The same over a source in parentheses and over a statement of a
+  `FROM`.
+- `ON b USING(a)` and `JOIN bb ON a=b USING(a)`: a syntax error at the
+  `USING`.
+
+### 6.6.399 A schema on the name of a `TEMP` object (`db-sqlite`)
+
+Unit tests of `crate::change`. Every answer is the one the C library's
+shell writes.
+
+- `CREATE TEMP TABLE main.t2` and `CREATE TEMP VIEW main.v1`: refused for
+  the schema.
+- `CREATE TEMP TABLE nosuch.t2`: refused for the database instead.
+- `CREATE TEMP TRIGGER temp.r1` and `CREATE TEMP TRIGGER main.r1`: both
+  refused for the schema.
+- `CREATE TRIGGER nosuch.r1`: refused for the database.
+- `CREATE TEMP TABLE temp.t2` and `CREATE TEMP VIEW temp.v1`, which
+  stand.
+
+### 6.6.400 A word where a table's options stand (`db-sqlite`)
+
+Unit tests of `crate::change`. Every answer is the one the C library's
+shell writes.
+
+- `WITHOUT oid`: refused naming the word.
+- A word alone after the columns, refused the same way.
+
+### 6.6.401 How many cores one compound holds (`db-sqlite`)
+
+Unit tests of `crate::db`. Every answer is the one the C library's shell
+writes.
+
+- A compound of 500 cores, which stands and answers 500 rows.
+- One of 501, which is refused.
+- One of 501 whose last core is a `VALUES`, which stands.
+
 ### 6.6.396 A `REFERENCES` of a column that points at two (`db-sqlite`)
 
 Unit tests of `crate::change`. Every answer is the one the C library's

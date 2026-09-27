@@ -7,6 +7,30 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` refuses a compound of more than 500 cores and passes over one
+  whose last core is a `VALUES`, whose rows are cores of a compound in the C
+  library and one core here. D-558 records it. Catalog 6.6.401. `select7.test`
+  goes from 23 cases passing to 24.
+
+- `db-sqlite` names the word where a table's options stand that is neither
+  `ROWID` after `WITHOUT` nor `STRICT`, rather than refusing it as a syntax
+  error. D-557 records it. Catalog 6.6.400. `tableopts.test` goes from 9 cases
+  passing to 10 and `without_rowid5.test` from 30 to 32.
+
+- `db-sqlite` refuses a `TEMP` table or view under a schema other than `temp`
+  and a `TEMP` trigger under any schema, and names a schema the connection holds
+  no database under first. D-556 records it. Catalog 6.6.399. `temptable.test`
+  goes from 60 cases passing to 61 and `trigger7.test` from 2 to 3.
+
+- `db-sqlite` refuses a `REINDEX` whose name is neither a collation, a table nor
+  an index as naming no object. D-555 records it. `reindex.test` goes from 29
+  cases passing to 30.
+
+- `db-sqlite` names the word where an `ON` or a `USING` stands with no join
+  before it, and refuses a second constraint on one source as a syntax error.
+  D-554 records it. Catalog 6.6.398. `tkt3935.test` goes from 6 cases passing to
+  10 and `join.test` from 177 to 178.
+
 - `db-sqlite` answers `expr IN ()` as false and `expr NOT IN ()` as true without
   reading what stands on the left, so an index over a statement there stands.
   D-553 records it. Catalog 6.6.397. `altertab3.test` goes from 89 cases passing

@@ -36,6 +36,16 @@ use crate::token::{Kind, Lexer, Token};
 /// tree next has a stack.
 pub const MAX_DEPTH: u32 = 200;
 
+/// How many cores one compound holds, which
+/// `SQLITE_MAX_COMPOUND_SELECT` of
+/// `research/sqlite/src/sqliteLimit.h:129` sets and
+/// `parserDoubleLinkSelect` of `research/sqlite/src/parse.y:562` counts
+/// against.
+///
+/// The parser reads the build's limit and not the one `sqlite3_limit`
+/// sets on a connection, as it does for [`MAX_DEPTH`].
+pub const MAX_COMPOUND: usize = 500;
+
 /// What the parser wanted where it stopped.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Expected {
@@ -88,6 +98,11 @@ pub enum Expected {
     /// A combination of words no join is written with, which is
     /// `unknown join type`.
     JoinType,
+    /// Nothing: an `ON` or a `USING` on the first table of a `FROM`,
+    /// which no join comes before, the truth telling the two apart.
+    JoinBefore(bool),
+    /// Nothing: a compound of more cores than [`MAX_COMPOUND`].
+    CompoundTerms,
     /// Nothing: an `ORDER BY` or a `LIMIT` written on a core of a
     /// compound other than the last, which the word it carries names,
     /// the truth telling the `ORDER BY` from the `LIMIT`.
@@ -145,7 +160,8 @@ pub enum Expected {
     Not,
     /// `CHECK`, after the name of an `ALTER TABLE ... ADD CONSTRAINT`.
     Constraint,
-    /// `WITHOUT ROWID` or `STRICT`, after a table's columns.
+    /// Nothing: a word that is neither `ROWID` after `WITHOUT` nor
+    /// `STRICT`, where a table's options stand.
     TableOption,
     /// A way of resolving a conflict, after `ON CONFLICT`.
     Conflict,
@@ -293,6 +309,12 @@ impl<'a> Parser<'a> {
         while let Some(operator) = self.compound_operator() {
             operators.push(operator);
             cores.push(self.select_core()?);
+        }
+        // `parserDoubleLinkSelect` counts the cores of a compound and
+        // passes over one whose last core is a `VALUES`, whose rows are
+        // cores of a compound there and one core here.
+        if cores.len() > MAX_COMPOUND && cores.last().is_some_and(|core| core.values.is_empty()) {
+            return Err(self.error(self.peek(), Expected::CompoundTerms));
         }
         // `VALUES` is a core and not a statement of its own, so nothing
         // of the whole may follow one: `oneselect` carries the
@@ -513,7 +535,19 @@ impl<'a> Parser<'a> {
     /// The tables of a `FROM` clause, with the joins between them.
     fn tables(&mut self) -> Result<Range, Error> {
         let mut sources = Vec::new();
-        sources.push(self.source(Join::default())?);
+        let first = self.source(Join::default())?;
+        // `sqlite3SrcListAppendFromTerm` of
+        // `research/sqlite/src/build.c:5079` refuses an `ON` or a `USING`
+        // on the first table of the clause, which no join comes before.
+        if first.on.is_some() || !first.using.is_empty() {
+            let token = self.peek();
+            return Err(Error {
+                at: token.map_or(self.end, |token| token.start),
+                len: token.map_or(0, |token| token.len),
+                expected: Expected::JoinBefore(first.on.is_some()),
+            });
+        }
+        sources.push(first);
         while let Some(join) = self.join_operator()? {
             sources.push(self.source(join)?);
         }
@@ -653,6 +687,14 @@ impl<'a> Parser<'a> {
             }
             self.expect(Kind::Rp, Expected::CloseParen)?;
             using = self.arena.push_names(&names);
+        }
+        // `on_using` of `research/sqlite/src/parse.y:892` takes one `ON`
+        // or one `USING`, so a second one is where the parse stops.
+        if let Some(token) = self
+            .peek()
+            .filter(|token| matches!(token.kind, Kind::Keyword(Keyword::On | Keyword::Using)))
+        {
+            return Err(self.error(Some(token), Expected::Eof));
         }
         Ok(Source {
             kind,

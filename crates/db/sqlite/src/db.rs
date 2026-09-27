@@ -215,6 +215,14 @@ pub enum Error {
     ExplicitNulls(bool),
     /// A combination of words no join is written with.
     JoinType(Vec<u8>),
+    /// An `ON` or a `USING` on the first table of a `FROM`, the truth
+    /// telling the two apart.
+    JoinBefore(bool),
+    /// A compound of more cores than the build takes.
+    CompoundTerms,
+    /// A word that is neither `ROWID` after `WITHOUT` nor `STRICT`,
+    /// where a table's options stand.
+    TableOption(Vec<u8>),
     /// An `ON` of an outer join that names a table read after it.
     Rightward,
     /// A trigger that carries a variable.
@@ -346,6 +354,13 @@ pub enum Error {
     TableColumns(Vec<u8>),
     /// An `ORDER BY` written with more terms than the connection's limit.
     OrderTerms,
+    /// A `REINDEX` naming an object the schema holds under no kind.
+    NoReindex,
+    /// A `CREATE TEMP TABLE` or a `CREATE TEMP VIEW` whose name carries a
+    /// schema other than the temp schema.
+    QualifiedTemp,
+    /// A `CREATE TEMP TRIGGER` whose name carries a schema.
+    QualifiedTrigger,
     /// An index written with more columns than the connection's limit.
     IndexColumns,
     /// A `VACUUM` on a connection with a transaction open.
@@ -569,6 +584,9 @@ impl Error {
                 if *ordered { "ORDER BY" } else { "LIMIT" },
                 shown(&compound_named(*operator))
             ),
+            Error::CompoundTerms => {
+                alloc::string::String::from("too many terms in compound SELECT")
+            }
             _ => return None,
         })
     }
@@ -609,9 +627,10 @@ impl Error {
         })
     }
 
-    /// The words a definition is refused with, from a name SQLite keeps
-    /// for itself to a key that counts up where no key of the table does,
-    /// or nothing where the refusal is another.
+    /// The words a definition, and a `REINDEX` over one, are refused
+    /// with, from a name SQLite keeps for itself to a key that counts up
+    /// where no key of the table does, or nothing where the refusal is
+    /// another.
     fn defining(&self) -> Option<alloc::string::String> {
         let shown = |bytes: &[u8]| alloc::string::String::from_utf8_lossy(bytes).into_owned();
         Some(match self {
@@ -672,6 +691,18 @@ impl Error {
             ),
             Error::Schema(schema::Error::AutoincrementWithoutRowid) => {
                 alloc::string::String::from("AUTOINCREMENT not allowed on WITHOUT ROWID tables")
+            }
+            Error::TableOption(word) => {
+                alloc::format!("unknown table option: {}", shown(word))
+            }
+            Error::NoReindex => {
+                alloc::string::String::from("unable to identify the object to be reindexed")
+            }
+            Error::QualifiedTemp => {
+                alloc::string::String::from("temporary table name must be unqualified")
+            }
+            Error::QualifiedTrigger => {
+                alloc::string::String::from("temporary trigger may not have qualified name")
             }
             _ => return None,
         })
@@ -739,6 +770,10 @@ impl Error {
             Error::JoinType(words) => {
                 alloc::format!("unknown join type: {}", shown(words))
             }
+            Error::JoinBefore(on) => alloc::format!(
+                "a JOIN clause is required before {}",
+                if *on { "ON" } else { "USING" }
+            ),
             Error::Rightward => {
                 alloc::string::String::from("ON clause references tables to its right")
             }
@@ -1220,6 +1255,15 @@ impl Error {
         if error.expected == parse::Expected::JoinType {
             return Error::JoinType(held.unwrap_or_default().to_vec());
         }
+        if let parse::Expected::JoinBefore(on) = error.expected {
+            return Error::JoinBefore(on);
+        }
+        if error.expected == parse::Expected::CompoundTerms {
+            return Error::CompoundTerms;
+        }
+        if error.expected == parse::Expected::TableOption {
+            return Error::TableOption(held.unwrap_or_default().to_vec());
+        }
         if let parse::Expected::BeforeCompound(ordered, operator) = error.expected {
             return Error::BeforeCompound(ordered, operator);
         }
@@ -1595,7 +1639,7 @@ impl Limit {
             Limit::Length | Limit::SqlLength => 1_000_000_000,
             Limit::Column => 2000,
             Limit::ExprDepth => i64::from(crate::parse::MAX_DEPTH),
-            Limit::CompoundSelect => 500,
+            Limit::CompoundSelect => i64::try_from(crate::parse::MAX_COMPOUND).unwrap_or(0),
             Limit::VdbeOp => 250_000_000,
             Limit::FunctionArg | Limit::TriggerDepth | Limit::ParserDepth => 1000,
             Limit::AttachedDatabases => i64::try_from(ATTACHED).unwrap_or(0),

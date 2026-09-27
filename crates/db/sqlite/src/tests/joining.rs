@@ -119,6 +119,48 @@ fn what_words_a_join_is_written_with() {
     }
 }
 
+/// An `ON` or a `USING` on the first source of a `FROM` is refused
+/// naming the word, and a second constraint on one join is a syntax
+/// error, which the grammar of `research/sqlite/src/parse.y:892` makes
+/// of it: `on_using` takes one `ON` or one `USING`.
+#[test]
+fn what_an_on_or_a_using_without_a_join_is_refused_with() {
+    let image = three();
+    let database = Database::open(&image).expect("a database");
+    for (sql, message) in [
+        (
+            "SELECT * FROM aa AS t ON b",
+            "a JOIN clause is required before ON",
+        ),
+        (
+            "SELECT * FROM aa AS t USING(a)",
+            "a JOIN clause is required before USING",
+        ),
+        (
+            "SELECT * FROM (aa) AS t ON b",
+            "a JOIN clause is required before ON",
+        ),
+        (
+            "SELECT * FROM (SELECT * FROM aa) AS t ON b",
+            "a JOIN clause is required before ON",
+        ),
+        (
+            "SELECT * FROM aa AS t ON b USING(a)",
+            "near \"USING\": syntax error",
+        ),
+        (
+            "SELECT * FROM aa JOIN bb ON a=b USING(a)",
+            "near \"USING\": syntax error",
+        ),
+    ] {
+        assert_eq!(
+            database.query(sql.as_bytes()).unwrap_err().message(),
+            message,
+            "{sql}"
+        );
+    }
+}
+
 /// An `ON` of an outer join that names a table read after it is
 /// refused, which the walk of `select.c` does; an inner join carries no
 /// such mark, its `ON` being read as a `WHERE`.
