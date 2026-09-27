@@ -207,7 +207,15 @@ fn what_a_statement_says_that_makes_it_no_table() {
     );
     assert_eq!(
         build("CREATE TABLE t(x, y AS (1) NONSENSE)"),
-        Err(Error::GeneratedWord)
+        Err(Error::GeneratedColumn(b"y".to_vec()))
+    );
+    assert_eq!(
+        build("CREATE TABLE t(x, y DEFAULT 1 AS (2))"),
+        Err(Error::GeneratedColumn(b"y".to_vec()))
+    );
+    assert_eq!(
+        build("CREATE TABLE t(x, y AS (2) DEFAULT 1)"),
+        Err(Error::DefaultGenerated)
     );
     assert_eq!(build("CREATE TABLE t(x AS (1))"), Err(Error::AllGenerated));
     assert_eq!(

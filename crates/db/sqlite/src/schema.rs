@@ -41,9 +41,12 @@ pub enum Error {
     /// A `likelihood` whose second argument is not a real between
     /// nought and one.
     Likelihood,
-    /// The word after a generated column's expression is neither
-    /// `STORED` nor `VIRTUAL`.
-    GeneratedWord,
+    /// A generated column the statement cannot describe: the word after
+    /// its expression is neither `STORED` nor `VIRTUAL`, or a `DEFAULT`
+    /// stands in front of the expression. The name is of the column.
+    GeneratedColumn(Vec<u8>),
+    /// A `DEFAULT` written after a generated column's expression.
+    DefaultGenerated,
     /// Every column is generated, so there is nothing to store.
     AllGenerated,
     /// A generated column in the primary key.
@@ -921,6 +924,13 @@ pub fn table(
                         .ok_or_else(|| Error::NoCollation(named.clone()))?;
                 }
                 ColumnConstraint::Default { value, text } => {
+                    // `sqlite3AddDefaultValue` of
+                    // `research/sqlite/src/build.c:1749` refuses a
+                    // `DEFAULT` on a column the statement already said is
+                    // computed.
+                    if column.computed.is_some() {
+                        return Err(Error::DefaultGenerated);
+                    }
                     column.default = Some(text.text(sql).to_vec());
                     column.falls_back = Some(value);
                 }
@@ -940,7 +950,16 @@ pub fn table(
                     ));
                 }
                 ColumnConstraint::Generated { value, kind } => {
-                    column.generated = generated_kind(kind, sql)?;
+                    // `sqlite3AddGenerated` of
+                    // `research/sqlite/src/build.c:1985` refuses a column
+                    // that carries a `DEFAULT` already, and a word after
+                    // the expression that names neither kind, by the name
+                    // of the column.
+                    let named = || Error::GeneratedColumn(column.name.clone());
+                    if column.default.is_some() {
+                        return Err(named());
+                    }
+                    column.generated = generated_kind(kind, sql).ok_or_else(named)?;
                     column.computed = Some(value);
                 }
                 ColumnConstraint::References(foreign) => {
@@ -1111,18 +1130,19 @@ pub fn table(
     Ok(table)
 }
 
-/// Which of `STORED` and `VIRTUAL` was written, and nothing else.
-fn generated_kind(kind: Option<Span>, sql: &[u8]) -> Result<Generated, Error> {
+/// Which of `STORED` and `VIRTUAL` was written, and nothing for a word
+/// that is neither.
+fn generated_kind(kind: Option<Span>, sql: &[u8]) -> Option<Generated> {
     let Some(word) = kind else {
-        return Ok(Generated::Virtual);
+        return Some(Generated::Virtual);
     };
     let word = dequote(word.text(sql));
     if word.eq_ignore_ascii_case(b"stored") {
-        Ok(Generated::Stored)
+        Some(Generated::Stored)
     } else if word.eq_ignore_ascii_case(b"virtual") {
-        Ok(Generated::Virtual)
+        Some(Generated::Virtual)
     } else {
-        Err(Error::GeneratedWord)
+        None
     }
 }
 
@@ -1259,6 +1279,104 @@ pub(crate) fn resolves(
         resolves(arena, id, table, sql, reading)?;
     }
     Ok(())
+}
+
+/// The generated column a `CREATE TABLE` writes out that is computed
+/// from itself, through the other columns computed like it, and nothing
+/// where no column of the statement is.
+///
+/// `sqlite3ExprCodeGetColumnOfTable` of `research/sqlite/src/expr.c:4449`
+/// marks a virtual column while it works the column out and refuses one
+/// it reaches again, naming it, so the walk follows a virtual column into
+/// a virtual column and stops at a stored one, whose value the row holds.
+/// The walk starts at the last column the statement wrote, which is the
+/// order the refusal names a column of two cycles in.
+///
+/// Reading the names costs O(n) in the nodes of the expressions and the
+/// walk O(n + e) in the columns and the names they hold.
+pub(crate) fn generated_loop(table: &Table, arena: &Arena, sql: &[u8]) -> Option<Vec<u8>> {
+    // What the walk has read of a column: nothing, that it stands on the
+    // walk, or that no cycle is under it.
+    const UNREAD: u8 = 0;
+    const READING: u8 = 1;
+    const READ: u8 = 2;
+    let held: Vec<(Vec<u8>, Option<ExprId>)> = table
+        .columns
+        .iter()
+        .map(|column| {
+            (
+                column.name.clone(),
+                // A stored column holds its value in the row, so the walk
+                // stops at one.
+                column
+                    .computed
+                    .filter(|_| column.generated == Generated::Virtual),
+            )
+        })
+        .collect();
+    let edges: Vec<Vec<usize>> = held
+        .iter()
+        .map(|(_, computed)| {
+            let mut out = Vec::new();
+            if let Some(id) = computed {
+                named_columns(arena, *id, &held, sql, &mut out);
+            }
+            out
+        })
+        .collect();
+    let mut state = alloc::vec![UNREAD; edges.len()];
+    let mark = |state: &mut Vec<u8>, at: usize, value: u8| {
+        for slot in state.iter_mut().skip(at).take(1) {
+            *slot = value;
+        }
+    };
+    for start in (0..edges.len()).rev() {
+        if state.get(start).copied().unwrap_or(READ) != UNREAD {
+            continue;
+        }
+        mark(&mut state, start, READING);
+        let mut stack = alloc::vec![(start, 0_usize)];
+        while let Some((at, step)) = stack.pop() {
+            let Some(next) = edges.get(at).and_then(|held| held.get(step)).copied() else {
+                mark(&mut state, at, READ);
+                continue;
+            };
+            stack.push((at, step.saturating_add(1)));
+            match state.get(next).copied().unwrap_or(READ) {
+                READING => return held.get(next).map(|(name, _)| name.clone()),
+                READ => {}
+                _ => {
+                    mark(&mut state, next, READING);
+                    stack.push((next, 0));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Where the columns an expression names stand, counting only the ones
+/// computed the same way.
+fn named_columns(
+    arena: &Arena,
+    id: ExprId,
+    held: &[(Vec<u8>, Option<ExprId>)],
+    sql: &[u8],
+    out: &mut Vec<usize>,
+) {
+    let node = arena.node(id).unwrap_or(Node::Literal(Literal::Null));
+    if let Node::Column { column, .. } = node {
+        let name = dequote(column.text(sql));
+        let at = held
+            .iter()
+            .position(|(held, computed)| computed.is_some() && held.eq_ignore_ascii_case(&name));
+        out.extend(at);
+    }
+    let mut under = Vec::new();
+    arena.under(node, |id| under.push(id));
+    for id in under {
+        named_columns(arena, id, held, sql, out);
+    }
 }
 
 /// Where a name stands among the columns.

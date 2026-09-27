@@ -282,9 +282,9 @@ pub enum Error {
     /// A `*` over two tables of one name, every column of which two
     /// tables would answer.
     Ambiguous,
-    /// A computed column that names itself, or names a column no table
-    /// has.
-    Computed,
+    /// A computed column that is computed from itself, through the other
+    /// columns computed like it, which the name is of.
+    Computed(Vec<u8>),
     /// A `WITH` term that writes more or fewer column names than its
     /// statement answers columns, with the name of the term, how many
     /// values its statement answers and how many names it wrote.
@@ -719,6 +719,21 @@ impl Error {
             }
             Error::OverGenerated(column) => {
                 alloc::format!("cannot UPDATE generated column \"{}\"", shown(column))
+            }
+            Error::Computed(column) => {
+                alloc::format!("generated column loop on \"{}\"", shown(column))
+            }
+            Error::Schema(schema::Error::GeneratedColumn(column)) => {
+                alloc::format!("error in generated column \"{}\"", shown(column))
+            }
+            Error::Schema(schema::Error::DefaultGenerated) => {
+                alloc::string::String::from("cannot use DEFAULT on a generated column")
+            }
+            Error::Schema(schema::Error::AllGenerated) => {
+                alloc::string::String::from("must have at least one non-generated column")
+            }
+            Error::Schema(schema::Error::GeneratedKey) => {
+                alloc::string::String::from("generated columns cannot be part of the PRIMARY KEY")
             }
             _ => return None,
         })
@@ -3298,7 +3313,9 @@ impl<'a> Database<'a> {
             // A column whose expression refuses the row itself refuses
             // the statement, and one this row cannot answer keeps the
             // value it was given.
-            Err(error @ Error::Eval(eval::Error::NotPure(..))) => return Err(error),
+            Err(error @ (Error::Eval(eval::Error::NotPure(..)) | Error::Computed(_))) => {
+                return Err(error);
+            }
             Err(_) => return Ok(()),
         };
         for (slot, value) in values.iter_mut().zip(held) {
@@ -11058,13 +11075,24 @@ fn compute(
         }
     }
     if values.iter().any(Option::is_none) {
+        // `sqlite3ComputeGeneratedColumns` of
+        // `research/sqlite/src/insert.c:378` names the last column the
+        // passes left unsettled, which is the last one of the circle the
+        // statement wrote.
+        let mut named: &[u8] = &[];
+        for (at, column) in table.columns.iter().enumerate() {
+            if values.get(at).is_some_and(Option::is_none) {
+                named = &column.name;
+            }
+        }
+        let named = named.to_vec();
         // A column that names another the passes never settle names
         // itself, which is what no pass answers a column for; every
         // other refusal is the one the C library answers where it reads
         // the statement, a function the connection was not told among
         // them.
         return Err(match refused {
-            None | Some(eval::Error::NoColumn(_)) => Error::Computed,
+            None | Some(eval::Error::NoColumn(_)) => Error::Computed(named),
             Some(error) => error.into(),
         });
     }

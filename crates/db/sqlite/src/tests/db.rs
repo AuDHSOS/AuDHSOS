@@ -261,7 +261,7 @@ fn a_computed_column_that_cannot_be_computed_is_refused() {
     let database = Database::open(&file).unwrap();
     assert_eq!(
         database.query(b"SELECT * FROM a").unwrap_err(),
-        Error::Computed
+        Error::Computed(b"u".to_vec())
     );
     // A column that names what the table does not hold is refused where
     // the reader reads the statement, so no row is reached.

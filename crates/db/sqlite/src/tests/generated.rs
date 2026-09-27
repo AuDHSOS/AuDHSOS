@@ -139,3 +139,107 @@ fn what_columns_a_statement_writes_a_value_into() {
         "cannot UPDATE generated column \"b\""
     );
 }
+
+/// Columns computed from each other in a circle are refused naming the
+/// last of the circle the statement wrote: the statement itself where
+/// every column of the circle is computed on reading, and the write
+/// where one of them is written down.
+#[test]
+fn what_columns_computed_from_each_other_are_refused_with() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    for (sql, message) in [
+        (
+            b"CREATE TABLE c1(a, b AS (b+1))".as_slice(),
+            "generated column loop on \"b\"",
+        ),
+        (
+            b"CREATE TABLE c1(a, b AS (c), c AS (d), d AS (b))",
+            "generated column loop on \"d\"",
+        ),
+        (
+            b"CREATE TABLE c1(a, d AS (b), c AS (d), b AS (c))",
+            "generated column loop on \"b\"",
+        ),
+        (
+            b"CREATE TABLE c1(a, b AS (c), c AS (b), z AS (a))",
+            "generated column loop on \"c\"",
+        ),
+        (
+            b"CREATE TABLE c1(a, x AS (y), y AS (z), z AS (y))",
+            "generated column loop on \"z\"",
+        ),
+        (
+            b"CREATE TABLE c1(a, m AS (n), n AS (m), p AS (q), q AS (p))",
+            "generated column loop on \"q\"",
+        ),
+    ] {
+        assert_eq!(writer.run(sql).unwrap_err().message(), message, "{sql:?}");
+    }
+    // A column written down breaks the circle the statement is read for,
+    // and the write is refused instead.
+    for sql in [
+        b"CREATE TABLE c2(a, b AS (b+1) STORED)".as_slice(),
+        b"CREATE TABLE c3(a, b AS (c) STORED, c AS (b))",
+        b"CREATE TABLE c4(a, b AS (c+1), c AS (a+1))",
+        b"CREATE TABLE c5(a, b AS (a+1), c AS (b+1))",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    for (sql, message) in [
+        (
+            b"INSERT INTO c2 VALUES(1)".as_slice(),
+            "generated column loop on \"b\"",
+        ),
+        (
+            b"INSERT INTO c3 VALUES(1)",
+            "generated column loop on \"c\"",
+        ),
+    ] {
+        assert_eq!(writer.run(sql).unwrap_err().message(), message, "{sql:?}");
+    }
+    for sql in [
+        b"INSERT INTO c4 VALUES(1)".as_slice(),
+        b"INSERT INTO c5 VALUES(1)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    assert_eq!(shown(&writer, b"SELECT a,b,c FROM c4"), "1|3|2|");
+    assert_eq!(shown(&writer, b"SELECT a,b,c FROM c5"), "1|2|3|");
+}
+
+/// What a statement that describes a generated column wrongly is
+/// refused with: a table of nothing but generated columns, a word after
+/// the expression that names neither kind, a `DEFAULT` on either side of
+/// the expression, and a generated column in the primary key.
+#[test]
+fn what_a_statement_that_describes_a_generated_column_wrongly_is_refused_with() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    for (sql, message) in [
+        (
+            b"CREATE TABLE g1(x AS (1))".as_slice(),
+            "must have at least one non-generated column",
+        ),
+        (
+            b"CREATE TABLE g2(a, x AS (1) BOGUS)",
+            "error in generated column \"x\"",
+        ),
+        (
+            b"CREATE TABLE g3(a, x DEFAULT 1 AS (2))",
+            "error in generated column \"x\"",
+        ),
+        (
+            b"CREATE TABLE g4(a, x AS (2) DEFAULT 1)",
+            "cannot use DEFAULT on a generated column",
+        ),
+        (
+            b"CREATE TABLE g5(a, x PRIMARY KEY AS (2))",
+            "generated columns cannot be part of the PRIMARY KEY",
+        ),
+        (
+            b"CREATE TABLE g6(a, x AS (2) PRIMARY KEY)",
+            "generated columns cannot be part of the PRIMARY KEY",
+        ),
+    ] {
+        assert_eq!(writer.run(sql).unwrap_err().message(), message, "{sql:?}");
+    }
+}

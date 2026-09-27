@@ -8574,6 +8574,14 @@ impl Writer {
             return Ok(false);
         };
         let table = crate::schema::table(arena, &written, sql, self.collating)?;
+        // `sqlite3ExprCodeGetColumnOfTable` of
+        // `research/sqlite/src/expr.c:4449` refuses a virtual column it
+        // reaches again while it works the column out, so a statement
+        // whose virtual columns are computed from each other in a circle
+        // is refused, after everything reading the statement refuses.
+        if let Some(named) = crate::schema::generated_loop(&table, arena, sql) {
+            return Err(Error::Computed(named));
+        }
         for at in 0..table.keys.len() {
             self.own_index(&table, at)?;
         }

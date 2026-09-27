@@ -7856,6 +7856,34 @@ Document 16 step Q8. Every answer is the one the C library's shell writes.
 - A `FROM` of 65 and of 100 sides, which are refused.
 - Two statements of 64 sides, one written inside the other, which stand.
 
+### 6.6.402 Generated columns computed from each other (`db-sqlite`)
+
+Unit tests of `crate::change`. Every answer is the one the C library's
+shell writes.
+
+- Six statements whose virtual columns are computed from each other in a
+  circle, each refused naming the last column of the circle: a column
+  computed from itself, a circle of three in either order, a circle
+  beside a column outside it, a circle reached from outside, and two
+  circles.
+- Three statements that stand: one whose circle holds a stored column,
+  and two chains of columns computed from each other in either
+  direction.
+- The writes into the first two, refused naming the same column, and the
+  writes into the chains, which stand.
+
+### 6.6.403 A generated column described wrongly (`db-sqlite`)
+
+Unit tests of `crate::change`. Every answer is the one the C library's
+shell writes.
+
+- A table of nothing but generated columns.
+- A word after the expression that names neither kind.
+- A `DEFAULT` in front of the expression and one after it, which carry
+  two different messages.
+- A generated column in the primary key, written before and after the
+  expression.
+
 ### 6.6.398 An `ON` or a `USING` with no join before it (`db-sqlite`)
 
 Unit tests of `crate::db`. Every answer is the one the C library's shell

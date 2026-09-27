@@ -7,6 +7,18 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` carries the words the C library refuses a generated column
+  described wrongly with: a table of nothing but generated columns, a word
+  after the expression that names neither kind, a `DEFAULT` on either side of
+  the expression, and a generated column in the primary key. D-560 records it.
+  Catalog 6.6.403.
+
+- `db-sqlite` refuses generated columns computed from each other in a circle,
+  naming the last column of the circle: the statement where every column of
+  the circle is computed on reading, and the write where one of them is
+  written down. D-559 records it. Catalog 6.6.402. `gencol1.test` goes from
+  158 cases passing to 159.
+
 - `db-sqlite` refuses a compound of more than 500 cores and passes over one
   whose last core is a `VALUES`, whose rows are cores of a compound in the C
   library and one core here. D-558 records it. Catalog 6.6.401. `select7.test`

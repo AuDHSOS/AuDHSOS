@@ -1287,6 +1287,10 @@ Size: L.
      records.
 257. A word where a table's options stand. Built, which D-557 records.
 258. How many cores one compound holds. Built, which D-558 records.
+259. Generated columns computed from each other in a circle. Built, which
+     D-559 records.
+260. The words a generated column described wrongly is refused with.
+     Built, which D-560 records.
 
 ### Done when
 
@@ -1296,8 +1300,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 123 550 cases in 844 files, 118 992
-pass, 2381 answer differently, and 2177 name something the engine
+under the `tclsh` of the machine. Of 123 555 cases in 844 files, 118 998
+pass, 2380 answer differently, and 2177 name something the engine
 refuses or a command that needs the C library's internals. The files
 that answer for tens of thousands of rows reach the five-minute
 deadline and are counted with the cases they ran by then. One run over
