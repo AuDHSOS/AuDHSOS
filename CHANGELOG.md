@@ -7,6 +7,22 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` holds the key of an index to the value the affinity of the column leaves of
+  the term's value, where it left the index alone unless the conversion answered the value
+  itself, so a number against a column of text affinity and text against one of integer
+  affinity each hold the walk. D-600 records it. Catalog 6.6.431.
+
+- `db-sqlite` ends the key of an index at a term that holds the rowid, every entry of an
+  index over a table that keeps a rowid ending with it. D-599 records it. Catalog 6.6.431.
+  `indexedby.test` goes from 57 cases passing to 59.
+
+- `db-sqlite` reads no index of a table a statement writes `NOT INDEXED` after and only
+  the index `INDEXED BY` names, which it reads whole where no term names a key of it,
+  where it read the clause only to refuse a name the table does not hold. A partial index
+  the clause names answers the rows of a statement holding every term of the index's
+  `WHERE`, and `no query solution` refuses one that holds them not. D-598 records it.
+  Catalog 6.6.430. `indexedby.test` goes from 50 cases passing to 57.
+
 - `db-sqlite` holds a branch of a top-level `OR` to a key a side the walk reads before it
   answers, one key per row of that side, where it read such a branch out of the whole
   table, and an `OR` written in an `ON` names the branches as a `WHERE` does. D-597

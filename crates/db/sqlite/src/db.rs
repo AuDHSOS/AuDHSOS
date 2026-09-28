@@ -155,6 +155,9 @@ pub enum Error {
     /// A `DROP` of a name the schema holds no such object under, with
     /// the word for what it makes and the name.
     NoObject(Vec<u8>, Vec<u8>),
+    /// A statement whose `INDEXED BY` names an index no walk of it can
+    /// read, which is `no query solution`.
+    NoSolution,
     /// A statement the parser stopped in, with the token it stopped at,
     /// which is `near \"%T\": syntax error`.
     Syntax(Vec<u8>),
@@ -887,6 +890,7 @@ impl Error {
                 alloc::format!("table {} may not be modified", shown(name))
             }
             Error::LockedTable => alloc::string::String::from(errstr(6)),
+            Error::NoSolution => alloc::string::String::from("no query solution"),
             Error::ReadOnlyDatabase => alloc::string::String::from(errstr(8)),
             Error::ViewVariable => {
                 alloc::string::String::from("parameters are not allowed in views")
@@ -1364,6 +1368,25 @@ struct Stored {
     keyed: Option<Kept>,
 }
 
+/// Which indexes of the table the side lets the walk read, which is every
+/// index of a side that writes neither clause and of a side that reads
+/// what a statement answers.
+///
+/// Reading the clause costs O(n) in the bytes of the name.
+fn indexing(kind: crate::ast::SourceKind, sql: &[u8]) -> Indexing {
+    let crate::ast::SourceKind::Table { indexed, .. } = kind else {
+        return Indexing::Any;
+    };
+    match indexed {
+        crate::ast::Indexed::Unspecified => Indexing::Any,
+        crate::ast::Indexed::Not => Indexing::None,
+        crate::ast::Indexed::By(span) => Indexing::By {
+            name: dequote(span.text(sql)),
+            implied: false,
+        },
+    }
+}
+
 /// Raises where `INDEXED BY name` names an index the table does not
 /// hold.
 ///
@@ -1807,6 +1830,41 @@ struct Reach<'a> {
     filter: Option<ExprId>,
 }
 
+/// Which indexes of a table a walk of it may read, which `INDEXED BY`
+/// and `NOT INDEXED` say.
+#[derive(Clone, PartialEq, Eq)]
+enum Indexing {
+    /// Every index of the table, which is what a side that writes
+    /// neither clause allows.
+    Any,
+    /// None of them, which `NOT INDEXED` says: `sqlite3SrcListIndexedBy`
+    /// of `research/sqlite/src/build.c` marks the side, and the rowid may
+    /// still hold the walk.
+    None,
+    /// The one index of this name, which `INDEXED BY` says and which the
+    /// walk reads whole where no term names a key of it.
+    By {
+        /// The name the clause writes.
+        name: Vec<u8>,
+        /// Whether that index answers some rows of the table alone and
+        /// the statement holds every term of its `WHERE`, which
+        /// `whereUsablePartialIndex` of `research/sqlite/src/where.c`
+        /// asks for before it reads such an index.
+        implied: bool,
+    },
+}
+
+impl<'a> Source<'a> {
+    /// The table of the schema the side reads, and nothing where it reads
+    /// the rows a statement answered.
+    const fn table(&self) -> Option<&'a Stored> {
+        match self {
+            Source::Table(stored) => Some(stored),
+            Source::Rows(_) => None,
+        }
+    }
+}
+
 /// Where a side of a `FROM` draws its rows.
 enum Source<'a> {
     /// A table of the schema.
@@ -1856,6 +1914,8 @@ struct Side<'a> {
     /// a branch of a multi-index `OR` is read against: every branch names
     /// an index of its own, and each holds the columns or does not.
     reading: Vec<usize>,
+    /// Which indexes of the table the statement lets the walk read.
+    indexing: Indexing,
     /// The name the plan writes it under where it reads a `VALUES` of
     /// several rows, which stands in front of the alias, and nothing
     /// otherwise.
@@ -2023,6 +2083,27 @@ struct Keying {
 }
 
 impl Side<'_> {
+    /// Whether the statement lets the walk read this index, which
+    /// `NOT INDEXED` lets it read none of and `INDEXED BY` one of.
+    ///
+    /// The key's own tree of a table that keeps its rows in it is the
+    /// table, so `NOT INDEXED` leaves it to be read: the rowid of such a
+    /// table is that key.
+    fn allows(&self, kept: &Kept, own: u32) -> bool {
+        // A partial index answers fewer entries than the table has rows,
+        // so a walk of one answers fewer rows than the statement asks
+        // for, unless the statement holds the term its `WHERE` names.
+        let implied = matches!(self.indexing, Indexing::By { implied: true, .. });
+        if kept.index.filter.is_some() && !implied {
+            return false;
+        }
+        match &self.indexing {
+            Indexing::Any => true,
+            Indexing::None => kept.root == own,
+            Indexing::By { name, .. } => kept.index.name.eq_ignore_ascii_case(name),
+        }
+    }
+
     /// The rowids the walk of the side's own tree is held to.
     const fn range(&self) -> (Option<i64>, Option<i64>) {
         match self.plan {
@@ -4972,6 +5053,7 @@ impl<'a> Database<'a> {
             &mut sides,
             settled,
         );
+        solvable(&sides)?;
         let shape = shape(arena, &select, sql, &sides, self.naming, self.collating)?;
         let collations = self.collations(&shape);
         let names: Vec<Vec<u8>> = shape
@@ -5376,6 +5458,15 @@ impl<'a> Database<'a> {
                 .iter()
                 .find(|(term, _)| term.eq_ignore_ascii_case(&named.name)),
         };
+        // A `WITH` term names a statement and holds no index, which
+        // `sqlite3SelectExpand` of `research/sqlite/src/select.c:5761`
+        // refuses with the name in quotes.
+        if let (Some(_), crate::ast::Indexed::By(span)) = (found.as_ref(), indexed) {
+            let mut named = b"\"".to_vec();
+            named.extend_from_slice(&dequote(span.text(sql)));
+            named.push(b'"');
+            return Err(Error::NoObject(b"index".to_vec(), named));
+        }
         if let Some((term, answered)) = found {
             return Ok(Tabled {
                 shape: answered.shape.clone(),
@@ -5394,6 +5485,13 @@ impl<'a> Database<'a> {
                 schema: self.named_place(stored.place),
                 lines: Vec::new(),
             });
+        }
+        // A view names a statement and holds no index, so a name
+        // `INDEXED BY` writes is one nothing answers, which
+        // `sqlite3IndexedByLookup` of `research/sqlite/src/build.c:4600`
+        // refuses.
+        if let crate::ast::Indexed::By(span) = indexed {
+            return Err(Error::NoObject(b"index".to_vec(), dequote(span.text(sql))));
         }
         // A view names a statement, so the rows are the ones that
         // statement answers, which is what `sqlite3SelectExpand` puts in
@@ -5608,6 +5706,7 @@ impl<'a> Database<'a> {
                 pushed: Vec::new(),
                 covering: None,
                 reading: Vec::new(),
+                indexing: indexing(source.kind, sql),
                 valued: clause,
                 least: false,
                 single: false,
@@ -5730,6 +5829,7 @@ impl<'a> Database<'a> {
                     pushed: Vec::new(),
                     covering: None,
                     reading: Vec::new(),
+                    indexing: Indexing::Any,
                     valued: Vec::new(),
                     least: false,
                     single: false,
@@ -7153,6 +7253,7 @@ fn planned(
 ) {
     let (filter, columns) = held;
     let format = settled.format;
+    marked(arena, filter, sql, sides);
     let terms = filter.map_or_else(
         || Planning {
             held: Vec::new(),
@@ -7200,49 +7301,37 @@ fn planned(
         // of the table reaches fewer of.
         let one = range.0.is_some() && range.0 == range.1;
         let between = *range != (None, None);
+        // `INDEXED BY` asks for the walk of that index whatever the terms
+        // name, so a term that holds one rowid does not take its place.
+        let forced = matches!(side.indexing, Indexing::By { .. });
         let keyed = match &side.source {
-            Source::Table(stored) if !one => {
-                // A walk held to a key of an index answers the rows one
-                // value names, where a range of rowids answers every
-                // row between two, so a key is taken over a range and a
-                // walk the terms only bound is not.
-                let held = plan_of(&terms, at, stored, format, between);
-                let wide = match &held {
-                    Some(Plan::Keyed { key, .. }) => key.len(),
-                    Some(_) | None => 0,
-                };
-                // A key the statement writes out is read once, where a
-                // key a side already read answers is read per row of
-                // that side, so the first is taken where both hold as
-                // many columns.
-                let better = joined(arena, sql, sides, at, (stored, filter))
-                    .filter(|(_, keys)| *keys > wide)
-                    .map(|(plan, _)| plan);
-                // An `OR` is read last, because one index costs less
-                // than one walk per branch, and a side already held to a
-                // range of rowids reads no branch at all.
-                better
-                    .or(held)
-                    .or_else(|| {
-                        filter.filter(|_| !between).and_then(|filter| {
-                            union_of(arena, (filter, columns), sql, sides, (at, stored), settled)
-                        })
-                    })
-                    // An `ON` holds the walk of the side it is written
-                    // after as a `WHERE` holds one, so an `OR` of it names
-                    // the branches of a multi-index walk too.
-                    .or_else(|| {
-                        side.on.filter(|_| !between).and_then(|on| {
-                            union_of(arena, (on, columns), sql, sides, (at, stored), settled)
-                        })
-                    })
-            }
+            Source::Table(stored) if !one || forced => keyed_plan(
+                (&terms, arena, sql),
+                (at, sides, stored),
+                (filter, columns),
+                (between && !forced, settled),
+            ),
             Source::Table(_) | Source::Rows(_) => None,
         };
         // A term that names one rowid answers one row, so it is taken
         // over a range of rowids and over any index.
-        let named = rowids.get(at).copied().flatten().map(Plan::Rowid);
-        let plan = named.or(keyed).unwrap_or(Plan::Rows(range.0, range.1));
+        let named = rowids
+            .get(at)
+            .copied()
+            .flatten()
+            .filter(|_| !forced)
+            .map(Plan::Rowid);
+        // A walk no term holds to a key of the index `INDEXED BY` names
+        // reads that index whole, which the C library names
+        // `SCAN t USING INDEX i`.
+        let whole = match &side.indexing {
+            Indexing::By { name, .. } => walked_whole(side, name, format),
+            Indexing::Any | Indexing::None => None,
+        };
+        let plan = named
+            .or(keyed)
+            .or(whole)
+            .unwrap_or(Plan::Rows(range.0, range.1));
         let single = one_rowed(&terms, at, &side.source, &plan);
         plans.push((plan, single));
     }
@@ -7445,6 +7534,11 @@ fn keyed_once(stored: &Stored, root: u32, key: &[Value]) -> bool {
         .chain(stored.keyed.iter())
         .find(|kept| kept.root == root)
         .is_some_and(|kept| {
+            // The rowid stands once in the table, so a key that ends with
+            // it names one row whatever else the index holds.
+            if key.len() > kept.index.columns.len() {
+                return true;
+            }
             kept.index.unique
                 && key.len() == kept.index.columns.len()
                 && key.iter().all(|value| *value != Value::Null)
@@ -8133,10 +8227,11 @@ fn reached(arena: &Arena, id: ExprId, sql: &[u8], sides: &[Side<'_>]) -> Option<
 fn plan_of(
     terms: &Planning<'_>,
     at: usize,
-    stored: &Stored,
+    held: (&Side<'_>, &Stored),
     format: u32,
     wants_key: bool,
 ) -> Option<Plan> {
+    let (side, stored) = held;
     let about = &terms.held;
     // The index whose key the terms name the most columns of answers
     // the fewest rows, which is what `whereLoopAddBtree` of
@@ -8150,7 +8245,7 @@ fn plan_of(
         // A partial index answers fewer entries than the table has rows,
         // so a statement planned against one would read fewer rows than
         // it must.
-        if kept.index.filter.is_some() {
+        if !side.allows(kept, stored.root) {
             continue;
         }
         let mut key = Vec::new();
@@ -8226,13 +8321,12 @@ fn plan_of(
                         (value, exact, term.needs)
                     })
             };
-            // A key that is not the value the term names would reach
-            // other entries than the term is true of, so the index is
-            // left alone.
-            if let Some((value, exact, _)) = named(BinaryOp::Eq) {
-                if !exact {
-                    break;
-                }
+            // The comparison converts the value under the affinity of the
+            // column, which is what the entries hold of it, so the key is
+            // that conversion: `sqlite3IndexAffinityOk` of
+            // `research/sqlite/src/expr.c` reads the same affinity off the
+            // two operands.
+            if let Some((value, _, _)) = named(BinaryOp::Eq) {
                 key.push(value);
                 collations.push(held.collation);
                 continue;
@@ -8254,6 +8348,21 @@ fn plan_of(
                 collations.push(held.collation);
             }
             break;
+        }
+        // The rowid stands after every column of an index of a table that
+        // keeps one, so a term that holds it at one whole number ends the
+        // key: `whereLoopAddBtree` reads `XN_ROWID` of
+        // `research/sqlite/src/sqliteInt.h` as one more column of the key.
+        // A key that holds every column of the index leaves no bound and
+        // no list, each of which ends the key before the last column.
+        if key.len() == kept.index.columns.len() {
+            let held = about.iter().find(|term| {
+                term.at == at && term.op == BinaryOp::Eq && term.reached == Reached::Key
+            });
+            if let Some(rowid) = held.and_then(|term| whole_of(&term.value)) {
+                key.push(Value::Int(rowid));
+                collations.push(Collation::Binary);
+            }
         }
         if key.is_empty() && listed.is_empty() && (wants_key || bounds.is_empty()) {
             continue;
@@ -8571,12 +8680,15 @@ fn covered(arena: &Arena, select: &Select, sql: &[u8], sides: &mut [Side<'_>], f
 ///
 /// Reading the indexes costs O(i * k) in their places.
 fn covers(side: &mut Side<'_>, read: &[usize]) {
-    let Source::Table(stored) = &side.source else {
+    let Some(stored) = side.source.table() else {
         return;
     };
     // A table that keeps its rows in the key's own tree ends the entries
     // of its indexes with that key and not with a rowid.
     if stored.table.without_rowid || !matches!(side.plan, Plan::Rows(None, None)) {
+        return;
+    }
+    if side.indexing != Indexing::Any {
         return;
     }
     let row_fields = stored
@@ -9045,12 +9157,20 @@ fn named_index(stored: &Stored, root: u32) -> Vec<u8> {
 /// One term of the brackets: the column the index holds at `at`, and
 /// the comparison written after it.
 fn term_of(stored: &Stored, root: u32, at: usize, how: &[u8]) -> Vec<u8> {
-    let keyed = stored
+    let found = stored
         .indexes
         .iter()
         .chain(stored.keyed.iter())
-        .find(|kept| kept.root == root)
-        .and_then(|kept| kept.index.columns.get(at));
+        .find(|kept| kept.root == root);
+    // A term at the place after the last column of the index holds the
+    // rowid, which every entry of an index over a table that keeps one
+    // ends with.
+    if found.is_some_and(|kept| kept.index.columns.len() == at) {
+        let mut held = b"rowid".to_vec();
+        held.extend_from_slice(how);
+        return held;
+    }
+    let keyed = found.and_then(|kept| kept.index.columns.get(at));
     let named = keyed.and_then(|keyed| {
         // `explainIndexColumnName` writes `<expr>` for a place over an
         // expression, which no column of the table names.
@@ -9931,6 +10051,216 @@ fn suffixed(
     None
 }
 
+/// Raises where the walk of a side reads anything but the index
+/// `INDEXED BY` names, which a partial index the statement holds no term
+/// of leaves it doing.
+///
+/// `sqlite3WhereBegin` of `research/sqlite/src/where.c` answers
+/// `no query solution` where the clause names an index no loop of the
+/// side could be built over.
+///
+/// # Errors
+///
+/// [`Error::NoSolution`] carries no name, as the C library's message
+/// carries none.
+///
+/// Reading the sides costs O(s) in them.
+fn solvable(sides: &[Side<'_>]) -> Result<(), Error> {
+    for side in sides {
+        let Indexing::By { name, .. } = &side.indexing else {
+            continue;
+        };
+        let root = side
+            .source
+            .table()
+            .and_then(|stored| kept_named(stored, name))
+            .map(|kept| kept.root);
+        if root != rooted_at(&side.plan) {
+            return Err(Error::NoSolution);
+        }
+    }
+    Ok(())
+}
+
+/// The plan an index of the side at `at` holds the walk to, and nothing
+/// where no index of it reaches a key or a bound the terms name.
+///
+/// `wants_key` asks for a plan that names a key: a side already held to a
+/// range of rowids is read by that range where an index only bounds it.
+///
+/// Costs what [`plan_of`], [`joined`] and [`union_of`] cost over the terms
+/// and the indexes.
+fn keyed_plan(
+    over: (&Planning<'_>, &Arena, &[u8]),
+    held: (usize, &[Side<'_>], &Stored),
+    named: (Option<ExprId>, Range),
+    asks: (bool, Settled),
+) -> Option<Plan> {
+    let (terms, arena, sql) = over;
+    let (at, sides, stored) = held;
+    let (filter, columns) = named;
+    let (wants_key, settled) = asks;
+    let side = sides.get(at)?;
+    // A walk held to a key of an index answers the rows one value names,
+    // where a range of rowids answers every row between two, so a key is
+    // taken over a range and a walk the terms only bound is not.
+    let keyed = plan_of(terms, at, (side, stored), settled.format, wants_key);
+    let wide = match &keyed {
+        Some(Plan::Keyed { key, .. }) => key.len(),
+        Some(_) | None => 0,
+    };
+    // A key the statement writes out is read once, where a key a side
+    // already read answers is read per row of that side, so the first is
+    // taken where both hold as many columns.
+    let better = joined(arena, sql, sides, at, (stored, filter))
+        .filter(|(_, keys)| *keys > wide)
+        .map(|(plan, _)| plan);
+    // An `OR` is read last, because one index costs less than one walk per
+    // branch, and a side already held to a range of rowids reads no branch
+    // at all.
+    better
+        .or(keyed)
+        .or_else(|| {
+            filter.filter(|_| !wants_key).and_then(|filter| {
+                union_of(arena, (filter, columns), sql, sides, (at, stored), settled)
+            })
+        })
+        // An `ON` holds the walk of the side it is written after as a
+        // `WHERE` holds one, so an `OR` of it names the branches of a
+        // multi-index walk too.
+        .or_else(|| {
+            side.on
+                .filter(|_| !wants_key)
+                .and_then(|on| union_of(arena, (on, columns), sql, sides, (at, stored), settled))
+        })
+}
+
+/// The index of `stored` this name spells, and nothing where the table
+/// holds no such index.
+///
+/// Reading the indexes costs O(i) in their number.
+fn kept_named<'a>(stored: &'a Stored, name: &[u8]) -> Option<&'a Kept> {
+    stored
+        .indexes
+        .iter()
+        .find(|kept| kept.index.name.eq_ignore_ascii_case(name))
+}
+
+/// Marks each side whose `INDEXED BY` names a partial index the statement
+/// holds every term of the index's `WHERE`.
+///
+/// `whereUsablePartialIndex` of `research/sqlite/src/where.c` reads the
+/// terms of the statement against that `WHERE` before it takes such an
+/// index, so a walk of one answers the rows the statement asks for.
+///
+/// Costs what [`implies`] costs per side.
+fn marked(arena: &Arena, filter: Option<ExprId>, sql: &[u8], sides: &mut [Side<'_>]) {
+    let held: Vec<bool> = sides
+        .iter()
+        .map(|side| implies(arena, filter, sql, side))
+        .collect();
+    for (side, held) in sides.iter_mut().zip(held) {
+        if let Indexing::By { implied, .. } = &mut side.indexing {
+            *implied = held;
+        }
+    }
+}
+
+/// Whether the statement holds the term the `WHERE` of the index
+/// `INDEXED BY` names writes, which is what lets a walk of a partial
+/// index answer the rows the statement asks for.
+///
+/// `whereUsablePartialIndex` of `research/sqlite/src/where.c` reads every
+/// term of the statement against that `WHERE` through
+/// `sqlite3ExprImpliesExpr`, which answers true where the two say the
+/// same thing; this engine reads the terms the top-level `AND` spine
+/// holds and compares each against it.
+///
+/// Costs O(t * n) in the terms of the spine and their nodes.
+fn implies(arena: &Arena, filter: Option<ExprId>, sql: &[u8], side: &Side<'_>) -> bool {
+    let Indexing::By { name, .. } = &side.indexing else {
+        return false;
+    };
+    let found = side
+        .source
+        .table()
+        .and_then(|stored| kept_named(stored, name))
+        .and_then(|kept| kept.index.filter.map(|held| (kept, held)));
+    let Some((kept, held)) = found else {
+        return false;
+    };
+    // An entry stands in the index only where every term of its `WHERE`
+    // is true, so the statement has to hold every one of them.
+    let mut wanted = alloc::vec![held];
+    while let Some(id) = wanted.pop() {
+        if let Some(Node::Binary {
+            op: BinaryOp::And,
+            left,
+            right,
+        }) = kept.arena.node(id)
+        {
+            wanted.push(left);
+            wanted.push(right);
+            continue;
+        }
+        let theirs = Written {
+            arena: &kept.arena,
+            id,
+            sql: &kept.sql,
+        };
+        if !spine_holds(arena, filter, sql, theirs) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Whether the top-level `AND` spine of `filter` holds a term that says
+/// what `wanted` says, which `sqlite3ExprImpliesExpr` answers for two
+/// terms that compare the same column against the same value.
+///
+/// Costs O(t * n) in the terms of the spine and their nodes.
+fn spine_holds(arena: &Arena, filter: Option<ExprId>, sql: &[u8], wanted: Written<'_>) -> bool {
+    let mut spine: Vec<ExprId> = filter.into_iter().collect();
+    while let Some(id) = spine.pop() {
+        if let Some(Node::Binary {
+            op: BinaryOp::And,
+            left,
+            right,
+        }) = arena.node(id)
+        {
+            spine.push(left);
+            spine.push(right);
+            continue;
+        }
+        if alike_written(Written { arena, id, sql }, wanted) {
+            return true;
+        }
+    }
+    false
+}
+
+/// The walk of the whole index of this name, which `INDEXED BY` asks for
+/// where no term names a key of it.
+///
+/// `sqlite3WhereBegin` reads the index the clause names whatever the
+/// terms hold, so the walk takes every entry of it: O(n) in the entries.
+fn walked_whole(side: &Side<'_>, name: &[u8], format: u32) -> Option<Plan> {
+    let kept = side.source.table().and_then(|stored| {
+        kept_named(stored, name).filter(|kept| side.allows(kept, stored.root))
+    })?;
+    Some(Plan::Keyed {
+        root: kept.root,
+        key: Vec::new(),
+        collations: Vec::new(),
+        rowid_at: kept.index.columns.len(),
+        listed: Vec::new(),
+        bounds: Bounds::default(),
+        backwards: held_backwards(kept.index.columns.first(), format),
+        reversed: false,
+    })
+}
+
 /// Whether the place of `index` at `at` holds the column a term names in
 /// the order that term asks about.
 ///
@@ -10078,6 +10408,7 @@ fn ored(
 ) -> Option<Plan> {
     let (id, columns) = held;
     let (at, stored) = over;
+    let side = sides.get(at)?;
     let mut plans = Vec::new();
     let mut spine = alloc::vec![id];
     while let Some(held) = spine.pop() {
@@ -10095,7 +10426,7 @@ fn ored(
         // A branch that names the rowid is read out of the table's own
         // tree, which is the `OP_SeekRowid` loop `sqlite3WhereBegin`
         // writes for `WHERE_IPK`.
-        let plan = plan_of(&terms, at, stored, settled.format, false)
+        let plan = plan_of(&terms, at, (side, stored), settled.format, false)
             .or_else(|| ranged_of(&terms.held, at))
             // A branch that names a column of a side the walk reads
             // before this one is held to the key that side answers, one
@@ -10383,8 +10714,7 @@ fn joined(
     let mut best: Option<(Plan, usize)> = None;
     let mut held = 0;
     for kept in stored.indexes.iter().chain(stored.keyed.iter()) {
-        // A partial index answers fewer entries than its places say.
-        if kept.index.filter.is_some() {
+        if !side.allows(kept, stored.root) {
             continue;
         }
         let mut keys: Vec<Keying> = Vec::new();

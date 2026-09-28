@@ -7888,6 +7888,37 @@ Unit tests of `crate::db` over `fixtures/indexed.db`.
 - `WHERE NULL` under an aggregate, which answers one row.
 - `WHERE abs(0)`, which is read against every row.
 
+### 6.6.431 What the key of an index holds of a term the affinity converts (`db-sqlite`)
+
+Unit tests of `crate::db` over an image `crate::change` writes. Every
+answer is the one the C library's shell writes.
+
+- A number against a column of text affinity and text against one of
+  integer affinity, which the walk is held to and which answer the rows
+  the comparison names.
+- A term that names the rowid beside the terms of every column of an
+  index, which answers one row and is taken over that index.
+- The same statement under `INDEXED BY`, whose key ends with the rowid and
+  is named `(a=? AND b=? AND rowid=?)`, and the row it answers.
+
+### 6.6.430 What `INDEXED BY` and `NOT INDEXED` hold the walk to (`db-sqlite`)
+
+Unit tests of `crate::db` over an image `crate::change` writes. Every
+answer is the one the C library's shell writes.
+
+- `NOT INDEXED` with two terms an index holds, which leaves `SCAN t1`.
+- `NOT INDEXED` with a term that names the rowid, which holds the walk.
+- `INDEXED BY` with a term naming the first column of that index, named
+  `SEARCH t1 USING INDEX i1 (a=?)`.
+- `INDEXED BY` with a term the index does not hold, and with a term that
+  names the rowid, which each leave `SCAN t1 USING INDEX i1`, and the rows
+  such a walk answers.
+- `INDEXED BY` over a partial index, with the terms of its `WHERE` held
+  and with them not, which is `no query solution`, over one whose `WHERE`
+  holds two terms, and one whose key ends with the rowid.
+- `INDEXED BY` over a view, which is `no such index`, and over a `WITH`
+  term, which is the same refusal with the name in quotes.
+
 ### 6.6.429 What an `OR` over a key another side answers holds the walk to (`db-sqlite`)
 
 Unit tests of `crate::db` over an image `crate::change` writes. Every

@@ -1671,3 +1671,180 @@ fn what_an_or_over_a_key_another_side_answers_holds_the_walk_to() {
         ]
     );
 }
+
+/// `NOT INDEXED` leaves the walk no index of the table, where the rowid
+/// still holds it, and `INDEXED BY` leaves it the one index that clause
+/// names, which it reads whole where no term names a key of it.
+#[test]
+fn what_indexed_by_and_not_indexed_hold_the_walk_to() {
+    let mut writer = crate::change::Writer::new(1024, 0, crate::header::Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t1(a, b, c)".as_slice(),
+        b"CREATE INDEX i1 ON t1(a)",
+        b"CREATE INDEX i2 ON t1(b)",
+        b"INSERT INTO t1 VALUES('one','two','three')",
+        b"CREATE VIEW v1 AS SELECT * FROM t1",
+        b"CREATE TABLE o1(x INTEGER PRIMARY KEY, y, z)",
+        b"CREATE INDEX p2 ON o1(y) WHERE z=1",
+        b"CREATE INDEX p3 ON o1(y) WHERE z=1 AND x=1",
+        b"INSERT INTO o1 VALUES(1,2,1)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let image = writer.written();
+    for (sql, lines) in [
+        (
+            b"SELECT * FROM t1 NOT INDEXED WHERE a='one' AND b='two'".as_slice(),
+            "`--SCAN t1",
+        ),
+        // The rowid is no index of the table, so a term that names it
+        // holds the walk all the same.
+        (
+            b"SELECT * FROM t1 NOT INDEXED WHERE rowid=1",
+            "`--SEARCH t1 USING INTEGER PRIMARY KEY (rowid=?)",
+        ),
+        (
+            b"SELECT * FROM t1 INDEXED BY i1 WHERE a='one'",
+            "`--SEARCH t1 USING INDEX i1 (a=?)",
+        ),
+        // A term the named index does not hold, and a term that names the
+        // rowid, each leave the walk of that index whole.
+        (
+            b"SELECT * FROM t1 INDEXED BY i1 WHERE b='two'",
+            "`--SCAN t1 USING INDEX i1",
+        ),
+        (
+            b"SELECT * FROM t1 INDEXED BY i1 WHERE rowid=1",
+            "`--SCAN t1 USING INDEX i1",
+        ),
+        // A partial index answers the rows of a statement that holds every
+        // term of its `WHERE`.
+        (
+            b"SELECT * FROM o1 INDEXED BY p2 WHERE z=1 AND y=2",
+            "`--SEARCH o1 USING INDEX p2 (y=?)",
+        ),
+        // A `WHERE` of two terms asks the statement for both of them, and
+        // `x` names the rowid, which ends the key.
+        (
+            b"SELECT * FROM o1 INDEXED BY p3 WHERE z=1 AND x=1 AND y=2",
+            "`--SEARCH o1 USING INDEX p3 (y=? AND rowid=?)",
+        ),
+    ] {
+        assert_eq!(plan(&image, sql), tree(&[lines]), "{sql:?}");
+    }
+    let database = Database::open(&image).unwrap();
+    assert_eq!(
+        database
+            .query(b"SELECT * FROM t1 INDEXED BY i1 WHERE b='two'")
+            .unwrap()
+            .rows
+            .len(),
+        1
+    );
+    // A statement that holds no term of the `WHERE` of the index reaches no
+    // walk of it, and a view holds no index at all.
+    for (sql, refused) in [
+        (
+            b"SELECT * FROM o1 INDEXED BY p2 ORDER BY 1".as_slice(),
+            "no query solution",
+        ),
+        (
+            b"SELECT * FROM v1 INDEXED BY i1 WHERE a='one'",
+            "no such index: i1",
+        ),
+        (
+            b"SELECT * FROM o1 INDEXED BY p3 WHERE z=1 AND y=2",
+            "no query solution",
+        ),
+    ] {
+        let held = database.query(sql).map(|answered| answered.rows);
+        assert_eq!(
+            held.err().map(|error| error.message()),
+            Some(alloc::string::String::from(refused)),
+            "{sql:?}"
+        );
+    }
+}
+
+/// The key an index names holds the value the affinity of the column
+/// leaves of the term's value, which is what the entries hold, and a term
+/// that holds the rowid ends that key, the rowid standing after every
+/// column of an index over a table that keeps one.
+#[test]
+fn what_the_key_of_an_index_holds_of_a_term_the_affinity_converts() {
+    let mut writer = crate::change::Writer::new(1024, 0, crate::header::Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE x1(a, b TEXT)".as_slice(),
+        b"CREATE INDEX x1i ON x1(a,b)",
+        b"INSERT INTO x1 VALUES(1,1),(1,1),(1,1),(1,1)",
+        b"CREATE TABLE t(v TEXT, w INTEGER)",
+        b"CREATE INDEX tv ON t(v)",
+        b"CREATE INDEX tw ON t(w)",
+        b"INSERT INTO t VALUES(1,'3.0'),(2,'x')",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let image = writer.written();
+    let database = Database::open(&image).unwrap();
+    for (sql, lines) in [
+        // A column of text affinity holds the number as text, and one of
+        // integer affinity holds the text as the number it reads as.
+        (
+            b"SELECT v FROM t WHERE v=1".as_slice(),
+            "`--SEARCH t USING COVERING INDEX tv (v=?)",
+        ),
+        (
+            b"SELECT w FROM t WHERE w='3.0'",
+            "`--SEARCH t USING COVERING INDEX tw (w=?)",
+        ),
+        // A term that names the rowid answers one row, so it is taken over
+        // the key of any index, and `INDEXED BY` leaves the key that index
+        // names, which the rowid ends.
+        (
+            b"SELECT a,b,rowid FROM x1 WHERE a=1 AND b=1 AND rowid='3.0'",
+            "`--SEARCH x1 USING INTEGER PRIMARY KEY (rowid=?)",
+        ),
+        (
+            b"SELECT a,b,rowid FROM x1 INDEXED BY x1i WHERE a=1 AND b=1 AND rowid='3.0'",
+            "`--SEARCH x1 USING COVERING INDEX x1i (a=? AND b=? AND rowid=?)",
+        ),
+    ] {
+        assert_eq!(plan(&image, sql), tree(&[lines]), "{sql:?}");
+    }
+    assert_eq!(
+        database.query(b"SELECT v FROM t WHERE v=1").unwrap().rows,
+        alloc::vec![alloc::vec![Value::Text(b"1".to_vec())]]
+    );
+    assert_eq!(
+        database
+            .query(b"SELECT w FROM t WHERE w='3.0'")
+            .unwrap()
+            .rows,
+        alloc::vec![alloc::vec![Value::Int(3)]]
+    );
+    assert_eq!(
+        database
+            .query(b"SELECT a,b,rowid FROM x1 INDEXED BY x1i WHERE a=1 AND b=1 AND rowid='3.0'")
+            .unwrap()
+            .rows,
+        alloc::vec![alloc::vec![
+            Value::Int(1),
+            Value::Text(b"1".to_vec()),
+            Value::Int(3)
+        ]]
+    );
+}
+
+/// A `WITH` term names a statement and holds no index, so `INDEXED BY`
+/// over one is refused with the name in quotes.
+#[test]
+fn what_indexed_by_over_a_with_term_refuses() {
+    let database = Database::open(super::INDEXED).unwrap();
+    let held = database
+        .query(b"WITH c AS (SELECT 1 AS x) SELECT * FROM c INDEXED BY i1")
+        .map(|answered| answered.rows);
+    assert_eq!(
+        held.err().map(|error| error.message()),
+        Some(alloc::string::String::from("no such index: \"i1\""))
+    );
+}
