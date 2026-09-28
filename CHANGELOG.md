@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` holds a branch of a top-level `OR` to a key a side the walk reads before it
+  answers, one key per row of that side, where it read such a branch out of the whole
+  table, and an `OR` written in an `ON` names the branches as a `WHERE` does. D-597
+  records it. Catalog 6.6.429. `where9.test` goes from 67 cases passing to 75 and
+  `where8.test` from 2036 to 2040.
+
 - `db-sqlite` reads a branch of a multi-index `OR` out of the entries of its own index
   where they hold every column the statement reads, which saves one descent per row, and
   the plan says `COVERING` of that branch. D-595 records it. Catalog 6.6.428. `whereD.test`

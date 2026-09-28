@@ -4208,9 +4208,14 @@ impl<'a> Database<'a> {
             // `research/sqlite/src/wherecode.c:210` writes ` LEFT-JOIN` after
             // the line of a side an outer join keeps the unmatched rows of,
             // which is `JT_LEFT` of a `LEFT` and of a `FULL` join.
+            // The same function writes one line per walk, so a
+            // multi-index `OR` carries the words on the line of every
+            // branch and not on the line above them.
             if matches!(side.kind, JoinKind::Left | JoinKind::Full) {
-                for (_, detail) in lines.iter_mut().skip(at).take(1) {
-                    detail.extend_from_slice(b" LEFT-JOIN");
+                for (_, detail) in lines.iter_mut().skip(at) {
+                    if detail.starts_with(b"SEARCH ") || detail.starts_with(b"SCAN ") {
+                        detail.extend_from_slice(b" LEFT-JOIN");
+                    }
                 }
             }
         }
@@ -6223,6 +6228,20 @@ impl<'a> Database<'a> {
         if let Plan::Rows(first, last) = plan {
             return Some(self.ranged(stored, (*first, *last)));
         }
+        // A branch held to the rowid a side before this one answers reads
+        // the one row of that rowid.
+        if let Plan::Rowid(id) = plan {
+            let reach = cursor.reach;
+            let mut value =
+                evaluate_row(reach.arena, *id, reach.sql, cursor).unwrap_or(Value::Null);
+            crate::value::apply(&mut value, Affinity::Numeric);
+            return match value {
+                Value::Int(rowid) => Some(self.ranged(stored, (Some(rowid), Some(rowid)))),
+                Value::Null | Value::Real(_) | Value::Text(_) | Value::Blob(_) => {
+                    Some(Feed::Rows(NO_ROWS.iter()))
+                }
+            };
+        }
         // Every branch names an index of its own, so the entries of one
         // hold the columns the statement reads where the entries of
         // another do not.
@@ -7202,11 +7221,21 @@ fn planned(
                 // An `OR` is read last, because one index costs less
                 // than one walk per branch, and a side already held to a
                 // range of rowids reads no branch at all.
-                better.or(held).or_else(|| {
-                    filter.filter(|_| !between).and_then(|filter| {
-                        union_of(arena, (filter, columns), sql, sides, (at, stored), settled)
+                better
+                    .or(held)
+                    .or_else(|| {
+                        filter.filter(|_| !between).and_then(|filter| {
+                            union_of(arena, (filter, columns), sql, sides, (at, stored), settled)
+                        })
                     })
-                })
+                    // An `ON` holds the walk of the side it is written
+                    // after as a `WHERE` holds one, so an `OR` of it names
+                    // the branches of a multi-index walk too.
+                    .or_else(|| {
+                        side.on.filter(|_| !between).and_then(|on| {
+                            union_of(arena, (on, columns), sql, sides, (at, stored), settled)
+                        })
+                    })
             }
             Source::Table(_) | Source::Rows(_) => None,
         };
@@ -10067,7 +10096,12 @@ fn ored(
         // tree, which is the `OP_SeekRowid` loop `sqlite3WhereBegin`
         // writes for `WHERE_IPK`.
         let plan = plan_of(&terms, at, stored, settled.format, false)
-            .or_else(|| ranged_of(&terms.held, at))?;
+            .or_else(|| ranged_of(&terms.held, at))
+            // A branch that names a column of a side the walk reads
+            // before this one is held to the key that side answers, one
+            // key per row of it, which `whereLoopAddOr` builds as it
+            // builds any other loop of the branch.
+            .or_else(|| joined(arena, sql, sides, at, (stored, Some(held))).map(|(plan, _)| plan))?;
         plans.push(plan);
     }
     Some(Plan::Union(plans))

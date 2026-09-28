@@ -1394,6 +1394,13 @@ Size: L.
      `WHERE c=? AND d=?` names `(c=?)` where the C library names
      `(c=? AND d=?)`.
 
+287. The number and the order the C library writes the branches of a
+     multi-index `OR` in: `explainIndexRange` counts every cursor the
+     statement opened, so a statement of two sides numbers the branches
+     from three, and `whereLoopAddOr` reads them in the order its costs
+     put them. This engine numbers the branches of one `OR` from one and
+     reads them in the order the `WHERE` writes them.
+
 ### Done when
 
 Every statement of the recorded corpora is accepted or refused as the C

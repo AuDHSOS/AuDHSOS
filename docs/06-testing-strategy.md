@@ -7888,6 +7888,23 @@ Unit tests of `crate::db` over `fixtures/indexed.db`.
 - `WHERE NULL` under an aggregate, which answers one row.
 - `WHERE abs(0)`, which is read against every row.
 
+### 6.6.429 What an `OR` over a key another side answers holds the walk to (`db-sqlite`)
+
+Unit tests of `crate::db` over an image `crate::change` writes. Every
+answer is the one the C library's shell writes, but for the numbering and
+the order of the branches, which item 287 of `docs/16-sqlite-in-rust.md`
+holds.
+
+- Two branches, each naming a column of the side the walk reads first,
+  which the plan names `MULTI-INDEX OR` over two `SEARCH` lines.
+- The rows that statement answers.
+- A branch naming the rowid of this side, read as the one row of that
+  rowid, and a value that is no whole number, which names no row.
+- An `ON` of a `LEFT JOIN` holding the same `OR`, whose branch lines carry
+  ` LEFT-JOIN`.
+- The rows of that join, a row the `ON` matched nothing to standing with no
+  value of the side it names.
+
 ### 6.6.428 What a branch of an `OR` and a walk of one row count (`db-sqlite`)
 
 Unit tests of `crate::db` over an image `crate::change` writes. Every

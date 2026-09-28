@@ -1568,3 +1568,106 @@ fn what_the_plan_names_a_branch_of_an_or_whose_index_covers_the_statement() {
         );
     }
 }
+
+/// A branch of a top-level `OR` names a key of an index over this side
+/// that a side the walk reads before it answers, one key per row of that
+/// side, and an `ON` holds the walk of the side written after it as a
+/// `WHERE` holds one, so an `OR` of it names the branches too.
+#[test]
+fn what_an_or_over_a_key_another_side_answers_holds_the_walk_to() {
+    let mut writer = crate::change::Writer::new(1024, 0, crate::header::Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t1(a INTEGER PRIMARY KEY,c,d)".as_slice(),
+        b"CREATE TABLE t2(a INTEGER PRIMARY KEY,c,d)",
+        b"CREATE INDEX t2c ON t2(c)",
+        b"CREATE INDEX t2d ON t2(d)",
+        b"INSERT INTO t1 VALUES(1,10,100),(2,20,200)",
+        b"INSERT INTO t2 VALUES(1,10,999),(2,99,200)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let image = writer.written();
+    // The C library counts the branches by the cursor it opened for each,
+    // which a statement of two sides numbers from three, and reads them in
+    // the order its costs put them; item 287 of
+    // `docs/16-sqlite-in-rust.md` holds both.
+    assert_eq!(
+        plan(
+            &image,
+            b"SELECT t2.a FROM t1, t2 WHERE t1.a=1 AND (t1.c=t2.c OR t1.d=t2.d)"
+        ),
+        tree(&[
+            "|--SEARCH t1 USING INTEGER PRIMARY KEY (rowid=?)",
+            "`--MULTI-INDEX OR",
+            "   |--INDEX 1",
+            "   |  `--SEARCH t2 USING INDEX t2c (c=?)",
+            "   `--INDEX 2",
+            "      `--SEARCH t2 USING INDEX t2d (d=?)",
+        ])
+    );
+    let database = Database::open(&image).unwrap();
+    assert_eq!(
+        database
+            .query(b"SELECT t2.a FROM t1, t2 WHERE t1.a=1 AND (t1.c=t2.c OR t1.d=t2.d)")
+            .unwrap()
+            .rows,
+        alloc::vec![alloc::vec![Value::Int(1)]]
+    );
+    // A branch that names the rowid of this side reads the one row of the
+    // rowid the other side answers.
+    assert_eq!(
+        plan(
+            &image,
+            b"SELECT t2.a FROM t1, t2 WHERE t1.a=1 AND (t2.a=t1.c OR t2.c=t1.c)"
+        ),
+        tree(&[
+            "|--SEARCH t1 USING INTEGER PRIMARY KEY (rowid=?)",
+            "`--MULTI-INDEX OR",
+            "   |--INDEX 1",
+            "   |  `--SEARCH t2 USING INTEGER PRIMARY KEY (rowid=?)",
+            "   `--INDEX 2",
+            "      `--SEARCH t2 USING COVERING INDEX t2c (c=?)",
+        ])
+    );
+    assert_eq!(
+        database
+            .query(b"SELECT t2.a FROM t1, t2 WHERE t1.a=1 AND (t2.a=t1.c OR t2.c=t1.c)")
+            .unwrap()
+            .rows,
+        alloc::vec![alloc::vec![Value::Int(1)]]
+    );
+    // A rowid that is no whole number names no row.
+    assert!(
+        database
+            .query(b"SELECT t2.a FROM t1, t2 WHERE t1.a=1 AND (t2.a=t1.c||'x' OR t2.c=999)")
+            .unwrap()
+            .rows
+            .is_empty()
+    );
+    // An `ON` of a `LEFT JOIN` holds the walk, and a row it matches
+    // nothing to stands with no value of the side it names.
+    assert_eq!(
+        plan(
+            &image,
+            b"SELECT t1.a, t2.a FROM t1 LEFT JOIN t2 ON (t1.c=t2.c OR t1.d=t2.d)"
+        ),
+        tree(&[
+            "|--SCAN t1",
+            "`--MULTI-INDEX OR",
+            "   |--INDEX 1",
+            "   |  `--SEARCH t2 USING INDEX t2c (c=?) LEFT-JOIN",
+            "   `--INDEX 2",
+            "      `--SEARCH t2 USING INDEX t2d (d=?) LEFT-JOIN",
+        ])
+    );
+    assert_eq!(
+        database
+            .query(b"SELECT t1.a, t2.a FROM t1 LEFT JOIN t2 ON (t1.c=t2.c OR t1.d=t2.d)")
+            .unwrap()
+            .rows,
+        alloc::vec![
+            alloc::vec![Value::Int(1), Value::Int(1)],
+            alloc::vec![Value::Int(2), Value::Int(2)]
+        ]
+    );
+}
