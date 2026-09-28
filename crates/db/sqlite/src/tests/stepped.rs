@@ -434,10 +434,22 @@ fn what_the_two_passes_of_a_pattern_s_range_answer() {
         })
         .collect();
     assert_eq!(rows, ["'abc'", "'abd'", "X'616263'"]);
-    // Two entries of text and one of a blob, the pattern read for each.
-    assert_eq!(answered.stepped.likes, 3);
+    // The range answers the pattern whole, the wildcard standing for what
+    // follows the prefix alone, so the pattern is read for no entry.
+    assert_eq!(answered.stepped.likes, 0);
     // One descent per pass, and one step per entry after the first of it.
     assert_eq!(answered.stepped.searched, 4);
+    // A pattern that says more than the prefix is read for every entry the
+    // two passes take, whether it says it in place of one character or
+    // behind the wildcard.
+    for (sql, rows) in [
+        (b"SELECT quote(x) FROM b WHERE x LIKE 'ab_'".as_slice(), 3),
+        (b"SELECT quote(x) FROM b WHERE x LIKE 'ab%c'", 2),
+    ] {
+        let held = database.query(sql).unwrap();
+        assert_eq!(held.rows.len(), rows, "{sql:?}");
+        assert_eq!(held.stepped.likes, 3, "{sql:?}");
+    }
     let quoted = |sql: &[u8]| {
         database
             .query(sql)

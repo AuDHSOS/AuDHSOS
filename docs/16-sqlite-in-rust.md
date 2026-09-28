@@ -1354,6 +1354,18 @@ Size: L.
      `FULL` join matched nothing to, which it names `RIGHT-JOIN` over the
      lines of that walk. This engine answers those rows and names no line
      for them, which D-579 records.
+281. A `LIKE` whose range answers it whole and whose pattern does not tell
+     the letters apart, which `TERM_LIKECOND` of
+     `research/sqlite/src/whereInt.h:311` reads on the pass over the blobs
+     alone: the range holds the letters of both cases, so the pattern says
+     nothing of a text entry it reaches. This engine reads such a term on
+     both passes, which counts the comparisons of the text pass over.
+     `like.test` holds two cases of it.
+282. A `like` or a `glob` the application defined for a count of arguments
+     of its own, which `sqlite3IsLikeFunction` of
+     `research/sqlite/src/func.c` reads as the function the operator calls,
+     leaving the range unwritten. This engine calls the built-in one.
+     `like.test` holds two cases of it.
 
 ### Done when
 

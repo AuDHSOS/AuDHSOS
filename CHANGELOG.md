@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` reads a `LIKE` or a `GLOB` whose range answers it whole for no row the
+  walk takes, which asks that one pattern wrote both ends of the range and that its
+  wildcard stand for what follows the prefix alone. D-582 records it. Catalog 6.6.420.
+  `like.test` goes from 120 cases passing to 126.
+
 - `db-sqlite` takes the range a `LIKE` or a `GLOB` holds the walk to twice: once over
   the text its prefix begins and once over the blobs, which stand after every text,
   where the high end held as a blob reached every text above the prefix. D-581

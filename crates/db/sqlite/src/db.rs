@@ -1846,6 +1846,9 @@ struct Side<'a> {
     /// Whether the walk answers one row, which a term that holds the
     /// rowid or every column of a unique index at one value does.
     single: bool,
+    /// The terms of the `WHERE` the walk answers by itself, which are read
+    /// for no row it takes.
+    dropped: Vec<ExprId>,
     /// How the plan names the statement it reads, and [`Nesting::Named`]
     /// for a table.
     nesting: Nesting,
@@ -1889,6 +1892,23 @@ struct Bounds {
     /// matches stands after every text, so the text the prefix begins and
     /// the blobs it begins are two ranges.
     patterned: (bool, bool),
+    /// The term both ends were read out of, where they answer it whole.
+    answers: Option<Answers>,
+}
+
+/// The term the two ends of a range were read out of, where every entry
+/// they reach holds a value that term is true of.
+///
+/// `disableTerm` of `research/sqlite/src/wherecode.c:404` leaves such a
+/// term unread where both ends of its range hold the walk, and reads it on
+/// the pass over the blobs alone where the pattern does not tell the
+/// letters apart, the range holding the letters of both cases there.
+#[derive(Clone, Copy, Debug)]
+struct Answers {
+    /// The `LIKE` or the `GLOB`.
+    term: ExprId,
+    /// Whether the pattern tells the letters apart.
+    sensitive: bool,
 }
 
 impl Bounds {
@@ -5407,6 +5427,7 @@ impl<'a> Database<'a> {
                 valued: clause,
                 least: false,
                 single: false,
+                dropped: Vec::new(),
                 nesting,
                 lines,
             });
@@ -5525,6 +5546,7 @@ impl<'a> Database<'a> {
                     valued: Vec::new(),
                     least: false,
                     single: false,
+                    dropped: Vec::new(),
                     nesting: Nesting::Named,
                     lines: Vec::new(),
                 };
@@ -6354,6 +6376,13 @@ impl<'a> Database<'a> {
         let free = once
             || (windowless && !gathered && smallest.is_none() && (terms == 0 || answered == 0));
         covered(arena, select, sql, sides, free);
+        // The walk of a pattern's range answers its term whole, so the term
+        // is read for no row the walk takes.
+        for side in sides.iter_mut() {
+            let held = dropped(&side.plan);
+            side.pushed.retain(|id| !held.contains(id));
+            side.dropped = held;
+        }
         let gathers = self.gathered_rows(arena, select, sql, sides, (windowless, terms, calls));
         self.explain(
             sides,
@@ -6873,6 +6902,15 @@ struct Bound {
 /// What a bound read out of a pattern asks of the column it holds.
 #[derive(Clone, Copy)]
 struct Pattern {
+    /// The `LIKE` or the `GLOB` the bound was read out of.
+    term: ExprId,
+    /// Whether the pattern is a prefix and one wildcard for what follows
+    /// it, so that every entry the bounds reach holds a value the pattern
+    /// matches and the term says nothing the bounds do not.
+    ///
+    /// `isLikeOrGlob` of `research/sqlite/src/whereexpr.c:258` reads the
+    /// wildcard as the last character of the pattern for this.
+    complete: bool,
     /// The collation the pattern matches under, which the column has to
     /// compare under for the bound to hold.
     collation: Collation,
@@ -6974,7 +7012,14 @@ fn terms_of<'a>(
         }) = arena.node(id)
         {
             if !negated && escape.is_none() {
-                out.extend(liked(arena, op, value, pattern, sql, sides, sensitive));
+                out.extend(liked(
+                    arena,
+                    op,
+                    (id, value, pattern),
+                    sql,
+                    sides,
+                    sensitive,
+                ));
             }
             continue;
         }
@@ -7362,12 +7407,12 @@ fn bounded(
 fn liked(
     arena: &Arena,
     op: crate::ast::LikeOp,
-    value: ExprId,
-    pattern: ExprId,
+    held: (ExprId, ExprId, ExprId),
     sql: &[u8],
     sides: &[Side<'_>],
     sensitive: bool,
 ) -> Vec<Bound> {
+    let (term, value, pattern) = held;
     let wildcards: &[u8] = match op {
         crate::ast::LikeOp::Like => b"%_",
         crate::ast::LikeOp::Glob => b"*?[",
@@ -7430,7 +7475,14 @@ fn liked(
     for last in bumped.iter_mut().rev().take(1) {
         *last = last.saturating_add(1);
     }
+    // The bounds answer the pattern whole where the wildcard for what
+    // follows the prefix is the last character of it.
+    let complete = held
+        .get(count..)
+        .is_some_and(|rest| rest.first() == wildcards.first() && rest.len() == 1);
     let needs = Pattern {
+        term,
+        complete,
         collation: if nocase {
             Collation::NoCase
         } else {
@@ -7612,7 +7664,7 @@ fn plan_of(
                         crate::value::apply(&mut value, column.affinity);
                         let exact = compare(&value, &term.value, Collation::Binary)
                             == core::cmp::Ordering::Equal;
-                        (value, exact, term.needs.is_some())
+                        (value, exact, term.needs)
                     })
             };
             // A key that is not the value the term names would reach
@@ -9376,23 +9428,45 @@ fn ored(
 /// the entries that hold it.
 ///
 /// Costs what `named` costs per end.
-fn bounds_of(named: impl Fn(BinaryOp) -> Option<(Value, bool, bool)>) -> Bounds {
-    let widened = |held: Option<(Value, bool, bool)>, inside: bool| {
-        held.map(|(value, exact, patterned)| ((value, inside || !exact), patterned))
+fn bounds_of(named: impl Fn(BinaryOp) -> Option<(Value, bool, Option<Pattern>)>) -> Bounds {
+    let widened = |held: Option<(Value, bool, Option<Pattern>)>, inside: bool| {
+        held.map(|(value, exact, needs)| ((value, inside || !exact), needs))
     };
     let low = widened(named(BinaryOp::Ge), true).or_else(|| widened(named(BinaryOp::Gt), false));
     let high = widened(named(BinaryOp::Le), true).or_else(|| widened(named(BinaryOp::Lt), false));
+    let patterns = (
+        low.as_ref().and_then(|held| held.1),
+        high.as_ref().and_then(|held| held.1),
+    );
     Bounds {
         // An end read out of a pattern holds the text the prefix begins,
         // and the walk takes the range a second time where the high end is
         // one of those.
-        patterned: (
-            matches!(low, Some((_, true))),
-            matches!(high, Some((_, true))),
-        ),
+        patterned: (patterns.0.is_some(), patterns.1.is_some()),
+        answers: wholly(patterns),
         low: low.map(|held| held.0),
         high: high.map(|held| held.0),
     }
+}
+
+/// The term the two ends of a range answer whole, which asks that a
+/// pattern wrote both of them and that its wildcard stands for what
+/// follows the prefix alone.
+///
+/// One pattern wrote both ends where both are read out of one: [`liked`]
+/// writes the two ends of a pattern one after the other, and [`bounds_of`]
+/// takes the first term of each end, so the first low end a pattern wrote
+/// and the first high end stand for the same pattern.
+///
+/// Costs O(1).
+fn wholly(patterns: (Option<Pattern>, Option<Pattern>)) -> Option<Answers> {
+    let (_, high) = (patterns.0?, patterns.1?);
+    // The two ends of one pattern carry that pattern, so the high end says
+    // of it what the low end says.
+    high.complete.then_some(Answers {
+        term: high.term,
+        sensitive: high.collation != Collation::NoCase,
+    })
 }
 
 /// The walk of the table's own tree the terms hold to a range of its
@@ -9962,6 +10036,28 @@ fn attached(
 /// Whether every term of `terms` holds for the row the walk stands on.
 ///
 /// Reading `n` terms costs what the `n` terms cost.
+/// The terms the walk of `plan` answers by itself, which are read for no
+/// row it takes.
+///
+/// `disableTerm` of `research/sqlite/src/wherecode.c:404` leaves a `LIKE`
+/// or a `GLOB` unread where both ends of the range it was read out of hold
+/// the walk and the pattern tells the letters apart: the range reaches the
+/// entries that hold a value the pattern matches and no other. A pattern
+/// that does not tell the letters apart is read on the pass over the blobs
+/// here as it is there, which this engine reads on both passes.
+///
+/// Costs O(1).
+fn dropped(plan: &Plan) -> Vec<ExprId> {
+    let Plan::Keyed { bounds, .. } = plan else {
+        return Vec::new();
+    };
+    bounds
+        .answers
+        .filter(|held| held.sensitive)
+        .map(|held| alloc::vec![held.term])
+        .unwrap_or_default()
+}
+
 /// The terms of the `WHERE` no level of the walk reads, which are the
 /// terms read once per row the walk answers.
 ///
@@ -9984,7 +10080,10 @@ fn over_all(arena: &Arena, filter: Option<ExprId>, sides: &[Side<'_>]) -> Vec<Ex
             spine.push(right);
             continue;
         }
-        if !sides.iter().any(|side| side.pushed.contains(&id)) {
+        if !sides
+            .iter()
+            .any(|side| side.pushed.contains(&id) || side.dropped.contains(&id))
+        {
             out.push(id);
         }
     }

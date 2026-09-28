@@ -7888,6 +7888,15 @@ Unit tests of `crate::db` over `fixtures/indexed.db`.
 - `WHERE NULL` under an aggregate, which answers one row.
 - `WHERE abs(0)`, which is read against every row.
 
+### 6.6.420 The term a pattern's range answers (`db-sqlite`)
+
+Unit tests of `crate::db` over an image `crate::change` writes, whose
+table holds text and blobs the same prefix begins.
+
+- A pattern whose wildcard stands for what follows the prefix alone, read
+  for no entry the two passes take.
+- A pattern that says more than the prefix, read for every entry.
+
 ### 6.6.419 The two passes of a pattern's range (`db-sqlite`)
 
 Unit tests of `crate::db` over an image `crate::change` writes, whose
