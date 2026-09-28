@@ -233,10 +233,13 @@ fn what_happens_to_the_rows_that_point_at_a_row_that_goes() {
     assert_eq!(answered(&writer, "SELECT count(*) FROM gone"), ["0"]);
     writer.run(b"DELETE FROM p WHERE x=2").unwrap();
     assert_eq!(answered(&writer, "SELECT a, b FROM emptied"), ["b", ""]);
-    writer.run(b"DELETE FROM p WHERE x=3").unwrap();
-    assert_eq!(answered(&writer, "SELECT a, b FROM fallen"), ["c", "7"]);
+    // The row a `SET DEFAULT` writes is held to the keys of its table,
+    // so a fallback that points at no row refuses the statement and the
+    // row stands as it was.
+    assert_eq!(writer.run(b"DELETE FROM p WHERE x=3"), Err(Error::Foreign));
+    assert_eq!(answered(&writer, "SELECT a, b FROM fallen"), ["c", "3"]);
     assert_eq!(writer.run(b"DELETE FROM p WHERE x=4"), Err(Error::Foreign));
-    assert_eq!(answered(&writer, "SELECT count(*) FROM p"), ["1"]);
+    assert_eq!(answered(&writer, "SELECT count(*) FROM p"), ["2"]);
     // A row nothing points at goes, and so does a row whose key is
     // null wherever it is read.
     writer.run(b"INSERT INTO p VALUES(5,'five')").unwrap();
@@ -1106,5 +1109,34 @@ fn what_a_references_of_a_column_that_points_at_two_is_refused_with() {
             .unwrap_err()
             .message(),
         "number of columns in foreign key does not match the number of columns in the referenced table"
+    );
+}
+
+/// A foreign key that points at a view answers no index of it, so the
+/// statement that writes a row of the child is a mismatch and not a name
+/// the schema does not hold.
+#[test]
+fn what_a_foreign_key_that_points_at_a_view_is_refused_with() {
+    let (mut writer, _) = ran(&[
+        "PRAGMA foreign_keys=ON",
+        "CREATE TABLE c(x REFERENCES v(y))",
+        "CREATE VIEW v AS SELECT x AS y FROM c",
+    ])
+    .unwrap();
+    assert_eq!(
+        writer
+            .run(b"INSERT INTO c DEFAULT VALUES")
+            .expect_err("a refusal")
+            .message(),
+        "foreign key mismatch - \"c\" referencing \"v\""
+    );
+    // A name the schema holds nothing of is no table at all.
+    writer.run(b"CREATE TABLE d(y REFERENCES nosuch)").unwrap();
+    assert_eq!(
+        writer
+            .run(b"INSERT INTO d VALUES(1)")
+            .expect_err("a refusal")
+            .message(),
+        "no such table: main.nosuch"
     );
 }

@@ -899,6 +899,35 @@ impl Names {
     }
 }
 
+/// What one statement wrote.
+#[derive(Clone, Copy)]
+struct Changed {
+    /// How many rows of a table it wrote.
+    rows: i64,
+    /// Whether it is a statement that writes rows of a table, which an
+    /// `INSERT`, an `UPDATE` and a `DELETE` are the three of and which
+    /// `PRAGMA count_changes` answers a row of the count for.
+    changing: bool,
+}
+
+impl Changed {
+    /// A statement that writes the schema and no row of a table.
+    const fn schema() -> Self {
+        Changed {
+            rows: 0,
+            changing: false,
+        }
+    }
+
+    /// A statement that wrote `rows` rows of a table.
+    const fn rows(rows: i64) -> Self {
+        Changed {
+            rows,
+            changing: true,
+        }
+    }
+}
+
 /// The files a connection holds, as a statement of it reads them.
 struct Images {
     /// The file the statement writes.
@@ -5167,10 +5196,14 @@ impl Writer {
         if !self.returned.is_empty() {
             return Ok(core::mem::take(&mut self.returned));
         }
-        // `PRAGMA count_changes`: a statement that changes rows answers
+        // `PRAGMA count_changes`: a statement that writes rows answers
         // how many it changed, which is one row of one column.
-        if self.truth.counting {
-            return Ok(alloc::vec![alloc::vec![Value::Int(changed)]]);
+        // `SQLITE_CountRows` of `research/sqlite/src/insert.c:1146`,
+        // `delete.c:325` and `update.c:589` is read by those three
+        // statements alone, so a statement that writes the schema answers
+        // no row.
+        if self.truth.counting && changed.changing {
+            return Ok(alloc::vec![alloc::vec![Value::Int(changed.rows)]]);
         }
         Ok(Vec::new())
     }
@@ -5296,9 +5329,9 @@ impl Writer {
         Ok(())
     }
 
-    /// One statement that makes something or changes rows, and how
-    /// many rows it changed.
-    fn ran(&mut self, sql: &[u8]) -> Result<i64, Error> {
+    /// One statement that makes something or changes rows, with what it
+    /// wrote.
+    fn ran(&mut self, sql: &[u8]) -> Result<Changed, Error> {
         // The readings are tried in turn, and the one that took in most
         // of the statement says where the parse stopped.
         let mut held = None;
@@ -5311,24 +5344,24 @@ impl Writer {
                     authorizer.definition(&arena, definition, sql)
                 })?;
                 if read.answer == crate::auth::Answer::Ignore {
-                    return Ok(0);
+                    return Ok(Changed::schema());
                 }
                 self.define(&arena, definition, sql)?;
-                return Ok(0);
+                return Ok(Changed::schema());
             }
             Err(error) => held = Some(crate::parse::furthest(held, error)),
         }
         match crate::parse::analyze(sql) {
             Ok(asked) => {
                 self.analyze(&asked, sql)?;
-                return Ok(0);
+                return Ok(Changed::schema());
             }
             Err(error) => held = Some(crate::parse::furthest(held, error)),
         }
         match crate::parse::reindex(sql) {
             Ok(asked) => {
                 self.reindex(&asked, sql)?;
-                return Ok(0);
+                return Ok(Changed::schema());
             }
             Err(error) => held = Some(crate::parse::furthest(held, error)),
         }
@@ -5366,7 +5399,7 @@ impl Writer {
         // changed rows, and `sqlite3_total_changes` the rows of every
         // statement of the connection.
         self.counts_step(changed);
-        Ok(changed)
+        Ok(Changed::rows(changed))
     }
 
     /// `BEGIN`, `COMMIT` and `ROLLBACK`.
@@ -7707,10 +7740,21 @@ impl Writer {
             return Ok(());
         };
         for key in &table.foreign {
-            let (parent, _) = database
-                .table(&key.table)
-                .ok_or_else(|| Error::NoTable(schema_named_as(&key.table)))?;
-            parent_places(&database, (&table.name, key), parent)?;
+            let held = match database.table(&key.table) {
+                Some((parent, _)) => parent,
+                // `sqlite3FkLocateIndex` of `research/sqlite/src/fkey.c`
+                // reads the parent as a table and answers no index of a
+                // view, so a key that points at one is a mismatch and not
+                // a name the schema does not hold.
+                None if database.view(&key.table).is_some() => {
+                    return Err(Error::ForeignMismatch(
+                        table.name.clone(),
+                        key.table.clone(),
+                    ));
+                }
+                None => return Err(Error::NoTable(schema_named_as(&key.table))),
+            };
+            parent_places(&database, (&table.name, key), held)?;
         }
         self.pointing(name)?;
         Ok(())
@@ -7957,7 +8001,23 @@ impl Writer {
                 *slot = value.clone();
             }
         }
-        self.rewrite(&points.child, key, &values)
+        self.rewrite(&points.child, key, &values)?;
+        // `sqlite3FkActions` of `research/sqlite/src/fkey.c:1275` writes
+        // the row through a trigger, so the row is held to the keys of
+        // its table: the fallback of a column may point at no row, where
+        // a null points at none and is held to nothing.
+        if !fallback {
+            return Ok(());
+        }
+        let written = {
+            let bytes = self.image();
+            let database = self.reading(&bytes)?;
+            let (table, _) = database
+                .table(&points.child)
+                .ok_or(Error::NoTable(Vec::new()))?;
+            table.clone()
+        };
+        self.parented(&written, &values, keyed_rowid(key))
     }
 
     /// One row of a table, written again with the values given.

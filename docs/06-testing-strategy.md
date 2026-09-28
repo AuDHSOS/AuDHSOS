@@ -7914,6 +7914,36 @@ answer is the one the C library's shell writes.
   the statement outside answers, and one whose term writes `oid` or
   `_rowid_`.
 
+### 6.6.445 What a foreign key that points at a view is refused with (`db-sqlite`)
+
+Unit tests of `crate::change`. Every answer is the one the C library's
+shell writes.
+
+- `CREATE TABLE c(x REFERENCES v(y))` over a view `v`, and `INSERT INTO c
+  DEFAULT VALUES`, refused `foreign key mismatch - "c" referencing "v"`.
+- The same over a name the schema does not hold, refused `no such table:
+  main.nosuch`.
+
+### 6.6.444 Which statements answer a count of the rows they wrote (`db-sqlite`)
+
+Unit tests of `crate::change` under `PRAGMA count_changes=1`. Every answer
+is the one the C library's shell writes.
+
+- An `INSERT`, an `UPDATE` and a `DELETE`, each answering one row of the
+  count it wrote, and a `DELETE` that writes no row answering nought.
+- `CREATE TABLE u(c)` and `CREATE INDEX`, each answering no row.
+
+### 6.6.443 What the row a `SET DEFAULT` action writes is held to (`db-sqlite`)
+
+Unit tests of `crate::change`. Every answer is the one the C library's
+shell writes.
+
+- `DELETE FROM p WHERE x=3` over `fallen(a, b DEFAULT 7 REFERENCES p ON
+  DELETE SET DEFAULT)` holding `('c', 3)`, refused `FOREIGN KEY constraint
+  failed` with the row standing as it was.
+- The same over `ON DELETE SET NULL`, which writes the null, and over `ON
+  DELETE CASCADE`, which takes the row away.
+
 ### 6.6.442 Which columns the check of a foreign key reads (`db-sqlite`)
 
 Unit tests of `crate::auth` over a connection told a function that writes

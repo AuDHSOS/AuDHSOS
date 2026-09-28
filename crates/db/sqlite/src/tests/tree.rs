@@ -2086,7 +2086,8 @@ fn a_statement_answers_how_many_rows_it_changed_where_the_pragma_says_so() {
         writer.run(b"DELETE FROM t WHERE a>99").unwrap(),
         [[Value::Int(0)]]
     );
-    assert_eq!(writer.run(b"CREATE TABLE u(c)").unwrap(), [[Value::Int(0)]]);
+    assert!(writer.run(b"CREATE TABLE u(c)").unwrap().is_empty());
+    assert!(writer.run(b"CREATE INDEX ua ON u(c)").unwrap().is_empty());
     // A number says it as well, which is what `sqlite3GetBoolean`
     // takes for one.
     writer.run(b"PRAGMA count_changes=0").unwrap();

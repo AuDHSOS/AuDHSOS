@@ -17,6 +17,19 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   WHERE 0` refuses nothing. D-608 records it. Catalog 6.6.439. `tkt3554.test` goes from 1 case
   passing to 4.
 
+- `db-sqlite` holds the row a `SET DEFAULT` action writes to the foreign keys of its table, so a
+  fallback that points at no row refuses the statement, where it wrote the row. D-612 records it.
+  Catalog 6.6.443. With D-613 and D-614 `fkey2.test` goes from 1195 cases passing to 1200,
+  `without_rowid3.test` from 1179 to 1184 and `e_fkey.test` from 897 to 899.
+
+- `db-sqlite` answers a count of the rows written under `PRAGMA count_changes` for an `INSERT`, an
+  `UPDATE` and a `DELETE` alone, where a statement that writes the schema answered one row of
+  nought. D-613 records it. Catalog 6.6.444. `capi2.test` goes from 123 cases passing to 126,
+  `insert2.test` from 27 to 29 and `pragma.test` from 148 to 149.
+
+- `db-sqlite` refuses a foreign key that points at a view as a mismatch, where it read the name as
+  no table at all. D-614 records it. Catalog 6.6.445.
+
 ### Added
 
 - `db-sqlite` asks the function the connection was told about the columns the check of a foreign key

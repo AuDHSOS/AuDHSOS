@@ -886,6 +886,22 @@ fn alone() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// The column a read of which [`ignoring`] answers `Ignore` for, as its
+/// first byte, and nought for none.
+static IGNORING: AtomicU32 = AtomicU32::new(0);
+
+/// A function that ignores a read of the column [`IGNORING`] names and
+/// allows every other action, which holds none of the state the rules of
+/// [`asking`] hold.
+fn ignoring(asked: &Asked<'_>) -> Answer {
+    let byte = IGNORING.load(Ordering::Relaxed);
+    let held = u8::try_from(byte).ok();
+    if asked.action == Action::Read && held.is_some() && asked.second.first().copied() == held {
+        return Answer::Ignore;
+    }
+    Answer::Ok
+}
+
 /// A function that allows every action and writes down what it was asked.
 fn recording(asked: &Asked<'_>) -> Answer {
     if let Ok(mut held) = RECORDED.lock() {
@@ -1173,7 +1189,9 @@ fn which_columns_the_check_of_a_foreign_key_reads() {
 /// holds a null stands.
 #[test]
 fn what_a_foreign_key_whose_parent_is_ignored_refuses() {
-    let mut writer = told();
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    IGNORING.store(0, Ordering::Relaxed);
+    writer.asks(ignoring);
     for sql in [
         b"PRAGMA foreign_keys=ON".as_slice(),
         b"CREATE TABLE long(a, b PRIMARY KEY, c)",
@@ -1182,7 +1200,7 @@ fn what_a_foreign_key_whose_parent_is_ignored_refuses() {
     ] {
         writer.run(sql).unwrap();
     }
-    rule_of(Action::Read, Answer::Ignore, b'b');
+    IGNORING.store(u32::from(b'b'), Ordering::Relaxed);
     assert_eq!(
         writer
             .run(b"INSERT INTO short VALUES(1, 3, 2)")
@@ -1193,7 +1211,7 @@ fn what_a_foreign_key_whose_parent_is_ignored_refuses() {
     writer.run(b"INSERT INTO short VALUES(1, 3, NULL)").unwrap();
     // A read the function ignored of another table than the one a key
     // points at leaves the check of that key alone.
-    allows();
+    IGNORING.store(0, Ordering::Relaxed);
     for sql in [
         b"CREATE TABLE other(k PRIMARY KEY)".as_slice(),
         b"CREATE TABLE both(f REFERENCES long, g REFERENCES other)",
@@ -1201,7 +1219,7 @@ fn what_a_foreign_key_whose_parent_is_ignored_refuses() {
     ] {
         writer.run(sql).unwrap();
     }
-    rule_of(Action::Read, Answer::Ignore, b'k');
+    IGNORING.store(u32::from(b'k'), Ordering::Relaxed);
     assert_eq!(
         writer
             .run(b"INSERT INTO both VALUES(2, 7)")
@@ -1212,7 +1230,7 @@ fn what_a_foreign_key_whose_parent_is_ignored_refuses() {
     // A key over two columns is read column by column, so a read the
     // function ignored of the second leaves the first as it stands and
     // the key points at no row all the same.
-    allows();
+    IGNORING.store(0, Ordering::Relaxed);
     for sql in [
         b"CREATE TABLE pair(m, n, PRIMARY KEY(m, n))".as_slice(),
         b"CREATE TABLE kid(x, y, FOREIGN KEY(x, y) REFERENCES pair(m, n))",
@@ -1220,7 +1238,7 @@ fn what_a_foreign_key_whose_parent_is_ignored_refuses() {
     ] {
         writer.run(sql).unwrap();
     }
-    rule_of(Action::Read, Answer::Ignore, b'n');
+    IGNORING.store(u32::from(b'n'), Ordering::Relaxed);
     assert_eq!(
         writer
             .run(b"INSERT INTO kid VALUES(8, 9)")
@@ -1228,7 +1246,7 @@ fn what_a_foreign_key_whose_parent_is_ignored_refuses() {
             .message(),
         "FOREIGN KEY constraint failed"
     );
-    allows();
+    IGNORING.store(0, Ordering::Relaxed);
     assert_eq!(
         read(&writer, b"SELECT count(*) FROM kid").unwrap(),
         [[Value::Int(0)]]
