@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` ends the key of an index at a column an `IN` names, taking one descent of
+  the index per value of the list, where it read every entry of the index. The values
+  stand in the order of the column, so an `ORDER BY` over it is answered by the walk.
+  D-591 records it. Catalog 6.6.426. `where.test` goes from 287 cases passing to 292 and
+  `where2.test` from 63 to 67.
+
 - `db-sqlite` holds the walk to one row per value where an `IN` names the rowid, where
   it read every row of the table, and counts the walk of the list as the C library
   counts it. D-590 records it. Catalog 6.6.425. `where.test` goes from 286 cases
@@ -927,6 +933,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   `with2.test` from 59 to 61 and `select3.test` from 83 to 84.
 
 ### Fixed
+
+- `db-sqlite` compares an `IN` over a list of more than one value under the collation of
+  the value on the left alone, where it took a written collation from either side, so
+  `a IN ('a' COLLATE BINARY, 'zz')` over a column that compares under `NOCASE` answers
+  the row holding `A`. D-592 records it.
 
 - `db-sqlite` answers a row two branches of an `OR` over a table that keeps its rows
   in the key's own tree name once, the walk carrying no rowid to tell the rows apart

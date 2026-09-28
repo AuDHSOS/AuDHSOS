@@ -7888,6 +7888,31 @@ Unit tests of `crate::db` over `fixtures/indexed.db`.
 - `WHERE NULL` under an aggregate, which answers one row.
 - `WHERE abs(0)`, which is read against every row.
 
+### 6.6.426 What an `IN` over a column an index holds holds the walk to (`db-sqlite`)
+
+Unit tests of `crate::db` over an image `crate::change` writes. Every
+answer is the one the C library's shell writes.
+
+- A list over the first column of an index, named `(w=?)` in the plan.
+- A key in front of the list, named `(x=? AND y=?)`.
+- A term the index does not hold, which leaves the walk reading the table.
+- The rows answered in the order of the column, whatever order the list
+  writes the values in.
+- An `ORDER BY` written `DESC`, which reads the values from the largest
+  down.
+- Text against a column of no affinity, which reaches no entry.
+- A `NOT IN`, a list of no value and a list of one value under a
+  `COLLATE`, which each leave the walk of the whole index, and a list that
+  names a column of the side itself, which leaves the walk of the table.
+- Text against a column of integer affinity, which the walk is held to
+  nothing by.
+- A null among the values, which names no walk of its own.
+- A list about a column of another side, which says nothing about the index
+  this side is walked by.
+- A `COLLATE` over one value of a longer list, which says nothing about the
+  comparison: the walk of the index stands, and the rows are the ones the
+  collation of the column names.
+
 ### 6.6.425 What an `IN` over the rowid holds the walk to (`db-sqlite`)
 
 Unit tests of `crate::db` over an image `crate::change` writes. Every

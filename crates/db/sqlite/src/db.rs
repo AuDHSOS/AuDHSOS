@@ -1958,6 +1958,10 @@ enum Plan {
         /// Where the rowid stands in an entry, which is after every
         /// column the index holds.
         rowid_at: usize,
+        /// The values a list holds the column after the key at, sorted
+        /// under that column's collation and each held once, which the
+        /// walk takes one entry of the index per value of.
+        listed: Vec<Value>,
         /// What the column after the key is held between.
         bounds: Bounds,
         /// Whether the index holds its entries from the largest value
@@ -6282,6 +6286,44 @@ impl<'a> Database<'a> {
         })))
     }
 
+    /// One walk of the index per value of the list, each held to the key
+    /// the plan names and that value, and nothing where one of them
+    /// cannot be walked.
+    ///
+    /// `codeINTerm` of `research/sqlite/src/wherecode.c:670` writes the
+    /// loop over the values and `bRev` reads them from the last back,
+    /// which a walk that begins at the high end of the entries is.
+    ///
+    /// The values stand in the order of the column, so no row stands in
+    /// two of the walks and the rows are answered in that order.
+    ///
+    /// Costs O(v log n) in the values of the list and the entries.
+    fn listed<'f>(&self, stored: &'f Stored, held: &Seek) -> Option<Feed<'a, 'f>> {
+        // The ephemeral index holding the values counts one step per
+        // value after the first.
+        self.search(i64::try_from(held.listed.len().saturating_sub(1)).unwrap_or(0));
+        let mut values = held.listed.clone();
+        // A walk that begins at the high end of the entries answers the
+        // values of the list from the largest down.
+        if held.backwards != held.reversed {
+            values.reverse();
+        }
+        let mut feeds = Vec::new();
+        for value in values {
+            let mut one = held.clone();
+            one.listed = Vec::new();
+            one.key.push(value);
+            feeds.push(self.keyed(stored, one)?);
+        }
+        Some(Feed::Union(Box::new(Union {
+            feeds,
+            at: 0,
+            seen: Vec::new(),
+            kept: Vec::new(),
+            apart: true,
+        })))
+    }
+
     /// The walk of one index, held to the key the plan names, and
     /// nothing where the entries cannot be compared against that key.
     ///
@@ -6290,11 +6332,15 @@ impl<'a> Database<'a> {
     /// table's own tree instead, which answers the same rows and only
     /// the cost is not the same.
     fn keyed<'f>(&self, stored: &'f Stored, held: Seek) -> Option<Feed<'a, 'f>> {
+        if !held.listed.is_empty() {
+            return self.listed(stored, &held);
+        }
         let Seek {
             root,
             key,
             collations,
             rowid_at,
+            listed: _,
             bounds,
             backwards,
             reversed,
@@ -7064,6 +7110,7 @@ fn planned(
         || Planning {
             held: Vec::new(),
             over: Vec::new(),
+            lists: Vec::new(),
             arena,
             sql,
         },
@@ -7306,7 +7353,9 @@ fn one_rowed(terms: &Planning<'_>, at: usize, source: &Source<'_>, plan: &Plan) 
             .held
             .iter()
             .any(|term| term.at == at && term.reached == Reached::Key && term.op == BinaryOp::Eq),
-        Plan::Keyed { root, key, .. } => keyed_once(stored, *root, key),
+        Plan::Keyed {
+            root, key, listed, ..
+        } => listed.is_empty() && keyed_once(stored, *root, key),
         // A list of values names as many rows as it holds values.
         Plan::Rows(_, _)
         | Plan::Backwards
@@ -7352,6 +7401,7 @@ fn terms_of<'a>(
     let sensitive = settled.sensitive;
     let mut out = Vec::new();
     let mut over = Vec::new();
+    let mut lists = Vec::new();
     let mut spine = alloc::vec![filter];
     while let Some(id) = spine.pop() {
         if let Some(Node::Like {
@@ -7389,6 +7439,17 @@ fn terms_of<'a>(
             }
             continue;
         }
+        if let Some(Node::InList {
+            value,
+            list,
+            negated,
+        }) = arena.node(id)
+        {
+            if !negated {
+                lists.extend(held_in(arena, (value, list), sql, sides));
+            }
+            continue;
+        }
         let Some(Node::Binary { op, left, right }) = arena.node(id) else {
             continue;
         };
@@ -7411,60 +7472,82 @@ fn terms_of<'a>(
         // `a < 5` and `5 > a` say the same thing about `a`, so the
         // operator turns over with the operands.
         for (op, held, value_id) in [(op, left, right), (flipped(op), right, left)] {
-            // `resolveExprStep` of `research/sqlite/src/resolve.c` reads a
-            // name no side of the `FROM` answers against the names the
-            // statement answers its columns under, so a term that names
-            // one stands for the expression that column answers.
-            let column = reached(arena, held, sql, sides)
-                .is_none()
-                .then(|| aliased_to(arena, columns, sql, held))
-                .flatten()
-                .unwrap_or(held);
-            let Some((at, reached)) = reached(arena, column, sql, sides) else {
-                // An index over an expression names a key of a term that
-                // holds that same expression at one value.
-                over.extend(held_over(arena, (column, value_id), sql, sides, op));
-                continue;
-            };
-            // `sqlite3BinaryCompareCollSeq`: a `COLLATE` on either side
-            // says what the comparison compares under, which need not be
-            // what the column compares under, and an index over the
-            // column then holds its entries in another order than the
-            // term asks about. A `COLLATE` over the column itself is
-            // already no term, because `reached` reads a column and not
-            // a node above one.
-            if matches!(arena.node(value_id), Some(Node::Collate { .. })) {
-                continue;
-            }
-            // A term that names a column is a term about the row, and
-            // the row is what is being planned for, so only a value the
-            // walk needs no row to read is one it can be held to.
-            let Ok(value) = evaluate_row(arena, value_id, sql, &eval::NoRow(None)) else {
-                continue;
-            };
-            // A row an outer join left empty holds no value where the
-            // side holds one, and a term whose value is null is true of
-            // such a row, so a term that holds the walk of that side
-            // would leave those rows out.
-            if value == Value::Null && extended(sides, at) {
-                continue;
-            }
-            out.push(Bound {
-                at,
-                reached,
-                op,
-                value,
-                id: value_id,
-                needs: None,
-            });
+            out.extend(held_at(
+                arena,
+                (op, held, value_id),
+                sql,
+                (sides, columns),
+                &mut over,
+            ));
         }
     }
     Planning {
         held: out,
         over,
+        lists,
         arena,
         sql,
     }
+}
+
+/// What one comparison of the spine holds a column of a side at, and
+/// nothing where it holds no column of one; a comparison that holds an
+/// expression over a column is added to `over` instead.
+///
+/// Reading one comparison costs O(n) in its nodes.
+fn held_at(
+    arena: &Arena,
+    term: (BinaryOp, ExprId, ExprId),
+    sql: &[u8],
+    against: (&[Side<'_>], Range),
+    over: &mut Vec<Overed>,
+) -> Option<Bound> {
+    let (op, held, value_id) = term;
+    let (sides, columns) = against;
+    // `resolveExprStep` of `research/sqlite/src/resolve.c` reads a
+    // name no side of the `FROM` answers against the names the
+    // statement answers its columns under, so a term that names
+    // one stands for the expression that column answers.
+    let column = reached(arena, held, sql, sides)
+        .is_none()
+        .then(|| aliased_to(arena, columns, sql, held))
+        .flatten()
+        .unwrap_or(held);
+    let Some((at, reached)) = reached(arena, column, sql, sides) else {
+        // An index over an expression names a key of a term that
+        // holds that same expression at one value.
+        over.extend(held_over(arena, (column, value_id), sql, sides, op));
+        return None;
+    };
+    // `sqlite3BinaryCompareCollSeq`: a `COLLATE` on either side
+    // says what the comparison compares under, which need not be
+    // what the column compares under, and an index over the
+    // column then holds its entries in another order than the
+    // term asks about. A `COLLATE` over the column itself is
+    // already no term, because `reached` reads a column and not
+    // a node above one.
+    if matches!(arena.node(value_id), Some(Node::Collate { .. })) {
+        return None;
+    }
+    // A term that names a column is a term about the row, and
+    // the row is what is being planned for, so only a value the
+    // walk needs no row to read is one it can be held to.
+    let value = evaluate_row(arena, value_id, sql, &eval::NoRow(None)).ok()?;
+    // A row an outer join left empty holds no value where the
+    // side holds one, and a term whose value is null is true of
+    // such a row, so a term that holds the walk of that side
+    // would leave those rows out.
+    if value == Value::Null && extended(sides, at) {
+        return None;
+    }
+    Some(Bound {
+        at,
+        reached,
+        op,
+        value,
+        id: value_id,
+        needs: None,
+    })
 }
 
 /// The term an expression of one side is held at one value by, and
@@ -7509,6 +7592,60 @@ struct Overed {
     value: Value,
 }
 
+/// The list an `IN` holds a column of one side to one value of, and
+/// nothing where the `IN` names no column of a side or holds a value no
+/// walk can read before it begins.
+///
+/// `codeINTerm` of `research/sqlite/src/wherecode.c:670` writes a loop
+/// over the values of such a list and `codeEqualityTerm` of the same file
+/// at line 803 reads the column at each of them, so the walk takes the
+/// entries of one value per pass. A value that names a column is one the
+/// walk needs a row to read, and an index holds no entry a comparison
+/// against null reaches.
+///
+/// Reading one list costs O(n) in its values.
+fn held_in(arena: &Arena, held: (ExprId, Range), sql: &[u8], sides: &[Side<'_>]) -> Option<Listed> {
+    let (value, list) = held;
+    let (at, reached) = reached(arena, value, sql, sides)?;
+    let named = arena.children(list);
+    // `sqlite3CodeSubselect` of `research/sqlite/src/expr.c:3778` reads
+    // the collation of a list off the value on the left alone, so a
+    // `COLLATE` over a value of the list says nothing about the
+    // comparison. A list of one value is the equality `parse.y:1515`
+    // writes in its place, which a `COLLATE` over that value says the
+    // collation of, and the entries of the index stand in another order
+    // than that collation holds.
+    if named.len() == 1
+        && named
+            .first()
+            .is_some_and(|id| matches!(arena.node(*id), Some(Node::Collate { .. })))
+    {
+        return None;
+    }
+    let mut values = Vec::new();
+    for id in named {
+        let held = evaluate_row(arena, *id, sql, &eval::NoRow(None)).ok()?;
+        if held != Value::Null {
+            values.push(held);
+        }
+    }
+    (!values.is_empty()).then_some(Listed {
+        at,
+        reached,
+        values,
+    })
+}
+
+/// One list a column of a side is held to one value of.
+struct Listed {
+    /// Which side the column reads.
+    at: usize,
+    /// Which column of that side, or its rowid.
+    reached: Reached,
+    /// The values of the list, none of them null.
+    values: Vec<Value>,
+}
+
 /// The terms a plan is built from: the ones about a column of a side and
 /// the ones about an expression over one, with the text the expressions
 /// were written in.
@@ -7517,6 +7654,8 @@ struct Planning<'a> {
     held: Vec<Bound>,
     /// The terms about an expression.
     over: Vec<Overed>,
+    /// The lists a column of a side is held to one value of.
+    lists: Vec<Listed>,
     /// The tree the expressions stand in.
     arena: &'a Arena,
     /// The text that tree was parsed from.
@@ -7962,6 +8101,7 @@ fn plan_of(
         }
         let mut key = Vec::new();
         let mut collations = Vec::new();
+        let mut listed = Vec::new();
         let mut bounds = Bounds::default();
         // An index holds every place it has in one direction or reaches
         // no key, because the entries of a place held the other way run
@@ -8043,6 +8183,15 @@ fn plan_of(
                 collations.push(held.collation);
                 continue;
             }
+            // A list holds the column at one of its values per pass of
+            // the walk, which is one descent of the index each, and the
+            // columns after it run over again for every value, so the
+            // key ends where the list stands.
+            listed = listed_at(terms, (at, reached), column.affinity, held.collation);
+            if !listed.is_empty() {
+                collations.push(held.collation);
+                break;
+            }
             // The column after the key is the last one a term reaches,
             // because the entries of the columns after it run over
             // again for each value of this one.
@@ -8052,10 +8201,12 @@ fn plan_of(
             }
             break;
         }
-        if key.is_empty() && (wants_key || bounds.is_empty()) {
+        if key.is_empty() && listed.is_empty() && (wants_key || bounds.is_empty()) {
             continue;
         }
-        let reached = key.len();
+        // A list names one value of the column per pass, which divides
+        // the entries as a key of one more column does.
+        let reached = key.len().saturating_add(usize::from(!listed.is_empty()));
         if best.as_ref().is_some_and(|(held, _)| *held >= reached) {
             continue;
         }
@@ -8066,6 +8217,7 @@ fn plan_of(
                 key,
                 collations,
                 rowid_at: kept.index.columns.len(),
+                listed,
                 bounds,
                 backwards,
                 reversed: false,
@@ -8073,6 +8225,47 @@ fn plan_of(
         ));
     }
     best.map(|(_, plan)| plan)
+}
+
+/// The values a list holds the column `held` names at, each converted
+/// under the affinity of that column, sorted under `collation` and held
+/// once, and nothing where no list names the column or one value reaches
+/// other entries than the list names.
+///
+/// `codeINTerm` of `research/sqlite/src/wherecode.c:670` writes the
+/// values into an ephemeral index, which holds them in the order of the
+/// collation and each of them once.
+///
+/// Costs O(n log n) in the values of the list.
+fn listed_at(
+    terms: &Planning<'_>,
+    held: (usize, Reached),
+    affinity: Affinity,
+    collation: Collation,
+) -> Vec<Value> {
+    let (at, reached) = held;
+    let Some(list) = terms
+        .lists
+        .iter()
+        .find(|list| list.at == at && list.reached == reached)
+    else {
+        return Vec::new();
+    };
+    let mut values = Vec::new();
+    for named in &list.values {
+        // An entry holds what the table's affinity left of the value, so
+        // a value that affinity answers another value for reaches entries
+        // the list does not name.
+        let mut value = named.clone();
+        crate::value::apply(&mut value, affinity);
+        if compare(&value, named, Collation::Binary) != core::cmp::Ordering::Equal {
+            return Vec::new();
+        }
+        values.push(value);
+    }
+    values.sort_by(|left, right| compare(left, right, collation));
+    values.dedup_by(|left, right| compare(left, right, collation) == core::cmp::Ordering::Equal);
+    values
 }
 
 /// The value a term holds the expression of the place `keyed` at, and
@@ -8143,7 +8336,12 @@ const fn whole_walk(side: &Side<'_>) -> bool {
     matches!(side.source, Source::Table(_))
         && match &side.plan {
             Plan::Rows(None, None) | Plan::Backwards => true,
-            Plan::Keyed { key, bounds, .. } => key.is_empty() && bounds.is_empty(),
+            Plan::Keyed {
+                key,
+                listed,
+                bounds,
+                ..
+            } => key.is_empty() && listed.is_empty() && bounds.is_empty(),
             Plan::Rows(_, _)
             | Plan::Joined { .. }
             | Plan::Rowid(_)
@@ -8360,6 +8558,7 @@ fn covers(side: &mut Side<'_>, read: &[usize]) {
             key: Vec::new(),
             collations: Vec::new(),
             rowid_at: kept.index.columns.len(),
+            listed: Vec::new(),
             bounds: Bounds::default(),
             backwards: false,
             reversed: false,
@@ -8531,11 +8730,21 @@ fn detailed(side: &Side<'_>, plan: &Plan, lines: &mut Vec<Explained>, parent: us
             lines.push((parent, by_rowid(&side.shown, &[b"rowid=?"])));
         }
         Plan::Keyed {
-            root, key, bounds, ..
+            root,
+            key,
+            listed,
+            bounds,
+            ..
         } => {
             let mut terms: Vec<Vec<u8>> = Vec::new();
             for at in 0..key.len() {
                 terms.push(term_of(stored, *root, at, b"=?"));
+            }
+            // `sqlite3WhereExplainOneScan` of
+            // `research/sqlite/src/wherecode.c:146` counts a list among
+            // the equalities and writes it as one.
+            if !listed.is_empty() {
+                terms.push(term_of(stored, *root, key.len(), b"=?"));
             }
             if bounds.low.is_some() {
                 terms.push(term_of(stored, *root, key.len(), b">?"));
@@ -9116,6 +9325,7 @@ fn placed(side: &Side<'_>, stored: &Stored, mut places: Vec<Termed>, format: u32
             key,
             collations,
             rowid_at,
+            listed,
             bounds,
             backwards,
             ..
@@ -9137,6 +9347,7 @@ fn placed(side: &Side<'_>, stored: &Stored, mut places: Vec<Termed>, format: u32
                 key: key.clone(),
                 collations: collations.clone(),
                 rowid_at: *rowid_at,
+                listed: listed.clone(),
                 bounds: bounds.clone(),
                 backwards: *backwards,
                 reversed: true,
@@ -9176,6 +9387,7 @@ fn placed(side: &Side<'_>, stored: &Stored, mut places: Vec<Termed>, format: u32
         key,
         collations,
         rowid_at,
+        listed,
         bounds,
         backwards,
         ..
@@ -9188,6 +9400,7 @@ fn placed(side: &Side<'_>, stored: &Stored, mut places: Vec<Termed>, format: u32
                 key: key.clone(),
                 collations: collations.clone(),
                 rowid_at: *rowid_at,
+                listed: listed.clone(),
                 bounds: bounds.clone(),
                 backwards: *backwards,
                 reversed: true,
@@ -9514,6 +9727,7 @@ fn gathering(side: &Side<'_>, stored: &Stored, wanted: &[Termed], format: u32) -
                 key: Vec::new(),
                 collations: Vec::new(),
                 rowid_at: kept.index.columns.len(),
+                listed: Vec::new(),
                 bounds: Bounds::default(),
                 backwards: held_backwards(kept.index.columns.first(), format),
                 reversed: false,
@@ -9686,6 +9900,7 @@ fn walked(stored: &Stored, wanted: &[Termed], tail: Option<bool>, format: u32) -
                     key: Vec::new(),
                     collations: Vec::new(),
                     rowid_at: kept.index.columns.len(),
+                    listed: Vec::new(),
                     bounds: Bounds::default(),
                     backwards: held_backwards(kept.index.columns.first(), format),
                     reversed: !matching,
@@ -9877,6 +10092,9 @@ struct Seek {
     collations: Vec<Collation>,
     /// Where the rowid stands in an entry.
     rowid_at: usize,
+    /// The values a list holds the column after the key at, which the
+    /// walk takes one entry per value of.
+    listed: Vec<Value>,
     /// What the column after the key is held between.
     bounds: Bounds,
     /// Whether the index holds its entries backwards.
@@ -9939,6 +10157,7 @@ fn sought(plan: &Plan, held: (Option<&[Option<usize>]>, u32), cursor: &Cursor<'_
             key,
             collations,
             rowid_at,
+            listed,
             bounds,
             backwards,
             reversed,
@@ -9947,6 +10166,7 @@ fn sought(plan: &Plan, held: (Option<&[Option<usize>]>, u32), cursor: &Cursor<'_
             key: key.clone(),
             collations: collations.clone(),
             rowid_at: *rowid_at,
+            listed: listed.clone(),
             bounds: bounds.clone(),
             backwards: *backwards,
             reversed: *reversed,
@@ -9976,6 +10196,7 @@ fn sought(plan: &Plan, held: (Option<&[Option<usize>]>, u32), cursor: &Cursor<'_
                 key,
                 collations: keys.iter().map(|keying| keying.collation).collect(),
                 rowid_at: *rowid_at,
+                listed: Vec::new(),
                 bounds: Bounds::default(),
                 backwards: false,
                 reversed: false,
@@ -10147,21 +10368,6 @@ fn keyed_rowid(
 /// own and a list of no value names none.
 ///
 /// Walking the spine costs O(n) in its nodes.
-/// Whether the expression names no column of any side, so that its value
-/// stands before the walk begins.
-///
-/// Costs O(n) in the nodes of the expression.
-fn no_column(arena: &Arena, id: ExprId) -> bool {
-    let mut stack = alloc::vec![id];
-    while let Some(node) = stack.pop().and_then(|id| arena.node(id)) {
-        if matches!(node, Node::Column { .. }) {
-            return false;
-        }
-        arena.under(node, |child| stack.push(child));
-    }
-    true
-}
-
 fn listed_rowid(
     arena: &Arena,
     roots: &[ExprId],
@@ -10206,6 +10412,21 @@ fn listed_rowid(
         }
     }
     None
+}
+
+/// Whether the expression names no column of any side, so that its value
+/// stands before the walk begins.
+///
+/// Costs O(n) in the nodes of the expression.
+fn no_column(arena: &Arena, id: ExprId) -> bool {
+    let mut stack = alloc::vec![id];
+    while let Some(node) = stack.pop().and_then(|id| arena.node(id)) {
+        if matches!(node, Node::Column { .. }) {
+            return false;
+        }
+        arena.under(node, |child| stack.push(child));
+    }
+    true
 }
 
 /// What the column `column` of side `at` is held equal to by the `AND`

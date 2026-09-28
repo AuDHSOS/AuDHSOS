@@ -1289,3 +1289,172 @@ fn what_an_in_naming_a_column_of_a_side_before_it_holds() {
         .unwrap();
     assert_eq!(answered.rows.len(), 3);
 }
+
+/// An `IN` over a column an index holds ends the key of that index, which
+/// the plan names as an equality, and the walk takes the entries of one
+/// value of the list per pass.
+#[test]
+fn what_an_in_over_a_column_of_an_index_holds_the_walk_to() {
+    let mut writer = crate::change::Writer::new(1024, 0, crate::header::Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t(w,x,y)".as_slice(),
+        b"CREATE INDEX tw ON t(w)",
+        b"CREATE INDEX txy ON t(x,y)",
+        b"INSERT INTO t VALUES(1,1,1),(2,2,2),(3,3,3),(4,4,4),(5,5,5)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let image = writer.written();
+    for (sql, lines) in [
+        (
+            b"SELECT w FROM t WHERE w IN (3,1,2)".as_slice(),
+            tree(&["`--SEARCH t USING COVERING INDEX tw (w=?)"]),
+        ),
+        // A key before the list holds the columns in front of it, and the
+        // list the one after them.
+        (
+            b"SELECT y FROM t WHERE x=2 AND y IN (2,3)",
+            tree(&["`--SEARCH t USING COVERING INDEX txy (x=? AND y=?)"]),
+        ),
+        // A term the index does not hold is read over the rows the list
+        // names.
+        (
+            b"SELECT w FROM t WHERE w IN (2) AND x>0",
+            tree(&["`--SEARCH t USING INDEX tw (w=?)"]),
+        ),
+    ] {
+        assert_eq!(plan(&image, sql), lines, "{sql:?}");
+    }
+    // The values stand in the order of the column, so the walk answers the
+    // rows in that order and the walk read from the last entry back
+    // answers them the other way round.
+    let database = Database::open(&image).unwrap();
+    for (sql, rows) in [
+        (
+            b"SELECT w FROM t WHERE w IN (3,1,2)".as_slice(),
+            alloc::vec![1, 2, 3],
+        ),
+        (
+            b"SELECT w FROM t WHERE w IN (3,1,2) ORDER BY w DESC",
+            alloc::vec![3, 2, 1],
+        ),
+        // A value the column's affinity leaves as it stands reaches the
+        // entries it names, and one it holds no entry of reaches none.
+        (b"SELECT w FROM t WHERE w IN ('2',3)", alloc::vec![3]),
+        // An index holds no entry a comparison against null reaches, so
+        // such a value names no walk of its own.
+        (b"SELECT w FROM t WHERE w IN (NULL,2)", alloc::vec![2]),
+    ] {
+        let answered = database.query(sql).unwrap();
+        let held: Vec<i64> = answered
+            .rows
+            .iter()
+            .filter_map(|row| match row.first() {
+                Some(Value::Int(held)) => Some(*held),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(held, rows, "{sql:?}");
+    }
+    // A `NOT IN`, a list of no value and a list of one value under a
+    // `COLLATE` each leave the walk of the whole index, and a list that
+    // names a column of the side itself leaves the walk of the table,
+    // which that column is read out of.
+    for (sql, lines) in [
+        (
+            b"SELECT w FROM t WHERE w NOT IN (1,2)".as_slice(),
+            tree(&["`--SCAN t USING COVERING INDEX tw"]),
+        ),
+        (
+            b"SELECT w FROM t WHERE w IN ()",
+            tree(&["`--SCAN t USING COVERING INDEX tw"]),
+        ),
+        (
+            b"SELECT w FROM t WHERE w IN (1 COLLATE NOCASE)",
+            tree(&["`--SCAN t USING COVERING INDEX tw"]),
+        ),
+        // A `COLLATE` over one value of a longer list says nothing about
+        // the comparison, which the collation of the column holds.
+        (
+            b"SELECT w FROM t WHERE w IN (1 COLLATE NOCASE, 2)",
+            tree(&["`--SEARCH t USING COVERING INDEX tw (w=?)"]),
+        ),
+        (b"SELECT w FROM t WHERE w IN (1, x)", tree(&["`--SCAN t"])),
+    ] {
+        assert_eq!(plan(&image, sql), lines, "{sql:?}");
+    }
+}
+
+/// A value the affinity of the column answers another value for reaches
+/// entries the list does not name, so such a list holds the walk to
+/// nothing, and the collation a list of more than one value compares
+/// under is the column's, whatever a `COLLATE` over a value says.
+#[test]
+fn what_an_in_over_a_column_of_another_affinity_or_collation_holds() {
+    let mut writer = crate::change::Writer::new(1024, 0, crate::header::Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE k(v INTEGER)".as_slice(),
+        b"CREATE INDEX kv ON k(v)",
+        b"INSERT INTO k VALUES(5),(6)",
+        b"CREATE TABLE c(a TEXT COLLATE NOCASE)",
+        b"CREATE INDEX ca ON c(a)",
+        b"INSERT INTO c VALUES('A'),('b')",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let image = writer.written();
+    // Text against a column of integer affinity stands in an entry as the
+    // number it reads as, which the walk of the index is not held to. An
+    // entry of `kv` is no shorter than the row, so the walk reads the
+    // table.
+    assert_eq!(
+        plan(&image, b"SELECT v FROM k WHERE v IN ('5',6)"),
+        tree(&["`--SCAN k"])
+    );
+    assert_eq!(
+        plan(
+            &image,
+            b"SELECT a FROM c WHERE a IN ('a' COLLATE BINARY, 'zz')"
+        ),
+        tree(&["`--SEARCH c USING COVERING INDEX ca (a=?)"])
+    );
+    // A list about a column of another side says nothing about the index
+    // this one is walked by. The C library reads the side the list holds
+    // first, where this engine reads the sides in the order the `FROM`
+    // writes them, which item 283 of `docs/16-sqlite-in-rust.md` holds.
+    assert_eq!(
+        plan(
+            &image,
+            b"SELECT v, a FROM k, c WHERE c.a IN ('A','b') AND k.v > 5"
+        ),
+        tree(&[
+            "|--SEARCH k USING COVERING INDEX kv (v>?)",
+            "`--SEARCH c USING COVERING INDEX ca (a=?)",
+        ])
+    );
+    let database = Database::open(&image).unwrap();
+    for (sql, rows) in [
+        (
+            b"SELECT a FROM c WHERE a IN ('a' COLLATE BINARY, 'zz')".as_slice(),
+            alloc::vec!["A"],
+        ),
+        // A list of one value is the equality the C library writes in its
+        // place, which the `COLLATE` says the collation of.
+        (
+            b"SELECT a FROM c WHERE a IN ('a' COLLATE BINARY)",
+            Vec::new(),
+        ),
+        (b"SELECT a FROM c WHERE a IN ('a')", alloc::vec!["A"]),
+    ] {
+        let answered = database.query(sql).unwrap();
+        let held: Vec<&str> = answered
+            .rows
+            .iter()
+            .filter_map(|row| match row.first() {
+                Some(Value::Text(text)) => core::str::from_utf8(text).ok(),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(held, rows, "{sql:?}");
+    }
+}

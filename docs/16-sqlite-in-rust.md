@@ -1378,6 +1378,12 @@ Size: L.
      reads an `EXISTS` where the row it stands for is read and names it
      `SCALAR SUBQUERY`. `eqp.test` holds two cases of them.
 
+285. A second `IN` over the column after the one a first `IN` names, which
+     `codeINTerm` of `research/sqlite/src/wherecode.c:670` writes a loop
+     per list for and names `(x=? AND y=?)`. This engine ends the key at
+     the first list and reads the second over the entries that list
+     reaches, which names `(x=?)`. `eqp.test` holds one case of it.
+
 ### Done when
 
 Every statement of the recorded corpora is accepted or refused as the C

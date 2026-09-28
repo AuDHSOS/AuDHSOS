@@ -1305,11 +1305,15 @@ fn listed(
     for member in arena.children(list) {
         members.push(answer(arena, *member, sql, row, deeper)?);
     }
+    // `sqlite3CodeSubselect` of `research/sqlite/src/expr.c:3778` reads
+    // the collation of the comparison off the value on the left alone,
+    // where a list of one value is the equality `parse.y:1515` writes in
+    // its place, which takes a written collation from either side.
     Ok(Answer::plain(in_list(
         &left,
         &members,
         negated,
-        row.collation(),
+        (row.collation(), members.len() == 1),
     )))
 }
 
@@ -2237,7 +2241,12 @@ fn between(
 /// `x IN (a, b)`, whose list holds at least one member, because
 /// [`listed`] answers an empty one without reading what is looked for in
 /// it.
-fn in_list(left: &Answer, list: &[Answer], negated: bool, default: Collation) -> Value {
+///
+/// `alone` of `under` says that the list holds one value, whose written
+/// collation the comparison then takes; a longer list compares under the
+/// collation of the value on the left alone.
+fn in_list(left: &Answer, list: &[Answer], negated: bool, under: (Collation, bool)) -> Value {
+    let (default, alone) = under;
     let mut unknown = false;
     for member in list {
         // The affinity is the left side's alone, which is what
@@ -2248,8 +2257,8 @@ fn in_list(left: &Answer, list: &[Answer], negated: bool, default: Collation) ->
             value: member.value.clone(),
             json: false,
             affinity: Affinity::None,
-            collation: member.collation,
-            written: member.written,
+            collation: alone.then_some(member.collation).flatten(),
+            written: alone && member.written,
         };
         match logic(&comparison(BinaryOp::Eq, left, &against, default)) {
             Some(true) => return Value::Int(i64::from(!negated)),
