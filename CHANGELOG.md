@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` counts one search per row a statement reads out of the sorter after the
+  first, as the rows of a walk count one each, which `sqlite3_search_count` reads.
+  D-584 records it. Catalog 6.6.422. `like.test` goes from 128 cases passing to 138
+  and `where8.test` from 2032 to 2035.
+
 - `db-sqlite` writes no range for a `LIKE` or a `GLOB` whose pattern the statement
   computes, reading a `COLLATE` on the pattern through, and calls the `like` or the
   `glob` the application defined for the count of arguments the term holds. D-583

@@ -537,3 +537,45 @@ fn what_a_pattern_whose_prefix_reads_as_a_number_holds() {
     assert_eq!(held.stepped.steps, 0);
     assert_eq!(held.stepped.likes, 2);
 }
+
+/// The rows a statement reads out of the sorter count a search each after
+/// the first, as the rows of a walk do, and the sort itself counts one
+/// search back.
+///
+/// `OP_SorterNext` of `research/sqlite/src/vdbe.c:6532` counts one per row
+/// it moves to and `OP_Sort` of `research/sqlite/src/vdbe.c:6351` counts
+/// one back, which it takes off the step `OP_Rewind` counts after it.
+#[test]
+fn what_the_rows_read_out_of_the_sorter_count() {
+    let mut writer = crate::change::Writer::new(1024, 0, crate::header::Encoding::Utf8).unwrap();
+    writer
+        .run(b"CREATE TABLE t(a INTEGER PRIMARY KEY, b)")
+        .unwrap();
+    for held in ["1", "12", "123", "234", "345", "45"] {
+        let mut sql = alloc::string::String::from("INSERT INTO t VALUES(");
+        sql.push_str(held);
+        sql.push(',');
+        sql.push_str(held);
+        sql.push(')');
+        writer.run(sql.as_bytes()).unwrap();
+    }
+    let image = writer.written();
+    let database = Database::open(&image).unwrap();
+    // Six rows walked count five steps, the six rows read out of the sorter
+    // five searches, and the sort one back.
+    let held = database.query(b"SELECT a FROM t ORDER BY +a").unwrap();
+    assert_eq!(held.stepped.steps, 5);
+    assert_eq!(held.stepped.sorts, 1);
+    assert_eq!(held.stepped.searched, 9);
+    // The walk of the whole table alone counts the five steps.
+    let held = database.query(b"SELECT a FROM t").unwrap();
+    assert_eq!(held.stepped.searched, 5);
+    assert_eq!(held.stepped.sorts, 0);
+    // Two rows out of the sorter count one search, and five steps of the
+    // walk with the one the sort takes back leave five.
+    let held = database
+        .query(b"SELECT a FROM t WHERE b LIKE '12%' ORDER BY +a")
+        .unwrap();
+    assert_eq!(held.rows.len(), 2);
+    assert_eq!(held.stepped.searched, 5);
+}

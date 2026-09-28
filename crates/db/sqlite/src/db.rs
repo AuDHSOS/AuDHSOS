@@ -4981,6 +4981,10 @@ impl<'a> Database<'a> {
         }
         if !keys.is_empty() && !held {
             self.sort();
+            // `OP_SorterNext` counts a search per row after the first the
+            // statement reads out of the sorter, as `OP_Next` counts one per
+            // row of a walk.
+            self.search(i64::try_from(rows.len().saturating_sub(1)).unwrap_or(0));
             rows.sort_by(|left, right| order_of(&left.keys, &right.keys, &keys));
         }
         let mut rows: Vec<Vec<Value>> = rows.into_iter().map(|row| row.values).collect();

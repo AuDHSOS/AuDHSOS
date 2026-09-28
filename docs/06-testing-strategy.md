@@ -7888,6 +7888,15 @@ Unit tests of `crate::db` over `fixtures/indexed.db`.
 - `WHERE NULL` under an aggregate, which answers one row.
 - `WHERE abs(0)`, which is read against every row.
 
+### 6.6.422 What the rows of the sorter count (`db-sqlite`)
+
+Unit tests of `crate::db` over an image `crate::change` writes.
+
+- Six rows walked and sorted, which count five steps, one sort and nine
+  searches.
+- The same walk with no `ORDER BY`, which counts the five steps alone.
+- Two rows out of the sorter, which count one search.
+
 ### 6.6.421 What a `LIKE` reads its pattern from (`db-sqlite`)
 
 Unit tests of `crate::db` over images `crate::change` writes.
