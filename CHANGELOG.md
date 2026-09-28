@@ -7,6 +7,19 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` names a range of an index over an expression from a bound over that same
+  expression and from each end of a `BETWEEN` over it, where it took a key of `=` alone, so the
+  walk answers the rows in the order of the index. D-602 records it. Catalog 6.6.433.
+  `indexexpr2.test` goes from 109 cases passing to 110.
+
+- `db-sqlite` holds the key and the ends of such a range to the value the affinity of the
+  expression leaves of the term's value, so `CAST(b AS TEXT)=123` reaches the entries holding
+  `'123'`. D-603 records it. `indexexpr2.test` goes from 110 cases passing to 111.
+
+- `db-sqlite` says `COVERING` of an index whose own expressions answer the columns the statement
+  reads, while the walk reads the row all the same. D-604 records it. Catalog 6.6.434.
+  `indexexpr1.test` goes from 92 cases passing to 96.
+
 - `db-sqlite` holds the key of an index to the value the affinity of the column leaves of
   the term's value, where it left the index alone unless the conversion answered the value
   itself, so a number against a column of text affinity and text against one of integer

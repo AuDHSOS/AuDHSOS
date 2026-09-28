@@ -7888,6 +7888,42 @@ Unit tests of `crate::db` over `fixtures/indexed.db`.
 - `WHERE NULL` under an aggregate, which answers one row.
 - `WHERE abs(0)`, which is read against every row.
 
+### 6.6.434 What the plan says of an index whose expressions answer what is read (`db-sqlite`)
+
+Unit tests of `crate::db` over an image `crate::change` writes. Every
+answer is the one the C library's shell writes.
+
+- `SELECT rowid FROM t1 WHERE substr(a,b,3)<='and'` over an index on that
+  expression, named `SEARCH t1 USING COVERING INDEX t1abx (<expr><?)`.
+- The same term over an index on `(b,substr(a,2,3),c)` with `c` answered,
+  named `COVERING INDEX t1ba`.
+- `SELECT c` over the index that holds no `c`, named `INDEX t1abx`.
+- `SELECT a` over the index whose expression reads `a`, named `INDEX
+  t1abx`, the row answering the column written on its own.
+- `SELECT *`, whose columns no name of the statement stands for, and a
+  bound over another expression of the same side, neither of which the
+  entries of the index answer.
+- `SELECT c FROM t1 WHERE b=1`, which writes no expression of the index
+  and is covered by its columns alone.
+- The same term beside a second side whose column the statement answers,
+  and a bound over an expression of that second side, neither of which
+  says anything about the entries of the first.
+
+### 6.6.433 What a bound over an expression an index holds names (`db-sqlite`)
+
+Unit tests of `crate::db` over an image `crate::change` writes. Every
+answer is the one the C library's shell writes.
+
+- `WHERE (b || 'x')>'onex'` over an index on that expression, named
+  `SEARCH t1 USING INDEX i1 (<expr>>?)`, and the rows it answers, which
+  stand in the order of the index.
+- The same expression under a `BETWEEN`, named `(<expr>>? AND <expr><?)`,
+  and its rows.
+- `WHERE CAST(b AS TEXT)=123` over an index on that `CAST`, whose key
+  holds `'123'`, with the plan and the rows.
+- A bound over an expression an index holds under `COLLATE NOCASE`, which
+  names no range of it and leaves `SCAN t2`.
+
 ### 6.6.432 What a `USING` holds the walk of the side before it to (`db-sqlite`)
 
 Unit tests of `crate::db` over an image `crate::change` writes. Every

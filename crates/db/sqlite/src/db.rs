@@ -1920,19 +1920,15 @@ struct Side<'a> {
     /// several rows, which stands in front of the alias, and nothing
     /// otherwise.
     valued: Vec<u8>,
+    /// Whether the index the plan names holds every column the statement
+    /// reads counting the columns its own expressions read, which the
+    /// plan says `COVERING` of while the walk reads the row all the same.
+    expressed: bool,
     /// Whether the walk is held to the one row a bare `min` or `max`
     /// reads, which the plan writes `SEARCH` for.
     least: bool,
-    /// Whether the walk answers one row, which a term that holds the
-    /// rowid or every column of a unique index at one value does.
-    single: bool,
-    /// Whether the walk reads no entry after the one it answers, which
-    /// `whereShortCut` of `research/sqlite/src/where.c:6351` marks with
-    /// `WHERE_ONEROW` for a statement of one table: a branch of an `OR`
-    /// and a side of a join each read the entry after their row, which
-    /// `whereLoopAddBtree` marks one row only for an index whose every
-    /// column is `NOT NULL`.
-    once: bool,
+    /// How many rows the walk answers.
+    rowing: Rowing,
     /// The terms of the `WHERE` the walk answers by itself, which are read
     /// for no row it takes.
     dropped: Vec<ExprId>,
@@ -1946,6 +1942,35 @@ struct Side<'a> {
     /// above it, which hang where this side hangs and stand in the place
     /// this side stands in the `FROM`.
     lines: Vec<Explained>,
+}
+
+/// How many rows the walk of a side answers.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Rowing {
+    /// More than one row, for all the terms say.
+    Many,
+    /// The one row a term that holds the rowid or every column of a
+    /// unique index at one value names.
+    One,
+    /// That one row, with the entry after it left unread, which
+    /// `whereShortCut` of `research/sqlite/src/where.c:6351` marks with
+    /// `WHERE_ONEROW` for a statement of one table: a branch of an `OR`
+    /// and a side of a join each read the entry after their row, which
+    /// `whereLoopAddBtree` marks one row only for an index whose every
+    /// column is `NOT NULL`.
+    Ended,
+}
+
+impl Rowing {
+    /// How many rows a walk answers, where `single` says one row holds
+    /// every term and `alone` that the statement reads this side alone.
+    const fn of(single: bool, alone: bool) -> Self {
+        match (single, alone) {
+            (true, true) => Rowing::Ended,
+            (true, false) => Rowing::One,
+            (false, _) => Rowing::Many,
+        }
+    }
 }
 
 /// How a plan names a statement written inside a `FROM`.
@@ -2102,6 +2127,16 @@ impl Side<'_> {
             Indexing::None => kept.root == own,
             Indexing::By { name, .. } => kept.index.name.eq_ignore_ascii_case(name),
         }
+    }
+
+    /// Whether the walk answers one row.
+    const fn rowed(&self) -> bool {
+        matches!(self.rowing, Rowing::One | Rowing::Ended)
+    }
+
+    /// Whether the walk reads no entry after the one row it answers.
+    const fn ended(&self) -> bool {
+        matches!(self.rowing, Rowing::Ended)
     }
 
     /// The rowids the walk of the side's own tree is held to.
@@ -5164,7 +5199,7 @@ impl<'a> Database<'a> {
         // A walk that answers one row answers every term of the order and
         // gathers every group, whatever order the index it reads holds its
         // entries in.
-        if matches!(sides, [side] if side.single) {
+        if matches!(sides, [side] if side.rowed()) {
             return (true, arena.orders(select.order).len());
         }
         let walked = if alone && calls.is_empty() && select.group.is_empty() {
@@ -5708,9 +5743,9 @@ impl<'a> Database<'a> {
                 reading: Vec::new(),
                 indexing: indexing(source.kind, sql),
                 valued: clause,
+                expressed: false,
                 least: false,
-                single: false,
-                once: false,
+                rowing: Rowing::Many,
                 dropped: Vec::new(),
                 nesting,
                 lines,
@@ -5831,9 +5866,9 @@ impl<'a> Database<'a> {
                     reading: Vec::new(),
                     indexing: Indexing::Any,
                     valued: Vec::new(),
+                    expressed: false,
                     least: false,
-                    single: false,
-                    once: false,
+                    rowing: Rowing::Many,
                     dropped: Vec::new(),
                     nesting: Nesting::Named,
                     lines: Vec::new(),
@@ -6303,7 +6338,7 @@ impl<'a> Database<'a> {
         }
         if let Some(mut held) = sought(&side.plan, (side.covering.as_deref(), stored.root), cursor)
         {
-            if side.once {
+            if side.ended() {
                 held.taking = Taking::One;
             }
             if let Some(feed) = self.passes(stored, held) {
@@ -6781,7 +6816,7 @@ impl<'a> Database<'a> {
         // the order of any index, so an index that holds every column the
         // statement reads answers the row out of its entry, and the rows
         // that differ are the one row.
-        let once = matches!(sides, [side] if side.single);
+        let once = matches!(sides, [side] if side.rowed());
         let free = once
             || (windowless && !gathered && smallest.is_none() && (terms == 0 || answered == 0));
         covered(arena, select, sql, sides, free);
@@ -7342,8 +7377,7 @@ fn planned(
     let alone = sides.len() == 1;
     for (side, (plan, single)) in sides.iter_mut().zip(plans) {
         side.plan = plan;
-        side.single = single;
-        side.once = single && alone;
+        side.rowing = Rowing::of(single, alone);
     }
     let Some(filter) = filter else {
         return;
@@ -7591,8 +7625,24 @@ fn terms_of<'a>(
         }) = arena.node(id)
         {
             if !negated {
-                out.extend(bounded(arena, value, low, BinaryOp::Ge, sql, sides));
-                out.extend(bounded(arena, value, high, BinaryOp::Le, sql, sides));
+                out.extend(bounded(
+                    arena,
+                    value,
+                    low,
+                    BinaryOp::Ge,
+                    sql,
+                    sides,
+                    &mut over,
+                ));
+                out.extend(bounded(
+                    arena,
+                    value,
+                    high,
+                    BinaryOp::Le,
+                    sql,
+                    sides,
+                    &mut over,
+                ));
             }
             continue;
         }
@@ -7707,13 +7757,17 @@ fn held_at(
     })
 }
 
-/// The term an expression of one side is held at one value by, and
-/// nothing where the term holds no expression of a side or holds it at
-/// anything but one value.
+/// The term an expression of one side is held at one value by, or bounded
+/// at one value by, and nothing where the term holds no expression of a
+/// side or holds it at anything but one value.
 ///
-/// Only a term written `=` names a key, because the entries of an index
-/// over an expression run in the order that expression answers and a
-/// bound would ask about the order of what the statement wrote.
+/// The entries of a place over an expression run in the order that
+/// expression answers, which is the order a bound over the same
+/// expression asks about, so `whereLoopAddBtree` of
+/// `research/sqlite/src/where.c` reads a bound over it as it reads one
+/// over a column and `explainIndexRange` writes `<expr>>?` for it. A
+/// place over an expression carries no affinity, so the value is compared
+/// as the statement wrote it.
 ///
 /// Reading one term costs O(n) in its nodes.
 fn held_over(
@@ -7724,18 +7778,27 @@ fn held_over(
     op: BinaryOp,
 ) -> Option<Overed> {
     let (id, value) = held;
-    if op != BinaryOp::Eq {
-        return None;
-    }
     // A `COLLATE` says what the comparison compares under, which the
     // entries of the index are not held in the order of.
     if matches!(arena.node(value), Some(Node::Collate { .. })) {
         return None;
     }
     let at = over_of(arena, id, sql, sides)?;
+    // `sqlite3IndexAffinityStr` of `research/sqlite/src/build.c` reads the
+    // affinity of a place over an expression off that expression, which
+    // is what the entries hold and what the comparison converts the other
+    // operand under: `CAST(b AS TEXT)=123` reaches the entries holding
+    // `'123'`.
+    let affinity = affinity_of(arena, id, sql, sides);
     let value = evaluate_row(arena, value, sql, &eval::NoRow(None)).ok()?;
     // An index holds no entry a comparison against null reaches.
-    (value != Value::Null).then_some(Overed { at, id, value })
+    (value != Value::Null).then_some(Overed {
+        at,
+        id,
+        op,
+        affinity,
+        value,
+    })
 }
 
 /// One term that holds an expression of a side at a value, which an
@@ -7745,6 +7808,11 @@ struct Overed {
     at: usize,
     /// The expression, as the statement wrote it.
     id: ExprId,
+    /// Which way the comparison runs, with the expression on the left.
+    op: BinaryOp,
+    /// What the expression converts the value under, which is the
+    /// affinity of the expression itself.
+    affinity: Affinity,
     /// What it is held at.
     value: Value,
 }
@@ -8016,7 +8084,8 @@ fn over_of(arena: &Arena, id: ExprId, sql: &[u8], sides: &[Side<'_>]) -> Option<
 
 /// The term one end of a `BETWEEN` holds the column at, and nothing
 /// where the value is no column of a side or the end is no value the
-/// walk can read without a row.
+/// walk can read without a row; an end that bounds an expression is
+/// added to `over` instead.
 ///
 /// Reading one end costs what the expression it is read from costs.
 fn bounded(
@@ -8026,8 +8095,14 @@ fn bounded(
     op: BinaryOp,
     sql: &[u8],
     sides: &[Side<'_>],
+    over: &mut Vec<Overed>,
 ) -> Option<Bound> {
-    let (at, reached) = reached(arena, value, sql, sides)?;
+    let Some((at, reached)) = reached(arena, value, sql, sides) else {
+        // An index over an expression names a range of a term that
+        // bounds that same expression.
+        over.extend(held_over(arena, (value, end), sql, sides, op));
+        return None;
+    };
     let held = evaluate_row(arena, end, sql, &eval::NoRow(None)).ok()?;
     Some(Bound {
         at,
@@ -8261,12 +8336,17 @@ fn plan_of(
                 // A place over an expression is one a term naming that
                 // same expression holds at one value.
                 crate::schema::Of::Term(term) => {
-                    let Some(value) = keyed_over(term, held, kept, terms, at) else {
-                        break;
-                    };
-                    key.push(value);
-                    collations.push(held.collation);
-                    continue;
+                    if let Some(value) = keyed_over(term, held, kept, terms, at) {
+                        key.push(value);
+                        collations.push(held.collation);
+                        continue;
+                    }
+                    // A bound over that same expression ends the key, the
+                    // entries of the places after it running over again
+                    // for each value of this one.
+                    bounds = bounded_over(term, held, kept, terms, at);
+                    collations.extend((!bounds.is_empty()).then_some(held.collation));
+                    break;
                 }
                 crate::schema::Of::Place(place) => place,
             };
@@ -8344,25 +8424,16 @@ fn plan_of(
             // because the entries of the columns after it run over
             // again for each value of this one.
             bounds = bounds_of(named);
-            if !bounds.is_empty() {
-                collations.push(held.collation);
-            }
+            collations.extend((!bounds.is_empty()).then_some(held.collation));
             break;
         }
-        // The rowid stands after every column of an index of a table that
-        // keeps one, so a term that holds it at one whole number ends the
-        // key: `whereLoopAddBtree` reads `XN_ROWID` of
-        // `research/sqlite/src/sqliteInt.h` as one more column of the key.
-        // A key that holds every column of the index leaves no bound and
-        // no list, each of which ends the key before the last column.
-        if key.len() == kept.index.columns.len() {
-            let held = about.iter().find(|term| {
-                term.at == at && term.op == BinaryOp::Eq && term.reached == Reached::Key
-            });
-            if let Some(rowid) = held.and_then(|term| whole_of(&term.value)) {
-                key.push(Value::Int(rowid));
-                collations.push(Collation::Binary);
-            }
+        // A key that holds every column of the index ends with the rowid
+        // a term names, which leaves no bound and no list.
+        if key.len() == kept.index.columns.len()
+            && let Some(rowid) = keyed_tail(about, at)
+        {
+            key.push(Value::Int(rowid));
+            collations.push(Collation::Binary);
         }
         if key.is_empty() && listed.is_empty() && (wants_key || bounds.is_empty()) {
             continue;
@@ -8388,6 +8459,21 @@ fn plan_of(
         ));
     }
     best.map(|(_, plan)| plan)
+}
+
+/// The rowid a term of the spine holds the walk to, which ends the key of
+/// an index whose every column the key holds already.
+///
+/// The rowid stands after every column of an index of a table that keeps
+/// one, so `whereLoopAddBtree` reads `XN_ROWID` of
+/// `research/sqlite/src/sqliteInt.h` as one more column of the key.
+///
+/// Reading the terms costs O(n) in them.
+fn keyed_tail(about: &[Bound], at: usize) -> Option<i64> {
+    about
+        .iter()
+        .find(|term| term.at == at && term.op == BinaryOp::Eq && term.reached == Reached::Key)
+        .and_then(|term| whole_of(&term.value))
 }
 
 /// The values a list holds the column `held` names at, each converted
@@ -8462,7 +8548,8 @@ fn keyed_over(
         .over
         .iter()
         .find(|over| {
-            over.at == at
+            over.op == BinaryOp::Eq
+                && over.at == at
                 && alike_written(
                     Written {
                         arena: terms.arena,
@@ -8472,7 +8559,65 @@ fn keyed_over(
                     theirs,
                 )
         })
-        .map(|over| over.value.clone())
+        .map(|over| {
+            let mut value = over.value.clone();
+            crate::value::apply(&mut value, over.affinity);
+            value
+        })
+}
+
+/// The range the terms hold the expression of the place `keyed` between,
+/// and an empty range where no term bounds that expression.
+///
+/// A place over an expression carries no affinity, so every end is the
+/// value the statement wrote and reaches the entries that value names.
+///
+/// Matching one place costs O(t * n) in the terms and their nodes.
+fn bounded_over(
+    term: ExprId,
+    keyed: &crate::schema::Keyed,
+    kept: &Kept,
+    terms: &Planning<'_>,
+    at: usize,
+) -> Bounds {
+    // An index over an expression holds its entries under the collation
+    // the `CREATE INDEX` wrote, and a term compares under `BINARY` where
+    // it writes none.
+    if keyed.collation != Collation::Binary {
+        return Bounds::default();
+    }
+    let theirs = Written {
+        arena: &kept.arena,
+        id: term,
+        sql: &kept.sql,
+    };
+    bounds_of(|op| {
+        terms
+            .over
+            .iter()
+            .find(|over| {
+                over.op == op
+                    && over.at == at
+                    && alike_written(
+                        Written {
+                            arena: terms.arena,
+                            id: over.id,
+                            sql: terms.sql,
+                        },
+                        theirs,
+                    )
+            })
+            .map(|over| {
+                // A conversion that answers another value, which a
+                // numeric affinity over text does, is one the end is
+                // widened for.
+                let mut value = over.value.clone();
+                crate::value::apply(&mut value, over.affinity);
+                let exact =
+                    compare(&value, &over.value, Collation::Binary) == core::cmp::Ordering::Equal;
+                (value, exact, None)
+            })
+    })
 }
 
 /// Whether the walk of a statement goes on or stops where it stands.
@@ -8663,11 +8808,23 @@ fn covered(arena: &Arena, select: &Select, sql: &[u8], sides: &mut [Side<'_>], f
             }
         }
     }
-    for (side, read) in sides.iter_mut().zip(reading) {
-        if free {
-            covers(side, &read);
+    if free {
+        for (side, read) in sides.iter_mut().zip(&reading) {
+            covers(side, read);
         }
+    }
+    // The walk the index answers is chosen by now, so the plan names it
+    // and the reading says whether its entries hold what the statement
+    // reads.
+    let expressing: Vec<bool> = (0..sides.len())
+        .map(|at| {
+            let read = reading.get(at).map_or(&[][..], Vec::as_slice);
+            expressed(arena, select, sql, sides, (at, read))
+        })
+        .collect();
+    for ((side, read), held) in sides.iter_mut().zip(reading).zip(expressing) {
         side.covering = covering_of(side, &read);
+        side.expressed = held;
         side.reading = read;
     }
 }
@@ -8765,6 +8922,114 @@ fn covering_of(side: &Side<'_>, read: &[usize]) -> Option<Vec<Option<usize>>> {
         return None;
     };
     covering_at(stored, root, read)
+}
+
+/// Whether the index the plan of the side at `at` names holds every
+/// column the statement reads of that side, counting a column one of the
+/// index's own expressions reads as answered by the entry.
+///
+/// `whereIsCoveringIndex` of `research/sqlite/src/where.c:3831` walks the
+/// statement, leaves the columns under an expression the index holds
+/// unread and answers `WHERE_EXPRIDX` where it left one, which
+/// `sqlite3WhereExplainOneScan` writes `COVERING INDEX` for while the
+/// walk keeps the table open. A column written on its own as well as
+/// under such an expression is read from the row, so it is counted.
+///
+/// Costs O(n * k) in the nodes of the statement and the places of the
+/// index.
+fn expressed(
+    arena: &Arena,
+    select: &Select,
+    sql: &[u8],
+    sides: &[Side<'_>],
+    held: (usize, &[usize]),
+) -> bool {
+    let (at, read) = held;
+    let found = sides.get(at).and_then(|side| {
+        let root = rooted_at(&side.plan)?;
+        let stored = side.source.table()?;
+        let kept = stored.indexes.iter().find(|kept| kept.root == root)?;
+        Some((stored, root, kept))
+    });
+    let Some((stored, root, kept)) = found else {
+        return false;
+    };
+    let terms: Vec<ExprId> = kept
+        .index
+        .columns
+        .iter()
+        .filter_map(|column| match column.of {
+            crate::schema::Of::Term(term) => Some(term),
+            crate::schema::Of::Place(_) => None,
+        })
+        .collect();
+    if terms.is_empty() {
+        return false;
+    }
+    let mut spared: Vec<usize> = Vec::new();
+    let mut bare: Vec<usize> = Vec::new();
+    let mut matched = false;
+    let mut spine = roots(arena, select);
+    while let Some(id) = spine.pop() {
+        let alike = terms.iter().any(|term| {
+            alike_written(
+                Written { arena, id, sql },
+                Written {
+                    arena: &kept.arena,
+                    id: *term,
+                    sql: &kept.sql,
+                },
+            )
+        });
+        if alike {
+            matched = true;
+            spared.extend(placed_under(arena, id, sql, sides));
+            continue;
+        }
+        if let Some((held, Reached::Column(place))) = reached(arena, id, sql, sides)
+            && held == at
+        {
+            bare.push(place);
+        }
+        arena
+            .node(id)
+            .into_iter()
+            .for_each(|node| arena.under(node, |child| spine.push(child)));
+    }
+    if !matched {
+        return false;
+    }
+    let pruned: Vec<usize> = read
+        .iter()
+        .copied()
+        .filter(|place| bare.contains(place) || !spared.contains(place))
+        .collect();
+    covering_at(stored, root, &pruned).is_some()
+}
+
+/// The places the columns `id` names take in the table, counting every
+/// node under it.
+///
+/// Every column of an expression the side holds an index over is a column
+/// of that side: `shaped` of `research/sqlite/src/ast.rs` reads the table
+/// a name carries in front of it as part of the name, so a name that
+/// reaches another side is another expression, and a bare name two sides
+/// answer is refused before the walk begins.
+///
+/// Costs O(n) in the nodes of the expression.
+fn placed_under(arena: &Arena, id: ExprId, sql: &[u8], sides: &[Side<'_>]) -> Vec<usize> {
+    let mut out = Vec::new();
+    let mut spine = alloc::vec![id];
+    while let Some(id) = spine.pop() {
+        if let Some((_, Reached::Column(place))) = reached(arena, id, sql, sides) {
+            out.push(place);
+        }
+        arena
+            .node(id)
+            .into_iter()
+            .for_each(|node| arena.under(node, |child| spine.push(child)));
+    }
+    out
 }
 
 /// The page the tree of the index a plan names begins at, and nothing
@@ -8914,7 +9179,7 @@ fn detailed(side: &Side<'_>, plan: &Plan, lines: &mut Vec<Explained>, parent: us
         Plan::Union(_) => rooted_at(plan)
             .and_then(|root| covering_at(stored, root, &side.reading))
             .is_some(),
-        _ => side.covering.is_some(),
+        _ => side.covering.is_some() || side.expressed,
     };
     match plan {
         Plan::Rows(None, None) | Plan::Backwards => {

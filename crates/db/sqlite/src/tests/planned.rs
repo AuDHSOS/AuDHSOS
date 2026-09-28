@@ -1896,3 +1896,191 @@ fn what_a_using_holds_the_walk_of_the_side_before_it_to() {
         alloc::vec![alloc::vec![Value::Int(2), Value::Int(28)]]
     );
 }
+
+/// A bound over an expression an index holds names a range of that index,
+/// the entries of the place running in the order the expression answers,
+/// and the value is converted under the affinity of the expression.
+#[test]
+fn what_a_bound_over_an_expression_an_index_holds_names() {
+    let mut writer = crate::change::Writer::new(1024, 0, crate::header::Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t1(a INTEGER PRIMARY KEY, b)".as_slice(),
+        b"INSERT INTO t1 VALUES(1,'one'),(2,'two'),(3,'three')",
+        b"CREATE INDEX i1 ON t1(b || 'x')",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let image = writer.written();
+    let rows = |sql: &[u8]| Database::open(&image).unwrap().query(sql).unwrap().rows;
+    assert_eq!(
+        plan(&image, b"SELECT b FROM t1 WHERE (b || 'x')>'onex'"),
+        tree(&["`--SEARCH t1 USING INDEX i1 (<expr>>?)"])
+    );
+    // The walk answers the rows in the order of the index and not of the
+    // rowids.
+    assert_eq!(
+        rows(b"SELECT b FROM t1 WHERE (b || 'x')>'onex'"),
+        alloc::vec![
+            alloc::vec![Value::Text(b"three".to_vec())],
+            alloc::vec![Value::Text(b"two".to_vec())]
+        ]
+    );
+    // A `BETWEEN` says one bound of each end.
+    assert_eq!(
+        plan(
+            &image,
+            b"SELECT b FROM t1 WHERE (b || 'x') BETWEEN 'onex' AND 'threex'"
+        ),
+        tree(&["`--SEARCH t1 USING INDEX i1 (<expr>>? AND <expr><?)"])
+    );
+    assert_eq!(
+        rows(b"SELECT b FROM t1 WHERE (b || 'x') BETWEEN 'onex' AND 'threex'"),
+        alloc::vec![
+            alloc::vec![Value::Text(b"one".to_vec())],
+            alloc::vec![Value::Text(b"three".to_vec())]
+        ]
+    );
+    // An index that writes a collation of its own holds its entries in
+    // another order than the comparison asks about, so no bound names a
+    // range of it.
+    let mut writer = crate::change::Writer::new(1024, 0, crate::header::Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t2(a)".as_slice(),
+        b"INSERT INTO t2 VALUES('AB'),('cd')",
+        b"CREATE INDEX i2 ON t2(substr(a,1,2) COLLATE NOCASE)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let image = writer.written();
+    assert_eq!(
+        plan(&image, b"SELECT a FROM t2 WHERE substr(a,1,2)>'b'"),
+        tree(&["`--SCAN t2"])
+    );
+    let mut writer = crate::change::Writer::new(1024, 0, crate::header::Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE x1(a INTEGER PRIMARY KEY, b)".as_slice(),
+        b"INSERT INTO x1 VALUES(1,123),(2,'123'),(3,'123abc')",
+        b"CREATE INDEX x1i ON x1(CAST(b AS TEXT))",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let image = writer.written();
+    // A `CAST` says the affinity of the place, which the entries hold and
+    // which the key is converted under; the statement reads the rowid and
+    // the expression alone, which the entries answer.
+    assert_eq!(
+        plan(&image, b"SELECT a FROM x1 WHERE CAST(b AS TEXT)=123"),
+        tree(&["`--SEARCH x1 USING COVERING INDEX x1i (<expr>=?)"])
+    );
+    assert_eq!(
+        Database::open(&image)
+            .unwrap()
+            .query(b"SELECT a FROM x1 WHERE CAST(b AS TEXT)=123")
+            .unwrap()
+            .rows,
+        alloc::vec![alloc::vec![Value::Int(1)], alloc::vec![Value::Int(2)]]
+    );
+}
+
+/// The plan says `COVERING` of an index whose own expressions answer the
+/// columns the statement reads, and says it not where one of those
+/// columns stands on its own as well.
+#[test]
+fn what_the_plan_says_of_an_index_whose_expressions_answer_what_is_read() {
+    let mut writer = crate::change::Writer::new(1024, 0, crate::header::Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t1(a,b,c)".as_slice(),
+        b"INSERT INTO t1 VALUES('and_the_Word',1,2)",
+        b"CREATE INDEX t1abx ON t1(substr(a,b,3))",
+        b"CREATE INDEX t1ba ON t1(b,substr(a,2,3),c)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let image = writer.written();
+    // The rowid stands at the end of every entry and the expression reads
+    // `a` and `b`, so the entries hold what the statement reads.
+    assert_eq!(
+        plan(&image, b"SELECT rowid FROM t1 WHERE substr(a,b,3)<='and'"),
+        tree(&["`--SEARCH t1 USING COVERING INDEX t1abx (<expr><?)"])
+    );
+    // `c` stands in the index beside the expression.
+    assert_eq!(
+        plan(
+            &image,
+            b"SELECT c FROM t1 WHERE b=1 AND substr(a,2,3)='nd_'"
+        ),
+        tree(&["`--SEARCH t1 USING COVERING INDEX t1ba (b=? AND <expr>=?)"])
+    );
+    // `c` stands in no place of `t1abx`.
+    assert_eq!(
+        plan(&image, b"SELECT c FROM t1 WHERE substr(a,b,3)<='and'"),
+        tree(&["`--SEARCH t1 USING INDEX t1abx (<expr><?)"])
+    );
+    // `a` stands on its own as well as under the expression, so the row
+    // answers it.
+    assert_eq!(
+        plan(&image, b"SELECT a FROM t1 WHERE substr(a,b,3)<='and'"),
+        tree(&["`--SEARCH t1 USING INDEX t1abx (<expr><?)"])
+    );
+    // A `*` reads every column of the side, which no name of the
+    // statement stands for, so the entries of `t1abx` answer none of it.
+    assert_eq!(
+        plan(&image, b"SELECT * FROM t1 WHERE substr(a,b,3)<='and'"),
+        tree(&["`--SEARCH t1 USING INDEX t1abx (<expr><?)"])
+    );
+    // A bound over another expression of the same side says nothing about
+    // the index that holds this one.
+    assert_eq!(
+        plan(
+            &image,
+            b"SELECT c FROM t1 WHERE substr(a,b,3)<='and' AND substr(a,1,2)>'x'"
+        ),
+        tree(&["`--SEARCH t1 USING INDEX t1abx (<expr><?)"])
+    );
+    // A statement that writes no expression of the index is covered by
+    // the columns of the index alone, which hold `b` and `c`.
+    assert_eq!(
+        plan(&image, b"SELECT c FROM t1 WHERE b=1"),
+        tree(&["`--SEARCH t1 USING COVERING INDEX t1ba (b=?)"])
+    );
+    // A column of another side says nothing about the entries of this
+    // one, and the walk of that side answers what the statement reads of
+    // it. The C library reads `t2` first, its costs putting the side that
+    // answers one row on the outside; the lines are the same but for that
+    // order.
+    let mut writer = crate::change::Writer::new(1024, 0, crate::header::Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t1(a,b,c)".as_slice(),
+        b"INSERT INTO t1 VALUES('and_the_Word',1,2)",
+        b"CREATE INDEX t1abx ON t1(substr(a,b,3))",
+        b"CREATE TABLE t2(d)",
+        b"INSERT INTO t2 VALUES('xy')",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let image = writer.written();
+    assert_eq!(
+        plan(
+            &image,
+            b"SELECT t2.d FROM t1, t2 WHERE substr(a,b,3)<='and'"
+        ),
+        tree(&[
+            "|--SEARCH t1 USING COVERING INDEX t1abx (<expr><?)",
+            "`--SCAN t2"
+        ])
+    );
+    // A bound over an expression of the second side says nothing about
+    // the index of the first, which holds another expression.
+    let held = b"SELECT t2.d FROM t1, t2 WHERE substr(a,b,3)<='and' AND substr(t2.d,1,2)>'a'";
+    assert_eq!(
+        plan(&image, held),
+        tree(&[
+            "|--SEARCH t1 USING COVERING INDEX t1abx (<expr><?)",
+            "`--SCAN t2"
+        ])
+    );
+    assert_eq!(
+        Database::open(&image).unwrap().query(held).unwrap().rows,
+        alloc::vec![alloc::vec![Value::Text(b"xy".to_vec())]]
+    );
+}

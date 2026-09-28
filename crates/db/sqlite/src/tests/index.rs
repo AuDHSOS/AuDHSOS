@@ -757,7 +757,9 @@ fn what_a_term_that_names_a_column_of_the_answer_holds_the_walk_to() {
             super::INDEXED,
             b"EXPLAIN QUERY PLAN SELECT abs(a) AS abc FROM e WHERE abc=2"
         ),
-        "SEARCH e USING INDEX ea (<expr>=?)"
+        // The one expression the statement reads is the one the index
+        // holds, so its entries answer every column the statement reads.
+        "SEARCH e USING COVERING INDEX ea (<expr>=?)"
     );
     // A name with a table in front of it names a column of that table
     // and no column of the answer.
