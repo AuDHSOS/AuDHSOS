@@ -7888,6 +7888,21 @@ Unit tests of `crate::db` over `fixtures/indexed.db`.
 - `WHERE NULL` under an aggregate, which answers one row.
 - `WHERE abs(0)`, which is read against every row.
 
+### 6.6.415 What a walk of one row leaves unbuilt (`db-sqlite`)
+
+Unit tests of `crate::db` over `fixtures/indexed.db`, drawn as
+`query_plan_graph` of the suite's `tester.tcl` draws the lines. Every
+answer is the one the C library's shell writes.
+
+- A term that holds the rowid at one value, and one whose value is no
+  whole number, each with an `ORDER BY` the plan names no tree for.
+- A key that holds every column of a unique index, and one that holds
+  every column of the key's own tree.
+- A `DISTINCT` over such a walk, which the plan names no tree for.
+- A key of an index that is no unique one, a key of fewer columns than the
+  index holds, a key that names a null value, and a range of rowids two
+  bounds narrow to one rowid: each keeps the tree of the `ORDER BY`.
+
 ### 6.6.414 A walk of the key's own tree (`db-sqlite`)
 
 Unit tests of `crate::db` over `fixtures/indexed.db` and over an image

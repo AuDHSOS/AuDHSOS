@@ -7,6 +7,16 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` answers every term of an `ORDER BY`, gathers every group of a
+  `GROUP BY` and leaves the rows of a `DISTINCT` where they stand for a walk that
+  answers one row, which a term holding the rowid or every column of a unique
+  index at one value does. D-577 records it. Catalog 6.6.415. `where2.test` goes
+  from 60 cases passing to 63.
+
+- `db-sqlite` answers a row two branches of an `OR` over a table that keeps its
+  rows in the key's own tree name once, the walk carrying no rowid to tell the
+  rows apart by.
+
 - `db-sqlite` holds the walk of a table that keeps its rows in the key's own
   tree by the terms of a `WHERE` that name the key's columns, named
   `SEARCH u USING PRIMARY KEY (a=?)`, and answers the row out of the entry of

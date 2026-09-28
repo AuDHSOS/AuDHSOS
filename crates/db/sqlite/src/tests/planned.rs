@@ -619,3 +619,106 @@ fn what_the_terms_hold_a_key_of_two_columns_to() {
         alloc::vec![alloc::vec![Value::Int(1), Value::Int(2), Value::Int(3)]]
     );
 }
+
+/// Two branches of an `OR` that name the same row of a table that keeps
+/// its rows in the key's own tree answer it once, the walk carrying no
+/// rowid to tell the rows apart by.
+#[test]
+fn what_two_branches_that_name_one_row_of_the_key_s_own_tree_answer() {
+    let database = Database::open(super::INDEXED).unwrap();
+    assert_eq!(
+        database
+            .query(b"SELECT * FROM u WHERE a='x' OR a='x'")
+            .unwrap()
+            .rows,
+        alloc::vec![alloc::vec![Value::Text(b"x".to_vec()), Value::Int(1)]]
+    );
+    assert_eq!(
+        database
+            .query(b"SELECT * FROM u WHERE a='x' OR a='y'")
+            .unwrap()
+            .rows,
+        alloc::vec![
+            alloc::vec![Value::Text(b"x".to_vec()), Value::Int(1)],
+            alloc::vec![Value::Text(b"y".to_vec()), Value::Int(2)]
+        ]
+    );
+}
+
+/// A walk that answers one row answers every term of an `ORDER BY` and
+/// leaves the rows of a `DISTINCT` where they stand, and one that answers
+/// more than one builds a tree for each.
+#[test]
+fn what_a_walk_that_answers_one_row_leaves_unbuilt() {
+    for (sql, lines) in [
+        // A term that names one rowid, and one whose value is no whole
+        // number, each answer one row.
+        (
+            b"SELECT * FROM k WHERE rowid=1 ORDER BY b".as_slice(),
+            tree(&["`--SEARCH k USING INTEGER PRIMARY KEY (rowid=?)"]),
+        ),
+        (
+            b"SELECT * FROM k WHERE rowid='x' ORDER BY b",
+            tree(&["`--SEARCH k USING INTEGER PRIMARY KEY (rowid=?)"]),
+        ),
+        // A key that holds every column of a unique index answers one
+        // row, and the rows of a `DISTINCT` are that one row.
+        (
+            b"SELECT * FROM k WHERE b='x' ORDER BY a",
+            tree(&["`--SEARCH k USING INDEX kb (b=?)"]),
+        ),
+        (
+            b"SELECT DISTINCT * FROM k WHERE rowid=1",
+            tree(&["`--SEARCH k USING INTEGER PRIMARY KEY (rowid=?)"]),
+        ),
+        (
+            b"SELECT DISTINCT a FROM k WHERE b='x'",
+            tree(&["`--SEARCH k USING INDEX kb (b=?)"]),
+        ),
+        // The key of a table that keeps its rows in the key's own tree is
+        // unique, so a key that holds every column of it answers one row.
+        (
+            b"SELECT * FROM u WHERE a='x' ORDER BY b",
+            tree(&["`--SEARCH u USING PRIMARY KEY (a=?)"]),
+        ),
+        // An index that is no unique one holds as many entries per value
+        // as the table has rows of it.
+        (
+            b"SELECT * FROM k WHERE a=1 ORDER BY b",
+            tree(&[
+                "|--SEARCH k USING INDEX ka (a=?)",
+                "`--USE TEMP B-TREE FOR ORDER BY",
+            ]),
+        ),
+        // A key of fewer columns than the index holds reaches every entry
+        // that begins with it.
+        (
+            b"SELECT * FROM m WHERE p=1 AND q='a' ORDER BY r",
+            tree(&[
+                "|--SEARCH m USING INDEX mpq (p=? AND q=?)",
+                "`--USE TEMP B-TREE FOR ORDER BY",
+            ]),
+        ),
+        // Two rows that hold no value at a column of a unique index stand
+        // under the same key, so a key that names a null value reaches
+        // both.
+        (
+            b"SELECT * FROM k WHERE b IS NULL ORDER BY a",
+            tree(&[
+                "|--SEARCH k USING INDEX kb (b=?)",
+                "`--USE TEMP B-TREE FOR ORDER BY",
+            ]),
+        ),
+        // A range of rowids whose two bounds name one rowid is no term
+        // written `=`.
+        (
+            b"SELECT * FROM k WHERE rowid>=1 AND rowid<=1 ORDER BY b",
+            tree(&[
+                "|--SEARCH k USING INTEGER PRIMARY KEY (rowid=?)",
+                "`--USE TEMP B-TREE FOR ORDER BY",
+            ]),
+        ),
+    ] {
+        assert_eq!(plan(super::INDEXED, sql), lines, "{sql:?}");
+    }
+}

@@ -1843,6 +1843,9 @@ struct Side<'a> {
     /// Whether the walk is held to the one row a bare `min` or `max`
     /// reads, which the plan writes `SEARCH` for.
     least: bool,
+    /// Whether the walk answers one row, which a term that holds the
+    /// rowid or every column of a unique index at one value does.
+    single: bool,
     /// How the plan names the statement it reads, and [`Nesting::Named`]
     /// for a table.
     nesting: Nesting,
@@ -4962,6 +4965,12 @@ impl<'a> Database<'a> {
         held: (&mut [Side<'_>], bool, &[Call]),
     ) -> (bool, usize) {
         let (sides, alone, calls) = held;
+        // A walk that answers one row answers every term of the order and
+        // gathers every group, whatever order the index it reads holds its
+        // entries in.
+        if matches!(sides, [side] if side.single) {
+            return (true, arena.orders(select.order).len());
+        }
         let walked = if alone && calls.is_empty() && select.group.is_empty() {
             in_order(
                 arena,
@@ -5368,6 +5377,7 @@ impl<'a> Database<'a> {
                 covering: None,
                 valued: clause,
                 least: false,
+                single: false,
                 nesting,
                 lines,
             });
@@ -5485,6 +5495,7 @@ impl<'a> Database<'a> {
                     covering: None,
                     valued: Vec::new(),
                     least: false,
+                    single: false,
                     nesting: Nesting::Named,
                     lines: Vec::new(),
                 };
@@ -5923,6 +5934,7 @@ impl<'a> Database<'a> {
                     feeds,
                     at: 0,
                     seen: Vec::new(),
+                    kept: Vec::new(),
                 })),
                 None => self.scanned(side, stored),
             };
@@ -6267,13 +6279,19 @@ impl<'a> Database<'a> {
         // stand and builds one all the same.
         let single = sides.is_empty() && calls.is_empty() && select.group.is_empty();
         let answered = if single { terms } else { answered };
-        let free = windowless && !gathered && smallest.is_none() && (terms == 0 || answered == 0);
+        // A walk that answers one row answers the order without reading
+        // the order of any index, so an index that holds every column the
+        // statement reads answers the row out of its entry, and the rows
+        // that differ are the one row.
+        let once = matches!(sides, [side] if side.single);
+        let free = once
+            || (windowless && !gathered && smallest.is_none() && (terms == 0 || answered == 0));
         covered(arena, select, sql, sides, free);
         self.explain(
             sides,
             Sorting {
                 grouped: !select.group.is_empty() && !gathered,
-                distinct: select.distinct == Distinct::Distinct,
+                distinct: select.distinct == Distinct::Distinct && !once,
                 ordered: terms.saturating_sub(answered),
                 terms,
             },
@@ -6594,7 +6612,7 @@ fn planned(
             *held = Some(term.id);
         }
     }
-    let mut plans: Vec<Plan> = Vec::new();
+    let mut plans: Vec<(Plan, bool)> = Vec::new();
     for ((at, side), range) in sides.iter().enumerate().zip(&ranges) {
         // An index over a table that keeps its rows in the key's own
         // tree ends its entries with that key and not with a rowid, and
@@ -6635,10 +6653,13 @@ fn planned(
         // A term that names one rowid answers one row, so it is taken
         // over a range of rowids and over any index.
         let named = rowids.get(at).copied().flatten().map(Plan::Rowid);
-        plans.push(named.or(keyed).unwrap_or(Plan::Rows(range.0, range.1)));
+        let plan = named.or(keyed).unwrap_or(Plan::Rows(range.0, range.1));
+        let single = one_rowed(&terms, at, &side.source, &plan);
+        plans.push((plan, single));
     }
-    for (side, plan) in sides.iter_mut().zip(plans) {
+    for (side, (plan, single)) in sides.iter_mut().zip(plans) {
         side.plan = plan;
+        side.single = single;
     }
     let Some(filter) = filter else {
         return;
@@ -6770,6 +6791,53 @@ enum Reached {
     Key,
     /// The column of the side at this place.
     Column(usize),
+}
+
+/// Whether the walk the plan names answers one row, which a term that
+/// holds the rowid or every column of a unique index at one value does.
+///
+/// `whereShortCut` of `research/sqlite/src/where.c:6425` reads such a
+/// walk as answering every term of an `ORDER BY` and as needing no table
+/// of its own for a `DISTINCT`. A term written `=` or `IS` names the one
+/// row, so a range two bounds narrow to one rowid does not.
+///
+/// Reading the terms costs O(n) in them.
+fn one_rowed(terms: &Planning<'_>, at: usize, source: &Source<'_>, plan: &Plan) -> bool {
+    let Source::Table(stored) = source else {
+        return false;
+    };
+    match plan {
+        Plan::Rowid(_) => true,
+        Plan::Rows(Some(low), Some(high)) if low == high => terms
+            .held
+            .iter()
+            .any(|term| term.at == at && term.reached == Reached::Key && term.op == BinaryOp::Eq),
+        Plan::Keyed { root, key, .. } => keyed_once(stored, *root, key),
+        Plan::Rows(_, _) | Plan::Backwards | Plan::Union(_) | Plan::Joined { .. } => false,
+    }
+}
+
+/// Whether the key holds every column of an index one row of the table
+/// alone carries.
+///
+/// A unique index holds one entry per value of its columns, except that
+/// two rows that hold no value at a column of it stand under the same
+/// key, so a key that names a null value reaches more than one row.
+/// [`plan_of`] names no partial index, whose entries stand for some rows
+/// of the table alone.
+///
+/// Reading the indexes costs O(i) in their number.
+fn keyed_once(stored: &Stored, root: u32, key: &[Value]) -> bool {
+    stored
+        .indexes
+        .iter()
+        .chain(stored.keyed.iter())
+        .find(|kept| kept.root == root)
+        .is_some_and(|kept| {
+            kept.index.unique
+                && key.len() == kept.index.columns.len()
+                && key.iter().all(|value| *value != Value::Null)
+        })
 }
 
 /// Every term a top-level `AND` spine holds that compares a column of
@@ -9565,6 +9633,10 @@ struct Union<'i, 'f> {
     /// branches name from being answered twice. Reading one row costs
     /// O(n) in the rows already answered.
     seen: Vec<i64>,
+    /// The rows already answered by a walk that carries no rowid, which
+    /// is the walk of a table that keeps its rows in the key's own tree.
+    /// Reading one row costs O(n) in the rows already answered.
+    kept: Vec<Vec<Value>>,
 }
 
 impl Union<'_, '_> {
@@ -9576,13 +9648,19 @@ impl Union<'_, '_> {
                 self.at = self.at.saturating_add(1);
                 continue;
             };
-            let Ok((Some(rowid), values)) = read else {
+            let Ok((rowid, values)) = read else {
                 return Some(read);
             };
-            if !self.seen.contains(&rowid) {
-                self.seen.push(rowid);
-                return Some(Ok((Some(rowid), values)));
+            // A walk of the key's own tree answers no rowid, and the key
+            // is unique, so the row itself says whether a branch before
+            // this one answered the row.
+            match rowid {
+                Some(rowid) if self.seen.contains(&rowid) => continue,
+                Some(rowid) => self.seen.push(rowid),
+                None if self.kept.contains(&values) => continue,
+                None => self.kept.push(values.clone()),
             }
+            return Some(Ok((rowid, values)));
         }
     }
 }
