@@ -7,6 +7,15 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` reads a branch of a multi-index `OR` out of the entries of its own index
+  where they hold every column the statement reads, which saves one descent per row, and
+  the plan says `COVERING` of that branch. D-595 records it. Catalog 6.6.428. `whereD.test`
+  goes from 44 cases passing to 49.
+
+- `db-sqlite` reads no entry after the row a statement of one table is held to by a
+  unique index, where it read the entry after it to see the key no longer stood. D-596
+  records it. `whereD.test` goes from 49 cases passing to 50.
+
 - `db-sqlite` walks an index over a table that keeps its rows in the key's own tree: the
   entry ends with the columns of the key, which the row is read out of that tree by, and
   an entry holding every column the statement reads answers the row itself. D-593 records

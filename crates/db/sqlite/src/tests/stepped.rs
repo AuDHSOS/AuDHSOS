@@ -648,3 +648,43 @@ fn what_an_in_over_the_rowid_holds_the_walk_to() {
         (2, 5, 5, 0)
     );
 }
+
+/// A branch of a multi-index `OR` is read out of the entries of its own
+/// index where they hold every column the statement reads, which saves
+/// the descent to the row and the search it counts, and a walk held to
+/// one row reads no entry after it.
+#[test]
+fn what_a_branch_of_an_or_and_a_walk_of_one_row_count() {
+    let mut writer = crate::change::Writer::new(1024, 0, crate::header::Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t3(a, b, c)".as_slice(),
+        b"CREATE UNIQUE INDEX i3 ON t3(a, b)",
+        b"INSERT INTO t3 VALUES(1,'one','i'),(3,'three','iii'),(6,'six','vi')",
+        b"INSERT INTO t3 VALUES(2,'two','ii'),(4,'four','iv'),(5,'five','v')",
+        b"CREATE TABLE t4(x PRIMARY KEY, y)",
+        b"INSERT INTO t4 VALUES('a','one'),('b','two')",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let image = writer.written();
+    let database = Database::open(&image).unwrap();
+    let searched = |sql: &[u8]| database.query(sql).unwrap().stepped.searched;
+    // Each branch descends its index and reads the entry after its row,
+    // which is two searches, where a branch that reads a column the index
+    // leaves out descends the table for a third.
+    assert_eq!(
+        searched(b"SELECT a, b FROM t3 WHERE (a=1 AND b='one') OR (a=2 AND b='two')"),
+        4
+    );
+    assert_eq!(
+        searched(b"SELECT a, c FROM t3 WHERE (a=1 AND b='one') OR (a=2 AND b='two')"),
+        6
+    );
+    // A statement of one table held to one row by a unique index reads no
+    // entry after that row: the descent and the read of the row count one
+    // each.
+    assert_eq!(searched(b"SELECT y FROM t4 WHERE x='a'"), 2);
+    // A key that leaves a column of the index out names more than one row,
+    // so the walk reads the entry after the last of them.
+    assert_eq!(searched(b"SELECT b FROM t3 WHERE a=1"), 2);
+}

@@ -7888,6 +7888,20 @@ Unit tests of `crate::db` over `fixtures/indexed.db`.
 - `WHERE NULL` under an aggregate, which answers one row.
 - `WHERE abs(0)`, which is read against every row.
 
+### 6.6.428 What a branch of an `OR` and a walk of one row count (`db-sqlite`)
+
+Unit tests of `crate::db` over an image `crate::change` writes. Every
+count is the one `sqlite3_search_count` answers for the C library.
+
+- Two branches over one covering index: four searches, two per branch.
+- The same statement reading a column the index leaves out: six, the
+  descent to the row counting one per branch.
+- The plan, which says `COVERING` of the first and not of the second.
+- A statement of one table held to one row by a unique index: two, the
+  walk reading no entry after its row.
+- A key that leaves a column of the index out: two, the walk reading the
+  entry after the last row the key names.
+
 ### 6.6.427 What an index over a table that keeps its rows in the key's own tree holds the walk to (`db-sqlite`)
 
 Unit tests of `crate::db` over an image `crate::change` writes. Every

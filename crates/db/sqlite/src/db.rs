@@ -1852,6 +1852,10 @@ struct Side<'a> {
     /// table, where the index holds every column the statement reads
     /// and the row is built from the entry rather than from the table.
     covering: Option<Vec<Option<usize>>>,
+    /// The places of the columns the statement reads of this side, which
+    /// a branch of a multi-index `OR` is read against: every branch names
+    /// an index of its own, and each holds the columns or does not.
+    reading: Vec<usize>,
     /// The name the plan writes it under where it reads a `VALUES` of
     /// several rows, which stands in front of the alias, and nothing
     /// otherwise.
@@ -1862,6 +1866,13 @@ struct Side<'a> {
     /// Whether the walk answers one row, which a term that holds the
     /// rowid or every column of a unique index at one value does.
     single: bool,
+    /// Whether the walk reads no entry after the one it answers, which
+    /// `whereShortCut` of `research/sqlite/src/where.c:6351` marks with
+    /// `WHERE_ONEROW` for a statement of one table: a branch of an `OR`
+    /// and a side of a join each read the entry after their row, which
+    /// `whereLoopAddBtree` marks one row only for an index whose every
+    /// column is `NOT NULL`.
+    once: bool,
     /// The terms of the `WHERE` the walk answers by itself, which are read
     /// for no row it takes.
     dropped: Vec<ExprId>,
@@ -5591,9 +5602,11 @@ impl<'a> Database<'a> {
                 plan: Plan::Rows(None, None),
                 pushed: Vec::new(),
                 covering: None,
+                reading: Vec::new(),
                 valued: clause,
                 least: false,
                 single: false,
+                once: false,
                 dropped: Vec::new(),
                 nesting,
                 lines,
@@ -5711,9 +5724,11 @@ impl<'a> Database<'a> {
                     plan: Plan::Rows(None, None),
                     pushed: Vec::new(),
                     covering: None,
+                    reading: Vec::new(),
                     valued: Vec::new(),
                     least: false,
                     single: false,
+                    once: false,
                     dropped: Vec::new(),
                     nesting: Nesting::Named,
                     lines: Vec::new(),
@@ -6146,7 +6161,7 @@ impl<'a> Database<'a> {
         if let Plan::Union(plans) = &side.plan {
             let feeds: Option<Vec<Feed<'a, 'f>>> = plans
                 .iter()
-                .map(|plan| self.branch(stored, plan, cursor))
+                .map(|plan| self.branch(stored, (plan, &side.reading), cursor))
                 .collect();
             return match feeds {
                 Some(feeds) => Feed::Union(Box::new(Union {
@@ -6181,10 +6196,14 @@ impl<'a> Database<'a> {
                 None => Feed::Rows(NO_ROWS.iter()),
             };
         }
-        if let Some(held) = sought(&side.plan, (side.covering.as_deref(), stored.root), cursor)
-            && let Some(feed) = self.passes(stored, held)
+        if let Some(mut held) = sought(&side.plan, (side.covering.as_deref(), stored.root), cursor)
         {
-            return feed;
+            if side.once {
+                held.taking = Taking::One;
+            }
+            if let Some(feed) = self.passes(stored, held) {
+                return feed;
+            }
         }
         // A plan that names an index and could not be walked falls back
         // to the whole tree, which answers the same rows.
@@ -6197,13 +6216,19 @@ impl<'a> Database<'a> {
     fn branch<'f>(
         &self,
         stored: &'f Stored,
-        plan: &Plan,
+        held: (&Plan, &[usize]),
         cursor: &Cursor<'_>,
     ) -> Option<Feed<'a, 'f>> {
+        let (plan, read) = held;
         if let Plan::Rows(first, last) = plan {
             return Some(self.ranged(stored, (*first, *last)));
         }
-        sought(plan, (None, stored.root), cursor).and_then(|held| self.passes(stored, held))
+        // Every branch names an index of its own, so the entries of one
+        // hold the columns the statement reads where the entries of
+        // another do not.
+        let covering = rooted_at(plan).and_then(|root| covering_at(stored, root, read));
+        sought(plan, (covering.as_deref(), stored.root), cursor)
+            .and_then(|held| self.passes(stored, held))
     }
 
     /// The walks an `IN` over the rowid asks for: one of the row each value
@@ -6346,6 +6371,7 @@ impl<'a> Database<'a> {
             reversed,
             covering,
             own,
+            taking,
         } = held;
         let image = self.imaged(stored.place);
         // The descent stands on the first entry the walk takes, which is
@@ -6397,6 +6423,7 @@ impl<'a> Database<'a> {
             covering,
             own,
             rewind,
+            taking,
             searched: 0,
             tail: tailed(stored, root),
             encoding: self.encoding,
@@ -7190,9 +7217,15 @@ fn planned(
         let single = one_rowed(&terms, at, &side.source, &plan);
         plans.push((plan, single));
     }
+    // `whereShortCut` plans a statement of one table on its own and marks
+    // a walk held to one row as reading no entry after it, where a join
+    // and an `OR` are planned by `whereLoopAddBtree`, which asks that
+    // every column of the index be `NOT NULL` for that.
+    let alone = sides.len() == 1;
     for (side, (plan, single)) in sides.iter_mut().zip(plans) {
         side.plan = plan;
         side.single = single;
+        side.once = single && alone;
     }
     let Some(filter) = filter else {
         return;
@@ -8493,6 +8526,7 @@ fn covered(arena: &Arena, select: &Select, sql: &[u8], sides: &mut [Side<'_>], f
             covers(side, &read);
         }
         side.covering = covering_of(side, &read);
+        side.reading = read;
     }
 }
 
@@ -8582,22 +8616,29 @@ fn covers(side: &mut Side<'_>, read: &[usize]) {
 /// is reached as the rowid and stands in no reading, because the rowid
 /// is what every entry ends with.
 fn covering_of(side: &Side<'_>, read: &[usize]) -> Option<Vec<Option<usize>>> {
-    /// The page the tree of the index a plan names begins at, and
-    /// nothing where the plan names no index.
-    const fn rooted(plan: &Plan) -> Option<u32> {
-        match plan {
-            Plan::Keyed { root, .. } | Plan::Joined { root, .. } => Some(*root),
-            Plan::Rows(_, _)
-            | Plan::Backwards
-            | Plan::Rowid(_)
-            | Plan::Rowids(_)
-            | Plan::Union(_) => None,
-        }
-    }
-
-    let (Some(root), Source::Table(stored)) = (rooted(&side.plan), &side.source) else {
+    let (Some(root), Source::Table(stored)) = (rooted_at(&side.plan), &side.source) else {
         return None;
     };
+    covering_at(stored, root, read)
+}
+
+/// The page the tree of the index a plan names begins at, and nothing
+/// where the plan names no index.
+const fn rooted_at(plan: &Plan) -> Option<u32> {
+    match plan {
+        Plan::Keyed { root, .. } | Plan::Joined { root, .. } => Some(*root),
+        Plan::Rows(_, _) | Plan::Backwards | Plan::Rowid(_) | Plan::Rowids(_) | Plan::Union(_) => {
+            None
+        }
+    }
+}
+
+/// Where each place of the index at `root` stands in the table, where
+/// that index holds every column of `read`, and nothing where it leaves
+/// one out.
+///
+/// Reading the places costs O(k) in them.
+fn covering_at(stored: &Stored, root: u32, read: &[usize]) -> Option<Vec<Option<usize>>> {
     let kept = stored.indexes.iter().find(|kept| kept.root == root)?;
     let mut places: Vec<Option<usize>> = kept
         .index
@@ -8722,8 +8763,14 @@ fn detailed(side: &Side<'_>, plan: &Plan, lines: &mut Vec<Explained>, parent: us
         return;
     };
     // `sqlite3WhereExplainOneScan` says `COVERING` for a walk that
-    // reads no row of the table.
-    let covering = side.covering.is_some();
+    // reads no row of the table, which every branch of a multi-index `OR`
+    // is or is not on its own, each naming an index of its own.
+    let covering = match &side.plan {
+        Plan::Union(_) => rooted_at(plan)
+            .and_then(|root| covering_at(stored, root, &side.reading))
+            .is_some(),
+        _ => side.covering.is_some(),
+    };
     match plan {
         Plan::Rows(None, None) | Plan::Backwards => {
             lines.push((parent, scanned(&side.shown, b"", false, side.least)));
@@ -10123,6 +10170,22 @@ struct Seek {
     /// Whether the walk reads the table's own tree, whose entries are
     /// the rows themselves.
     own: bool,
+    /// How many entries the walk answers.
+    taking: Taking,
+}
+
+/// How many entries a walk of an index answers.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Taking {
+    /// Every entry the key reaches, which the walk reads one after
+    /// another until an entry no longer begins with the key.
+    Every,
+    /// One entry, which `WHERE_ONEROW` of
+    /// `research/sqlite/src/whereInt.h` marks and `wherecode.c:2209`
+    /// ends with `OP_Noop` rather than `OP_Next`.
+    One,
+    /// That one entry, already answered.
+    Spent,
 }
 
 impl Seek {
@@ -10188,6 +10251,7 @@ fn sought(plan: &Plan, held: (Option<&[Option<usize>]>, u32), cursor: &Cursor<'_
             reversed: *reversed,
             covering: covering.map(<[Option<usize>]>::to_vec),
             own: *root == own,
+            taking: Taking::Every,
         }),
         Plan::Joined {
             root,
@@ -10218,6 +10282,7 @@ fn sought(plan: &Plan, held: (Option<&[Option<usize>]>, u32), cursor: &Cursor<'_
                 reversed: false,
                 covering: covering.map(<[Option<usize>]>::to_vec),
                 own: *root == own,
+                taking: Taking::Every,
             })
         }
     }
@@ -10940,6 +11005,9 @@ struct Sought<'i, 'f> {
     /// Whether the walk begins at `OP_Rewind` and stands before its
     /// first entry, which counts no search.
     rewind: bool,
+    /// How many entries the walk answers, and whether the one entry a
+    /// walk of one row answers stands answered.
+    taking: Taking,
     /// The descents and the steps the walk has taken.
     searched: i64,
     /// Where the rowid stands in an entry.
@@ -10962,6 +11030,11 @@ impl<'i> Sought<'i, '_> {
     /// The next row the index names, or nothing once its entries no
     /// longer begin with the key.
     fn read(&mut self) -> Option<Read> {
+        // A walk that answers one entry reads no other, so no step
+        // follows the row it answered.
+        if self.taking == Taking::Spent {
+            return None;
+        }
         let entry = self.walk.next()?;
         // The first entry the walk answers is where the descent stood,
         // which is `OP_SeekGE`; each one after it is a step, which is
@@ -10973,7 +11046,12 @@ impl<'i> Sought<'i, '_> {
             self.searched = self.searched.saturating_add(1);
         }
         match self.take(entry) {
-            Ok(Some(row)) => Some(Ok(row)),
+            Ok(Some(row)) => {
+                if self.taking == Taking::One {
+                    self.taking = Taking::Spent;
+                }
+                Some(Ok(row))
+            }
             // Every entry after this one sorts after it, so the entries
             // that begin with the key are read out.
             Ok(None) => None,

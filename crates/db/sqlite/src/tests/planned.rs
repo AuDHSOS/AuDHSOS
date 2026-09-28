@@ -1529,3 +1529,42 @@ fn what_an_index_over_a_table_that_keeps_its_rows_in_the_key_holds_the_walk_to()
         alloc::vec![alloc::vec![Value::Int(1)]]
     );
 }
+
+/// Every branch of a multi-index `OR` names an index of its own, so the
+/// plan says `COVERING` of a branch whose entries hold every column the
+/// statement reads and not of one whose do not.
+#[test]
+fn what_the_plan_names_a_branch_of_an_or_whose_index_covers_the_statement() {
+    let mut writer = crate::change::Writer::new(1024, 0, crate::header::Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t3(a, b, c)".as_slice(),
+        b"CREATE UNIQUE INDEX i3 ON t3(a, b)",
+        b"INSERT INTO t3 VALUES(1,'one','i'),(2,'two','ii')",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let image = writer.written();
+    for (sql, held) in [
+        (
+            b"SELECT a, b FROM t3 WHERE (a=1 AND b='one') OR (a=2 AND b='two')".as_slice(),
+            "COVERING INDEX i3",
+        ),
+        (
+            b"SELECT a, c FROM t3 WHERE (a=1 AND b='one') OR (a=2 AND b='two')",
+            "INDEX i3",
+        ),
+    ] {
+        let named = alloc::format!("      `--SEARCH t3 USING {held} (a=? AND b=?)");
+        assert_eq!(
+            plan(&image, sql),
+            tree(&[
+                "`--MULTI-INDEX OR",
+                "   |--INDEX 1",
+                &alloc::format!("   |  `--SEARCH t3 USING {held} (a=? AND b=?)"),
+                "   `--INDEX 2",
+                &named,
+            ]),
+            "{sql:?}"
+        );
+    }
+}
