@@ -111,6 +111,10 @@ pub enum Error {
     /// An `ORDER BY` inside the brackets of a call that is no
     /// aggregate, with the name of the function.
     OrderedCall(Vec<u8>),
+    /// A name that stands for a result alias whose expression holds a
+    /// window function, read from inside a statement of its own, with
+    /// that alias.
+    AliasedWindow(Vec<u8>),
     /// A `LIKE` or `GLOB` pattern longer than the engine takes.
     PatternTooBig,
     /// A blob or a string longer than `SQLITE_MAX_LENGTH`, which is what
@@ -165,6 +169,9 @@ impl Error {
             Error::Infinite(name) => alloc::format!("Inf input to {}()", shown(name)),
             Error::NoWindow(name) => {
                 alloc::format!("misuse of window function {}()", shown(name))
+            }
+            Error::AliasedWindow(name) => {
+                alloc::format!("misuse of aliased window function {}", shown(name))
             }
             Error::NotPure(name, place) => alloc::format!(
                 "non-deterministic use of {}() in {}",
@@ -295,6 +302,22 @@ pub trait Row {
         table: Option<&[u8]>,
         column: &[u8],
     ) -> Option<(Value, Affinity, Collation)>;
+
+    /// The same for a name written inside a statement of its own, which
+    /// the row that statement stands inside answers.
+    ///
+    /// `lookupName` of `research/sqlite/src/resolve.c:677` refuses a name
+    /// that stands for a result alias whose expression holds a window
+    /// function where the name context is not the outermost one, which is
+    /// a name written inside such a statement.
+    fn column_inside(
+        &self,
+        schema: Option<&[u8]>,
+        table: Option<&[u8]>,
+        column: &[u8],
+    ) -> Option<(Value, Affinity, Collation)> {
+        self.column(schema, table, column)
+    }
 
     /// The collations the application defined on the connection, which
     /// a `COLLATE` names one of.

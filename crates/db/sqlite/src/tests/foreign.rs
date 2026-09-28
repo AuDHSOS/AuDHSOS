@@ -517,8 +517,20 @@ fn the_text_a_refusal_is_written_as() {
         Error::Eval(crate::eval::Error::NoCollation(b"zz".to_vec())).message(),
         "no such collation sequence: zz"
     );
-    // A refusal this crate has no text for is written as its name.
-    assert_eq!(Error::Having.message(), "Having");
+    assert_eq!(
+        Error::Having.message(),
+        "HAVING clause on a non-aggregate query"
+    );
+    assert_eq!(
+        Error::Ambiguous(b"main.t1.a".to_vec()).message(),
+        "ambiguous column name: main.t1.a"
+    );
+    assert_eq!(
+        Error::Eval(crate::eval::Error::AliasedWindow(b"m".to_vec())).message(),
+        "misuse of aliased window function m"
+    );
+    // A shape of statement this crate does not answer is written as the
+    // name of the refusal.
     assert_eq!(
         Error::Eval(crate::eval::Error::Unsupported).message(),
         "Unsupported"

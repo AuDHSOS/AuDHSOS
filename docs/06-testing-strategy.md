@@ -7933,6 +7933,35 @@ is the one the C library's shell writes.
   count it wrote, and a `DELETE` that writes no row answering nought.
 - `CREATE TABLE u(c)` and `CREATE INDEX`, each answering no row.
 
+### 6.6.448 What a name that stands for an aliased window function is refused with (`db-sqlite`)
+
+Unit tests of `crate::db` over an image `crate::change` writes. Every
+answer is the one the C library's shell writes.
+
+- `SELECT count() OVER() AS m FROM t1 ORDER BY (SELECT m)`, refused
+  `misuse of aliased window function m`.
+- The same over `sum(b) OVER (ORDER BY a) AS abc` and over `1+sum(b) OVER
+  (ORDER BY a) AS abc`.
+- `ORDER BY abc` without the statement around it, which stands, and a name
+  that stands for an alias of no window function read from inside such a
+  statement, which stands as well.
+
+### 6.6.447 What a `*` over two sides of one name is refused with (`db-sqlite`)
+
+Unit tests of `crate::db`. Every answer is the one the C library's shell
+writes.
+
+- `SELECT * FROM t1, t1` and `SELECT t1.* FROM t1, t1`, each refused
+  `ambiguous column name: main.t1.a`.
+
+### 6.6.446 What a `HAVING` on a statement that gathers no group is refused with (`db-sqlite`)
+
+Unit tests of `crate::db`. Every answer is the one the C library's shell
+writes.
+
+- `SELECT a FROM t1 HAVING a>0`, refused `HAVING clause on a non-aggregate
+  query`.
+
 ### 6.6.443 What the row a `SET DEFAULT` action writes is held to (`db-sqlite`)
 
 Unit tests of `crate::change`. Every answer is the one the C library's

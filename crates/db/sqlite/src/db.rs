@@ -286,8 +286,9 @@ pub enum Error {
     /// have, named.
     JoinColumn(Vec<u8>),
     /// A `*` over two tables of one name, every column of which two
-    /// tables would answer.
-    Ambiguous,
+    /// tables would answer, with the first of those columns named as
+    /// `database.table.column`.
+    Ambiguous(Vec<u8>),
     /// A computed column that is computed from itself, through the other
     /// columns computed like it, which the name is of.
     Computed(Vec<u8>),
@@ -775,6 +776,25 @@ impl Error {
         })
     }
 
+    /// The words a refusal of one clause of a statement carries, or
+    /// nothing where the refusal is another.
+    fn clauses(&self) -> Option<alloc::string::String> {
+        Some(match self {
+            Error::Ambiguous(name) => alloc::format!(
+                "ambiguous column name: {}",
+                alloc::string::String::from_utf8_lossy(name)
+            ),
+            Error::Having => alloc::string::String::from("HAVING clause on a non-aggregate query"),
+            Error::Recursion => {
+                alloc::string::String::from("recursive aggregate queries not supported")
+            }
+            Error::RecursiveWindow => {
+                alloc::string::String::from("cannot use window functions in recursive queries")
+            }
+            _ => return None,
+        })
+    }
+
     /// The words a misuse is refused with, or nothing where the refusal
     /// is another.
     fn misused(&self) -> Option<alloc::string::String> {
@@ -1134,6 +1154,7 @@ impl Error {
             .or_else(|| self.datatypes())
             .or_else(|| self.defining())
             .or_else(|| self.misused())
+            .or_else(|| self.clauses())
             .or_else(|| self.computed())
             .or_else(|| self.databases())
             .or_else(|| self.compounds())
@@ -1218,10 +1239,6 @@ impl Error {
                 "the \".\" operator prohibited in index expressions".to_string()
             }
             Error::Joined(most) => alloc::format!("at most {most} tables in a join"),
-            Error::Recursion => "recursive aggregate queries not supported".to_string(),
-            Error::RecursiveWindow => {
-                "cannot use window functions in recursive queries".to_string()
-            }
             Error::Recursed => errstr(7).to_string(),
             Error::Eval(error) => error.message(),
             Error::Auth(error) => error.message(),
@@ -7094,6 +7111,7 @@ impl<'a> Database<'a> {
                     aggregates: cursor.aggregates.clone(),
                     reach,
                     aliasing: core::cell::Cell::new(true),
+                    inside: core::cell::Cell::new(false),
                     reaching: core::cell::Cell::new(false),
                     refusal: core::cell::RefCell::new(None),
                 });
@@ -7543,6 +7561,7 @@ impl<'a> Database<'a> {
                 aggregates: answers,
                 reach,
                 aliasing: core::cell::Cell::new(true),
+                inside: core::cell::Cell::new(false),
                 reaching: core::cell::Cell::new(false),
                 refusal: core::cell::RefCell::new(None),
             };
@@ -13671,7 +13690,7 @@ fn shape(
                     // so two sides of one name make every column of
                     // them a name two sides answer.
                     if sides.iter().take(at).any(|before| before.named(&side.name)) {
-                        return Err(Error::Ambiguous);
+                        return Err(Error::Ambiguous(ambiguous_name(side)));
                     }
                     // The columns a `USING` or a `NATURAL` matched are
                     // answered once and not twice, which is the side
@@ -13700,7 +13719,7 @@ fn shape(
                     .filter(|side| !side.exists && side.named(&called));
                 let side = named.next().ok_or_else(|| Error::NoTable(called.clone()))?;
                 if named.next().is_some() {
-                    return Err(Error::Ambiguous);
+                    return Err(Error::Ambiguous(ambiguous_name(side)));
                 }
                 columns.extend(side.shape.columns.iter().map(|column| {
                     let mut answered = side.answered_as(column);
@@ -13785,6 +13804,40 @@ fn origin_of(arena: &Arena, expr: ExprId, sql: &[u8], sides: &[Side<'_>]) -> Ori
         }
     }
     Origin::default()
+}
+
+/// The name the refusal of a `*` over two sides of one name carries: the
+/// database, the table and the column of the side's first column, which
+/// is what `lookupName` of `research/sqlite/src/resolve.c:620` writes for
+/// the first name it found twice.
+///
+/// Reading the column costs O(1).
+fn ambiguous_name(side: &Side<'_>) -> Vec<u8> {
+    side.shape.columns.first().map_or_else(Vec::new, |column| {
+        let mut named = column.origin.schema.clone();
+        named.push(b'.');
+        named.extend_from_slice(&column.origin.table);
+        named.push(b'.');
+        named.extend_from_slice(&column.origin.column);
+        named
+    })
+}
+
+/// Whether an expression holds a window function.
+///
+/// Reading it costs O(n) in its nodes.
+fn windowed_under(arena: &Arena, id: ExprId) -> bool {
+    let mut stack = alloc::vec![id];
+    let mut found = false;
+    while let Some(held) = stack.pop() {
+        arena.node(held).into_iter().for_each(|node| {
+            if matches!(node, Node::Over { .. }) {
+                found = true;
+            }
+            arena.under(node, |child| stack.push(child));
+        });
+    }
+    found
 }
 
 /// Where a bare `rowid` of a side comes from: the database and the table
@@ -15560,6 +15613,10 @@ struct Cursor<'a> {
     /// Whether a bare name no side holds stands for a name the statement
     /// answers under, which every clause but the answer itself reads.
     aliasing: core::cell::Cell<bool>,
+    /// Whether the name being read was written inside a statement of its
+    /// own, which a result alias that holds a window function is refused
+    /// for.
+    inside: core::cell::Cell<bool>,
     /// Whether a name reaches the columns of a side the transform read
     /// out of an `EXISTS`, which a term that `EXISTS` wrote does and
     /// every other expression of the statement does not:
@@ -15656,6 +15713,15 @@ impl<'a> Cursor<'a> {
                     } if dequote(alias.text(sql)).eq_ignore_ascii_case(column) => Some(expr),
                     _ => None,
                 })?;
+        // `lookupName` of `research/sqlite/src/resolve.c:677` refuses a
+        // name that stands for an alias whose expression holds a window
+        // function where the name stands inside a statement of its own,
+        // the window being answered over the rows of the statement that
+        // wrote it and not over one row of them.
+        if self.inside.get() && windowed_under(arena, held) {
+            *self.refusal.borrow_mut() = Some(eval::Error::AliasedWindow(column.to_vec()));
+            return None;
+        }
         self.aliasing.set(false);
         let answered = eval::evaluate_compared(arena, held, sql, self);
         self.aliasing.set(true);
@@ -15679,6 +15745,7 @@ impl<'a> Cursor<'a> {
             aggregates: Vec::new(),
             reach,
             aliasing: core::cell::Cell::new(true),
+            inside: core::cell::Cell::new(false),
             reaching: core::cell::Cell::new(false),
             refusal: core::cell::RefCell::new(None),
         }
@@ -15748,6 +15815,18 @@ impl eval::Row for Cursor<'_> {
             .then_some(self.reach.database.trusted)
     }
 
+    fn column_inside(
+        &self,
+        schema: Option<&[u8]>,
+        table: Option<&[u8]>,
+        column: &[u8],
+    ) -> Option<(Value, Affinity, Collation)> {
+        let held = self.inside.replace(true);
+        let answered = self.column(schema, table, column);
+        self.inside.set(held);
+        answered
+    }
+
     fn refused(&self) -> Option<eval::Error> {
         self.refusal
             .borrow_mut()
@@ -15800,7 +15879,7 @@ impl eval::Row for Cursor<'_> {
                 .reach
                 .scope
                 .outer
-                .and_then(|outer| outer.column(schema, table, column));
+                .and_then(|outer| outer.column_inside(schema, table, column));
         };
         // A name written with its table is that table's value; only a
         // bare one is filled from the side a `USING` matched to it.

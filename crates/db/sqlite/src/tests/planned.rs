@@ -2457,3 +2457,71 @@ fn which_way_the_groups_of_a_statement_come_out() {
         tree(&["|--SCAN k", "`--USE TEMP B-TREE FOR GROUP BY"])
     );
 }
+
+/// A name that stands for a result alias whose expression holds a window
+/// function is refused where the name was written inside a statement of
+/// its own, the window being answered over the rows of the statement that
+/// wrote it.
+#[test]
+fn what_a_name_that_stands_for_an_aliased_window_function_is_refused_with() {
+    let refused = |sql: &[u8]| {
+        Database::open(super::INDEXED)
+            .unwrap()
+            .query(sql)
+            .expect_err("a refusal")
+            .message()
+    };
+    assert_eq!(
+        refused(b"SELECT count() OVER() AS m FROM k ORDER BY (SELECT m)"),
+        "misuse of aliased window function m"
+    );
+    assert_eq!(
+        refused(b"SELECT a, sum(a) OVER (ORDER BY a) AS abc FROM k ORDER BY (SELECT abc)"),
+        "misuse of aliased window function abc"
+    );
+    assert_eq!(
+        refused(b"SELECT a, 1+sum(a) OVER (ORDER BY a) AS abc FROM k ORDER BY (SELECT abc)"),
+        "misuse of aliased window function abc"
+    );
+    // The same name read outside such a statement stands, and so does one
+    // that stands for an alias of no window function.
+    let rows = |sql: &[u8]| {
+        Database::open(super::INDEXED)
+            .unwrap()
+            .query(sql)
+            .unwrap()
+            .rows
+            .len()
+    };
+    assert_eq!(
+        rows(b"SELECT a, sum(a) OVER (ORDER BY a) AS abc FROM k ORDER BY abc"),
+        100
+    );
+    assert_eq!(rows(b"SELECT a AS z FROM k ORDER BY (SELECT z)"), 100);
+}
+
+/// A `*` over two sides of one name is refused with the database, the
+/// table and the column of the first of those columns, and a `HAVING` on
+/// a statement that gathers no group with the words of that clause.
+#[test]
+fn what_a_star_over_two_sides_of_one_name_is_refused_with() {
+    let refused = |sql: &[u8]| {
+        Database::open(super::INDEXED)
+            .unwrap()
+            .query(sql)
+            .expect_err("a refusal")
+            .message()
+    };
+    assert_eq!(
+        refused(b"SELECT * FROM k, k"),
+        "ambiguous column name: main.k.a"
+    );
+    assert_eq!(
+        refused(b"SELECT k.* FROM k, k"),
+        "ambiguous column name: main.k.a"
+    );
+    assert_eq!(
+        refused(b"SELECT a FROM k HAVING a>0"),
+        "HAVING clause on a non-aggregate query"
+    );
+}

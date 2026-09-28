@@ -7,6 +7,21 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` refuses a `HAVING` written on a statement that gathers no group with `HAVING clause on
+  a non-aggregate query`, where it wrote the name of the refusal itself. D-615 records it. Catalog
+  6.6.446.
+
+- `db-sqlite` writes the database, the table and the column of the first of the columns two sides of
+  one name answer into the refusal of a `*` over them, so `SELECT * FROM t1, t1` is refused
+  `ambiguous column name: main.t1.a`, where the refusal carried no name. D-616 records it. Catalog
+  6.6.447.
+
+- `db-sqlite` refuses a name that stands for a result alias whose expression holds a window function
+  where the name was written inside a statement of its own, so `SELECT count() OVER() AS m FROM t1
+  ORDER BY (SELECT m)` is refused `misuse of aliased window function m`, where it answered the window
+  for the row the inner statement stood on. D-617 records it. Catalog 6.6.448. `window1.test` goes
+  from 312 cases passing to 315.
+
 - `db-sqlite` refuses the statement whatever the expression of a computed column refuses, where it
   wrote the row and left the refusal to the read of the column, so `CREATE TABLE t(a, b AS
   (abs(a)))` no longer takes the row `-9223372036854775808`. D-609 records it. Catalog 6.6.440.
