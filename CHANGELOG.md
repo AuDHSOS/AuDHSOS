@@ -7,6 +7,15 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` walks an index over a table that keeps its rows in the key's own tree: the
+  entry ends with the columns of the key, which the row is read out of that tree by, and
+  an entry holding every column the statement reads answers the row itself. D-593 records
+  it. Catalog 6.6.427. With D-594, `collate4.test` goes from 100 cases passing to 101.
+
+- `db-sqlite` reads every column of the side a `*` names, so an index whose entries hold
+  them covers the statement, where a statement holding a `*` left every index
+  uncovering. D-594 records it.
+
 - `db-sqlite` ends the key of an index at a column an `IN` names, taking one descent of
   the index per value of the list, where it read every entry of the index. The values
   stand in the order of the column, so an `ORDER BY` over it is answered by the walk.

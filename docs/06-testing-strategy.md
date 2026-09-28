@@ -7888,6 +7888,21 @@ Unit tests of `crate::db` over `fixtures/indexed.db`.
 - `WHERE NULL` under an aggregate, which answers one row.
 - `WHERE abs(0)`, which is read against every row.
 
+### 6.6.427 What an index over a table that keeps its rows in the key's own tree holds the walk to (`db-sqlite`)
+
+Unit tests of `crate::db` over an image `crate::change` writes. Every
+answer is the one the C library's shell writes.
+
+- A column the entry does not hold, which the row is read out of the key's
+  own tree by.
+- A table of three columns whose key is two of them, where the entry holds
+  every column and the walk descends nothing.
+- The rows of both, in the order of the index.
+- A `LEFT JOIN` whose `ON` names a column an index holds, named
+  `SEARCH t2 USING COVERING INDEX t2c (c=?) LEFT-JOIN`.
+- A `*`, which reads every column of the side it names, so the index covers
+  the statement where its entries hold them.
+
 ### 6.6.426 What an `IN` over a column an index holds holds the walk to (`db-sqlite`)
 
 Unit tests of `crate::db` over an image `crate::change` writes. Every

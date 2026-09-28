@@ -6398,6 +6398,7 @@ impl<'a> Database<'a> {
             own,
             rewind,
             searched: 0,
+            tail: tailed(stored, root),
             encoding: self.encoding,
             collation: self.collation(),
             schemed: self.schemed(stored.place),
@@ -8083,16 +8084,7 @@ fn plan_of(
     // `pTab->pIndex` carries the index made last first, which is the
     // order `whereLoopAddBtree` reads them in and so the order two
     // indexes the terms name as many columns of are taken in.
-    // An index over a table that keeps its rows in the key's own tree ends
-    // its entries with that key and not with a rowid, which this walk
-    // cannot descend the table by, so such a table is read out of the
-    // key's own tree alone.
-    let indexes: &[Kept] = if stored.table.without_rowid {
-        &[]
-    } else {
-        &stored.indexes
-    };
-    for kept in indexes.iter().rev().chain(stored.keyed.iter()) {
+    for kept in stored.indexes.iter().rev().chain(stored.keyed.iter()) {
         // A partial index answers fewer entries than the table has rows,
         // so a statement planned against one would read fewer rows than
         // it must.
@@ -8446,11 +8438,24 @@ fn in_order_of(
 /// the sides for each of them.
 fn covered(arena: &Arena, select: &Select, sql: &[u8], sides: &mut [Side<'_>], free: bool) {
     let mut reading: Vec<Vec<usize>> = alloc::vec![Vec::new(); sides.len()];
-    // A `*` answers every column of the side it names, which no index of
-    // it covers unless it holds every column.
+    // A `*` reads every column of every side and a `t.*` every column of
+    // the side it names, which `sqlite3SelectExpand` writes out as those
+    // columns, so an index covers such a statement where it holds them.
     let results = arena.results(select.columns);
-    if results.iter().any(|held| expression_of(held).is_none()) {
-        return;
+    for held in results {
+        let named = match held {
+            crate::ast::ResultColumn::Expr { .. } => continue,
+            crate::ast::ResultColumn::Star => None,
+            crate::ast::ResultColumn::TableStar(span) => Some(dequote(span.text(sql))),
+        };
+        for (at, side) in sides.iter().enumerate() {
+            if named.as_ref().is_some_and(|name| !side.named(name)) {
+                continue;
+            }
+            for read in reading.iter_mut().skip(at).take(1) {
+                read.extend(0..side.shape.columns.len());
+            }
+        }
     }
     // Every name the file writes is read against these sides: a name
     // another core of the compound or another statement writes reaches
@@ -8594,12 +8599,23 @@ fn covering_of(side: &Side<'_>, read: &[usize]) -> Option<Vec<Option<usize>>> {
         return None;
     };
     let kept = stored.indexes.iter().find(|kept| kept.root == root)?;
-    let places: Vec<Option<usize>> = kept
+    let mut places: Vec<Option<usize>> = kept
         .index
         .columns
         .iter()
         .map(crate::schema::Keyed::place)
         .collect();
+    // An index over a table that keeps its rows in the key's own tree
+    // ends its entries with the columns of the key the index does not
+    // hold already, which the entry answers as its own places do.
+    if let Some(keyed) = stored.keyed.as_ref() {
+        for column in &keyed.index.columns {
+            let place = column.place();
+            if !places.contains(&place) {
+                places.push(place);
+            }
+        }
+    }
     if read.iter().all(|place| places.contains(&Some(*place))) {
         return Some(places);
     }
@@ -10267,16 +10283,7 @@ fn joined(
     }
     let mut best: Option<(Plan, usize)> = None;
     let mut held = 0;
-    // An index over a table that keeps its rows in the key's own tree ends
-    // its entries with that key and not with a rowid, which this walk
-    // cannot descend the table by, so such a table is read out of the key's
-    // own tree alone.
-    let indexes: &[Kept] = if stored.table.without_rowid {
-        &[]
-    } else {
-        &stored.indexes
-    };
-    for kept in indexes.iter().chain(stored.keyed.iter()) {
+    for kept in stored.indexes.iter().chain(stored.keyed.iter()) {
         // A partial index answers fewer entries than its places say.
         if kept.index.filter.is_some() {
             continue;
@@ -10937,6 +10944,10 @@ struct Sought<'i, 'f> {
     searched: i64,
     /// Where the rowid stands in an entry.
     rowid_at: usize,
+    /// Where the key of a table that keeps its rows in the key's own tree
+    /// stands in an entry, and nothing for a table that keeps its rows by
+    /// rowid.
+    tail: Option<Rowed>,
     /// What encoding the file keeps its text in.
     encoding: Encoding,
     /// What a comparison uses where nothing writes a collation.
@@ -11041,6 +11052,12 @@ impl<'i> Sought<'i, '_> {
                 self.encoding,
                 &mut self.payload,
             )?;
+            // An entry of an index over a table that keeps its rows in
+            // the key's own tree carries no rowid, and the columns of the
+            // key stand among the ones the entry holds.
+            if self.tail.is_some() {
+                return Ok(Some((None, values)));
+            }
             let rowid = rowid_of(&self.image, &entry, self.rowid_at, &mut self.payload)?;
             // The column the rowid is another name for holds nothing of
             // its own: the key is what it answers. A table that carries
@@ -11050,6 +11067,38 @@ impl<'i> Sought<'i, '_> {
                 *slot = Value::Int(rowid);
             }
             return Ok(Some((Some(rowid), values)));
+        }
+        // An entry of an index over a table that keeps its rows in the
+        // key's own tree ends with the columns of the key, which the row
+        // is read out of that tree by.
+        if let Some(tail) = self.tail.clone() {
+            let mut key = Vec::new();
+            for at in &tail.places {
+                let held =
+                    value_of_entry(&self.image, &entry, *at, self.encoding, &mut self.payload);
+                key.push(held?);
+            }
+            self.searched = self.searched.saturating_add(1);
+            let held = keyed_row(
+                &self.image,
+                self.stored.root,
+                (&key, &tail.collations),
+                self.encoding,
+            );
+            return held?
+                .map(|row| {
+                    read_payload(&self.image, &row, &mut self.payload)?;
+                    values_of(
+                        &self.payload,
+                        self.stored,
+                        None,
+                        self.encoding,
+                        self.collation,
+                        self.schemed,
+                    )
+                    .map(|values| (None, values))
+                })
+                .transpose();
         }
         let rowid = rowid_of(&self.image, &entry, self.rowid_at, &mut self.payload)?;
         // The row the entry names, which the table's tree is descended
@@ -11225,6 +11274,94 @@ fn value_of_entry(
         record::Record::parse(held)?
     };
     held_value(&record, at, encoding)
+}
+
+/// Where the key of a table that keeps its rows in the key's own tree
+/// stands in an entry of the index at `root`, and nothing for a table
+/// that keeps its rows by rowid or for the key's own tree, whose entries
+/// are the rows.
+///
+/// `sqlite3CreateIndex` of `research/sqlite/src/build.c` ends every index
+/// of such a table with the columns of the key the index does not hold
+/// already, in the order of the key, so an entry carries the key where an
+/// entry of a table that keeps its rows by rowid carries a rowid:
+/// `PRAGMA index_xinfo` over `CREATE INDEX wc ON w(c)` of a table keyed
+/// by `(a,b)` answers `c`, `a` and `b`.
+///
+/// Costs O(k * n) in the columns of the key and of the index.
+fn tailed(stored: &Stored, root: u32) -> Option<Rowed> {
+    let keyed = stored.keyed.as_ref().filter(|kept| kept.root != root)?;
+    let held = stored.indexes.iter().find(|kept| kept.root == root)?;
+    let declared: Vec<Option<usize>> = held
+        .index
+        .columns
+        .iter()
+        .map(crate::schema::Keyed::place)
+        .collect();
+    let mut places = Vec::new();
+    let mut collations = Vec::new();
+    let mut appended = declared.len();
+    for column in &keyed.index.columns {
+        // A column of a key names a column of the table, never an
+        // expression, so no place of the key is one the entry leaves out.
+        let place = column.place().unwrap_or(usize::MAX);
+        let held = declared.iter().position(|held| *held == Some(place));
+        // A column of the key the index holds already stands where the
+        // index holds it, and every other one after the columns of the
+        // index, in the order of the key.
+        places.push(held.unwrap_or(appended));
+        appended = appended.saturating_add(usize::from(held.is_none()));
+        collations.push(column.collation);
+    }
+    Some(Rowed { places, collations })
+}
+
+/// Where the key of a table that keeps its rows in the key's own tree
+/// stands in an entry of one of its indexes.
+#[derive(Clone)]
+struct Rowed {
+    /// The place in the entry of each column of the key, in the order of
+    /// the key.
+    places: Vec<usize>,
+    /// What each column of the key compares under.
+    collations: Vec<Collation>,
+}
+
+/// The entry of the key's own tree that `key` names, which is the row,
+/// and nothing where the tree holds no entry under that key, which is a
+/// file whose index and table disagree: `OP_NotFound` of the loop the C
+/// library writes reads the next entry of the index there, where this
+/// walk answers no further row.
+///
+/// `sqlite3VdbeFinishMoveto` reads the row an entry of an index names,
+/// which for such a table is `OP_SeekGE` over the key: O(log n) in the
+/// rows.
+fn keyed_row<'i>(
+    image: &Image<'i>,
+    root: u32,
+    held: (&[Value], &[Collation]),
+    encoding: Encoding,
+) -> Result<Option<crate::page::Payload<'i>>, Error> {
+    let (key, collations) = held;
+    let mut scratch = Vec::new();
+    let mut reached = |entry: &crate::page::Payload<'i>| {
+        let order = order_of_entry(image, entry, key, collations, encoding, &mut scratch)
+            .map_err(|_| crate::error::Error::Overrun)?;
+        Ok(is_before(order, false, true))
+    };
+    let mut held = Vec::new();
+    let entry = image
+        .entries_from(root, &mut reached)
+        .map_err(Error::Image)?
+        .next()
+        .transpose()?
+        // The entry the descent stands on is the row under the key, and
+        // an entry under another key is one the key names no row before.
+        .filter(|entry| {
+            order_of_entry(image, entry, key, collations, encoding, &mut held)
+                .is_ok_and(|order| order == core::cmp::Ordering::Equal)
+        });
+    Ok(entry)
 }
 
 /// The row one entry of a covering index answers: the columns the index

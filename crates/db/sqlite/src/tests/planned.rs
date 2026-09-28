@@ -557,13 +557,17 @@ fn what_the_terms_hold_the_walk_of_a_table_that_keeps_its_rows_in_the_key_to() {
         plan(super::INDEXED, b"SELECT * FROM u WHERE a>'a' AND a<'z'"),
         tree(&["`--SEARCH u USING PRIMARY KEY (a>? AND a<?)"])
     );
-    // An index over such a table ends its entries with that key and not
-    // with a rowid, so the walk of one is not read, and a walk the terms
-    // hold to nothing reads every row.
+    // An index over such a table ends its entries with the columns of the
+    // key, which hold every column here, so the walk answers the rows out
+    // of the entries.
     assert_eq!(
         plan(super::INDEXED, b"SELECT * FROM u WHERE b=1"),
-        tree(&["`--SCAN u"])
+        tree(&["`--SEARCH u USING COVERING INDEX ub (b=?)"])
     );
+    // A walk the terms hold to nothing reads the rows out of the key's own
+    // tree, where the C library weighs the index against it and names
+    // `SCAN u USING COVERING INDEX ub`, which item 278 of
+    // `docs/16-sqlite-in-rust.md` holds.
     assert_eq!(
         plan(super::INDEXED, b"SELECT * FROM u"),
         tree(&["`--SCAN u"])
@@ -980,7 +984,7 @@ fn what_a_join_over_a_table_that_keeps_its_rows_in_the_key_answers() {
         ),
         tree(&[
             "|--SCAN t1",
-            "|--SCAN t2 LEFT-JOIN",
+            "|--SEARCH t2 USING COVERING INDEX t2c (c=?) LEFT-JOIN",
             "`--USE TEMP B-TREE FOR ORDER BY"
         ])
     );
@@ -1457,4 +1461,71 @@ fn what_an_in_over_a_column_of_another_affinity_or_collation_holds() {
             .collect();
         assert_eq!(held, rows, "{sql:?}");
     }
+}
+
+/// An index over a table that keeps its rows in the key's own tree holds
+/// the walk of that table: the entry ends with the columns of the key,
+/// which the row is read out of the key's own tree by, and an entry that
+/// holds every column the statement reads answers the row itself.
+#[test]
+fn what_an_index_over_a_table_that_keeps_its_rows_in_the_key_holds_the_walk_to() {
+    let mut writer = crate::change::Writer::new(1024, 0, crate::header::Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t(a,b,c,PRIMARY KEY(a)) WITHOUT ROWID".as_slice(),
+        b"CREATE INDEX tb ON t(b)",
+        b"INSERT INTO t VALUES('k1',1,'c1'),('k2',2,'c2'),('k3',1,'c3')",
+        b"CREATE TABLE s(a,b,c,PRIMARY KEY(b,c)) WITHOUT ROWID",
+        b"CREATE INDEX sca ON s(c,a)",
+        b"INSERT INTO s VALUES(1,2,3),(4,5,6)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let image = writer.written();
+    for (sql, lines) in [
+        // A column the entry does not hold is read out of the row, which
+        // the key's own tree is descended to.
+        (
+            b"SELECT c FROM t WHERE b=1".as_slice(),
+            tree(&["`--SEARCH t USING INDEX tb (b=?)"]),
+        ),
+        // The key of the table stands in the entry, so an entry holds
+        // every column of a table of three columns whose key is two of
+        // them.
+        (
+            b"SELECT a FROM s WHERE c=3",
+            tree(&["`--SEARCH s USING COVERING INDEX sca (c=?)"]),
+        ),
+    ] {
+        assert_eq!(plan(&image, sql), lines, "{sql:?}");
+    }
+    let database = Database::open(&image).unwrap();
+    assert_eq!(
+        database.query(b"SELECT c FROM t WHERE b=1").unwrap().rows,
+        alloc::vec![
+            alloc::vec![Value::Text(b"c1".to_vec())],
+            alloc::vec![Value::Text(b"c3".to_vec())]
+        ]
+    );
+    assert_eq!(
+        database
+            .query(b"SELECT a,b,c FROM t WHERE b=1")
+            .unwrap()
+            .rows,
+        alloc::vec![
+            alloc::vec![
+                Value::Text(b"k1".to_vec()),
+                Value::Int(1),
+                Value::Text(b"c1".to_vec())
+            ],
+            alloc::vec![
+                Value::Text(b"k3".to_vec()),
+                Value::Int(1),
+                Value::Text(b"c3".to_vec())
+            ]
+        ]
+    );
+    assert_eq!(
+        database.query(b"SELECT a FROM s WHERE c=3").unwrap().rows,
+        alloc::vec![alloc::vec![Value::Int(1)]]
+    );
 }

@@ -1336,11 +1336,12 @@ Size: L.
      walk, which D-576 records. A bare `min` or `max` over that key reads
      the order too, so this engine names `SCAN u` where the C library names
      `SEARCH u USING PRIMARY KEY`.
-278. A walk of an index over a table that keeps its rows in the key's own
-     tree. The entry of such an index ends with the key of the row and not
-     with a rowid, so the descent to the row is a read of the key's tree by
-     that key; `crate::db` reads no index of such a table and walks the key
-     or the table, which D-579 records for a key an `ON` names.
+278. The index the C library weighs against the key's own tree for a walk
+     no term holds, which it names `SCAN t USING COVERING INDEX i` where
+     the entries hold every column the statement reads, the entry being no
+     shorter than the row. This engine reads the key's own tree there and
+     names `SCAN t`. The walk an index of such a table holds is built,
+     which D-593 records, and the order such a walk answers is item 277.
 279. The rows a `DISTINCT` keeps one of, gathered by the walks of more than
      one side: the rows of the side read second stand under one row of the
      side read first, so the columns of the first are grouped. `crate::db`
@@ -1383,6 +1384,15 @@ Size: L.
      per list for and names `(x=? AND y=?)`. This engine ends the key at
      the first list and reads the second over the entries that list
      reaches, which names `(x=?)`. `eqp.test` holds one case of it.
+
+286. The key an index whose places run in different directions names,
+     which `whereLoopAddBtree` of `research/sqlite/src/where.c` holds a
+     term of every column of at one value, the direction of a place
+     deciding the order the entries stand in and not what a `=` reaches.
+     This engine names a key of the places up to the first one that runs
+     the other way, so `CREATE INDEX tcd ON t(c DESC,d)` under
+     `WHERE c=? AND d=?` names `(c=?)` where the C library names
+     `(c=? AND d=?)`.
 
 ### Done when
 
