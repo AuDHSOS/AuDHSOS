@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` answers the rowid of each of the tables inside brackets in a `FROM` and reads a name as
+  a rowid where no column of any side carries it, so `SELECT _rowid_ FROM w1 JOIN (w3 JOIN r1)`
+  answers the rowid of `r1` and `SELECT rowid FROM r1 JOIN (r2 JOIN w2)` the column `w2` calls
+  `rowid`, where it answered the rowid of a side alone. D-618 records it. Catalog 6.6.449.
+  `joinH.test` goes from 62 cases passing to 70 and `joinD.test` from 353 to 372.
+
 - `db-sqlite` refuses a `HAVING` written on a statement that gathers no group with `HAVING clause on
   a non-aggregate query`, where it wrote the name of the refusal itself. D-615 records it. Catalog
   6.6.446.

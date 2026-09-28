@@ -7933,6 +7933,29 @@ is the one the C library's shell writes.
   count it wrote, and a `DELETE` that writes no row answering nought.
 - `CREATE TABLE u(c)` and `CREATE INDEX`, each answering no row.
 
+### 6.6.449 Which rowid a name reaches through the tables inside brackets (`db-sqlite`)
+
+Unit tests of `crate::db` over an image `crate::change` writes. Every
+answer is the one the C library's shell writes.
+
+- `SELECT _rowid_ FROM w1 JOIN (w3 JOIN r1)` and the same over `oid`,
+  each answering the rowid of `r1`, the one table inside the brackets that
+  keeps one.
+- `SELECT r1.oid FROM w1 JOIN (w3 JOIN r1)`, which names a table inside
+  the brackets, `SELECT r1._rowid_ FROM w1 JOIN (w3 JOIN r1)`, which names
+  it under the name the rowid is answered under, and `SELECT
+  main.r1.rowid FROM r1`, which names the database as well.
+- `SELECT rowid FROM r1 JOIN (r2 JOIN w2)`, answering the column `w2`
+  calls `rowid` and not the rowid of `r1` or `r2`.
+- `SELECT rowid FROM w1 JOIN (w3 JOIN r3)` over a table carrying a column
+  of each of the three names, answering that column.
+- `SELECT * FROM r1 JOIN (r2 JOIN w2)`, answering four columns.
+- `SELECT rowid FROM w1, (r1, r2)` and `SELECT rowid FROM r1, (r2 JOIN
+  w1)`, each refused `ambiguous column name: rowid`.
+- `SELECT temp.r1.rowid FROM r1`, refused `no such column: temp.r1.rowid`,
+  and `SELECT oid FROM w1 JOIN (w3 JOIN w2 ON 1)`, refused `no such
+  column: oid`.
+
 ### 6.6.448 What a name that stands for an aliased window function is refused with (`db-sqlite`)
 
 Unit tests of `crate::db` over an image `crate::change` writes. Every

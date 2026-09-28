@@ -1520,14 +1520,42 @@ struct Shape {
     /// The name the key is answered under, where a column of the side
     /// is another name for the rowid.
     key: Option<Vec<u8>>,
+    /// The places among the columns that stand for the rowid of one of
+    /// the tables inside brackets, which a `*` leaves out and a name
+    /// that reaches a rowid reads: `selectExpander` of
+    /// `research/sqlite/src/select.c:6217` appends one such column per
+    /// table of a statement that stands for the tables inside brackets.
+    keys: Vec<usize>,
 }
 
 impl Shape {
-    /// Where the column `name` stands, where the side has one.
+    /// Where the column `name` stands, where the side has one. The
+    /// column that stands for the rowid of a table inside brackets is
+    /// not one, a name reaching it through [`Shape::keys`] alone.
     fn place(&self, name: &[u8]) -> Option<usize> {
-        self.columns
-            .iter()
-            .position(|column| column.name.eq_ignore_ascii_case(name))
+        self.columns.iter().enumerate().find_map(|(at, column)| {
+            (!self.keying(at) && column.name.eq_ignore_ascii_case(name)).then_some(at)
+        })
+    }
+
+    /// Whether the column at this place stands for the rowid of a table
+    /// inside brackets.
+    fn keying(&self, at: usize) -> bool {
+        self.keys.contains(&at)
+    }
+
+    /// The first of `_rowid_`, `rowid` and `oid` no column of the side
+    /// carries, and nothing where the side carries all three, which is
+    /// what `sqlite3RowidAlias` of `research/sqlite/src/expr.c:3054`
+    /// answers.
+    fn alias(&self) -> Option<&'static [u8]> {
+        [
+            b"_rowid_".as_slice(),
+            b"rowid".as_slice(),
+            b"oid".as_slice(),
+        ]
+        .into_iter()
+        .find(|name| self.place(name).is_none())
     }
 
     /// Whether the side has a column of this name.
@@ -2465,6 +2493,7 @@ fn shape_of(schema: &[u8], table: &Table) -> Shape {
             .rowid_alias
             .and_then(|at| table.columns.get(at))
             .map(|column| column.name.clone()),
+        keys: Vec::new(),
     }
 }
 
@@ -7633,6 +7662,7 @@ fn listed(
             nested: false,
             keyed: false,
             key: None,
+            keys: Vec::new(),
         },
     })
 }
@@ -13677,6 +13707,7 @@ fn shape(
     // side and not of the table is read.
     let long = naming.full && !naming.short;
     let mut columns = Vec::new();
+    let mut keys = Vec::new();
     for result in arena.results(select.columns) {
         match *result {
             ResultColumn::Star => {
@@ -13695,7 +13726,15 @@ fn shape(
                     // The columns a `USING` or a `NATURAL` matched are
                     // answered once and not twice, which is the side
                     // that hides them leaving them out.
-                    for column in &side.shape.columns {
+                    for (place, column) in side.shape.columns.iter().enumerate() {
+                        // The column a side standing for the tables
+                        // inside brackets answers as the rowid of one of
+                        // them is left out, which `selectExpander` of
+                        // `research/sqlite/src/select.c:6230` leaves out
+                        // of the columns of a nested `FROM` it expands.
+                        if side.shape.keying(place) {
+                            continue;
+                        }
                         // A statement that stands for the tables
                         // inside brackets answers the column a `USING`
                         // matched as well, under the name of the table
@@ -13709,6 +13748,14 @@ fn shape(
                         answered.hidden = hidden;
                         answered.shown = side.shown_as(column, long);
                         columns.push(answered);
+                    }
+                    // A statement standing for the tables inside
+                    // brackets answers the rowid of each of them that
+                    // keeps one, under the first name no column of that
+                    // table carries.
+                    if let Some(name) = keyed_name(side).filter(|_| select.nested) {
+                        keys.push(columns.len());
+                        columns.push(keyed_column(side, name));
                     }
                 }
             }
@@ -13770,6 +13817,7 @@ fn shape(
         nested: select.nested,
         keyed: false,
         key: None,
+        keys,
     })
 }
 
@@ -13840,6 +13888,33 @@ fn windowed_under(arena: &Arena, id: ExprId) -> bool {
     found
 }
 
+/// The name a side standing for the tables inside brackets answers the
+/// rowid of one of them under, and nothing where that table keeps no
+/// rowid or carries a column of each of the three names.
+fn keyed_name(side: &Side<'_>) -> Option<&'static [u8]> {
+    if !side.shape.keyed {
+        return None;
+    }
+    side.shape.alias()
+}
+
+/// The column a side standing for the tables inside brackets answers the
+/// rowid of one of them as, which carries the name of that table so that
+/// `t.rowid` reaches it.
+fn keyed_column(side: &Side<'_>, name: &[u8]) -> Column {
+    Column {
+        name: name.to_vec(),
+        shown: name.to_vec(),
+        from: side.called().to_vec(),
+        hidden: false,
+        affinity: Affinity::Integer,
+        collation: None,
+        datatype: classes_of(Affinity::Integer),
+        declared: b"INTEGER".to_vec(),
+        origin: keyed_origin(side),
+    }
+}
+
 /// Where a bare `rowid` of a side comes from: the database and the table
 /// of the side's first column, under the name `rowid`.
 fn keyed_origin(side: &Side<'_>) -> Origin {
@@ -13906,7 +13981,12 @@ fn project(
                     .enumerate()
                     .filter(|(_, held)| !held.exists)
                 {
-                    held.each(|column, value| {
+                    held.each(|place, column, value| {
+                        // The rowid of a table inside brackets is left
+                        // out, as `shape` leaves the column out.
+                        if held.shape.keying(place) {
+                            return;
+                        }
                         if left_out(column, held.using) && !select.nested {
                             return;
                         }
@@ -13927,12 +14007,17 @@ fn project(
                             .map_or_else(|| value.clone(), |(value, ..)| value);
                         out.push(cursor.coalesced(at, &column.name, &mine));
                     });
+                    // The rowid of the side comes after its columns,
+                    // where `shape` appended the column for it.
+                    if select.nested && held.keying() {
+                        out.push(held.rowid.map_or(Value::Null, Value::Int));
+                    }
                 }
             }
             ResultColumn::TableStar(span) => {
                 let named = dequote(span.text(sql));
                 for held in cursor.held.iter().filter(|held| held.named(&named)) {
-                    held.each(|_, value| out.push(value.clone()));
+                    held.each(|_, _, value| out.push(value.clone()));
                 }
             }
             ResultColumn::Expr { expr, .. } => {
@@ -15529,7 +15614,7 @@ impl<'a> Held<'a> {
         }
         let mut first: Option<(Value, Affinity, Collation)> = None;
         for (at, held) in self.shape.columns.iter().enumerate() {
-            if !held.name.eq_ignore_ascii_case(column) {
+            if self.shape.keying(at) || !held.name.eq_ignore_ascii_case(column) {
                 continue;
             }
             let value = self.values.get(at).cloned().unwrap_or(Value::Null);
@@ -15555,42 +15640,46 @@ impl<'a> Held<'a> {
         if !self.shape.nested {
             return None;
         }
-        let at = self.shape.columns.iter().position(|held| {
-            held.from.eq_ignore_ascii_case(from) && held.name.eq_ignore_ascii_case(column)
-        })?;
+        let at = self
+            .shape
+            .columns
+            .iter()
+            .enumerate()
+            .find_map(|(at, held)| {
+                let matching = held.from.eq_ignore_ascii_case(from)
+                    && held.name.eq_ignore_ascii_case(column)
+                    && !self.shape.keying(at);
+                matching.then_some(at)
+            })?;
         let held = self.shape.columns.get(at)?;
         let value = self.values.get(at).cloned().unwrap_or(Value::Null);
         Some((value, held.affinity, held.collation.unwrap_or(default)))
     }
 
-    /// Calls `each` with every column and the value it holds.
-    fn each(&self, mut each: impl FnMut(&Column, &Value)) {
-        for (column, value) in self.shape.columns.iter().zip(&self.values) {
-            each(column, value);
+    /// Calls `each` with the place of every column, the column and the
+    /// value it holds.
+    fn each(&self, mut each: impl FnMut(usize, &Column, &Value)) {
+        for (place, (column, value)) in self.shape.columns.iter().zip(&self.values).enumerate() {
+            each(place, column, value);
         }
     }
 
-    /// What this side answers for `column`, or nothing where it has no
-    /// such column. `default` is the collation of a column nothing was
-    /// written about.
+    /// Whether a side standing for the tables inside brackets answers
+    /// the rowid of this one, which it does for a table that keeps one
+    /// and carries a column of fewer than all three names.
+    fn keying(&self) -> bool {
+        self.shape.keyed && self.shape.alias().is_some()
+    }
+
+    /// What this side answers for `column` out of the columns it holds,
+    /// and nothing where it holds no column of that name, the rowid of
+    /// the row being reached through [`Cursor::keying`] alone. `default`
+    /// is the collation of a column nothing was written about.
     fn column(&self, column: &[u8], default: Collation) -> Option<(Value, Affinity, Collation)> {
         if let Some(answered) = self.filled(column, default) {
             return Some(answered);
         }
-        let Some(at) = self.shape.place(column) else {
-            // The three names the rowid answers to, which a statement
-            // inside the `FROM` and a table that keeps its rows in the
-            // key's own tree both refuse.
-            let rowid = self.shape.keyed
-                && (column.eq_ignore_ascii_case(b"rowid")
-                    || column.eq_ignore_ascii_case(b"oid")
-                    || column.eq_ignore_ascii_case(b"_rowid_"));
-            if rowid {
-                let value = self.rowid.map_or(Value::Null, Value::Int);
-                return Some((value, Affinity::Integer, Collation::Binary));
-            }
-            return None;
-        };
+        let at = self.shape.place(column)?;
         let held = self.shape.columns.get(at)?;
         let value = self.values.get(at).cloned().unwrap_or(Value::Null);
         Some((value, held.affinity, held.collation.unwrap_or(default)))
@@ -15653,13 +15742,21 @@ impl<'a> Cursor<'a> {
     /// counting the columns a name matches: it reads every side, so it
     /// is O(sides) per name.
     fn answering(&self, schema: Option<&[u8]>, table: Option<&[u8]>, column: &[u8]) -> Answering {
+        let found = self.owning(schema, table, column);
+        // `lookupName` of `research/sqlite/src/resolve.c:624` reads a
+        // name as a rowid where no column of any side carries it, so a
+        // column of that name is answered before the rowid of another
+        // side and two rowids alone are what it refuses.
+        if matches!(found, Answering::Nothing) && crate::schema::rowid_named(column) {
+            return self.keying(schema, table);
+        }
+        found
+    }
+
+    /// What the sides answer for a name out of the columns they hold.
+    fn owning(&self, schema: Option<&[u8]>, table: Option<&[u8]>, column: &[u8]) -> Answering {
         let mut found = Answering::Nothing;
-        for (at, held) in self
-            .held
-            .iter()
-            .enumerate()
-            .filter(|(_, held)| !held.exists || self.reaching.get())
-        {
+        for (at, held) in self.reading() {
             // A schema in front of the column names the database the
             // side reads, which a side that reads no table has none of.
             if schema.is_some_and(|named| !held.schema.eq_ignore_ascii_case(named)) {
@@ -15684,6 +15781,48 @@ impl<'a> Cursor<'a> {
             found = Answering::One(at, value, affinity, collation);
         }
         found
+    }
+
+    /// What the sides answer for a name that reaches a rowid: the rowid
+    /// of a side that keeps one, and the rowid of each of the tables
+    /// inside brackets a side stands for, which `cntTab` of
+    /// `research/sqlite/src/resolve.c:288` counts one by one.
+    fn keying(&self, schema: Option<&[u8]>, table: Option<&[u8]>) -> Answering {
+        let mut found = Answering::Nothing;
+        for (at, held) in self.reading() {
+            if schema.is_some_and(|named| !held.schema.eq_ignore_ascii_case(named)) {
+                continue;
+            }
+            let mine = (held.keying() && table.is_none_or(|named| held.named(named)))
+                .then(|| held.rowid.map_or(Value::Null, Value::Int));
+            let inside = held
+                .shape
+                .columns
+                .iter()
+                .enumerate()
+                .filter(|(place, _)| held.shape.keying(*place))
+                .filter(|(_, column)| {
+                    table.is_none_or(|named| column.from.eq_ignore_ascii_case(named))
+                })
+                .map(|(place, _)| held.values.get(place).cloned().unwrap_or(Value::Null));
+            for value in mine.into_iter().chain(inside) {
+                if matches!(found, Answering::One(..)) {
+                    return Answering::Many;
+                }
+                found = Answering::One(at, value, Affinity::Integer, Collation::Binary);
+            }
+        }
+        found
+    }
+
+    /// The sides a name reads, with the place of each: every side but
+    /// the one the transform read out of an `EXISTS`, which a term that
+    /// `EXISTS` wrote reads as well.
+    fn reading(&self) -> impl Iterator<Item = (usize, &Held<'a>)> {
+        self.held
+            .iter()
+            .enumerate()
+            .filter(|(_, held)| !held.exists || self.reaching.get())
     }
 
     /// What a bare name no side answers stands for: the expression the
