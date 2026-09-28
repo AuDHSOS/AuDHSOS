@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` reads an `EXISTS` of the top-level `AND` spine of a `WHERE` as another side of the
+  `FROM`, whose walk stops at the first row it answers, where it answered the statement inside
+  once per row; the terms that `EXISTS` wrote hold the walk of that side, and the plan writes
+  ` EXISTS` after its name. D-605 records it. Catalogs 6.6.435 and 6.6.436. `existsexpr.test` goes from 76
+  cases passing to 101.
+
 - `db-sqlite` names a range of an index over an expression from a bound over that same
   expression and from each end of a `BETWEEN` over it, where it took a key of `=` alone, so the
   walk answers the rows in the order of the index. D-602 records it. Catalog 6.6.433.

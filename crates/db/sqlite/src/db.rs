@@ -1828,6 +1828,44 @@ struct Reach<'a> {
     /// The `WHERE` of the statement, which the walk reads to see whether
     /// no row can make it true.
     filter: Option<ExprId>,
+    /// The `EXISTS` terms of that `WHERE` the transform read as sides,
+    /// whose own `WHERE` the walk reads as terms of this statement.
+    lifted: &'a [Lifted],
+}
+
+impl Reach<'_> {
+    /// Every root of the `WHERE` the walk reads: the clause the statement
+    /// wrote, whose terms name no side of their own, and the `WHERE` of
+    /// each `EXISTS` the transform read as a side, whose terms are read on
+    /// the level of that side where they name no level themselves.
+    fn roots(&self) -> Vec<Rooted> {
+        let written = self
+            .filter
+            .into_iter()
+            .map(|term| Rooted { term, home: None });
+        let lifted = self.lifted.iter().filter_map(|held| {
+            held.filter.map(|term| Rooted {
+                term,
+                home: Some(held.side),
+            })
+        });
+        written.chain(lifted).collect()
+    }
+
+    /// The roots alone, which is what a walk over the spine reads.
+    fn spine(&self) -> Vec<ExprId> {
+        self.roots().into_iter().map(|held| held.term).collect()
+    }
+}
+
+/// One root of the `WHERE` a walk is planned against.
+#[derive(Clone, Copy)]
+struct Rooted {
+    /// The expression the root stands at.
+    term: ExprId,
+    /// The side the `EXISTS` it came from stands for, where a term of it
+    /// names no side the walk can read it on.
+    home: Option<usize>,
 }
 
 /// Which indexes of a table a walk of it may read, which `INDEXED BY`
@@ -1920,6 +1958,11 @@ struct Side<'a> {
     /// several rows, which stands in front of the alias, and nothing
     /// otherwise.
     valued: Vec<u8>,
+    /// Whether the transform read the side out of an `EXISTS` of the
+    /// `WHERE`: a `*` answers no column of it, a name reaches it from a
+    /// term that `EXISTS` wrote alone, and the walk of it stops at the
+    /// first row it answers.
+    exists: bool,
     /// Whether the index the plan names holds every column the statement
     /// reads counting the columns its own expressions read, which the
     /// plan says `COVERING` of while the walk reads the row all the same.
@@ -1942,6 +1985,23 @@ struct Side<'a> {
     /// above it, which hang where this side hangs and stand in the place
     /// this side stands in the `FROM`.
     lines: Vec<Explained>,
+}
+
+/// One `EXISTS` of a `WHERE` that the walk reads as another side of the
+/// `FROM`.
+#[derive(Clone, Copy)]
+struct Lifted {
+    /// Where the side it stands for is read, which is after every side
+    /// the statement wrote.
+    side: usize,
+    /// The `EXISTS` term, which the side answers by standing at a row.
+    term: ExprId,
+    /// The statement written inside it, which the plan names no line of.
+    inside: SelectId,
+    /// The one table that statement reads.
+    source: crate::ast::Source,
+    /// The `WHERE` of that statement, read as a term of this one.
+    filter: Option<ExprId>,
 }
 
 /// How many rows the walk of a side answers.
@@ -4604,6 +4664,7 @@ impl<'a> Database<'a> {
             scope,
             columns: first.columns,
             filter: first.filter,
+            lifted: &[],
         };
         let cursor = Cursor::new(self.collation(), self.encoding, reach);
         limit(arena, &first, sql, &mut answer.rows, &cursor)?;
@@ -4816,12 +4877,13 @@ impl<'a> Database<'a> {
             scope,
             columns: select.columns,
             filter: select.filter,
+            lifted: &[],
         };
         if !select.values.is_empty() {
             let cursor = Cursor::new(self.collation(), self.encoding, reach);
             return Ok(listed(arena, &select, sql, &cursor)?.shape);
         }
-        let sides = self.sides(arena, &select, sql, scope)?;
+        let sides = self.sides(arena, &select, sql, (scope, &[]))?;
         shape(arena, &select, sql, &sides, self.naming, self.collating)
     }
 
@@ -5030,9 +5092,10 @@ impl<'a> Database<'a> {
             scope,
             columns: select.columns,
             filter: select.filter,
+            lifted: &[],
         };
         counted_sides(arena, &select)?;
-        let sides = self.sides(arena, &select, sql, scope)?;
+        let sides = self.sides(arena, &select, sql, (scope, &[]))?;
         let shape = shape(arena, &select, sql, &sides, self.naming, self.collating)?;
         let names: Vec<Vec<u8>> = shape
             .columns
@@ -5064,6 +5127,7 @@ impl<'a> Database<'a> {
     ) -> Result<Answered, Error> {
         let (whole, merged) = held;
         let select = arena.select(id).ok_or(Error::Unsupported)?;
+        let lifted = self.lifted(arena, &select, sql, scope);
         let reach = Reach {
             database: self,
             arena,
@@ -5071,19 +5135,20 @@ impl<'a> Database<'a> {
             scope,
             columns: select.columns,
             filter: select.filter,
+            lifted: &lifted,
         };
         if !select.values.is_empty() {
             return self.listed_rows(arena, (&select, id), sql, reach);
         }
         self.within_terms(arena, &select)?;
-        let mut sides = self.sides(arena, &select, sql, scope)?;
+        let mut sides = self.sides(arena, &select, sql, (scope, &lifted))?;
         let settled = Settled {
             sensitive: self.sensitive,
             format: self.schema_format(),
         };
         planned(
             arena,
-            (select.filter, select.columns),
+            (&reach.roots(), select.columns),
             sql,
             &mut sides,
             settled,
@@ -5126,7 +5191,7 @@ impl<'a> Database<'a> {
         );
         // The plan names every statement written inside an expression of
         // this one after the lines of the walk.
-        self.insides(arena, &select, sql, (scope, &sides));
+        self.insides(arena, &select, sql, (scope, &sides, &lifted));
         // `EXPLAIN QUERY PLAN` names the plan of the statement and runs
         // no loop of it, so the walks are left where they stand and the
         // statement answers no row: `sqlite3_step` over such a
@@ -5638,6 +5703,203 @@ impl<'a> Database<'a> {
         Ok((answered?, lines))
     }
 
+    /// The `EXISTS` terms of the top-level `AND` spine of the `WHERE`
+    /// that the walk reads as another side of the `FROM`.
+    ///
+    /// `existsToJoin` of `research/sqlite/src/select.c:7326` appends the
+    /// one table such a statement reads to the `FROM`, marks it
+    /// `fg.fromExists` and reads the `WHERE` of that statement as terms
+    /// of this one; the mark holds the walk of the side to the first row
+    /// it answers, which is what the `EXISTS` asks about. The statement
+    /// inside reads one table of the schema and no statement of its own,
+    /// holds no aggregate, no window, no `LIMIT` and no compound, and the
+    /// statement outside writes no `OFFSET`, which answers other rows
+    /// where a side answers fewer.
+    ///
+    /// Reading the spine costs O(n) in its nodes.
+    fn lifted(&self, arena: &Arena, select: &Select, sql: &[u8], scope: Scope<'_>) -> Vec<Lifted> {
+        if select.limit.is_some_and(|held| held.offset.is_some()) {
+            return Vec::new();
+        }
+        let mut out: Vec<Lifted> = Vec::new();
+        let written = arena.sources(select.from).len();
+        // The names of the sides the statement wrote, which the side an
+        // `EXISTS` stands for may answer none of: `sqlite3SelectPrep`
+        // resolves every name before the transform, where this engine
+        // resolves each name against the sides it has, so a name two of
+        // them answer would be read as no name at all.
+        let mut taken: Vec<(Vec<u8>, Vec<Vec<u8>>)> = Vec::new();
+        for source in arena.sources(select.from) {
+            match self.plainly(source, sql, scope) {
+                Some(held) => taken.push(held),
+                None => return Vec::new(),
+            }
+        }
+        let mut spine: Vec<ExprId> = select.filter.into_iter().collect();
+        while let Some(id) = spine.pop() {
+            if let Some(Node::Binary {
+                op: BinaryOp::And,
+                left,
+                right,
+            }) = arena.node(id)
+            {
+                spine.push(left);
+                spine.push(right);
+                continue;
+            }
+            let Some(Node::Exists(inside)) = arena.node(id) else {
+                continue;
+            };
+            let Some(held) = self.lifts(arena, inside, sql) else {
+                continue;
+            };
+            let Some(named) = self.plainly(&held.0, sql, scope) else {
+                continue;
+            };
+            if taken.iter().any(|(name, columns)| {
+                name.eq_ignore_ascii_case(&named.0)
+                    || columns
+                        .iter()
+                        .any(|column| named.1.iter().any(|mine| mine.eq_ignore_ascii_case(column)))
+            }) {
+                continue;
+            }
+            taken.push(named);
+            out.push(Lifted {
+                side: written.saturating_add(out.len()),
+                term: id,
+                inside,
+                source: held.0,
+                filter: held.1,
+            });
+        }
+        out
+    }
+
+    /// What a source of a `FROM` is called and the names of the columns it
+    /// answers, where the source is a table of the schema, and nothing for
+    /// a statement, a view, a `WITH` term and a table-valued function,
+    /// whose columns this reads without answering them.
+    ///
+    /// Reading the table costs O(1) and the names are its own.
+    fn plainly(
+        &self,
+        source: &crate::ast::Source,
+        sql: &[u8],
+        scope: Scope<'_>,
+    ) -> Option<(Vec<u8>, Vec<Vec<u8>>)> {
+        let SourceKind::Table { schema, name, .. } = source.kind else {
+            return None;
+        };
+        let named = dequote(name.text(sql));
+        if scope
+            .terms
+            .iter()
+            .any(|(term, _)| term.eq_ignore_ascii_case(&named))
+        {
+            return None;
+        }
+        let place = match schema {
+            Some(span) => Some(self.placed(&dequote(span.text(sql)))?),
+            None => None,
+        };
+        let stored = self.located_table(place, &named)?;
+        let called = source.alias.map_or(named, |span| dequote(span.text(sql)));
+        let columns = stored
+            .table
+            .columns
+            .iter()
+            .map(|column| column.name.clone())
+            .collect();
+        Some((called, columns))
+    }
+
+    /// The one table a statement inside an `EXISTS` reads and the `WHERE`
+    /// it writes, where the walk reads that statement as a side.
+    ///
+    /// Reading the statement costs O(n) in its nodes.
+    fn lifts(
+        &self,
+        arena: &Arena,
+        id: SelectId,
+        sql: &[u8],
+    ) -> Option<(crate::ast::Source, Option<ExprId>)> {
+        let inside = arena.select(id)?;
+        // The statement inside answers the rows of its one table and
+        // nothing else: a compound, a `LIMIT`, a `WITH`, a `VALUES`, a
+        // `GROUP BY`, a `HAVING` and a `WINDOW` each answer other rows
+        // than the side does.
+        let plainly = [
+            inside.compound.is_none(),
+            inside.limit.is_none(),
+            inside.ctes.is_empty(),
+            inside.values.is_empty(),
+            inside.group.is_empty(),
+            inside.having.is_none(),
+            inside.windows.is_empty(),
+        ];
+        if plainly.into_iter().any(|held| !held) {
+            return None;
+        }
+        // `SF_Aggregate` marks a statement that reads an aggregate, whose
+        // one row stands whether the table holds a row or not, and a
+        // window function reads the rows of a statement of its own.
+        for root in roots(arena, &inside) {
+            if self.grouping_call(arena, root, sql) || windowed(arena, root) {
+                return None;
+            }
+        }
+        // A bare `rowid` reaches every side that keeps one, so a term of
+        // the `EXISTS` that writes one would read a name two sides answer.
+        if inside
+            .filter
+            .is_some_and(|filter| bare_rowid(arena, filter, sql))
+        {
+            return None;
+        }
+        let [source] = arena.sources(inside.from) else {
+            return None;
+        };
+        // A view, a `WITH` term and a statement written inside the `FROM`
+        // each name a statement, which `plainly` leaves out; `INDEXED BY`
+        // asks for an index of a side the statement wrote.
+        if !matches!(
+            source.kind,
+            crate::ast::SourceKind::Table {
+                indexed: crate::ast::Indexed::Unspecified,
+                ..
+            }
+        ) {
+            return None;
+        }
+        Some((*source, inside.filter))
+    }
+
+    /// Whether an expression reads an aggregate, which is `SF_Aggregate`.
+    ///
+    /// `sqlite3FindFunction` reads a name with the number of arguments the
+    /// call writes, so `max(a,b)` is the scalar of that name and `max(a)`
+    /// the aggregate.
+    ///
+    /// Costs O(n) in the nodes of the expression.
+    fn grouping_call(&self, arena: &Arena, id: ExprId, sql: &[u8]) -> bool {
+        arena.node(id).is_some_and(|node| {
+            let mut found = match node {
+                Node::Call { name, args, .. } => agg::lookup_in(
+                    self.grouped,
+                    &dequote(name.text(sql)),
+                    arena.children(args).len(),
+                )
+                .is_some(),
+                _ => false,
+            };
+            arena.under(node, |child| {
+                found = found || self.grouping_call(arena, child, sql);
+            });
+            found
+        })
+    }
+
     /// The sides of a `FROM` clause, and how each attaches to the ones
     /// before it.
     ///
@@ -5650,10 +5912,21 @@ impl<'a> Database<'a> {
         arena: &Arena,
         select: &Select,
         sql: &'s [u8],
-        scope: Scope<'_>,
+        held: (Scope<'_>, &[Lifted]),
     ) -> Result<Vec<Side<'s>>, Error> {
+        let (scope, lifted) = held;
         let mut out: Vec<Side<'s>> = Vec::new();
-        for source in arena.sources(select.from) {
+        let written = arena.sources(select.from).len();
+        let sources: Vec<crate::ast::Source> = arena
+            .sources(select.from)
+            .iter()
+            .copied()
+            .chain(lifted.iter().map(|held| held.source))
+            .collect();
+        for source in &sources {
+            // The sides the transform reads out of an `EXISTS` stand
+            // after every side the statement wrote.
+            let exists = out.len() >= written;
             // A name is matched with its quotes off, which is
             // `sqlite3Dequote` over every identifier the parser keeps.
             let alias = source.alias.map(|span| dequote(span.text(sql)));
@@ -5743,6 +6016,7 @@ impl<'a> Database<'a> {
                 reading: Vec::new(),
                 indexing: indexing(source.kind, sql),
                 valued: clause,
+                exists,
                 expressed: false,
                 least: false,
                 rowing: Rowing::Many,
@@ -5866,6 +6140,7 @@ impl<'a> Database<'a> {
                     reading: Vec::new(),
                     indexing: Indexing::Any,
                     valued: Vec::new(),
+                    exists: false,
                     expressed: false,
                     least: false,
                     rowing: Rowing::Many,
@@ -6116,6 +6391,7 @@ impl<'a> Database<'a> {
             scope,
             columns: head.columns,
             filter: head.filter,
+            lifted: &[],
         };
         let cursor = Cursor::new(self.collation(), self.encoding, reach);
         let (skip, most) = bounds(arena, &head, sql, &cursor)?;
@@ -6668,6 +6944,7 @@ impl<'a> Database<'a> {
         };
         let deeper = at.saturating_add(1);
         let mut any = false;
+        let mut held = false;
         let mut ordinal = 0i64;
         let mut flow = Flow::Go;
         let mut feed = self.feed(side, cursor);
@@ -6685,6 +6962,7 @@ impl<'a> Database<'a> {
                 name: &side.name,
                 using: &side.using,
                 rowid,
+                exists: side.exists,
                 values,
             });
             let attached = match spare {
@@ -6701,10 +6979,15 @@ impl<'a> Database<'a> {
                 // product, which `TERM_CODED` of `wherecode.c` marks.
                 if all_hold(arena, &side.pushed, sql, cursor)? {
                     flow = self.nest(sides, deeper, cursor, arena, sql, each, kept, None)?;
+                    // A side the transform read out of an `EXISTS` stands
+                    // for one row of it and no more, which is the jump
+                    // `sqlite3WhereEnd` writes to `addrBrk` for
+                    // `fg.fromExists` after the terms of the level held.
+                    held = side.exists;
                 }
             }
             cursor.held.pop();
-            if flow == Flow::Stop {
+            if flow == Flow::Stop || held {
                 break;
             }
         }
@@ -6761,7 +7044,7 @@ impl<'a> Database<'a> {
                 reach,
             );
         }
-        let rest = over_all(arena, select.filter, sides);
+        let rest = over_all(arena, reach, sides);
         let mut out = Vec::new();
         self.scan(sides, arena, sql, reach, &mut |cursor: &Cursor<'b>| {
             if all_hold(arena, &rest, sql, cursor)? {
@@ -6772,6 +7055,7 @@ impl<'a> Database<'a> {
                     aggregates: cursor.aggregates.clone(),
                     reach,
                     aliasing: core::cell::Cell::new(true),
+                    reaching: core::cell::Cell::new(false),
                     refusal: core::cell::RefCell::new(None),
                 });
             }
@@ -6948,12 +7232,28 @@ impl<'a> Database<'a> {
     /// loop of the statement, so nothing else plans those statements twice.
     ///
     /// Costs what planning each of those statements costs.
-    fn insides(&self, arena: &Arena, select: &Select, sql: &[u8], held: (Scope<'_>, &[Side<'_>])) {
-        let (scope, sides) = held;
+    fn insides(
+        &self,
+        arena: &Arena,
+        select: &Select,
+        sql: &[u8],
+        held: (Scope<'_>, &[Side<'_>], &[Lifted]),
+    ) {
+        let (scope, sides, lifted) = held;
         if self.planned.borrow().is_none() {
             return;
         }
-        for (id, listed) in inside_selects(arena, select) {
+        // The `WHERE` of an `EXISTS` the transform read as a side is read
+        // as a term of this statement, so a statement written inside it
+        // stands on a line of this plan.
+        let mut written = roots(arena, select);
+        written.extend(lifted.iter().filter_map(|held| held.filter));
+        for (id, listed) in inside_selects(arena, written) {
+            // A statement the transform read as a side of the `FROM`
+            // stands on a line of its own, and none over it.
+            if lifted.iter().any(|held| held.inside == id) {
+                continue;
+            }
             let mut line = Vec::new();
             if self.correlated(arena, id, sql, sides) {
                 line.extend_from_slice(b"CORRELATED ");
@@ -7078,7 +7378,7 @@ impl<'a> Database<'a> {
         let (sides, keys) = over;
         let (stops, reach) = held;
         let stops = self.stops(arena, select, sql, (stops, reach))?;
-        let rest = over_all(arena, select.filter, sides);
+        let rest = over_all(arena, reach, sides);
         let mut rows = Vec::new();
         // Whether the walk read a row, which is what resolved the names
         // of the statement.
@@ -7117,7 +7417,7 @@ impl<'a> Database<'a> {
             smallest,
         } = gathering;
         let terms = grouping(arena, select, sql, sides)?;
-        let rest = over_all(arena, select.filter, sides);
+        let rest = over_all(arena, reach, sides);
         let mut groups: Vec<Group<'b>> = Vec::new();
         self.scan(sides, arena, sql, reach, &mut |cursor: &Cursor<'b>| {
             if !all_hold(arena, &rest, sql, cursor)? {
@@ -7195,6 +7495,7 @@ impl<'a> Database<'a> {
                 aggregates: answers,
                 reach,
                 aliasing: core::cell::Cell::new(true),
+                reaching: core::cell::Cell::new(false),
                 refusal: core::cell::RefCell::new(None),
             };
             if keep(arena, select.having, sql, &cursor)? {
@@ -7281,24 +7582,16 @@ fn listed(
 /// answers.
 fn planned(
     arena: &Arena,
-    held: (Option<ExprId>, Range),
+    held: (&[Rooted], Range),
     sql: &[u8],
     sides: &mut [Side<'_>],
     settled: Settled,
 ) {
-    let (filter, columns) = held;
+    let (rooted, columns) = held;
+    let roots: Vec<ExprId> = rooted.iter().map(|held| held.term).collect();
     let format = settled.format;
-    marked(arena, filter, sql, sides);
-    let terms = filter.map_or_else(
-        || Planning {
-            held: Vec::new(),
-            over: Vec::new(),
-            lists: Vec::new(),
-            arena,
-            sql,
-        },
-        |filter| terms_of(arena, (filter, columns), sql, sides, settled),
-    );
+    marked(arena, &roots, sql, sides);
+    let terms = terms_of(arena, (&roots, columns), sql, sides, settled);
     // A rowid range is what a table's own tree is walked by, and it
     // answers a row where an index answers only where the row is, so it
     // is taken first and never given up for an index.
@@ -7343,7 +7636,7 @@ fn planned(
             Source::Table(stored) if !one || forced => keyed_plan(
                 (&terms, arena, sql),
                 (at, sides, stored),
-                (filter, columns),
+                (&roots, columns),
                 (between && !forced, settled),
             ),
             Source::Table(_) | Source::Rows(_) => None,
@@ -7379,9 +7672,9 @@ fn planned(
         side.plan = plan;
         side.rowing = Rowing::of(single, alone);
     }
-    let Some(filter) = filter else {
+    if rooted.is_empty() {
         return;
-    };
+    }
     // A `RIGHT` or a `FULL` join keeps the rows of its own side that
     // the walk matched nothing to, and the walk marks a row as matched
     // where it reads the levels under it, so a term read above such a
@@ -7393,19 +7686,27 @@ fn planned(
     // `sqlite3WhereSplit` puts every term of the `AND` spine on the
     // level where the sides it names are all read, so a term is read
     // once per row of that level and not once per row of the product.
-    let mut spine = alloc::vec![filter];
-    while let Some(id) = spine.pop() {
+    let mut spine = rooted.to_vec();
+    while let Some(held) = spine.pop() {
+        let id = held.term;
         if let Some(Node::Binary {
             op: BinaryOp::And,
             left,
             right,
         }) = arena.node(id)
         {
-            spine.push(left);
-            spine.push(right);
+            spine.push(Rooted { term: left, ..held });
+            spine.push(Rooted {
+                term: right,
+                ..held
+            });
             continue;
         }
-        let Some(at) = answerable(arena, id, sql, sides) else {
+        // A term of an `EXISTS` the transform read as a side is read on
+        // the level of that side where it names no level of its own,
+        // because the walk of that side stops at the first row its terms
+        // hold of.
+        let Some(at) = answerable(arena, id, sql, sides).or(held.home) else {
             continue;
         };
         // A term the levels above such a join answer is read on that
@@ -7583,17 +7884,17 @@ fn keyed_once(stored: &Stored, root: u32, key: &[Value]) -> bool {
 /// one side against a value no row is needed to read.
 fn terms_of<'a>(
     arena: &'a Arena,
-    held: (ExprId, Range),
+    held: (&[ExprId], Range),
     sql: &'a [u8],
     sides: &[Side<'_>],
     settled: Settled,
 ) -> Planning<'a> {
-    let (filter, columns) = held;
+    let (roots, columns) = held;
     let sensitive = settled.sensitive;
     let mut out = Vec::new();
     let mut over = Vec::new();
     let mut lists = Vec::new();
-    let mut spine = alloc::vec![filter];
+    let mut spine = roots.to_vec();
     while let Some(id) = spine.pop() {
         if let Some(Node::Like {
             op,
@@ -9183,7 +9484,10 @@ fn detailed(side: &Side<'_>, plan: &Plan, lines: &mut Vec<Explained>, parent: us
     };
     match plan {
         Plan::Rows(None, None) | Plan::Backwards => {
-            lines.push((parent, scanned(&side.shown, b"", false, side.least)));
+            lines.push((
+                parent,
+                scanned(&named_exists(side, &side.shown), b"", false, side.least),
+            ));
         }
         Plan::Rows(low, high) => {
             let mut terms: Vec<&[u8]> = Vec::new();
@@ -9197,10 +9501,13 @@ fn detailed(side: &Side<'_>, plan: &Plan, lines: &mut Vec<Explained>, parent: us
                     terms.push(b"rowid<?");
                 }
             }
-            lines.push((parent, by_rowid(&side.shown, &terms)));
+            lines.push((parent, by_rowid(&named_exists(side, &side.shown), &terms)));
         }
         Plan::Rowid(_) | Plan::Rowids(_) => {
-            lines.push((parent, by_rowid(&side.shown, &[b"rowid=?"])));
+            lines.push((
+                parent,
+                by_rowid(&named_exists(side, &side.shown), &[b"rowid=?"]),
+            ));
         }
         Plan::Keyed {
             root,
@@ -9228,7 +9535,7 @@ fn detailed(side: &Side<'_>, plan: &Plan, lines: &mut Vec<Explained>, parent: us
             lines.push((
                 parent,
                 searched(
-                    &side.name,
+                    &named_exists(side, &side.name),
                     &named_index(stored, *root),
                     &terms,
                     (covering, side.least, *root == stored.root),
@@ -9242,7 +9549,7 @@ fn detailed(side: &Side<'_>, plan: &Plan, lines: &mut Vec<Explained>, parent: us
             lines.push((
                 parent,
                 searched(
-                    &side.name,
+                    &named_exists(side, &side.name),
                     &named_index(stored, *root),
                     &terms,
                     (covering, side.least, *root == stored.root),
@@ -9319,6 +9626,18 @@ fn matching(
         .filter(|column| holds(sides, &column.name))
         .map(|column| column.name.clone())
         .collect())
+}
+
+/// The name the plan writes a side under, with ` EXISTS` after it where
+/// the transform read that side out of an `EXISTS` of the `WHERE`.
+fn named_exists(side: &Side<'_>, name: &[u8]) -> Vec<u8> {
+    let mut held = name.to_vec();
+    // `sqlite3WhereExplainOneScan` of `research/sqlite/src/wherecode.c:154`
+    // writes ` EXISTS` after the name of a side `fg.fromExists` marks.
+    if side.exists {
+        held.extend_from_slice(b" EXISTS");
+    }
+    held
 }
 
 /// The name a plan writes one side under, which is `%S` of
@@ -10033,10 +10352,8 @@ fn pinned(
     sides: &[Side<'_>],
     settled: Settled,
 ) -> Vec<usize> {
-    let Some(filter) = select.filter else {
-        return Vec::new();
-    };
-    terms_of(arena, (filter, select.columns), sql, sides, settled)
+    let roots: Vec<ExprId> = select.filter.into_iter().collect();
+    terms_of(arena, (&roots, select.columns), sql, sides, settled)
         .held
         .iter()
         .filter(|term| term.op == BinaryOp::Eq)
@@ -10362,12 +10679,12 @@ fn solvable(sides: &[Side<'_>]) -> Result<(), Error> {
 fn keyed_plan(
     over: (&Planning<'_>, &Arena, &[u8]),
     held: (usize, &[Side<'_>], &Stored),
-    named: (Option<ExprId>, Range),
+    named: (&[ExprId], Range),
     asks: (bool, Settled),
 ) -> Option<Plan> {
     let (terms, arena, sql) = over;
     let (at, sides, stored) = held;
-    let (filter, columns) = named;
+    let (roots, columns) = named;
     let (wants_key, settled) = asks;
     let side = sides.get(at)?;
     // A walk held to a key of an index answers the rows one value names,
@@ -10381,7 +10698,7 @@ fn keyed_plan(
     // A key the statement writes out is read once, where a key a side
     // already read answers is read per row of that side, so the first is
     // taken where both hold as many columns.
-    let better = joined(arena, sql, sides, at, (stored, filter))
+    let better = joined(arena, sql, sides, at, (stored, roots))
         .filter(|(_, keys)| *keys > wide)
         .map(|(plan, _)| plan);
     // An `OR` is read last, because one index costs less than one walk per
@@ -10390,8 +10707,8 @@ fn keyed_plan(
     better
         .or(keyed)
         .or_else(|| {
-            filter.filter(|_| !wants_key).and_then(|filter| {
-                union_of(arena, (filter, columns), sql, sides, (at, stored), settled)
+            roots.iter().filter(|_| !wants_key).find_map(|root| {
+                union_of(arena, (*root, columns), sql, sides, (at, stored), settled)
             })
         })
         // An `ON` holds the walk of the side it is written after as a
@@ -10423,10 +10740,10 @@ fn kept_named<'a>(stored: &'a Stored, name: &[u8]) -> Option<&'a Kept> {
 /// index, so a walk of one answers the rows the statement asks for.
 ///
 /// Costs what [`implies`] costs per side.
-fn marked(arena: &Arena, filter: Option<ExprId>, sql: &[u8], sides: &mut [Side<'_>]) {
+fn marked(arena: &Arena, roots: &[ExprId], sql: &[u8], sides: &mut [Side<'_>]) {
     let held: Vec<bool> = sides
         .iter()
-        .map(|side| implies(arena, filter, sql, side))
+        .map(|side| implies(arena, roots, sql, side))
         .collect();
     for (side, held) in sides.iter_mut().zip(held) {
         if let Indexing::By { implied, .. } = &mut side.indexing {
@@ -10446,7 +10763,7 @@ fn marked(arena: &Arena, filter: Option<ExprId>, sql: &[u8], sides: &mut [Side<'
 /// holds and compares each against it.
 ///
 /// Costs O(t * n) in the terms of the spine and their nodes.
-fn implies(arena: &Arena, filter: Option<ExprId>, sql: &[u8], side: &Side<'_>) -> bool {
+fn implies(arena: &Arena, roots: &[ExprId], sql: &[u8], side: &Side<'_>) -> bool {
     let Indexing::By { name, .. } = &side.indexing else {
         return false;
     };
@@ -10477,7 +10794,7 @@ fn implies(arena: &Arena, filter: Option<ExprId>, sql: &[u8], side: &Side<'_>) -
             id,
             sql: &kept.sql,
         };
-        if !spine_holds(arena, filter, sql, theirs) {
+        if !spine_holds(arena, roots, sql, theirs) {
             return false;
         }
     }
@@ -10489,8 +10806,8 @@ fn implies(arena: &Arena, filter: Option<ExprId>, sql: &[u8], side: &Side<'_>) -
 /// terms that compare the same column against the same value.
 ///
 /// Costs O(t * n) in the terms of the spine and their nodes.
-fn spine_holds(arena: &Arena, filter: Option<ExprId>, sql: &[u8], wanted: Written<'_>) -> bool {
-    let mut spine: Vec<ExprId> = filter.into_iter().collect();
+fn spine_holds(arena: &Arena, roots: &[ExprId], sql: &[u8], wanted: Written<'_>) -> bool {
+    let mut spine: Vec<ExprId> = roots.to_vec();
     while let Some(id) = spine.pop() {
         if let Some(Node::Binary {
             op: BinaryOp::And,
@@ -10691,7 +11008,7 @@ fn ored(
             spine.push(left);
             continue;
         }
-        let terms = terms_of(arena, (held, columns), sql, sides, settled);
+        let terms = terms_of(arena, (&[held], columns), sql, sides, settled);
         // A branch that names the rowid is read out of the table's own
         // tree, which is the `OP_SeekRowid` loop `sqlite3WhereBegin`
         // writes for `WHERE_IPK`.
@@ -10701,7 +11018,7 @@ fn ored(
             // before this one is held to the key that side answers, one
             // key per row of it, which `whereLoopAddOr` builds as it
             // builds any other loop of the branch.
-            .or_else(|| joined(arena, sql, sides, at, (stored, Some(held))).map(|(plan, _)| plan))?;
+            .or_else(|| joined(arena, sql, sides, at, (stored, &[held])).map(|(plan, _)| plan))?;
         plans.push(plan);
     }
     Some(Plan::Union(plans))
@@ -10943,7 +11260,7 @@ fn joined(
     sql: &[u8],
     sides: &[Side<'_>],
     at: usize,
-    (stored, filter): (&Stored, Option<ExprId>),
+    (stored, written): (&Stored, &[ExprId]),
 ) -> Option<(Plan, usize)> {
     let side = sides.get(at)?;
     // A `RIGHT` or a `FULL` join is walked twice, and the second walk
@@ -10964,7 +11281,7 @@ fn joined(
     let roots: Vec<ExprId> = side
         .on
         .into_iter()
-        .chain(filter.filter(|_| !outer))
+        .chain(written.iter().copied().filter(|_| !outer))
         .collect();
     if roots.is_empty() {
         return None;
@@ -11446,9 +11763,9 @@ fn dropped(plan: &Plan) -> Vec<ExprId> {
 /// read, so a term is read once and not again over the product.
 ///
 /// Costs O(t) in the terms of the spine, each read against the levels.
-fn over_all(arena: &Arena, filter: Option<ExprId>, sides: &[Side<'_>]) -> Vec<ExprId> {
+fn over_all(arena: &Arena, reach: Reach<'_>, sides: &[Side<'_>]) -> Vec<ExprId> {
     let mut out = Vec::new();
-    let mut spine: Vec<ExprId> = filter.into_iter().collect();
+    let mut spine = reach.spine();
     while let Some(id) = spine.pop() {
         if let Some(Node::Binary {
             op: BinaryOp::And,
@@ -11458,6 +11775,12 @@ fn over_all(arena: &Arena, filter: Option<ExprId>, sides: &[Side<'_>]) -> Vec<Ex
         {
             spine.push(left);
             spine.push(right);
+            continue;
+        }
+        // The `EXISTS` a side stands for is answered by that side
+        // standing at a row, so the term is read for no row the walk
+        // takes.
+        if reach.lifted.iter().any(|held| held.term == id) {
             continue;
         }
         if !sides
@@ -11477,11 +11800,49 @@ fn all_hold(
     cursor: &Cursor<'_>,
 ) -> Result<bool, Error> {
     for term in terms {
-        if !evaluate_row(arena, *term, sql, cursor)?.truth(false) {
+        if !term_holds(arena, *term, sql, cursor)? {
             return Ok(false);
         }
     }
     Ok(true)
+}
+
+/// Whether one term of the `WHERE` holds for the row the walk stands on.
+///
+/// A term an `EXISTS` the transform read as a side wrote reads the
+/// columns of that side, and every other term reads the sides the
+/// statement wrote alone.
+///
+/// Costs what the term costs.
+fn term_holds(arena: &Arena, term: ExprId, sql: &[u8], cursor: &Cursor<'_>) -> Result<bool, Error> {
+    let reaching = spine_of(cursor.reach.lifted, arena, term);
+    cursor.reaching.set(reaching);
+    let held = evaluate_row(arena, term, sql, cursor);
+    cursor.reaching.set(false);
+    Ok(held?.truth(false))
+}
+
+/// Whether `term` stands on the `AND` spine of the `WHERE` one of the
+/// lifted `EXISTS` statements wrote.
+///
+/// Reading the spines costs O(n) in their nodes.
+fn spine_of(lifted: &[Lifted], arena: &Arena, term: ExprId) -> bool {
+    let mut spine: Vec<ExprId> = lifted.iter().filter_map(|held| held.filter).collect();
+    while let Some(id) = spine.pop() {
+        if id == term {
+            return true;
+        }
+        if let Some(Node::Binary {
+            op: BinaryOp::And,
+            left,
+            right,
+        }) = arena.node(id)
+        {
+            spine.push(left);
+            spine.push(right);
+        }
+    }
+    false
 }
 
 /// Whether the column `name` holds the same value on the side the walk
@@ -12426,7 +12787,7 @@ fn answered(arena: &Arena, select: &Select, sql: &[u8], sides: &[Side<'_>]) -> V
     for column in arena.results(select.columns) {
         match *column {
             ResultColumn::Star => {
-                for (at, side) in sides.iter().enumerate() {
+                for (at, side) in sides.iter().enumerate().filter(|(_, side)| !side.exists) {
                     for (place, column) in side.shape.columns.iter().enumerate() {
                         // A `GROUP BY` counts the columns a `*`
                         // answers.
@@ -12441,7 +12802,7 @@ fn answered(arena: &Arena, select: &Select, sql: &[u8], sides: &[Side<'_>]) -> V
                 for (at, side) in sides
                     .iter()
                     .enumerate()
-                    .filter(|(_, side)| side.named(&called))
+                    .filter(|(_, side)| !side.exists && side.named(&called))
                 {
                     for place in 0..side.shape.columns.len() {
                         out.push(Term::Held(at, place));
@@ -12670,9 +13031,9 @@ fn called_as(alias: Option<&[u8]>, named: &[u8]) -> bool {
 /// wrote the expressions.
 ///
 /// Costs O(n) in the nodes of those expressions.
-fn inside_selects(arena: &Arena, select: &Select) -> Vec<(SelectId, bool)> {
+fn inside_selects(arena: &Arena, roots: Vec<ExprId>) -> Vec<(SelectId, bool)> {
     let mut out = Vec::new();
-    let mut spine = roots(arena, select);
+    let mut spine = roots;
     while let Some(node) = spine.pop().and_then(|id| arena.node(id)) {
         match node {
             Node::Subquery(held) | Node::Exists(held) => out.push((held, false)),
@@ -13086,6 +13447,46 @@ impl Gathering<'_> {
     }
 }
 
+/// Whether an expression names the rowid with no table in front of it,
+/// which every side that keeps a rowid answers.
+///
+/// Costs O(n) in the nodes of the expression.
+fn bare_rowid(arena: &Arena, id: ExprId, sql: &[u8]) -> bool {
+    arena.node(id).is_some_and(|node| {
+        let mut found = match node {
+            Node::Column {
+                table: None,
+                column,
+                ..
+            } => {
+                let named = dequote(column.text(sql));
+                named.eq_ignore_ascii_case(b"rowid")
+                    || named.eq_ignore_ascii_case(b"oid")
+                    || named.eq_ignore_ascii_case(b"_rowid_")
+            }
+            _ => false,
+        };
+        arena.under(node, |child| {
+            found = found || bare_rowid(arena, child, sql);
+        });
+        found
+    })
+}
+
+/// Whether an expression reads a window function, which answers over the
+/// rows of a statement of its own.
+///
+/// Costs O(n) in the nodes of the expression.
+fn windowed(arena: &Arena, id: ExprId) -> bool {
+    arena.node(id).is_some_and(|node| {
+        let mut found = matches!(node, Node::Over { .. });
+        arena.under(node, |child| {
+            found = found || windowed(arena, child);
+        });
+        found
+    })
+}
+
 /// Whether an expression answers with an aggregate, which is `EP_Agg`.
 fn aggregating(
     arena: &Arena,
@@ -13129,7 +13530,7 @@ fn shape(
                 if sides.is_empty() {
                     return Err(Error::NoTables);
                 }
-                for (at, side) in sides.iter().enumerate() {
+                for (at, side) in sides.iter().enumerate().filter(|(_, side)| !side.exists) {
                     // A `*` stands for every column named by its side,
                     // so two sides of one name make every column of
                     // them a name two sides answer.
@@ -13158,7 +13559,9 @@ fn shape(
             }
             ResultColumn::TableStar(span) => {
                 let called = dequote(span.text(sql));
-                let mut named = sides.iter().filter(|side| side.named(&called));
+                let mut named = sides
+                    .iter()
+                    .filter(|side| !side.exists && side.named(&called));
                 let side = named.next().ok_or_else(|| Error::NoTable(called.clone()))?;
                 if named.next().is_some() {
                     return Err(Error::Ambiguous);
@@ -13308,7 +13711,12 @@ fn project(
     for column in arena.results(select.columns) {
         match *column {
             ResultColumn::Star => {
-                for (at, held) in cursor.held.iter().enumerate() {
+                for (at, held) in cursor
+                    .held
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, held)| !held.exists)
+                {
                     held.each(|column, value| {
                         if left_out(column, held.using) && !select.nested {
                             return;
@@ -14878,6 +15286,10 @@ struct Held<'a> {
     using: &'a [Vec<u8>],
     /// The rowid of the row, where the side stands for one.
     rowid: Option<i64>,
+    /// Whether the transform read the side out of an `EXISTS`, whose
+    /// columns a `*` answers none of and a name reaches from a term that
+    /// `EXISTS` wrote alone.
+    exists: bool,
     /// Its values, one per column.
     values: Vec<Value>,
 }
@@ -14892,6 +15304,7 @@ impl<'a> Held<'a> {
             name,
             using,
             rowid: None,
+            exists: false,
             values: alloc::vec![Value::Null; shape.columns.len()],
         }
     }
@@ -15004,6 +15417,12 @@ struct Cursor<'a> {
     /// Whether a bare name no side holds stands for a name the statement
     /// answers under, which every clause but the answer itself reads.
     aliasing: core::cell::Cell<bool>,
+    /// Whether a name reaches the columns of a side the transform read
+    /// out of an `EXISTS`, which a term that `EXISTS` wrote does and
+    /// every other expression of the statement does not:
+    /// `sqlite3SelectPrep` resolves every name the statement wrote
+    /// before the transform appends the side.
+    reaching: core::cell::Cell<bool>,
     /// What the expression a name stood for was refused with, which the
     /// walk reads in place of the name it could not answer.
     refusal: core::cell::RefCell<Option<eval::Error>>,
@@ -15035,7 +15454,12 @@ impl<'a> Cursor<'a> {
     /// is O(sides) per name.
     fn answering(&self, schema: Option<&[u8]>, table: Option<&[u8]>, column: &[u8]) -> Answering {
         let mut found = Answering::Nothing;
-        for (at, held) in self.held.iter().enumerate() {
+        for (at, held) in self
+            .held
+            .iter()
+            .enumerate()
+            .filter(|(_, held)| !held.exists || self.reaching.get())
+        {
             // A schema in front of the column names the database the
             // side reads, which a side that reads no table has none of.
             if schema.is_some_and(|named| !held.schema.eq_ignore_ascii_case(named)) {
@@ -15112,6 +15536,7 @@ impl<'a> Cursor<'a> {
             aggregates: Vec::new(),
             reach,
             aliasing: core::cell::Cell::new(true),
+            reaching: core::cell::Cell::new(false),
             refusal: core::cell::RefCell::new(None),
         }
     }

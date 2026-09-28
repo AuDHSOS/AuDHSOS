@@ -7888,6 +7888,44 @@ Unit tests of `crate::db` over `fixtures/indexed.db`.
 - `WHERE NULL` under an aggregate, which answers one row.
 - `WHERE abs(0)`, which is read against every row.
 
+### 6.6.435 What an `EXISTS` of a `WHERE` holds the walk to (`db-sqlite`)
+
+Unit tests of `crate::db` over an image `crate::change` writes. Every
+answer is the one the C library's shell writes.
+
+- `SELECT a FROM t1 WHERE EXISTS (SELECT 1 FROM t2 WHERE c=a)` over a
+  unique index on `t2(c)`, named `SCAN t1` and `SEARCH t2 EXISTS USING
+  COVERING INDEX t2c (c=?)`.
+- `SELECT *` over such a statement, which answers the columns of `t1`
+  alone and each of its rows once, the side answering several.
+- A term of the `EXISTS` that names a column of `t1` alone, and one that
+  no row of `t2` holds.
+- An `EXISTS` whose statement reads an aggregate or writes a `LIMIT`,
+  which the plan names `SCALAR SUBQUERY` for.
+- An `EXISTS` over the table the statement outside reads, whose rows it
+  answers as a statement of its own.
+- An `EXISTS` whose term writes a bare `rowid`, and one beside a side the
+  statement wrote inside its `FROM`, each named `SCALAR SUBQUERY`.
+- An `EXISTS` over a compound, a `WITH`, a `VALUES`, a `GROUP BY`, a
+  `WINDOW`, a window function, a `WITH` term, a view, two tables, no
+  table, a statement inside the `FROM`, an `INDEXED BY`, and one under an
+  `OFFSET`, each of which names a statement of its own.
+- An `EXISTS` over a table that answers a column of the same name as one
+  the statement outside answers, and one whose term writes `oid` or
+  `_rowid_`.
+
+### 6.6.436 What a statement over a side read out of an `EXISTS` answers (`db-sqlite`)
+
+Unit tests of `crate::db` over an image `crate::change` writes. Every
+answer is the one the C library's shell writes.
+
+- An `EXISTS` over `main.t2` and one over an alias, which the transform
+  reads as the table each names.
+- A name and a `t.*` that only the appended side answers, which the
+  statement outside is refused for.
+- A `t1.*` under a `GROUP BY`, which counts the columns of the side the
+  statement wrote, and one beside a side of another name.
+
 ### 6.6.434 What the plan says of an index whose expressions answer what is read (`db-sqlite`)
 
 Unit tests of `crate::db` over an image `crate::change` writes. Every

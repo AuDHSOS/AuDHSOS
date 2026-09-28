@@ -48,6 +48,13 @@ fn drawn(rows: &[Vec<Value>], parent: i64, prefix: &str, out: &mut String) {
     }
 }
 
+/// Whether the plan of `sql` names a statement of its own for one the
+/// statement wrote inside an expression, which is what `~/SUBQUERY/` of
+/// `test/existsexpr.test` reads.
+fn inside(bytes: &[u8], sql: &[u8]) -> bool {
+    plan(bytes, sql).contains("SUBQUERY")
+}
+
 /// The lines of a tree, each written on its own.
 fn tree(lines: &[&str]) -> String {
     let mut out = String::new();
@@ -1123,9 +1130,8 @@ fn what_a_view_written_in_leaves_the_view_after_it() {
 /// `LIST SUBQUERY` for one an `IN` reads, with `CORRELATED` in front where
 /// the statement reads a column of the row the walk stands on.
 ///
-/// The C library reads an `EXISTS` as a walk of the statement above it,
-/// which it names `SCAN t2 EXISTS`, and writes `CREATE BLOOM FILTER` under
-/// the line of a list it reads once. Item 284 of document 16 records both.
+/// The C library writes `CREATE BLOOM FILTER` under the line of a list it
+/// reads once, which item 284 of document 16 records.
 #[test]
 fn what_the_plan_names_a_statement_inside_an_expression_by() {
     let mut writer = crate::change::Writer::new(1024, 0, crate::header::Encoding::Utf8).unwrap();
@@ -2082,5 +2088,257 @@ fn what_the_plan_says_of_an_index_whose_expressions_answer_what_is_read() {
     assert_eq!(
         Database::open(&image).unwrap().query(held).unwrap().rows,
         alloc::vec![alloc::vec![Value::Text(b"xy".to_vec())]]
+    );
+}
+
+/// An `EXISTS` of the `WHERE` whose statement reads one table stands for
+/// another side of the `FROM`, whose walk stops at the first row it
+/// answers, and the plan names no statement of its own for it.
+#[test]
+fn what_an_exists_of_a_where_holds_the_walk_to() {
+    let mut writer = crate::change::Writer::new(1024, 0, crate::header::Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t1(a,b)".as_slice(),
+        b"INSERT INTO t1 VALUES(1,10),(2,20),(3,30)",
+        b"CREATE TABLE t2(c,d)",
+        b"INSERT INTO t2 VALUES(2,1),(3,3)",
+        b"CREATE UNIQUE INDEX t2c ON t2(c)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let image = writer.written();
+    let rows = |sql: &[u8]| Database::open(&image).unwrap().query(sql).unwrap().rows;
+    // The side stands after the one the statement wrote and holds the key
+    // of the term the `EXISTS` wrote.
+    assert_eq!(
+        plan(
+            &image,
+            b"SELECT a FROM t1 WHERE EXISTS (SELECT 1 FROM t2 WHERE c=a)"
+        ),
+        tree(&[
+            "|--SCAN t1",
+            "`--SEARCH t2 EXISTS USING COVERING INDEX t2c (c=?)"
+        ])
+    );
+    // A `*` answers the columns of the side the statement wrote alone, and
+    // each row of it stands once however many rows the other side answers.
+    assert_eq!(
+        rows(b"SELECT * FROM t1 WHERE EXISTS (SELECT 1 FROM t2 WHERE d=a)"),
+        alloc::vec![
+            alloc::vec![Value::Int(1), Value::Int(10)],
+            alloc::vec![Value::Int(3), Value::Int(30)]
+        ]
+    );
+    // A term of the `EXISTS` that names a column of the side before it is
+    // read on the level of that side.
+    assert_eq!(
+        rows(b"SELECT a FROM t1 WHERE EXISTS (SELECT 1 FROM t2 WHERE c=a AND b<25)"),
+        alloc::vec![alloc::vec![Value::Int(2)]]
+    );
+    // A term no row of the side holds answers no row of the statement.
+    assert_eq!(
+        rows(b"SELECT a FROM t1 WHERE EXISTS (SELECT 1 FROM t2 WHERE c=9)"),
+        Vec::<alloc::vec::Vec<Value>>::new()
+    );
+}
+
+/// The walk reads the statement inside an `EXISTS` as one of its own where
+/// that statement holds an aggregate or a `LIMIT`, where it answers a name
+/// a side of the statement outside answers, and where a term of it writes
+/// a bare `rowid`.
+///
+/// The C library numbers such a statement by the cursors the statement
+/// opened and this engine by the place the statement stands in, which
+/// D-588 records.
+#[test]
+fn what_an_exists_the_walk_reads_as_a_statement_of_its_own_is_named() {
+    let mut writer = crate::change::Writer::new(1024, 0, crate::header::Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t1(a,b)".as_slice(),
+        b"INSERT INTO t1 VALUES(1,10),(2,20),(3,30)",
+        b"CREATE TABLE t2(c,d)",
+        b"INSERT INTO t2 VALUES(2,1),(3,3)",
+        b"CREATE UNIQUE INDEX t2c ON t2(c)",
+        b"CREATE VIEW v2 AS SELECT c AS e FROM t2",
+        b"CREATE TABLE t3(b,z)",
+        b"INSERT INTO t3 VALUES(1,1)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let image = writer.written();
+    // An aggregate answers one row whether the table holds one or not.
+    assert_eq!(
+        plan(
+            &image,
+            b"SELECT a FROM t1 WHERE EXISTS (SELECT count(*) FROM t2 WHERE c=a)"
+        ),
+        tree(&[
+            "|--SCAN t1",
+            "`--CORRELATED SCALAR SUBQUERY 0",
+            "   `--SCAN t2 USING COVERING INDEX t2c",
+        ])
+    );
+    // A `LIMIT` answers fewer rows than the table holds.
+    assert_eq!(
+        plan(
+            &image,
+            b"SELECT a FROM t1 WHERE EXISTS (SELECT 1 FROM t2 LIMIT 0)"
+        ),
+        tree(&[
+            "|--SCAN t1",
+            "`--SCALAR SUBQUERY 0",
+            "   `--SCAN t2 USING COVERING INDEX t2c",
+        ])
+    );
+    // The same table read twice answers every name twice.
+    assert_eq!(
+        plan(
+            &image,
+            b"SELECT a FROM t1 WHERE EXISTS (SELECT 1 FROM t1 WHERE b=4)"
+        ),
+        tree(&["|--SCAN t1", "`--SCALAR SUBQUERY 0", "   `--SCAN t1"])
+    );
+    assert_eq!(
+        Database::open(&image)
+            .unwrap()
+            .query(b"SELECT a FROM t1 WHERE EXISTS (SELECT 1 FROM t1 WHERE b=10)")
+            .unwrap()
+            .rows,
+        alloc::vec![
+            alloc::vec![Value::Int(1)],
+            alloc::vec![Value::Int(2)],
+            alloc::vec![Value::Int(3)]
+        ]
+    );
+    // A bare `rowid` reaches every side that keeps one.
+    assert_eq!(
+        plan(
+            &image,
+            b"SELECT a FROM t1 WHERE EXISTS (SELECT 1 FROM t2 WHERE rowid=a)"
+        ),
+        tree(&[
+            "|--SCAN t1",
+            "`--CORRELATED SCALAR SUBQUERY 0",
+            "   `--SCAN t2 USING COVERING INDEX t2c",
+        ])
+    );
+    // A statement written inside the `FROM` answers columns of its own,
+    // which this reads without answering them.
+    assert_eq!(
+        plan(
+            &image,
+            b"SELECT a FROM (SELECT a FROM t1) WHERE EXISTS (SELECT 1 FROM t2 WHERE c=a)"
+        ),
+        tree(&[
+            "|--SCAN t1",
+            "`--CORRELATED SCALAR SUBQUERY 1",
+            "   `--SCAN t2 USING COVERING INDEX t2c",
+        ])
+    );
+    // Every other statement the transform leaves alone, each of which
+    // answers other rows than a side of the `FROM` does.
+    for sql in [
+        b"SELECT a FROM t1 WHERE EXISTS (SELECT 1 FROM t2 WHERE c=a UNION SELECT 1)".as_slice(),
+        b"SELECT a FROM t1 WHERE EXISTS (WITH q AS (SELECT 1) SELECT 1 FROM t2 WHERE c=a)",
+        b"SELECT a FROM t1 WHERE EXISTS (VALUES(1))",
+        b"SELECT a FROM t1 WHERE EXISTS (SELECT 1 FROM t2 WHERE c=a GROUP BY c)",
+        b"SELECT a FROM t1 WHERE EXISTS (SELECT 1 FROM t2 WHERE c=a WINDOW w AS (ORDER BY c))",
+        b"SELECT a FROM t1 WHERE EXISTS (SELECT row_number() OVER () FROM t2 WHERE c=a)",
+        // A `WITH` term and a view each name a statement.
+        b"WITH q AS (SELECT 1 AS z) SELECT a FROM t1 WHERE EXISTS (SELECT 1 FROM q WHERE z=a)",
+        b"SELECT a FROM t1 WHERE EXISTS (SELECT 1 FROM v2 WHERE e=a)",
+        // A statement that skips rows answers other rows where a side
+        // answers fewer of them.
+        b"SELECT a FROM t1 WHERE EXISTS (SELECT 1 FROM t2 WHERE c=a) LIMIT 2 OFFSET 1",
+        // A statement of two tables and one of none each answer other
+        // rows than one side does, and `INDEXED BY` asks for an index of
+        // a side the statement wrote.
+        b"SELECT a FROM t1 WHERE EXISTS (SELECT 1 FROM t2 p, t2 q WHERE p.c=a AND q.c=a)",
+        b"SELECT a FROM t1 WHERE EXISTS (SELECT a)",
+        b"SELECT a FROM t1 WHERE EXISTS (SELECT 1 FROM (SELECT c FROM t2) WHERE c=a)",
+        b"SELECT a FROM t1 WHERE EXISTS (SELECT 1 FROM t2 INDEXED BY t2c WHERE c=a)",
+        // A table that answers a column of the same name as one a side the
+        // statement wrote answers.
+        b"SELECT a FROM t1 WHERE EXISTS (SELECT 1 FROM t3 WHERE z=a)",
+        // The other two names a bare rowid answers to.
+        b"SELECT a FROM t1 WHERE EXISTS (SELECT 1 FROM t2 WHERE oid=a)",
+        b"SELECT a FROM t1 WHERE EXISTS (SELECT 1 FROM t2 WHERE _rowid_=a)",
+        // A window function stands over the rows of a statement of its
+        // own, and an aggregate answers one row of them, whatever else
+        // the expression reads.
+        b"SELECT a FROM t1 WHERE EXISTS (SELECT (row_number() OVER ()) + 1 FROM t2 WHERE c=a)",
+        b"SELECT a FROM t1 WHERE EXISTS (SELECT count(c) + 1 FROM t2 WHERE c=a)",
+    ] {
+        assert!(inside(&image, sql), "{sql:?}");
+    }
+}
+
+/// What the walk answers where the transform read an `EXISTS` as a side:
+/// the columns of the sides the statement wrote, and no name of that side.
+#[test]
+fn what_a_statement_over_a_side_read_out_of_an_exists_answers() {
+    let mut writer = crate::change::Writer::new(1024, 0, crate::header::Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t1(a,b)".as_slice(),
+        b"INSERT INTO t1 VALUES(1,10),(2,20),(3,30)",
+        b"CREATE TABLE t2(c,d)",
+        b"INSERT INTO t2 VALUES(2,1),(3,3)",
+        b"CREATE UNIQUE INDEX t2c ON t2(c)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let image = writer.written();
+    // A schema in front of the table names the database that holds it, and
+    // an alias names the side, which the transform reads either way.
+    for sql in [
+        b"SELECT a FROM t1 WHERE EXISTS (SELECT 1 FROM main.t2 WHERE c=a)".as_slice(),
+        b"SELECT a FROM t1 WHERE EXISTS (SELECT 1 FROM t2 AS q WHERE q.c=a)",
+    ] {
+        assert!(!inside(&image, sql), "{sql:?}");
+    }
+    // A `t.*` and a `*` each count the columns of the sides the statement
+    // wrote, which a `GROUP BY` of one number reads.
+    assert_eq!(
+        Database::open(&image)
+            .unwrap()
+            .query(b"SELECT t1.* FROM t1 WHERE EXISTS (SELECT 1 FROM t2 WHERE c=a) GROUP BY 1")
+            .unwrap()
+            .rows,
+        alloc::vec![
+            alloc::vec![Value::Int(2), Value::Int(20)],
+            alloc::vec![Value::Int(3), Value::Int(30)]
+        ]
+    );
+    // A `t.*` beside a side of another name counts the columns of the
+    // side it names alone.
+    assert_eq!(
+        Database::open(&image)
+            .unwrap()
+            .query(b"SELECT t1.* FROM t1, t2 WHERE c=a GROUP BY 1")
+            .unwrap()
+            .rows,
+        alloc::vec![
+            alloc::vec![Value::Int(2), Value::Int(20)],
+            alloc::vec![Value::Int(3), Value::Int(30)]
+        ]
+    );
+    // A name only the appended side answers is a name the statement
+    // outside reaches nothing by, which `sqlite3SelectPrep` resolves
+    // before the transform.
+    assert_eq!(
+        Database::open(&image)
+            .unwrap()
+            .query(b"SELECT d FROM t1 WHERE EXISTS (SELECT 1 FROM t2 WHERE c=a)")
+            .unwrap_err()
+            .message(),
+        "no such column: d"
+    );
+    assert_eq!(
+        Database::open(&image)
+            .unwrap()
+            .query(b"SELECT t2.* FROM t1 WHERE EXISTS (SELECT 1 FROM t2 WHERE c=a)")
+            .unwrap_err()
+            .message(),
+        "no such table: t2"
     );
 }
