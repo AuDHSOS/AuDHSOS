@@ -1883,6 +1883,12 @@ struct Bounds {
     /// The highest value of that column, and whether an entry holding it
     /// is one the walk takes.
     high: Option<(Value, bool)>,
+    /// Whether the low end and the high end are read out of a pattern.
+    /// The walk takes the range a second time where the high end is, with
+    /// every end read out of a pattern read as a blob: a blob the pattern
+    /// matches stands after every text, so the text the prefix begins and
+    /// the blobs it begins are two ranges.
+    patterned: (bool, bool),
 }
 
 impl Bounds {
@@ -5958,6 +5964,7 @@ impl<'a> Database<'a> {
                     at: 0,
                     seen: Vec::new(),
                     kept: Vec::new(),
+                    apart: false,
                 })),
                 None => self.scanned(side, stored),
             };
@@ -5982,7 +5989,7 @@ impl<'a> Database<'a> {
             };
         }
         if let Some(held) = sought(&side.plan, (side.covering.as_deref(), stored.root), cursor)
-            && let Some(feed) = self.keyed(stored, held)
+            && let Some(feed) = self.passes(stored, held)
         {
             return feed;
         }
@@ -6003,7 +6010,38 @@ impl<'a> Database<'a> {
         if let Plan::Rows(first, last) = plan {
             return Some(self.ranged(stored, (*first, *last)));
         }
-        sought(plan, (None, stored.root), cursor).and_then(|held| self.keyed(stored, held))
+        sought(plan, (None, stored.root), cursor).and_then(|held| self.passes(stored, held))
+    }
+
+    /// The walks one plan asks for: the range of a pattern is taken once
+    /// over the text its prefix begins and once over the blobs, which
+    /// stand after every text, and every other plan is one walk.
+    ///
+    /// No row stands in both walks, so the rows of the second are answered
+    /// without reading the rows of the first.
+    ///
+    /// Costs what the two descents cost, which is O(log n) each.
+    fn passes<'f>(&self, stored: &'f Stored, held: Seek) -> Option<Feed<'a, 'f>> {
+        if !held.bounds.patterned.1 {
+            return self.keyed(stored, held);
+        }
+        // A walk that begins at the high end of the bounds reaches the
+        // blobs before the text, which stand after every text.
+        let from_high = held.backwards != held.reversed;
+        let text = self.keyed(stored, held.clone())?;
+        let blobs = self.keyed(stored, held.blobbed())?;
+        let feeds = if from_high {
+            alloc::vec![blobs, text]
+        } else {
+            alloc::vec![text, blobs]
+        };
+        Some(Feed::Union(Box::new(Union {
+            feeds,
+            at: 0,
+            seen: Vec::new(),
+            kept: Vec::new(),
+            apart: true,
+        })))
     }
 
     /// The walk of one index, held to the key the plan names, and
@@ -7379,10 +7417,12 @@ fn liked(
     for last in high.iter_mut().rev().take(1) {
         *last = last.saturating_add(1);
     }
-    // A blob the pattern matches stands after every text, so the high
-    // end is a blob: the walk then reaches the text the prefix begins
-    // and the blobs it begins both, which is what the two passes of the
-    // loop `sqlite3WhereBegin` writes for `WHERE_LIKEOPT` reach.
+    // Both ends are text, and the walk takes the range a second time with
+    // both of them as blobs, because a blob the pattern matches stands
+    // after every text: those are the two passes of the loop
+    // `sqlite3WhereBegin` writes for `WHERE_LIKEOPT`, which
+    // `whereLikeOptimizationStringFixup` of
+    // `research/sqlite/src/wherecode.c:1015` writes the second of.
     // `isLikeOrGlob` refuses a prefix that reads as a number, and a
     // lone minus with it, where the column is not one of text affinity,
     // because the column converts such a value to a number.
@@ -7411,7 +7451,7 @@ fn liked(
             at,
             reached,
             op: BinaryOp::Lt,
-            value: Value::Blob(high),
+            value: Value::Text(high),
             id: pattern,
             needs: Some(needs),
         },
@@ -7572,13 +7612,13 @@ fn plan_of(
                         crate::value::apply(&mut value, column.affinity);
                         let exact = compare(&value, &term.value, Collation::Binary)
                             == core::cmp::Ordering::Equal;
-                        (value, exact)
+                        (value, exact, term.needs.is_some())
                     })
             };
             // A key that is not the value the term names would reach
             // other entries than the term is true of, so the index is
             // left alone.
-            if let Some((value, exact)) = named(BinaryOp::Eq) {
+            if let Some((value, exact, _)) = named(BinaryOp::Eq) {
                 if !exact {
                     break;
                 }
@@ -7589,13 +7629,7 @@ fn plan_of(
             // The column after the key is the last one a term reaches,
             // because the entries of the columns after it run over
             // again for each value of this one.
-            let widened = |held: Option<(Value, bool)>, inside: bool| {
-                held.map(|(value, exact)| (value, inside || !exact))
-            };
-            bounds.low =
-                widened(named(BinaryOp::Ge), true).or_else(|| widened(named(BinaryOp::Gt), false));
-            bounds.high =
-                widened(named(BinaryOp::Le), true).or_else(|| widened(named(BinaryOp::Lt), false));
+            bounds = bounds_of(named);
             if !bounds.is_empty() {
                 collations.push(held.collation);
             }
@@ -9334,6 +9368,33 @@ fn ored(
     Some(Plan::Union(plans))
 }
 
+/// The bounds the terms hold the column after the key between, which
+/// `named` answers one end of at a time, and which ends a pattern wrote.
+///
+/// A bound written `>` or `<` leaves out the entries that hold the value
+/// itself, and one whose value the column's affinity changed is widened to
+/// the entries that hold it.
+///
+/// Costs what `named` costs per end.
+fn bounds_of(named: impl Fn(BinaryOp) -> Option<(Value, bool, bool)>) -> Bounds {
+    let widened = |held: Option<(Value, bool, bool)>, inside: bool| {
+        held.map(|(value, exact, patterned)| ((value, inside || !exact), patterned))
+    };
+    let low = widened(named(BinaryOp::Ge), true).or_else(|| widened(named(BinaryOp::Gt), false));
+    let high = widened(named(BinaryOp::Le), true).or_else(|| widened(named(BinaryOp::Lt), false));
+    Bounds {
+        // An end read out of a pattern holds the text the prefix begins,
+        // and the walk takes the range a second time where the high end is
+        // one of those.
+        patterned: (
+            matches!(low, Some((_, true))),
+            matches!(high, Some((_, true))),
+        ),
+        low: low.map(|held| held.0),
+        high: high.map(|held| held.0),
+    }
+}
+
 /// The walk of the table's own tree the terms hold to a range of its
 /// rowids, and nothing where no term names the rowid.
 ///
@@ -9356,6 +9417,7 @@ fn ranged_of(terms: &[Bound], at: usize) -> Option<Plan> {
 }
 
 /// What one plan holds a walk of an index to.
+#[derive(Clone)]
 struct Seek {
     /// The page the index's tree begins at.
     root: u32,
@@ -9378,6 +9440,36 @@ struct Seek {
     /// Whether the walk reads the table's own tree, whose entries are
     /// the rows themselves.
     own: bool,
+}
+
+impl Seek {
+    /// The same walk over the blobs the pattern's prefix begins, which
+    /// stand after every text, so the range is taken a second time with
+    /// both ends read as blobs.
+    ///
+    /// `whereLikeOptimizationStringFixup` of
+    /// `research/sqlite/src/wherecode.c:1015` writes the second pass of the
+    /// loop, which reads the two bound strings as blobs.
+    ///
+    /// Costs O(n) in the bytes of the two ends.
+    fn blobbed(mut self) -> Self {
+        let held = self.bounds.patterned;
+        for (end, patterned) in [
+            (&mut self.bounds.low, held.0),
+            (&mut self.bounds.high, held.1),
+        ] {
+            if !patterned {
+                continue;
+            }
+            // Every end a pattern wrote holds the text its prefix begins,
+            // which `OP_String` of the second pass reads as a blob.
+            *end = end
+                .take()
+                .and_then(|(value, inside)| value.text().map(|text| (Value::Blob(text), inside)));
+        }
+        self.bounds.patterned = (false, false);
+        self
+    }
 }
 
 /// What `plan` holds a walk of an index to.
@@ -10003,6 +10095,10 @@ struct Union<'i, 'f> {
     /// is the walk of a table that keeps its rows in the key's own tree.
     /// Reading one row costs O(n) in the rows already answered.
     kept: Vec<Vec<Value>>,
+    /// Whether no row stands in two of the walks, which the two passes of
+    /// a pattern's range are: one holds text and the other blobs. No row
+    /// is then looked for among the rows already answered.
+    apart: bool,
 }
 
 impl Union<'_, '_> {
@@ -10017,6 +10113,9 @@ impl Union<'_, '_> {
             let Ok((rowid, values)) = read else {
                 return Some(read);
             };
+            if self.apart {
+                return Some(Ok((rowid, values)));
+            }
             // A walk of the key's own tree answers no rowid, and the key
             // is unique, so the row itself says whether a branch before
             // this one answered the row.

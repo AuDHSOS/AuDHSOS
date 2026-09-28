@@ -7888,6 +7888,19 @@ Unit tests of `crate::db` over `fixtures/indexed.db`.
 - `WHERE NULL` under an aggregate, which answers one row.
 - `WHERE abs(0)`, which is read against every row.
 
+### 6.6.419 The two passes of a pattern's range (`db-sqlite`)
+
+Unit tests of `crate::db` over an image `crate::change` writes, whose
+table holds text and blobs the same prefix begins. Every answer is the one
+the C library's shell writes.
+
+- The rows the two passes answer, the text before the blobs, and the
+  pattern read once per entry either pass takes.
+- The descents and the steps the two passes count.
+- An `ORDER BY` written `DESC`, which takes the blobs before the text.
+- A low end another term wrote as a blob, which the second pass leaves as
+  it stands, written in front of the pattern and behind it.
+
 ### 6.6.418 What a `LIKE` counts and where a term is read (`db-sqlite`)
 
 Unit tests of `crate::db` over an image `crate::change` writes.

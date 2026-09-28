@@ -398,3 +398,74 @@ fn what_a_like_and_a_glob_count() {
         0
     );
 }
+
+/// The range a `LIKE` holds the walk to is taken twice: once over the text
+/// its prefix begins and once over the blobs, which stand after every
+/// text. The pattern is read once per entry either pass takes.
+#[test]
+fn what_the_two_passes_of_a_pattern_s_range_answer() {
+    let mut writer = crate::change::Writer::new(1024, 0, crate::header::Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE b(x TEXT)").unwrap();
+    writer.run(b"CREATE INDEX bx ON b(x)").unwrap();
+    for sql in [
+        b"INSERT INTO b VALUES('abc')".as_slice(),
+        b"INSERT INTO b VALUES(x'616263')",
+        b"INSERT INTO b VALUES('abd')",
+        b"INSERT INTO b VALUES('ABC')",
+        b"INSERT INTO b VALUES('b')",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let image = writer.written();
+    // `LIKE` tells the letters apart where `PRAGMA case_sensitive_like`
+    // set it, which holds the two ends under the collation of the index.
+    let database = Database::open(&image).unwrap().sensitively(true);
+    let answered = database
+        .query(b"SELECT quote(x) FROM b WHERE x LIKE 'ab%'")
+        .unwrap();
+    let rows: alloc::vec::Vec<alloc::string::String> = answered
+        .rows
+        .iter()
+        .map(|row| match row.first() {
+            Some(crate::value::Value::Text(text)) => {
+                alloc::string::String::from_utf8_lossy(text).into_owned()
+            }
+            _ => alloc::string::String::new(),
+        })
+        .collect();
+    assert_eq!(rows, ["'abc'", "'abd'", "X'616263'"]);
+    // Two entries of text and one of a blob, the pattern read for each.
+    assert_eq!(answered.stepped.likes, 3);
+    // One descent per pass, and one step per entry after the first of it.
+    assert_eq!(answered.stepped.searched, 4);
+    let quoted = |sql: &[u8]| {
+        database
+            .query(sql)
+            .unwrap()
+            .rows
+            .iter()
+            .map(|row| match row.first() {
+                Some(crate::value::Value::Text(text)) => {
+                    alloc::string::String::from_utf8_lossy(text).into_owned()
+                }
+                _ => alloc::string::String::new(),
+            })
+            .collect::<alloc::vec::Vec<_>>()
+    };
+    // A walk that begins at the high end of the bounds takes the blobs
+    // before the text.
+    assert_eq!(
+        quoted(b"SELECT quote(x) FROM b WHERE x LIKE 'ab%' ORDER BY x DESC"),
+        ["X'616263'", "'abd'", "'abc'"]
+    );
+    // A low end no pattern wrote is a blob already, which the second pass
+    // leaves as it stands.
+    assert_eq!(
+        quoted(b"SELECT quote(x) FROM b WHERE x LIKE 'ab%' AND x>=x'6162'"),
+        ["X'616263'"]
+    );
+    assert_eq!(
+        quoted(b"SELECT quote(x) FROM b WHERE x>=x'6162' AND x LIKE 'ab%'"),
+        ["X'616263'"]
+    );
+}

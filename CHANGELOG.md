@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` takes the range a `LIKE` or a `GLOB` holds the walk to twice: once over
+  the text its prefix begins and once over the blobs, which stand after every text,
+  where the high end held as a blob reached every text above the prefix. D-581
+  records it. Catalog 6.6.419. `like.test` goes from 116 cases passing to 120.
+
 - `db-sqlite` reads a term of the `WHERE` once per row of the level the sides it
   names are all read on, and not again over the product, and counts the comparisons
   of a `LIKE` and a `GLOB` for `::sqlite_like_count` of the suite's harness. D-580
