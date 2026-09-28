@@ -19,6 +19,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` asks the function the connection was told about the columns the check of a foreign key
+  reads, the parent's key for a statement that writes a child row and the child's key for one that
+  writes a parent row, and reads a column the function ignored as nothing, where it asked about
+  neither. D-611 records it. Catalog 6.6.442. `fkey2.test` goes from 1188 cases passing to 1195 and
+  `without_rowid3.test` from 1172 to 1179.
+
 - `db-sqlite` answers the groups of a statement in the direction the `ORDER BY` names for the terms
   of the `GROUP BY` and gathers them out of an index whichever way that index holds its entries, so
   `SELECT a, sum(b) FROM t1 GROUP BY a ORDER BY a DESC` sorts once where it sorted twice. D-610

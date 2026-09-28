@@ -7914,6 +7914,29 @@ answer is the one the C library's shell writes.
   the statement outside answers, and one whose term writes `oid` or
   `_rowid_`.
 
+### 6.6.442 Which columns the check of a foreign key reads (`db-sqlite`)
+
+Unit tests of `crate::auth` over a connection told a function that writes
+down what it was asked. Every answer is the one the C library's shell
+writes.
+
+- `INSERT INTO long VALUES(1, 2, 3)`, the parent of one immediate and one
+  deferred key: `SQLITE_INSERT long` then `SQLITE_READ mid i`, the child of
+  the immediate key read for nothing.
+- `INSERT INTO short VALUES(1, 3, 2)` and the same into the deferred
+  child: the action then `SQLITE_READ long b`.
+- A parent whose key is the rowid, read under the name of the column that
+  stands for it.
+- A key that names the column it points at, read under that name and
+  refused `foreign key mismatch - "named" referencing "one"`, and one whose
+  parent the schema does not hold, which names no column and is refused
+  `no such table: main.nosuch`.
+- A read of the parent's key the function ignores: the statement refused
+  `FOREIGN KEY constraint failed`, and a child key that holds a null
+  written. A read the function ignores of another table than the one a key
+  points at leaves the check of that key alone, and one of the second
+  column of a key over two leaves the first as it stands.
+
 ### 6.6.441 Which way the groups of a statement come out (`db-sqlite`)
 
 Unit tests of `crate::db` over the image of two tables with three indexes

@@ -219,6 +219,9 @@ pub(crate) struct Read {
     pub(crate) answer: Answer,
     /// The columns of an `UPDATE` the function ignored.
     pub(crate) unwritten: Vec<Vec<u8>>,
+    /// The columns a read the function ignored, each under the table it
+    /// stands in, which the check of a foreign key reads as nothing.
+    pub(crate) ignored: Vec<(Vec<u8>, Vec<u8>)>,
 }
 
 impl<'a> Authorizer<'a> {
@@ -245,6 +248,7 @@ impl<'a> Authorizer<'a> {
         Read {
             answer,
             unwritten: self.unwritten,
+            ignored: self.ignored,
         }
     }
 
@@ -512,6 +516,68 @@ impl Authorizer<'_> {
         Ok(())
     }
 
+    /// The columns the check of a foreign key reads, asked for after the
+    /// action that writes the row.
+    ///
+    /// `sqlite3FkCheck` of `research/sqlite/src/fkey.c:981` asks for
+    /// every column of the key a row points at, so a statement that
+    /// writes a child row reads the parent's key; `fkScanChildren` of
+    /// `research/sqlite/src/fkey.c:462` reads the columns that point at
+    /// the row a statement wrote, and a key held where the row is written
+    /// is scanned for no row, so a statement that writes a parent row
+    /// reads the key of a child held at the end of the transaction alone.
+    ///
+    /// A read the function ignores answers a null for that column, which
+    /// makes the check of a child key that holds no null fail.
+    ///
+    /// Reading the schema costs O(t) in its tables and O(k) in their keys.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] names what the function refused.
+    fn keyed(&mut self, table: &[u8], schema: &[u8]) -> Result<(), Error> {
+        let Some((held, _)) = self.database.table(table) else {
+            return Ok(());
+        };
+        // `sqlite3CreateForeignKey` writes each key in front of the ones
+        // written before it, so the last key written is read first.
+        let keys: Vec<crate::schema::Foreign> = held.foreign.iter().rev().cloned().collect();
+        for key in &keys {
+            for column in parent_columns(self.database, key) {
+                self.read_column(&key.table, &column, schema, &key.table, &column)?;
+            }
+        }
+        // The tables that point at this one, each read under the name the
+        // schema holds it by.
+        let pointing: Vec<(Vec<u8>, Vec<Vec<u8>>)> = self
+            .database
+            .tables()
+            .flat_map(|other| {
+                other
+                    .foreign
+                    .iter()
+                    .rev()
+                    .filter(|key| key.deferred && key.table.eq_ignore_ascii_case(table))
+                    .map(|key| {
+                        let columns = key
+                            .columns
+                            .iter()
+                            .filter_map(|at| other.columns.get(*at))
+                            .map(|column| column.name.clone())
+                            .collect();
+                        (other.name.clone(), columns)
+                    })
+                    .collect::<Vec<(Vec<u8>, Vec<Vec<u8>>)>>()
+            })
+            .collect();
+        for (child, columns) in &pointing {
+            for column in columns {
+                self.read_column(child, column, schema, child, column)?;
+            }
+        }
+        Ok(())
+    }
+
     /// The actions of every statement of one trigger's body.
     ///
     /// # Errors
@@ -702,6 +768,44 @@ impl Authorizer<'_> {
             Answer::Ok => Ok(Answer::Ok),
         }
     }
+}
+
+/// The columns of the parent a foreign key points at, by the names the
+/// schema holds them under: the ones the key wrote, and the primary key
+/// of the parent where it wrote none.
+///
+/// `sqlite3FkLocateIndex` of `research/sqlite/src/fkey.c` reads the same
+/// columns, and a key that points at a table the schema does not hold
+/// names none.
+///
+/// Reading them costs O(c) in the columns of the parent.
+fn parent_columns(
+    database: &crate::db::Database<'_>,
+    key: &crate::schema::Foreign,
+) -> Vec<Vec<u8>> {
+    let Some((parent, _)) = database.table(&key.table) else {
+        return Vec::new();
+    };
+    if key.parent.is_empty() {
+        let mut held: Vec<(u16, Vec<u8>)> = parent
+            .columns
+            .iter()
+            .filter(|column| column.key > 0)
+            .map(|column| (column.key, column.name.clone()))
+            .collect();
+        held.sort_by_key(|(place, _)| *place);
+        return held.into_iter().map(|(_, name)| name).collect();
+    }
+    key.parent
+        .iter()
+        .filter_map(|name| {
+            parent
+                .columns
+                .iter()
+                .find(|column| column.name.eq_ignore_ascii_case(name))
+                .map(|column| column.name.clone())
+        })
+        .collect()
 }
 
 /// Whether a term of a `WITH` reads its own name, which is what makes
@@ -1096,6 +1200,7 @@ impl Authorizer<'_> {
                         self.select(arena, statement.select, sql)?;
                     }
                 }
+                self.keyed(&name, &schema)?;
                 self.fired(&name, crate::ast::TriggerEvent::Insert)?;
                 Ok(answered)
             }
@@ -1109,6 +1214,7 @@ impl Authorizer<'_> {
                 // whole-table shortcut, which this crate has none of.
                 let answered = self.ask(Action::Delete, &name, b"", &schema)?;
                 self.read_change(arena, statement.name, statement.filter, sql)?;
+                self.keyed(&name, &schema)?;
                 self.fired(&name, crate::ast::TriggerEvent::Delete)?;
                 Ok(answered)
             }
@@ -1131,6 +1237,7 @@ impl Authorizer<'_> {
                 if let Some(filter) = statement.filter {
                     self.read_expr(arena, &mut reading, filter, sql)?;
                 }
+                self.keyed(&name, &schema)?;
                 self.fired(&name, crate::ast::TriggerEvent::Update)?;
                 Ok(answered)
             }

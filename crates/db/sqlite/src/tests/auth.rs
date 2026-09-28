@@ -1084,3 +1084,153 @@ fn which_actions_the_body_of_a_trigger_is_asked_for() {
     );
     clear();
 }
+
+/// The check of a foreign key reads the key the row points at, which the
+/// function the connection was told is asked about: a statement that
+/// writes a child row reads the parent's key, and one that writes a
+/// parent row reads the key of a child held at the end of the transaction
+/// alone.
+#[test]
+fn which_columns_the_check_of_a_foreign_key_reads() {
+    let _alone = alone();
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.asks(recording);
+    for sql in [
+        b"PRAGMA foreign_keys=ON".as_slice(),
+        b"CREATE TABLE long(a, b PRIMARY KEY, c)",
+        b"CREATE TABLE short(d, e, f REFERENCES long)",
+        b"CREATE TABLE mid(g, h, i REFERENCES long DEFERRABLE INITIALLY DEFERRED)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let clear = || RECORDED.lock().expect("the recorded calls").clear();
+    clear();
+    writer.run(b"INSERT INTO long VALUES(1, 2, 3)").unwrap();
+    assert_eq!(
+        asked_all(),
+        "SQLITE_INSERT/long//main// SQLITE_READ/mid/i/main//"
+    );
+    clear();
+    writer.run(b"INSERT INTO short VALUES(1, 3, 2)").unwrap();
+    assert_eq!(
+        asked_all(),
+        "SQLITE_INSERT/short//main// SQLITE_READ/long/b/main//"
+    );
+    clear();
+    writer.run(b"INSERT INTO mid VALUES(1, 3, 2)").unwrap();
+    assert_eq!(
+        asked_all(),
+        "SQLITE_INSERT/mid//main// SQLITE_READ/long/b/main//"
+    );
+    // A parent whose key is the rowid is read under the name of the
+    // column that stands for it.
+    for sql in [
+        b"CREATE TABLE one(a INTEGER PRIMARY KEY, b)".as_slice(),
+        b"CREATE TABLE two(b, c REFERENCES one)",
+        b"INSERT INTO one VALUES(101, 102)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    clear();
+    writer.run(b"INSERT INTO two VALUES(100, 101)").unwrap();
+    assert_eq!(
+        asked_all(),
+        "SQLITE_INSERT/two//main// SQLITE_READ/one/a/main//"
+    );
+    // A key that names the column it points at is read under that name,
+    // and one whose parent the schema does not hold names no column.
+    for sql in [
+        b"CREATE TABLE named(x REFERENCES one(b))".as_slice(),
+        b"CREATE TABLE loose(y REFERENCES nosuch)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    clear();
+    assert_eq!(
+        writer
+            .run(b"INSERT INTO named VALUES(102)")
+            .expect_err("a refusal")
+            .message(),
+        "foreign key mismatch - \"named\" referencing \"one\""
+    );
+    assert_eq!(
+        asked_all(),
+        "SQLITE_INSERT/named//main// SQLITE_READ/one/b/main//"
+    );
+    clear();
+    assert_eq!(
+        writer
+            .run(b"INSERT INTO loose VALUES(1)")
+            .expect_err("a refusal")
+            .message(),
+        "no such table: main.nosuch"
+    );
+    assert_eq!(asked_all(), "SQLITE_INSERT/loose//main//");
+}
+
+/// A read of the parent's key the function ignores answers a null for it,
+/// so the check of a child key that holds no null fails and one that
+/// holds a null stands.
+#[test]
+fn what_a_foreign_key_whose_parent_is_ignored_refuses() {
+    let mut writer = told();
+    for sql in [
+        b"PRAGMA foreign_keys=ON".as_slice(),
+        b"CREATE TABLE long(a, b PRIMARY KEY, c)",
+        b"CREATE TABLE short(d, e, f REFERENCES long)",
+        b"INSERT INTO long VALUES(1, 2, 3)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    rule_of(Action::Read, Answer::Ignore, b'b');
+    assert_eq!(
+        writer
+            .run(b"INSERT INTO short VALUES(1, 3, 2)")
+            .expect_err("a refusal")
+            .message(),
+        "FOREIGN KEY constraint failed"
+    );
+    writer.run(b"INSERT INTO short VALUES(1, 3, NULL)").unwrap();
+    // A read the function ignored of another table than the one a key
+    // points at leaves the check of that key alone.
+    allows();
+    for sql in [
+        b"CREATE TABLE other(k PRIMARY KEY)".as_slice(),
+        b"CREATE TABLE both(f REFERENCES long, g REFERENCES other)",
+        b"INSERT INTO other VALUES(7)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    rule_of(Action::Read, Answer::Ignore, b'k');
+    assert_eq!(
+        writer
+            .run(b"INSERT INTO both VALUES(2, 7)")
+            .expect_err("a refusal")
+            .message(),
+        "FOREIGN KEY constraint failed"
+    );
+    // A key over two columns is read column by column, so a read the
+    // function ignored of the second leaves the first as it stands and
+    // the key points at no row all the same.
+    allows();
+    for sql in [
+        b"CREATE TABLE pair(m, n, PRIMARY KEY(m, n))".as_slice(),
+        b"CREATE TABLE kid(x, y, FOREIGN KEY(x, y) REFERENCES pair(m, n))",
+        b"INSERT INTO pair VALUES(8, 9)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    rule_of(Action::Read, Answer::Ignore, b'n');
+    assert_eq!(
+        writer
+            .run(b"INSERT INTO kid VALUES(8, 9)")
+            .expect_err("a refusal")
+            .message(),
+        "FOREIGN KEY constraint failed"
+    );
+    allows();
+    assert_eq!(
+        read(&writer, b"SELECT count(*) FROM kid").unwrap(),
+        [[Value::Int(0)]]
+    );
+}

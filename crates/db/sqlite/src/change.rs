@@ -1125,6 +1125,10 @@ pub struct Writer {
     /// The columns of the `UPDATE` running now that the function
     /// ignored, which keep the value they had.
     unwritten: Vec<Vec<u8>>,
+    /// The columns of the statement running now that the function
+    /// ignored a read of, each under the table it stands in, which the
+    /// check of a foreign key reads as nothing.
+    ignored: Vec<(Vec<u8>, Vec<u8>)>,
     /// What the connection has written, which `changes()`,
     /// `total_changes()` and `last_insert_rowid()` answer.
     counted: crate::func::Counted,
@@ -1300,6 +1304,7 @@ impl Writer {
             writes: None,
             peeking: None,
             unwritten: Vec::new(),
+            ignored: Vec::new(),
             counted: crate::func::Counted::default(),
             writing: 0,
             deferred: 0,
@@ -1438,6 +1443,7 @@ impl Writer {
             writes: None,
             peeking: None,
             unwritten: Vec::new(),
+            ignored: Vec::new(),
             counted: crate::func::Counted::default(),
             writing: 0,
             deferred: 0,
@@ -4399,6 +4405,7 @@ impl Writer {
             return Ok(crate::auth::Read {
                 answer: crate::auth::Answer::Ok,
                 unwritten: Vec::new(),
+                ignored: Vec::new(),
             });
         };
         let bytes = self.images();
@@ -5336,6 +5343,10 @@ impl Writer {
             authorizer.functions(&arena, sql)?;
             authorizer.change(&arena, change, sql)
         })?;
+        // A read the function ignored answers a null for that column,
+        // which the check of a foreign key reads while the row is
+        // written.
+        self.ignored.clone_from(&read.ignored);
         let changed = match change {
             Change::Insert(statement) => match read.answer {
                 crate::auth::Answer::Ignore => Ok(0),
@@ -5348,7 +5359,9 @@ impl Writer {
                 self.unwritten.clear();
                 changed
             }
-        }?;
+        };
+        self.ignored.clear();
+        let changed = changed?;
         // `sqlite3_changes` counts the rows of the last statement that
         // changed rows, and `sqlite3_total_changes` the rows of every
         // statement of the connection.
@@ -7441,6 +7454,24 @@ impl Writer {
         self.rescued(table, values, rowid)
     }
 
+    /// Whether the function the connection was told ignored a read of
+    /// one of the parent's key columns, which answers a null for it.
+    ///
+    /// Reading the list costs O(n) in the columns it holds.
+    fn ignores(&self, parent: &Table, places: &[usize]) -> bool {
+        if self.ignored.is_empty() {
+            return false;
+        }
+        places.iter().any(|at| {
+            parent.columns.get(*at).is_some_and(|column| {
+                self.ignored.iter().any(|(table, name)| {
+                    table.eq_ignore_ascii_case(&parent.name)
+                        && name.eq_ignore_ascii_case(&column.name)
+                })
+            })
+        })
+    }
+
     /// Whether a foreign key is held where the transaction ends rather
     /// than where a row is written, which is `DEFERRABLE INITIALLY
     /// DEFERRED` and `PRAGMA defer_foreign_keys`.
@@ -7545,6 +7576,11 @@ impl Writer {
                 None => None,
             };
             let mut found = false;
+            // A read of the parent's key the function ignored answers a
+            // null for every value of it, which is `bIgnore` of
+            // `sqlite3FkCheck`: the row points at no row it can be held
+            // to.
+            let held = held.filter(|(parent, places)| !self.ignores(parent, places));
             if let Some((parent, places)) = held {
                 // A row of a table that points at itself is its own
                 // parent where its parent key answers what its child key
