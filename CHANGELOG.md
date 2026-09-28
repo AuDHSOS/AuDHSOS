@@ -974,6 +974,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` reads the column a `USING` or a `NATURAL` matches of the side before the
+  clause as well, so an index over another column of that side covers neither the
+  statement nor the match, where the walk built the row out of such an index and the join
+  matched no row. D-601 records it. Catalog 6.6.432. `boundary3.test` goes from 1829 cases
+  passing to 1896.
+
 - `db-sqlite` compares an `IN` over a list of more than one value under the collation of
   the value on the left alone, where it took a written collation from either side, so
   `a IN ('a' COLLATE BINARY, 'zz')` over a column that compares under `NOCASE` answers

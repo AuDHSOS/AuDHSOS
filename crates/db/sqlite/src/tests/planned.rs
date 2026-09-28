@@ -1848,3 +1848,51 @@ fn what_indexed_by_over_a_with_term_refuses() {
         Some(alloc::string::String::from("no such index: \"i1\""))
     );
 }
+
+/// A `USING` reads the column it matches of the side it stands on and of
+/// the side before it, so an index over another column of that side
+/// covers neither the statement nor the match.
+#[test]
+fn what_a_using_holds_the_walk_of_the_side_before_it_to() {
+    let mut writer = crate::change::Writer::new(1024, 0, crate::header::Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t1(a,x)".as_slice(),
+        b"INSERT INTO t1 VALUES(17,'p')",
+        b"INSERT INTO t1 VALUES(28,'q')",
+        b"CREATE INDEX t1x ON t1(x)",
+        b"CREATE TABLE t2(r,a)",
+        b"INSERT INTO t2 VALUES(1,17)",
+        b"INSERT INTO t2 VALUES(2,28)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let image = writer.written();
+    // The walk reads the entry of `t1x` for the term over `x` and the
+    // row of the table for `a`, which the entry holds none of.
+    assert_eq!(
+        plan(&image, b"SELECT t2.* FROM t1 JOIN t2 USING(a) WHERE x='p'"),
+        tree(&["|--SEARCH t1 USING INDEX t1x (x=?)", "`--SCAN t2"])
+    );
+    assert_eq!(
+        Database::open(&image)
+            .unwrap()
+            .query(b"SELECT t2.* FROM t1 JOIN t2 USING(a) WHERE x='p'")
+            .unwrap()
+            .rows,
+        alloc::vec![alloc::vec![Value::Int(1), Value::Int(17)]]
+    );
+    // A `NATURAL` join matches by the same column and reads it the same
+    // way.
+    assert_eq!(
+        plan(&image, b"SELECT t2.* FROM t1 NATURAL JOIN t2 WHERE x='q'"),
+        tree(&["|--SEARCH t1 USING INDEX t1x (x=?)", "`--SCAN t2"])
+    );
+    assert_eq!(
+        Database::open(&image)
+            .unwrap()
+            .query(b"SELECT t2.* FROM t1 NATURAL JOIN t2 WHERE x='q'")
+            .unwrap()
+            .rows,
+        alloc::vec![alloc::vec![Value::Int(2), Value::Int(28)]]
+    );
+}

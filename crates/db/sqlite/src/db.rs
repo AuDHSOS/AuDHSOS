@@ -8646,16 +8646,20 @@ fn covered(arena: &Arena, select: &Select, sql: &[u8], sides: &mut [Side<'_>], f
         }
     }
     // A `USING` or a `NATURAL` matches two sides by columns the
-    // statement does not write out.
+    // statement does not write out, reading the column of the side the
+    // clause stands on and of every side before it that answers the
+    // name: `sqlite3ProcessJoin` of `research/sqlite/src/select.c:594`
+    // writes the term of the match over a column of each side, which
+    // `sqlite3CreateColumnExpr` of `research/sqlite/src/resolve.c:885`
+    // marks read, and a `coalesce` over every side before the clause
+    // where a `RIGHT` join stands among them.
     for (at, side) in sides.iter().enumerate() {
         for name in &side.using {
-            let place = side
-                .shape
-                .columns
-                .iter()
-                .position(|column| column.name.eq_ignore_ascii_case(name));
-            for held in reading.iter_mut().skip(at).take(1) {
-                held.extend(place);
+            for (over, held) in sides.iter().enumerate().take(at.saturating_add(1)) {
+                let place = held.shape.place(name);
+                for read in reading.iter_mut().skip(over).take(1) {
+                    read.extend(place);
+                }
             }
         }
     }

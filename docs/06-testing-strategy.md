@@ -7888,6 +7888,18 @@ Unit tests of `crate::db` over `fixtures/indexed.db`.
 - `WHERE NULL` under an aggregate, which answers one row.
 - `WHERE abs(0)`, which is read against every row.
 
+### 6.6.432 What a `USING` holds the walk of the side before it to (`db-sqlite`)
+
+Unit tests of `crate::db` over an image `crate::change` writes. Every
+answer is the one the C library's shell writes.
+
+- `SELECT t2.* FROM t1 JOIN t2 USING(a) WHERE x='p'` over an index on
+  `t1(x)`, named `SEARCH t1 USING INDEX t1x (x=?)` and not `COVERING`,
+  the entry holding no `a` the match reads.
+- The row that statement answers, which the walk built from the table.
+- The same statement written as a `NATURAL JOIN`, with its plan and its
+  row.
+
 ### 6.6.431 What the key of an index holds of a term the affinity converts (`db-sqlite`)
 
 Unit tests of `crate::db` over an image `crate::change` writes. Every
