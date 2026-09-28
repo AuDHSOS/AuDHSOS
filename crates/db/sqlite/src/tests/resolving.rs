@@ -9,6 +9,7 @@ use alloc::string::String;
 
 use crate::change::Writer;
 use crate::header::Encoding;
+use crate::value::Value;
 
 /// A connection over two tables, neither holding a row.
 fn writing() -> Writer {
@@ -110,5 +111,47 @@ fn which_names_the_triggers_a_statement_may_fire_read() {
     assert_eq!(
         refused(&mut writer, b"INSERT INTO t1 VALUES(5,6)"),
         "no such column: rowid"
+    );
+}
+
+/// The pass over a row of nulls resolves the names of a statement that
+/// answered no row, and a refusal the value of that row raised stands for
+/// no statement: a `RAISE` of a trigger's body no row reached raises
+/// nothing, and a `zeroblob` longer than the largest value refuses
+/// nothing.
+#[test]
+fn what_a_statement_that_answered_no_row_refuses() {
+    let mut writer = writing();
+    writer
+        .run(
+            b"CREATE TRIGGER r BEFORE INSERT ON t1 BEGIN \
+              SELECT RAISE(IGNORE) WHERE EXISTS (SELECT a FROM t1 WHERE a=new.a); END",
+        )
+        .unwrap();
+    // The `EXISTS` holds for no row of the empty table, so the body's
+    // statement answers no row and the row is written.
+    writer.run(b"INSERT INTO t1 VALUES(1,2)").unwrap();
+    // The second row reaches the `EXISTS`, whose `RAISE` passes it over.
+    writer.run(b"INSERT INTO t1 VALUES(1,3)").unwrap();
+    let written = writer.written();
+    let database = crate::db::Database::open(&written).unwrap();
+    assert_eq!(
+        database.query(b"SELECT count(*) FROM t1").unwrap().rows,
+        [[Value::Int(1)]]
+    );
+    assert!(
+        database
+            .query(b"SELECT zeroblob(2000000000) WHERE 0")
+            .unwrap()
+            .rows
+            .is_empty()
+    );
+    // A name of such a statement is resolved all the same.
+    assert_eq!(
+        database
+            .query(b"SELECT nosuch FROM t1 WHERE 0")
+            .unwrap_err()
+            .message(),
+        "no such column: nosuch"
     );
 }

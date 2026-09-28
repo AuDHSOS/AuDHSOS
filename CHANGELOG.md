@@ -5,7 +5,29 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- `db-sqlite` refuses the statement whatever the expression of a computed column refuses, where it
+  wrote the row and left the refusal to the read of the column, so `CREATE TABLE t(a, b AS
+  (abs(a)))` no longer takes the row `-9223372036854775808`. D-609 records it. Catalog 6.6.440.
+
+- `db-sqlite` drops the refusal a value raises over the row of nulls it resolves the names of a
+  statement that answered no row by, so `SELECT RAISE(IGNORE) WHERE EXISTS (SELECT a FROM t1 WHERE
+  a=new.a)` in a trigger's body writes the first row of the table and `SELECT zeroblob(2000000000)
+  WHERE 0` refuses nothing. D-608 records it. Catalog 6.6.439. `tkt3554.test` goes from 1 case
+  passing to 4.
+
 ### Added
+
+- `db-sqlite` refuses a function that answers another value for the same row in an expression of
+  an index, in the `WHERE` of a partial index and in a generated column, and leaves one in a
+  `CHECK` constraint, where it read the call when the row was written. D-607 records it. Catalog
+  6.6.438.
+
+- `db-sqlite` holds the walk to an index that answers some rows of the table alone where the
+  statement holds every term of the index's `WHERE`, whatever index the statement names, where it
+  took such an index under `INDEXED BY` alone. D-606 records it. Catalog 6.6.437.
+  `indexexpr1.test` goes from 96 cases passing to 98 and `date2.test` from 28 to 29.
 
 - `db-sqlite` reads an `EXISTS` of the top-level `AND` spine of a `WHERE` as another side of the
   `FROM`, whose walk stops at the first row it answers, where it answered the statement inside

@@ -7914,6 +7914,52 @@ answer is the one the C library's shell writes.
   the statement outside answers, and one whose term writes `oid` or
   `_rowid_`.
 
+### 6.6.440 What a computed column that refuses the row refuses (`db-sqlite`)
+
+Unit tests of `crate::change`. Every answer is the one the C library's
+shell writes.
+
+- `CREATE TABLE t(a, b AS (abs(a)))` and `INSERT INTO t
+  VALUES(-9223372036854775808)`, refused `integer overflow`.
+- The same over `b AS (zeroblob(a)) STORED` and a length of two thousand
+  million, refused `string or blob too big`.
+
+### 6.6.439 What a statement that answered no row refuses (`db-sqlite`)
+
+Unit tests of `crate::change` and of `crate::db`. Every answer is the one
+the C library's shell writes.
+
+- A trigger whose body writes `SELECT RAISE(IGNORE) WHERE EXISTS (SELECT a
+  FROM t1 WHERE a=new.a)`: the first row is written, the second passed
+  over.
+- `SELECT zeroblob(2000000000) WHERE 0`, which answers no row and refuses
+  nothing.
+- `SELECT nosuch FROM t1 WHERE 0`, refused `no such column: nosuch`.
+
+### 6.6.438 What a function of another value for the same row is refused in (`db-sqlite`)
+
+Unit tests of `crate::change` and of `crate::db`. Every answer is the one
+the C library's shell writes.
+
+- `CREATE INDEX t2x1 ON t2(a,b+random())`, refused
+  `non-deterministic functions prohibited in index expressions`.
+- The same call in the `WHERE` of a partial index and in a generated
+  column, each refused with the words of its place.
+- The same call in a `CHECK` constraint, which stands.
+- `CREATE INDEX t2x4 ON t2(julianday('now'))`, refused
+  `non-deterministic use of julianday() in an index`, and one over
+  `date(a)`, which stands.
+
+### 6.6.437 What a partial index holds the walk to (`db-sqlite`)
+
+Unit tests of `crate::db` over an image `crate::change` writes. Every
+answer is the one the C library's shell writes.
+
+- `SELECT b FROM t1 WHERE a=5 AND c>10` over `CREATE INDEX t1a ON t1(a)
+  WHERE c>10`, named `SEARCH t1 USING INDEX t1a (a=?)`, and the row it
+  answers.
+- The same statement without the term over `c`, which leaves `SCAN t1`.
+
 ### 6.6.436 What a statement over a side read out of an `EXISTS` answers (`db-sqlite`)
 
 Unit tests of `crate::db` over an image `crate::change` writes. Every

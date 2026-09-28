@@ -239,6 +239,9 @@ pub enum Error {
     /// A statement written in an expression the schema holds, with the
     /// words that name where it stands.
     SubqueriesIn(&'static [u8]),
+    /// A function that answers another value for the same row, written in
+    /// an expression of the schema, with the words the place is named by.
+    FunctionsIn(&'static [u8]),
     /// A write of a trigger's body that names a schema.
     QualifiedInTrigger,
     /// An `UPDATE` or a `DELETE` of a trigger's body that names an
@@ -901,6 +904,9 @@ impl Error {
             Error::SubqueriesIn(held) => {
                 alloc::format!("subqueries prohibited in {}", shown(held))
             }
+            Error::FunctionsIn(held) => {
+                alloc::format!("non-deterministic functions prohibited in {}", shown(held))
+            }
             Error::Schema(schema::Error::UnsetDefault(name)) => {
                 alloc::format!("default value of column [{}] is not constant", shown(name))
             }
@@ -1382,7 +1388,6 @@ fn indexing(kind: crate::ast::SourceKind, sql: &[u8]) -> Indexing {
         crate::ast::Indexed::Not => Indexing::None,
         crate::ast::Indexed::By(span) => Indexing::By {
             name: dequote(span.text(sql)),
-            implied: false,
         },
     }
 }
@@ -1884,11 +1889,6 @@ enum Indexing {
     By {
         /// The name the clause writes.
         name: Vec<u8>,
-        /// Whether that index answers some rows of the table alone and
-        /// the statement holds every term of its `WHERE`, which
-        /// `whereUsablePartialIndex` of `research/sqlite/src/where.c`
-        /// asks for before it reads such an index.
-        implied: bool,
     },
 }
 
@@ -1954,6 +1954,11 @@ struct Side<'a> {
     reading: Vec<usize>,
     /// Which indexes of the table the statement lets the walk read.
     indexing: Indexing,
+    /// The trees of the indexes that answer some rows of the table alone
+    /// and whose every term the statement holds, which
+    /// `whereUsablePartialIndex` of `research/sqlite/src/where.c:3700`
+    /// asks for before it reads such an index.
+    implied: Vec<u32>,
     /// The name the plan writes it under where it reads a `VALUES` of
     /// several rows, which stands in front of the alias, and nothing
     /// otherwise.
@@ -2177,9 +2182,8 @@ impl Side<'_> {
     fn allows(&self, kept: &Kept, own: u32) -> bool {
         // A partial index answers fewer entries than the table has rows,
         // so a walk of one answers fewer rows than the statement asks
-        // for, unless the statement holds the term its `WHERE` names.
-        let implied = matches!(self.indexing, Indexing::By { implied: true, .. });
-        if kept.index.filter.is_some() && !implied {
+        // for, unless the statement holds every term of its `WHERE`.
+        if kept.index.filter.is_some() && !self.implied.contains(&kept.root) {
             return false;
         }
         match &self.indexing {
@@ -2324,8 +2328,6 @@ fn valued(arena: &Arena, id: crate::ast::SelectId) -> Vec<u8> {
     named
 }
 
-/// The name a plan writes a statement of a `FROM` under: the alias it
-/// carries, or its own place.
 /// The line that names how the rows of a statement standing in a `FROM`
 /// are read, and nothing where the plan names no line of its own for it.
 ///
@@ -2340,6 +2342,8 @@ fn housed_line(nesting: Nesting, named: &[u8]) -> Option<Vec<u8>> {
     Some(line)
 }
 
+/// The name a plan writes a statement of a `FROM` under: the alias it
+/// carries, or its own place.
 fn nested_named(id: crate::ast::SelectId, alias: Option<&[u8]>) -> Vec<u8> {
     match alias {
         Some(named) => named.to_vec(),
@@ -3650,21 +3654,12 @@ impl<'a> Database<'a> {
                 *slot = None;
             }
         }
-        // A column whose expression this row cannot answer keeps the
-        // value it was given, because a statement writes down only the
-        // columns computed once and the read of a column computed where
-        // it is read refuses on its own.
+        // `sqlite3ComputeGeneratedColumns` of
+        // `research/sqlite/src/insert.c:378` answers every computed
+        // column before the row is written, so whatever one of them
+        // refuses refuses the statement.
         let schemed = self.schemed(stored.place);
-        let held = match compute(stored, &mut held, self.encoding, Collation::Binary, schemed) {
-            Ok(()) => held,
-            // A column whose expression refuses the row itself refuses
-            // the statement, and one this row cannot answer keeps the
-            // value it was given.
-            Err(error @ (Error::Eval(eval::Error::NotPure(..)) | Error::Computed(_))) => {
-                return Err(error);
-            }
-            Err(_) => return Ok(()),
-        };
+        compute(stored, &mut held, self.encoding, Collation::Binary, schemed)?;
         for (slot, value) in values.iter_mut().zip(held) {
             *slot = value.unwrap_or(Value::Null);
         }
@@ -6015,6 +6010,7 @@ impl<'a> Database<'a> {
                 covering: None,
                 reading: Vec::new(),
                 indexing: indexing(source.kind, sql),
+                implied: Vec::new(),
                 valued: clause,
                 exists,
                 expressed: false,
@@ -6139,6 +6135,7 @@ impl<'a> Database<'a> {
                     covering: None,
                     reading: Vec::new(),
                     indexing: Indexing::Any,
+                    implied: Vec::new(),
                     valued: Vec::new(),
                     exists: false,
                     expressed: false,
@@ -9160,10 +9157,10 @@ fn covers(side: &mut Side<'_>, read: &[usize]) {
         .saturating_add(usize::from(stored.table.rowid_alias.is_none()));
     let mut narrowest: Option<&Kept> = None;
     for kept in stored.indexes.iter().rev() {
-        // A partial index answers fewer entries than the table has rows,
-        // and an index holding a place backwards answers its entries in
-        // an order this walk does not read.
-        if kept.index.filter.is_some()
+        // An index the statement leaves the walk none of, and one holding
+        // a place backwards, which answers its entries in an order this
+        // walk does not read.
+        if !side.allows(kept, stored.root)
             || kept
                 .index
                 .columns
@@ -10732,29 +10729,36 @@ fn kept_named<'a>(stored: &'a Stored, name: &[u8]) -> Option<&'a Kept> {
         .find(|kept| kept.index.name.eq_ignore_ascii_case(name))
 }
 
-/// Marks each side whose `INDEXED BY` names a partial index the statement
-/// holds every term of the index's `WHERE`.
+/// Marks on each side the partial indexes of its table whose every term
+/// the statement holds.
 ///
-/// `whereUsablePartialIndex` of `research/sqlite/src/where.c` reads the
-/// terms of the statement against that `WHERE` before it takes such an
+/// `whereUsablePartialIndex` of `research/sqlite/src/where.c:3700` reads
+/// the terms of the statement against that `WHERE` before it takes such an
 /// index, so a walk of one answers the rows the statement asks for.
 ///
-/// Costs what [`implies`] costs per side.
+/// Costs what [`implies`] costs per index of each side.
 fn marked(arena: &Arena, roots: &[ExprId], sql: &[u8], sides: &mut [Side<'_>]) {
-    let held: Vec<bool> = sides
+    let held: Vec<Vec<u32>> = sides
         .iter()
-        .map(|side| implies(arena, roots, sql, side))
+        .map(|side| {
+            side.source.table().map_or_else(Vec::new, |stored| {
+                stored
+                    .indexes
+                    .iter()
+                    .filter(|kept| implies(arena, roots, sql, kept))
+                    .map(|kept| kept.root)
+                    .collect()
+            })
+        })
         .collect();
     for (side, held) in sides.iter_mut().zip(held) {
-        if let Indexing::By { implied, .. } = &mut side.indexing {
-            *implied = held;
-        }
+        side.implied = held;
     }
 }
 
-/// Whether the statement holds the term the `WHERE` of the index
-/// `INDEXED BY` names writes, which is what lets a walk of a partial
-/// index answer the rows the statement asks for.
+/// Whether the statement holds every term the `WHERE` of this index
+/// writes, which is what lets a walk of a partial index answer the rows
+/// the statement asks for.
 ///
 /// `whereUsablePartialIndex` of `research/sqlite/src/where.c` reads every
 /// term of the statement against that `WHERE` through
@@ -10763,16 +10767,8 @@ fn marked(arena: &Arena, roots: &[ExprId], sql: &[u8], sides: &mut [Side<'_>]) {
 /// holds and compares each against it.
 ///
 /// Costs O(t * n) in the terms of the spine and their nodes.
-fn implies(arena: &Arena, roots: &[ExprId], sql: &[u8], side: &Side<'_>) -> bool {
-    let Indexing::By { name, .. } = &side.indexing else {
-        return false;
-    };
-    let found = side
-        .source
-        .table()
-        .and_then(|stored| kept_named(stored, name))
-        .and_then(|kept| kept.index.filter.map(|held| (kept, held)));
-    let Some((kept, held)) = found else {
+fn implies(arena: &Arena, roots: &[ExprId], sql: &[u8], kept: &Kept) -> bool {
+    let Some(held) = kept.index.filter else {
         return false;
     };
     // An entry stands in the index only where every term of its `WHERE`
@@ -13221,9 +13217,43 @@ fn unread(
         ));
     }
     for root in roots(arena, select) {
-        evaluate_row(arena, root, sql, &cursor)?;
+        match evaluate_row(arena, root, sql, &cursor) {
+            Err(held) if valued_refusal(&held) => {}
+            held => {
+                held?;
+            }
+        }
     }
     Ok(())
+}
+
+/// Whether a refusal stands for the value of a row and not for a name.
+///
+/// `sqlite3ResolveExprNames` of `research/sqlite/src/resolve.c:1740`
+/// resolves every name before a row is read, and `sqlite3VdbeExec`
+/// raises what a value refuses once a row reaches the expression, so the
+/// pass over a row of nulls drops the second and keeps the first: a
+/// `RAISE` of a trigger's body that no row reaches raises nothing, and a
+/// `zeroblob` of a length `SQLITE_MAX_LENGTH` bounds refuses nothing.
+///
+/// Reading the refusal costs O(1).
+const fn valued_refusal(error: &eval::Error) -> bool {
+    matches!(
+        *error,
+        eval::Error::Raised(..)
+            | eval::Error::NoRandom
+            | eval::Error::Overflow
+            | eval::Error::TooBig
+            | eval::Error::BadEscape
+            | eval::Error::BadUnicode
+            | eval::Error::PatternTooBig
+            | eval::Error::Fraction(..)
+            | eval::Error::Fractions(..)
+            | eval::Error::NotNumeric(..)
+            | eval::Error::Infinite(..)
+            | eval::Error::Json(..)
+            | eval::Error::Regexp(..)
+    )
 }
 
 /// Refuses a statement whose `FROM` holds more sides than the mask the

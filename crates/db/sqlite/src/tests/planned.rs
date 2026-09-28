@@ -2342,3 +2342,39 @@ fn what_a_statement_over_a_side_read_out_of_an_exists_answers() {
         "no such table: t2"
     );
 }
+
+/// An index that answers some rows of the table alone holds the walk
+/// where the statement holds every term of the index's `WHERE`, whatever
+/// index the statement names.
+#[test]
+fn what_a_partial_index_holds_the_walk_to() {
+    let mut writer = crate::change::Writer::new(1024, 0, crate::header::Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t1(a,b,c)".as_slice(),
+        b"INSERT INTO t1 VALUES(5,1,20),(5,2,5),(7,3,30)",
+        b"CREATE INDEX t1a ON t1(a) WHERE c>10",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let image = writer.written();
+    // The statement holds the term the `WHERE` of the index writes, so
+    // every row it asks for stands in the index.
+    assert_eq!(
+        plan(&image, b"SELECT b FROM t1 WHERE a=5 AND c>10"),
+        tree(&["`--SEARCH t1 USING INDEX t1a (a=?)"])
+    );
+    assert_eq!(
+        Database::open(&image)
+            .unwrap()
+            .query(b"SELECT b FROM t1 WHERE a=5 AND c>10")
+            .unwrap()
+            .rows,
+        alloc::vec![alloc::vec![Value::Int(1)]]
+    );
+    // A statement that holds it not asks for rows the index answers none
+    // of, so the walk reads the table.
+    assert_eq!(
+        plan(&image, b"SELECT b FROM t1 WHERE a=5"),
+        tree(&["`--SCAN t1"])
+    );
+}

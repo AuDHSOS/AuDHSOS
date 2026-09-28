@@ -243,3 +243,29 @@ fn what_a_statement_that_describes_a_generated_column_wrongly_is_refused_with() 
         assert_eq!(writer.run(sql).unwrap_err().message(), message, "{sql:?}");
     }
 }
+
+/// A computed column is answered before the row is written, so whatever
+/// its expression refuses refuses the statement, whether the column is
+/// stored or not.
+#[test]
+fn what_a_computed_column_that_refuses_the_row_refuses() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(a, b AS (abs(a)))").unwrap();
+    assert_eq!(
+        writer
+            .run(b"INSERT INTO t VALUES(-9223372036854775808)")
+            .expect_err("a refusal")
+            .message(),
+        "integer overflow"
+    );
+    writer
+        .run(b"CREATE TABLE u(a, b AS (zeroblob(a)) STORED)")
+        .unwrap();
+    assert_eq!(
+        writer
+            .run(b"INSERT INTO u VALUES(2000000000)")
+            .expect_err("a refusal")
+            .message(),
+        "string or blob too big"
+    );
+}

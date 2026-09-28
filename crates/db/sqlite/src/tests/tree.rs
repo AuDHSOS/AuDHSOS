@@ -3385,16 +3385,16 @@ fn random_and_randomblob_answer_the_bytes_the_seed_draws() {
     let other = Database::open(&written).unwrap().seeded(11);
     let draw = |database: &Database<'_>| database.query(b"SELECT randomblob(8)").unwrap().rows;
     assert_eq!(draw(&one), draw(&other));
-    // A generated column is answered against the row alone, which has
-    // no source under it, so the column is refused where it is read.
+    // A column the schema computes answers another value for the same
+    // row where it draws bytes, which the definition is refused for.
     let mut writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
-    writer
-        .run(b"CREATE TABLE u(a, b AS (randomblob(4)))")
-        .unwrap();
-    writer.run(b"INSERT INTO u(a) VALUES(1)").unwrap();
-    let written = writer.written();
-    let database = Database::open(&written).unwrap();
-    assert!(database.query(b"SELECT b FROM u").is_err());
+    assert_eq!(
+        writer
+            .run(b"CREATE TABLE u(a, b AS (randomblob(4)))")
+            .unwrap_err()
+            .message(),
+        "non-deterministic functions prohibited in generated columns"
+    );
 }
 
 #[test]

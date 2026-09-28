@@ -3340,6 +3340,13 @@ impl Writer {
             if schema_select(arena, id) {
                 return Err(Error::SubqueriesIn(held));
             }
+            // `sqlite3ResolveNotValid` of `research/sqlite/src/resolve.c:1236`
+            // refuses a function `SQLITE_FUNC_CONSTANT` does not mark in
+            // an index, in the `WHERE` of a partial index and in a
+            // generated column, and leaves one in a `CHECK` alone.
+            if held != b"CHECK constraints" && impurely(arena, id, sql) {
+                return Err(Error::FunctionsIn(held));
+            }
         }
         // `sqlite3ExprFunctionUsable` of
         // `research/sqlite/src/expr.c:1276` holds the expressions a
@@ -14007,6 +14014,40 @@ fn resolved_places(arena: &Arena, definition: Definition) -> Vec<(ExprId, &'stat
         _ => {}
     }
     out
+}
+
+/// The functions a schema expression may not call, which are the ones
+/// `SQLITE_FUNC_CONSTANT` does not mark: `random` and `randomblob`, the
+/// ones that read the connection, and the ones that read the build.
+///
+/// The date functions `PURE_DATE` of `research/sqlite/src/sqliteInt.h:2167`
+/// marks are constant and read the clock where a modifier says `now`,
+/// which `sqlite3NotPureFunc` refuses of its own.
+const IMPURE: [&[u8]; 12] = [
+    b"random",
+    b"randomblob",
+    b"last_insert_rowid",
+    b"changes",
+    b"total_changes",
+    b"sqlite_version",
+    b"sqlite_source_id",
+    b"sqlite_compileoption_used",
+    b"sqlite_compileoption_get",
+    b"current_time",
+    b"current_date",
+    b"current_timestamp",
+];
+
+/// Whether the expression at `id` calls a function that answers another
+/// value for the same row.
+///
+/// Reading the expression costs O(n) in its nodes.
+fn impurely(arena: &Arena, id: ExprId, sql: &[u8]) -> bool {
+    let mut names = Vec::new();
+    called_names(arena, id, sql, &mut names);
+    names
+        .iter()
+        .any(|name| IMPURE.iter().any(|held| name.eq_ignore_ascii_case(held)))
 }
 
 /// Whether the expression at `id` or one under it is a bound parameter.
