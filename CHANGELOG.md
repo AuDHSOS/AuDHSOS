@@ -7,6 +7,15 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` writes the database the statement wrote in front of the name of the table
+  in the line of a walk, where the side carries no alias. D-589 records it.
+
+- `db-sqlite` names every statement written inside an expression after the lines of the
+  walk: `SCALAR SUBQUERY` for one read for a value and `LIST SUBQUERY` for one an `IN`
+  reads, with `CORRELATED` in front where the statement reads a column of the row the
+  walk stands on. D-588 records it. Catalog 6.6.424. `eqp.test` goes from 46 cases
+  passing to 51.
+
 - `db-sqlite` names the rows of a view as it names the rows of a statement written
   inside a `FROM`: the statement of the view is written into the one that reads it
   where nothing of what the two hold stops it, and named `CO-ROUTINE` or

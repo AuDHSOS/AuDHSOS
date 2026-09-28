@@ -1323,14 +1323,11 @@ Size: L.
 275. The lines a plan names for a statement written inside a `FROM`, and
      `SEARCH` for a walk held to a bare `min` or `max`. Built, which D-574
      and D-575 record.
-276. The lines a plan names for a statement written inside an expression:
-     `SCALAR SUBQUERY`, `LIST SUBQUERY` and `CORRELATED LIST SUBQUERY`
-     stand over one, which this engine answers where the row it reads
-     stands and names no line for. A name that stands for a `WITH` term is
-     named no `CO-ROUTINE` or `MATERIALIZE` either, the rows of the term
-     being answered before the statement that reads them; D-587 records
-     the view, which is named as the C library names it. `eqp.test` holds
-     five cases of a statement inside an expression.
+276. A name that stands for a `WITH` term is named no `CO-ROUTINE` or
+     `MATERIALIZE`, the rows of the term being answered before the
+     statement that reads them; D-587 records the view, which is named as
+     the C library names it, and D-588 the statement written inside an
+     expression.
 277. The order a walk of a table that keeps its rows in the key's own tree
      answers, and the order a term whose `NULLS` clause moves its nulls
      asks for, which `KEYINFO_ORDER_BIGNULL` of `sqlite3WhereIsOrdered`
@@ -1373,6 +1370,13 @@ Size: L.
      outermost, a co-routine answering its rows once. This engine reads the
      sides in the order the `FROM` writes them, which names the same lines
      in another order. `eqp.test` holds six cases of it.
+284. The `CREATE BLOOM FILTER` the C library writes under the line of a
+     list it reads once, which `sqlite3CodeSubselect` of
+     `research/sqlite/src/expr.c:3718` writes where the list is large
+     enough to be worth one, and the `SCAN t EXISTS` it writes for an
+     `EXISTS` it reads as a walk of the statement above it. This engine
+     reads an `EXISTS` where the row it stands for is read and names it
+     `SCALAR SUBQUERY`. `eqp.test` holds two cases of them.
 
 ### Done when
 

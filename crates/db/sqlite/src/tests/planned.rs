@@ -1113,3 +1113,101 @@ fn what_a_view_written_in_leaves_the_view_after_it() {
         tree(&["|--CO-ROUTINE w", "|  `--SCAN t", "|--SCAN w", "`--SCAN t"])
     );
 }
+
+/// The plan names every statement written inside an expression after the
+/// lines of the walk: `SCALAR SUBQUERY` for one read for a value and
+/// `LIST SUBQUERY` for one an `IN` reads, with `CORRELATED` in front where
+/// the statement reads a column of the row the walk stands on.
+///
+/// The C library reads an `EXISTS` as a walk of the statement above it,
+/// which it names `SCAN t2 EXISTS`, and writes `CREATE BLOOM FILTER` under
+/// the line of a list it reads once. Item 284 of document 16 records both.
+#[test]
+fn what_the_plan_names_a_statement_inside_an_expression_by() {
+    let mut writer = crate::change::Writer::new(1024, 0, crate::header::Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t1(x,y)".as_slice(),
+        b"CREATE TABLE t2(x,y)",
+        b"CREATE TABLE sub(a,b)",
+        b"INSERT INTO t1 VALUES(1,2)",
+        b"INSERT INTO t2 VALUES(1,2)",
+        b"INSERT INTO sub VALUES(1,2)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let image = writer.written();
+    for (sql, lines) in [
+        (
+            b"SELECT (SELECT a FROM sub) FROM t1".as_slice(),
+            tree(&["|--SCAN t1", "`--SCALAR SUBQUERY 0", "   `--SCAN sub"]),
+        ),
+        // The lines of that statement stand under its own, the sorter of
+        // its `ORDER BY` among them.
+        (
+            b"SELECT x FROM t1 WHERE y=(SELECT b FROM sub ORDER BY a)",
+            tree(&[
+                "|--SCAN t1",
+                "`--SCALAR SUBQUERY 0",
+                "   |--SCAN sub",
+                "   `--USE TEMP B-TREE FOR ORDER BY",
+            ]),
+        ),
+        (
+            b"SELECT x FROM t1 WHERE y IN (SELECT y FROM t2)",
+            tree(&["|--SCAN t1", "`--LIST SUBQUERY 0", "   `--SCAN t2"]),
+        ),
+        // A statement that reads a column of the row the walk stands on is
+        // read once per row.
+        (
+            b"SELECT x FROM t1 WHERE y IN (SELECT y FROM t2 WHERE t2.x=t1.x)",
+            tree(&[
+                "|--SCAN t1",
+                "`--CORRELATED LIST SUBQUERY 0",
+                "   `--SCAN t2",
+            ]),
+        ),
+        // A column the statement of its own answers is its own, whatever
+        // the statement above it answers under that name.
+        (
+            b"SELECT x FROM t1 WHERE y IN (SELECT y FROM t2 WHERE t2.x=1)",
+            tree(&["|--SCAN t1", "`--LIST SUBQUERY 0", "   `--SCAN t2"]),
+        ),
+        // A schema in front of the table of the side says which database of
+        // the connection holds it.
+        (
+            b"SELECT x FROM t1 WHERE y IN (SELECT y FROM main.t2)",
+            tree(&["|--SCAN t1", "`--LIST SUBQUERY 0", "   `--SCAN main.t2"]),
+        ),
+        // An alias stands in the place of both.
+        (
+            b"SELECT x FROM t1 WHERE y IN (SELECT y FROM main.t2 AS q)",
+            tree(&["|--SCAN t1", "`--LIST SUBQUERY 0", "   `--SCAN q"]),
+        ),
+        // A side that reads a statement of its own answers a bare name and
+        // the names the alias it carries stands in front of.
+        (
+            b"SELECT x FROM t1 WHERE y IN (SELECT y FROM (SELECT y FROM t2))",
+            tree(&["|--SCAN t1", "`--LIST SUBQUERY 1", "   `--SCAN t2"]),
+        ),
+        (
+            b"SELECT x FROM t1 WHERE y IN (SELECT q.y FROM (SELECT y FROM t2) AS q)",
+            tree(&["|--SCAN t1", "`--LIST SUBQUERY 1", "   `--SCAN t2"]),
+        ),
+        (
+            b"SELECT x FROM t1 WHERE y IN (SELECT t1.y FROM (SELECT y FROM t2) AS q)",
+            tree(&[
+                "|--SCAN t1",
+                "`--CORRELATED LIST SUBQUERY 1",
+                "   `--SCAN t2",
+            ]),
+        ),
+        // An alias that is the name of a side of the statement above it
+        // answers the name itself.
+        (
+            b"SELECT x FROM t1 WHERE y IN (SELECT t1.y FROM (SELECT y FROM t2) AS t1)",
+            tree(&["|--SCAN t1", "`--LIST SUBQUERY 1", "   `--SCAN t2"]),
+        ),
+    ] {
+        assert_eq!(plan(&image, sql), lines, "{sql:?}");
+    }
+}

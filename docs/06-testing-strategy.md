@@ -7888,6 +7888,25 @@ Unit tests of `crate::db` over `fixtures/indexed.db`.
 - `WHERE NULL` under an aggregate, which answers one row.
 - `WHERE abs(0)`, which is read against every row.
 
+### 6.6.424 What the plan names a statement inside an expression by (`db-sqlite`)
+
+Unit tests of `crate::db` over an image `crate::change` writes, drawn as
+`query_plan_graph` of the suite's `tester.tcl` draws the lines. Every
+answer is the one the C library's shell writes, but for the two lines the
+comments name.
+
+- A statement read for a value, named `SCALAR SUBQUERY`, in a result
+  column and in a `WHERE`.
+- The lines of that statement under its own, the sorter of its `ORDER BY`
+  among them.
+- A statement an `IN` reads, named `LIST SUBQUERY`.
+- One that reads a column of the row the walk stands on, named
+  `CORRELATED LIST SUBQUERY`, against one whose columns are its own: a
+  column of a table of its own, of a side that reads a statement, and of
+  a side whose alias is the name of a side of the statement above it.
+- A table a database of the connection stands in front of, which the line
+  of the walk carries.
+
 ### 6.6.423 How the rows of a view are read (`db-sqlite`)
 
 Unit tests of `crate::db` over an image `crate::change` writes, drawn as

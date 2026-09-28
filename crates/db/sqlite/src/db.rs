@@ -1865,6 +1865,9 @@ struct Side<'a> {
     /// The terms of the `WHERE` the walk answers by itself, which are read
     /// for no row it takes.
     dropped: Vec<ExprId>,
+    /// The name the plan writes the side under, which carries the database
+    /// the statement wrote in front of the name of the table.
+    shown: Vec<u8>,
     /// How the plan names the statement it reads, and [`Nesting::Named`]
     /// for a table.
     nesting: Nesting,
@@ -4979,6 +4982,9 @@ impl<'a> Database<'a> {
             (&mut sides, &calls),
             (gathered, sorting, alone),
         );
+        // The plan names every statement written inside an expression of
+        // this one after the lines of the walk.
+        self.insides(arena, &select, sql, (scope, &sides));
         // `EXPLAIN QUERY PLAN` names the plan of the statement and runs
         // no loop of it, so the walks are left where they stand and the
         // statement answers no row: `sqlite3_step` over such a
@@ -5547,12 +5553,29 @@ impl<'a> Database<'a> {
                 SourceKind::Select(id) => (subquery_named(id), valued(arena, id)),
                 _ => (name.clone(), Vec::new()),
             };
+            let called = alias.unwrap_or(name);
+            // `%S` writes the database the statement wrote in front of the
+            // name of the table, where the side carries no alias; a name a
+            // statement of the schema had a database written into carries
+            // none, which `fixedSchema` of `research/sqlite/src/printf.c:1006`
+            // reads.
+            let mut shown = called.clone();
+            if let SourceKind::Table {
+                schema: Some(span), ..
+            } = source.kind
+                && source.alias.is_none()
+            {
+                shown = dequote(span.text(sql));
+                shown.push(b'.');
+                shown.extend_from_slice(&called);
+            }
             out.push(Side {
                 shape,
                 source: from,
                 schema: held,
                 table,
-                name: alias.unwrap_or(name),
+                shown,
+                name: called,
                 kind: source.join.kind,
                 on: source.on,
                 using,
@@ -5671,6 +5694,7 @@ impl<'a> Database<'a> {
                     source: Source::Table(stored),
                     schema: self.named_place(stored.place),
                     table: called.clone(),
+                    shown: Vec::new(),
                     name: Vec::new(),
                     kind: JoinKind::Inner,
                     on: None,
@@ -6529,6 +6553,136 @@ impl<'a> Database<'a> {
             },
         );
         smallest
+    }
+
+    /// Whether the statement at `id` reads a column of a side of the statement
+    /// that encloses it, which is what makes it correlated.
+    ///
+    /// `sqlite3CodeSubselect` of `research/sqlite/src/expr.c:3903` reads such a
+    /// statement once per row of that statement, where it reads one that names
+    /// no column of it once.
+    ///
+    /// Costs O(n * s) in the nodes of the statement and the sides of the one
+    /// above it.
+    fn correlated(&self, arena: &Arena, id: SelectId, sql: &[u8], sides: &[Side<'_>]) -> bool {
+        arena
+            .select(id)
+            .is_some_and(|inner| self.reads_outside(arena, &inner, sql, sides))
+    }
+
+    /// Whether an expression of `inner` names a column no side of its own
+    /// `FROM` answers and a side of the statement above it does.
+    ///
+    /// Costs O(n * s) in the nodes of the statement and the sides of the one
+    /// above it.
+    fn reads_outside(&self, arena: &Arena, inner: &Select, sql: &[u8], sides: &[Side<'_>]) -> bool {
+        let mut spine = roots(arena, inner);
+        for source in arena.sources(inner.from) {
+            spine.extend(source.on);
+        }
+        while let Some((held, node)) = spine
+            .pop()
+            .and_then(|held| arena.node(held).map(|node| (held, node)))
+        {
+            // A name a side of this statement answers is its own, and one no
+            // side of it answers is the enclosing statement's where a side of
+            // that statement answers it.
+            if let Node::Column { table, column, .. } = node
+                && reached(arena, held, sql, sides).is_some()
+                && !self.names_within(arena, inner, sql, (table, column))
+            {
+                return true;
+            }
+            arena.under(node, |under| spine.push(under));
+        }
+        false
+    }
+
+    /// Whether a side of the `FROM` of `select` answers the name at `id`.
+    ///
+    /// Costs O(s) in the sides, each read by name alone, where a side that
+    /// reads a statement answers whatever that statement answers.
+    fn names_within(
+        &self,
+        arena: &Arena,
+        select: &Select,
+        sql: &[u8],
+        held: (Option<Span>, Span),
+    ) -> bool {
+        let (table, column) = held;
+        let named = dequote(column.text(sql));
+        let held = table.map(|span| dequote(span.text(sql)));
+        arena.sources(select.from).iter().any(|source| {
+            let alias = source.alias.map(|span| dequote(span.text(sql)));
+            match source.kind {
+                SourceKind::Table {
+                    schema: under,
+                    name,
+                    ..
+                } => {
+                    let table = dequote(name.text(sql));
+                    let called = alias.unwrap_or_else(|| table.clone());
+                    // A name written with a table of its own is that table's
+                    // alone, and a bare one is the table's where the table
+                    // holds a column of that name.
+                    if held
+                        .as_deref()
+                        .is_some_and(|held| !called.eq_ignore_ascii_case(held))
+                    {
+                        return false;
+                    }
+                    let place = under.and_then(|span| self.placed(&dequote(span.text(sql))));
+                    self.located_table(place, &table).is_some_and(|stored| {
+                        shape_of(&self.named_place(stored.place), &stored.table)
+                            .reaches(&named)
+                            .is_some()
+                    })
+                }
+                // A statement of its own answers what its own columns are
+                // called, which this reading does not read, so a bare name is
+                // its and a name written with a table reaches it by the alias
+                // that statement carries alone.
+                SourceKind::Select(_) | SourceKind::Function { .. } => held
+                    .as_deref()
+                    .is_none_or(|held| called_as(alias.as_deref(), held)),
+            }
+        })
+    }
+
+    /// Writes the line the plan names every statement written inside an
+    /// expression of this one by, with the lines of that statement under it.
+    ///
+    /// `sqlite3CodeSubselect` of `research/sqlite/src/expr.c:3903` writes
+    /// `SCALAR SUBQUERY` over the lines of a statement read for a value or
+    /// for an `EXISTS`, and `research/sqlite/src/expr.c:3704` writes
+    /// `LIST SUBQUERY` over the lines of one an `IN` reads; `CORRELATED`
+    /// stands in front where the statement reads a column of the row the
+    /// walk of this statement stands on, which is read once per row.
+    ///
+    /// The lines stand under an `EXPLAIN QUERY PLAN` alone, which runs no
+    /// loop of the statement, so nothing else plans those statements twice.
+    ///
+    /// Costs what planning each of those statements costs.
+    fn insides(&self, arena: &Arena, select: &Select, sql: &[u8], held: (Scope<'_>, &[Side<'_>])) {
+        let (scope, sides) = held;
+        if self.planned.borrow().is_none() {
+            return;
+        }
+        for (id, listed) in inside_selects(arena, select) {
+            let mut line = Vec::new();
+            if self.correlated(arena, id, sql, sides) {
+                line.extend_from_slice(b"CORRELATED ");
+            }
+            line.extend_from_slice(if listed {
+                b"LIST SUBQUERY "
+            } else {
+                b"SCALAR SUBQUERY "
+            });
+            line.extend_from_slice(&number::integer_text(i64::from(id.place())));
+            self.plan_under(line);
+            let _ = self.statement(arena, id, sql, scope);
+            self.plan_over();
+        }
     }
 
     /// Whether the rows a `DISTINCT` keeps one of stand beside each other
@@ -8287,7 +8441,7 @@ fn detailed(side: &Side<'_>, plan: &Plan, lines: &mut Vec<Explained>, parent: us
     let covering = side.covering.is_some();
     match plan {
         Plan::Rows(None, None) | Plan::Backwards => {
-            lines.push((parent, scanned(&side.name, b"", false, side.least)));
+            lines.push((parent, scanned(&side.shown, b"", false, side.least)));
         }
         Plan::Rows(low, high) => {
             let mut terms: Vec<&[u8]> = Vec::new();
@@ -8301,9 +8455,9 @@ fn detailed(side: &Side<'_>, plan: &Plan, lines: &mut Vec<Explained>, parent: us
                     terms.push(b"rowid<?");
                 }
             }
-            lines.push((parent, by_rowid(&side.name, &terms)));
+            lines.push((parent, by_rowid(&side.shown, &terms)));
         }
-        Plan::Rowid(_) => lines.push((parent, by_rowid(&side.name, &[b"rowid=?"]))),
+        Plan::Rowid(_) => lines.push((parent, by_rowid(&side.shown, &[b"rowid=?"]))),
         Plan::Keyed {
             root, key, bounds, ..
         } => {
@@ -8421,10 +8575,10 @@ fn named_side<'a>(side: &'a Side<'_>) -> &'a [u8] {
     if !side.valued.is_empty() {
         return &side.valued;
     }
-    if side.name.is_empty() {
+    if side.shown.is_empty() {
         return &side.table;
     }
-    &side.name
+    &side.shown
 }
 
 /// `SCAN t`, with the index the walk reads where `index` names one, and
@@ -11282,6 +11436,32 @@ fn subqueries(arena: &Arena, select: &Select) -> Result<(), Error> {
         counted_columns(arena, root)?;
     }
     Ok(())
+}
+
+/// Whether the alias a source carries is `named`.
+///
+/// Costs O(n) in the bytes of the name.
+fn called_as(alias: Option<&[u8]>, named: &[u8]) -> bool {
+    alias.is_some_and(|alias| alias.eq_ignore_ascii_case(named))
+}
+
+/// Every statement written inside an expression of `select`, each with
+/// whether an `IN` reads it as a list of values, in the order the parser
+/// wrote the expressions.
+///
+/// Costs O(n) in the nodes of those expressions.
+fn inside_selects(arena: &Arena, select: &Select) -> Vec<(SelectId, bool)> {
+    let mut out = Vec::new();
+    let mut spine = roots(arena, select);
+    while let Some(node) = spine.pop().and_then(|id| arena.node(id)) {
+        match node {
+            Node::Subquery(held) | Node::Exists(held) => out.push((held, false)),
+            Node::InSelect { select: held, .. } => out.push((held, true)),
+            _ => {}
+        }
+        arena.under(node, |held| spine.push(held));
+    }
+    out
 }
 
 /// Every expression one statement holds, which is what a walk over the

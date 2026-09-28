@@ -1619,13 +1619,20 @@ fn what_term_says_something_else_than_the_create_index_said() {
         b"EXPLAIN QUERY PLAN SELECT b FROM t WHERE c='x'",
         // A `COLLATE` says what the comparison compares under.
         b"EXPLAIN QUERY PLAN SELECT b FROM t WHERE substr(a,1,12)='x' COLLATE NOCASE",
-        // An expression that reads nothing of the row, and one that
-        // reads a statement of its own, name no key.
+        // An expression that reads nothing of the row names no key.
         b"EXPLAIN QUERY PLAN SELECT b FROM t WHERE 1+1=2",
-        b"EXPLAIN QUERY PLAN SELECT b FROM t WHERE (SELECT 1)=1",
     ] {
         assert_eq!(planned(&bytes, sql), "SCAN t");
     }
+    // One that reads a statement of its own names no key either, and the
+    // plan names that statement after the walk.
+    assert_eq!(
+        planned(
+            &bytes,
+            b"EXPLAIN QUERY PLAN SELECT b FROM t WHERE (SELECT 1)=1"
+        ),
+        "SCAN t|SCALAR SUBQUERY 0|SCAN CONSTANT ROW"
+    );
     // An expression that reads two sides is one no index of either holds,
     // and one that reads another side than the index is over is not the
     // index's own.
