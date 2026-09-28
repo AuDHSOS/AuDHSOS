@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` lets a caller that holds one writer for several connections set whether
+  `LIKE` tells the letters apart per connection, which `PRAGMA case_sensitive_like`
+  stands on the connection for, and the suite's harness keeps that value per
+  connection. D-585 records it. `like.test` goes from 138 cases passing to 139.
+
 - `db-sqlite` counts one search per row a statement reads out of the sorter after the
   first, as the rows of a walk count one each, which `sqlite3_search_count` reads.
   D-584 records it. Catalog 6.6.422. `like.test` goes from 128 cases passing to 138

@@ -1538,6 +1538,17 @@ impl Writer {
         self.truth.sensitive
     }
 
+    /// Tells `LIKE` whether to tell the twenty-six letters apart, which a
+    /// caller that holds one writer for the connections over a file sets
+    /// per connection: `PRAGMA case_sensitive_like` stands on the
+    /// connection that wrote it and a connection that is opened again
+    /// tells them apart no more.
+    ///
+    /// Costs O(1).
+    pub const fn sensitive_as(&mut self, sensitive: bool) {
+        self.truth.sensitive = sensitive;
+    }
+
     /// What the next draw follows from, which `save_prng_state` holds
     /// and hands back to [`Writer::randomness`].
     ///

@@ -1210,6 +1210,11 @@ struct Session {
     /// Which connections read a file name as a URI: the setting above,
     /// or the `SQLITE_OPEN_URI` flag the open carried.
     uris: BTreeMap<String, bool>,
+    /// Which connections `PRAGMA case_sensitive_like` told to tell the
+    /// twenty-six letters apart, which stands on the connection that wrote
+    /// it: one writer carries the connections over a file, so the value of
+    /// this connection is put on it before each request.
+    sensitive: BTreeMap<String, bool>,
     /// What each connection was told for the pragmas it keeps a value
     /// for, which belong to a connection and not to the file.
     pragmas: BTreeMap<String, Kept>,
@@ -1284,6 +1289,7 @@ impl Session {
             uri: false,
             uris: BTreeMap::new(),
             pragmas: BTreeMap::new(),
+            sensitive: BTreeMap::new(),
             collations: BTreeMap::new(),
             functions: BTreeMap::new(),
             authorizers: BTreeMap::new(),
@@ -1999,6 +2005,7 @@ impl Session {
         self.nulls.remove(name);
         self.counters.remove(name);
         self.pragmas.remove(name);
+        self.sensitive.remove(name);
         self.collations.remove(name);
         self.functions.remove(name);
         Vec::new()
@@ -2357,6 +2364,7 @@ impl Session {
         // relies on.
         self.counters.insert(name.to_owned(), Counted::default());
         self.pragmas.insert(name.to_owned(), Kept::default());
+        self.sensitive.insert(name.to_owned(), false);
         // `PRAGMA data_version` answers one on a connection that just
         // opened, whatever the file has had written to it.
         let commits = self
@@ -3524,15 +3532,9 @@ impl Session {
         // file, so the writer stands at this connection's counters for
         // the statements of this request and answers them back.
         writer.counts_as(counted);
-        // The commits another connection made since this one last read
-        // the file each raise its `data_version` by one.
-        let commits = writer.counted_commits();
-        let dated = self.dated.entry(name.to_owned()).or_insert((1, commits));
-        let held = i64::from(commits.saturating_sub(dated.1));
-        dated.0 = dated.0.saturating_add(held);
-        dated.1 = commits;
-        kept.tells(b"data_version", dated.0);
+        dated_as(&mut self.dated, &mut kept, name, writer.counted_commits());
         writer.kept_as(kept);
+        writer.sensitive_as(self.sensitive.get(name).copied().unwrap_or(false));
         writer.collates(collating);
         writer.defines(defines);
         if asks {
@@ -3574,6 +3576,9 @@ impl Session {
         let wrote = wrote_pages(&did);
         let counted = writer.counts();
         let kept = writer.kept();
+        // `PRAGMA case_sensitive_like` stands on the connection that wrote
+        // it, and one writer carries the connections over a file.
+        let sensitive = writer.sensitive();
         let full = kept.fullfsync();
         let began = writer.began();
         let files = writer.attached_files();
@@ -3590,6 +3595,7 @@ impl Session {
         if full {
             self.synced.1 = self.synced.1.saturating_add(syncs);
         }
+        self.sensitive.insert(name.to_owned(), sensitive);
         let stepped = STEPPED.with(core::cell::Cell::take);
         self.sorted = stepped.sorts;
         self.searched = stepped.searched;
@@ -5854,6 +5860,21 @@ pub(crate) fn past_explain(sql: &str) -> String {
 
 /// Whether the statement is a `PRAGMA`, which names the columns it
 /// answers even though the connection that writes runs it.
+/// Tells `kept` the `data_version` this connection reads, which rises by
+/// one per commit another connection made over the file since this one
+/// last read it.
+///
+/// `pPager->iDataVersion` of `research/sqlite/src/pager.c:669` and
+/// `iBDataVersion` of `research/sqlite/src/btreeInt.h:354` together answer
+/// it. Costs O(log n) in the connections.
+fn dated_as(dated: &mut BTreeMap<String, (i64, u32)>, kept: &mut Kept, name: &str, commits: u32) {
+    let held = dated.entry(name.to_owned()).or_insert((1, commits));
+    let risen = i64::from(commits.saturating_sub(held.1));
+    held.0 = held.0.saturating_add(risen);
+    held.1 = commits;
+    kept.tells(b"data_version", held.0);
+}
+
 fn pragmas(sql: &str) -> bool {
     words(sql)
         .first()

@@ -74,6 +74,14 @@ fn what_like_matches_where_the_letters_are_told_apart() {
     writer.run(b"PRAGMA case_sensitive_like=on").unwrap();
     writer.run(b"PRAGMA case_sensitive_like=off").unwrap();
     assert_eq!(matched(&writer, read), "abcABCaBc");
+    // A caller that holds one writer for the connections over a file puts
+    // the value of the connection it answers for on that writer, because
+    // the pragma stands on the connection that wrote it.
+    writer.sensitive_as(true);
+    assert!(writer.sensitive());
+    assert_eq!(matched(&writer, read), "ABC");
+    writer.sensitive_as(false);
+    assert_eq!(matched(&writer, read), "abcABCaBc");
 }
 
 /// A statement that writes reads the pragma as a statement that reads
