@@ -7,15 +7,22 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` keeps the rows a `DISTINCT` names one of without a tree of its own
+  where the walk answers the columns of the list in the order of an index, whatever
+  order the list writes them in, and chooses the walk by that list where the
+  statement reads no other order. D-578 records it. Catalog 6.6.416. `orderby5.test`
+  goes from 18 cases passing to 24.
+
+- `db-sqlite` ends the line of a side an outer join keeps the unmatched rows of with
+  ` LEFT-JOIN`, and holds the walk of a table that keeps its rows in the key's own
+  tree by an `ON` that names that key. D-579 records it. Catalog 6.6.417.
+  `join2.test` goes from 42 cases passing to 44 and `join7.test` from 289 to 290.
+
 - `db-sqlite` answers every term of an `ORDER BY`, gathers every group of a
   `GROUP BY` and leaves the rows of a `DISTINCT` where they stand for a walk that
   answers one row, which a term holding the rowid or every column of a unique
   index at one value does. D-577 records it. Catalog 6.6.415. `where2.test` goes
   from 60 cases passing to 63.
-
-- `db-sqlite` answers a row two branches of an `OR` over a table that keeps its
-  rows in the key's own tree name once, the walk carrying no rowid to tell the
-  rows apart by.
 
 - `db-sqlite` holds the walk of a table that keeps its rows in the key's own
   tree by the terms of a `WHERE` that name the key's columns, named
@@ -867,6 +874,15 @@ follows Keep a Changelog; the project follows Semantic Versioning.
   `with2.test` from 59 to 61 and `select3.test` from 83 to 84.
 
 ### Fixed
+
+- `db-sqlite` answers a row two branches of an `OR` over a table that keeps its rows
+  in the key's own tree name once, the walk carrying no rowid to tell the rows apart
+  by. D-577 records it.
+
+- `db-sqlite` reads no index of a table that keeps its rows in the key's own tree
+  per row of the sides before it, the entries of one ending with that key and not
+  with a rowid: one statement of `join7.test` answered `database disk image is
+  malformed`. D-579 records it.
 
 - `db-sqlite` reads a side out of a covering index where another core of the
   compound or another statement of the file writes a name no side of the

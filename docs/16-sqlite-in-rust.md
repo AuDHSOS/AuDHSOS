@@ -1342,7 +1342,18 @@ Size: L.
      tree. The entry of such an index ends with the key of the row and not
      with a rowid, so the descent to the row is a read of the key's tree by
      that key; `crate::db` reads no index of such a table and walks the key
-     or the table.
+     or the table, which D-579 records for a key an `ON` names.
+279. The rows a `DISTINCT` keeps one of, gathered by the walks of more than
+     one side: the rows of the side read second stand under one row of the
+     side read first, so the columns of the first are grouped. `crate::db`
+     reads the list of a `DISTINCT` against the one side, which D-578
+     records, and holds a tree of its own otherwise. A side held to a range
+     of rowids is read out of no index that groups the columns either,
+     where the C library weighs the range against the index.
+280. The second walk the C library writes for the rows a `RIGHT` or a
+     `FULL` join matched nothing to, which it names `RIGHT-JOIN` over the
+     lines of that walk. This engine answers those rows and names no line
+     for them, which D-579 records.
 
 ### Done when
 
@@ -1352,8 +1363,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 123 546 cases in 843 files, 119 162
-pass, 2208 answer differently, and 2176 name something the engine
+under the `tclsh` of the machine. Of 123 526 cases in 843 files, 119 147
+pass, 2202 answer differently, and 2177 name something the engine
 refuses or a command that needs the C library's internals. The files
 that answer for tens of thousands of rows reach the five-minute
 deadline and are counted with the cases they ran by then. One run over

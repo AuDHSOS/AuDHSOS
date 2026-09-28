@@ -1276,13 +1276,15 @@ fn a_side_is_keyed_by_what_the_sides_before_it_answer() {
         ),
         "SCAN k|SEARCH m USING COVERING INDEX mpq (p=? AND q=?)"
     );
-    // An `ON` names a key where the statement writes no `WHERE`.
+    // An `ON` names a key where the statement writes no `WHERE`, and the
+    // line of a side an outer join keeps the unmatched rows of ends with
+    // the words for that join.
     assert_eq!(
         planned(
             super::INDEXED,
             b"EXPLAIN QUERY PLAN SELECT m.p FROM k LEFT JOIN m ON m.p=k.a+0"
         ),
-        "SCAN k USING COVERING INDEX ka|SEARCH m USING COVERING INDEX mpq (p=?)"
+        "SCAN k USING COVERING INDEX ka|SEARCH m USING COVERING INDEX mpq (p=?) LEFT-JOIN"
     );
     // The comparison converts both sides the way its affinity asks, so an
     // index of another affinity holds its entries in an order the term

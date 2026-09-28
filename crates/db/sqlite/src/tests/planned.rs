@@ -722,3 +722,315 @@ fn what_a_walk_that_answers_one_row_leaves_unbuilt() {
         assert_eq!(plan(super::INDEXED, sql), lines, "{sql:?}");
     }
 }
+
+/// What the rows a `DISTINCT` keeps one of ask of the walk: a column of
+/// the list stands where an index holds it, whatever place the list writes
+/// it in, and a list no two rows of the table stand under the same values
+/// of leaves the `DISTINCT` nothing to keep one of.
+#[test]
+fn what_the_rows_a_distinct_keeps_one_of_ask_of_the_walk() {
+    for (sql, lines) in [
+        // A column a term holds at one value stands alike in every row the
+        // walk answers, and the columns of the list stand after it in the
+        // index.
+        (
+            b"SELECT DISTINCT q FROM m WHERE p=1".as_slice(),
+            tree(&["`--SEARCH m USING COVERING INDEX mpq (p=?)"]),
+        ),
+        (
+            b"SELECT DISTINCT p FROM m WHERE p=1",
+            tree(&["`--SEARCH m USING COVERING INDEX mpq (p=?)"]),
+        ),
+        // The list writes its columns in the other order than the index
+        // holds them, which groups the rows all the same.
+        (
+            b"SELECT DISTINCT q, p FROM m",
+            tree(&["`--SCAN m USING COVERING INDEX mpq"]),
+        ),
+        // A side read by the whole table is read out of an index that
+        // groups the columns, whichever way that index holds them.
+        (
+            b"SELECT DISTINCT q FROM m",
+            tree(&["`--SCAN m USING COVERING INDEX mq"]),
+        ),
+        (
+            b"SELECT DISTINCT r FROM m",
+            tree(&["`--SCAN m USING COVERING INDEX mr"]),
+        ),
+        // The rowid stands once in the table, so a list that names it
+        // names no two rows alike.
+        (
+            b"SELECT DISTINCT p, rowid FROM m",
+            tree(&["`--SCAN m USING COVERING INDEX mpq"]),
+        ),
+        // The key of a table that keeps its rows in the key's own tree is
+        // unique and holds a value of every row.
+        (b"SELECT DISTINCT a FROM u", tree(&["`--SCAN u"])),
+        // A column the list compares under another collation than the
+        // index holds it under stands in another order there, whether the
+        // index groups the columns or makes the list name no two rows
+        // alike, and a column a term holds at one value stands alike in
+        // every row under the collation the term compares under alone.
+        (
+            b"SELECT DISTINCT q COLLATE binary FROM m",
+            tree(&[
+                "|--SCAN m USING COVERING INDEX mq",
+                "`--USE TEMP B-TREE FOR DISTINCT",
+            ]),
+        ),
+        (
+            b"SELECT DISTINCT b COLLATE NOCASE FROM k",
+            tree(&[
+                "|--SCAN k USING COVERING INDEX kb",
+                "`--USE TEMP B-TREE FOR DISTINCT",
+            ]),
+        ),
+        (
+            b"SELECT DISTINCT p, q COLLATE binary FROM m WHERE q='a'",
+            tree(&[
+                "|--SEARCH m USING INDEX mq (q=?)",
+                "`--USE TEMP B-TREE FOR DISTINCT",
+            ]),
+        ),
+        // No index of the table holds every column of the list.
+        (
+            b"SELECT DISTINCT p, q, r FROM m",
+            tree(&["|--SCAN m", "`--USE TEMP B-TREE FOR DISTINCT"]),
+        ),
+        (
+            b"SELECT DISTINCT b, a FROM k",
+            tree(&["|--SCAN k", "`--USE TEMP B-TREE FOR DISTINCT"]),
+        ),
+        // The list names the one column of an index that is no unique one,
+        // and leaves out the column of the unique index over the table.
+        (
+            b"SELECT DISTINCT a FROM k",
+            tree(&["`--SCAN k USING COVERING INDEX ka"]),
+        ),
+        // A `*` and an expression each name no column of the side.
+        (
+            b"SELECT DISTINCT * FROM m",
+            tree(&["|--SCAN m", "`--USE TEMP B-TREE FOR DISTINCT"]),
+        ),
+        (
+            b"SELECT DISTINCT p+1 FROM m",
+            tree(&[
+                "|--SCAN m USING COVERING INDEX mpq",
+                "`--USE TEMP B-TREE FOR DISTINCT",
+            ]),
+        ),
+    ] {
+        assert_eq!(plan(super::INDEXED, sql), lines, "{sql:?}");
+    }
+}
+
+/// The rows a walk chosen by the list of a `DISTINCT` answers, which stand
+/// in the order of the index it reads.
+#[test]
+fn what_a_walk_chosen_by_the_list_of_a_distinct_answers() {
+    let database = Database::open(super::INDEXED).unwrap();
+    // The index over `r` holds its entries from the largest value down and
+    // the rows that hold no value there last.
+    assert_eq!(
+        database.query(b"SELECT DISTINCT r FROM m").unwrap().rows,
+        alloc::vec![
+            alloc::vec![Value::Int(50)],
+            alloc::vec![Value::Int(30)],
+            alloc::vec![Value::Int(20)],
+            alloc::vec![Value::Int(10)],
+            alloc::vec![Value::Null]
+        ]
+    );
+    assert_eq!(
+        database
+            .query(b"SELECT DISTINCT q FROM m WHERE p=1")
+            .unwrap()
+            .rows,
+        alloc::vec![
+            alloc::vec![Value::Text(b"A".to_vec())],
+            alloc::vec![Value::Text(b"b".to_vec())]
+        ]
+    );
+}
+
+/// What a `DISTINCT` over more than the one side, over the rows a
+/// statement answered, and over a walk held to one rowid asks.
+#[test]
+fn what_a_distinct_over_no_walk_of_one_index_asks() {
+    for (sql, lines) in [
+        // A walk held to one rowid answers one row, whatever the list
+        // names.
+        (
+            b"SELECT DISTINCT q FROM m WHERE rowid='x'".as_slice(),
+            tree(&["`--SEARCH m USING INTEGER PRIMARY KEY (rowid=?)"]),
+        ),
+        // A partial index holds an entry for some rows of the table, so it
+        // groups no column over them.
+        (
+            b"SELECT DISTINCT b FROM e",
+            tree(&["|--SCAN e", "`--USE TEMP B-TREE FOR DISTINCT"]),
+        ),
+        (
+            b"SELECT DISTINCT a FROM e",
+            tree(&[
+                "|--SCAN e USING COVERING INDEX ec",
+                "`--USE TEMP B-TREE FOR DISTINCT",
+            ]),
+        ),
+        // Two sides read one after another answer the rows of the second
+        // per row of the first, which the C library reads as grouping the
+        // columns of the first and this engine leaves to a tree of its
+        // own. Item 279 of document 16 records it.
+        (
+            b"SELECT DISTINCT p FROM m, k",
+            tree(&[
+                "|--SCAN m USING COVERING INDEX mpq",
+                "|--SCAN k USING COVERING INDEX kb",
+                "`--USE TEMP B-TREE FOR DISTINCT",
+            ]),
+        ),
+        // A side that reads what a statement answered holds no index.
+        (
+            b"SELECT DISTINCT p FROM (SELECT p FROM m LIMIT 2)",
+            tree(&[
+                "|--CO-ROUTINE (subquery-0)",
+                "|  `--SCAN m USING COVERING INDEX mpq",
+                "|--SCAN (subquery-0)",
+                "`--USE TEMP B-TREE FOR DISTINCT",
+            ]),
+        ),
+    ] {
+        assert_eq!(plan(super::INDEXED, sql), lines, "{sql:?}");
+    }
+}
+
+/// A unique index over an expression, and one that holds its column under
+/// another collation, leave a `DISTINCT` its tree: no column of the first
+/// carries a value of the row, and the entries of the second stand in
+/// another order than the list compares under.
+#[test]
+fn what_a_unique_index_the_list_does_not_reach_leaves_a_distinct() {
+    let mut writer = crate::change::Writer::new(1024, 0, crate::header::Encoding::Utf8).unwrap();
+    writer
+        .run(b"CREATE TABLE g(a NOT NULL, b NOT NULL)")
+        .unwrap();
+    writer.run(b"CREATE UNIQUE INDEX gx ON g(abs(a))").unwrap();
+    writer
+        .run(b"CREATE UNIQUE INDEX gy ON g(b COLLATE NOCASE)")
+        .unwrap();
+    // A partial index holds an entry for some rows of the table, so two
+    // rows may stand under one key of it.
+    writer
+        .run(b"CREATE UNIQUE INDEX gz ON g(a) WHERE a>0")
+        .unwrap();
+    writer.run(b"INSERT INTO g VALUES(1,'x')").unwrap();
+    let image = writer.written();
+    for sql in [
+        b"SELECT DISTINCT a, b FROM g".as_slice(),
+        // The list leaves out the column of the one unique index the
+        // reading reaches.
+        b"SELECT DISTINCT a FROM g",
+    ] {
+        assert_eq!(
+            plan(&image, sql),
+            tree(&["|--SCAN g", "`--USE TEMP B-TREE FOR DISTINCT"]),
+            "{sql:?}"
+        );
+    }
+}
+/// A join whose `ON` names a column of a table that keeps its rows in the
+/// key's own tree reads no index of that table, whose entries end with the
+/// key and not with a rowid, and answers the rows of the join all the same.
+///
+/// Item 278 of document 16 records the walk of such an index as missing;
+/// the C library reads `t2c` here.
+#[test]
+fn what_a_join_over_a_table_that_keeps_its_rows_in_the_key_answers() {
+    let mut writer = crate::change::Writer::new(1024, 0, crate::header::Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t1(a INT, b INT)".as_slice(),
+        b"INSERT INTO t1 VALUES(1,2)",
+        b"INSERT INTO t1 VALUES(1,3)",
+        b"INSERT INTO t1 VALUES(1,4)",
+        b"CREATE TABLE t2(c INT, d INT PRIMARY KEY) WITHOUT ROWID",
+        b"INSERT INTO t2 VALUES(3,33)",
+        b"INSERT INTO t2 VALUES(4,44)",
+        b"INSERT INTO t2 VALUES(5,55)",
+        b"CREATE INDEX t2c ON t2(c)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let image = writer.written();
+    let database = Database::open(&image).unwrap();
+    assert_eq!(
+        database
+            .query(b"SELECT * FROM t1 LEFT OUTER JOIN t2 ON b=c ORDER BY +b")
+            .unwrap()
+            .rows,
+        alloc::vec![
+            alloc::vec![Value::Int(1), Value::Int(2), Value::Null, Value::Null],
+            alloc::vec![Value::Int(1), Value::Int(3), Value::Int(3), Value::Int(33)],
+            alloc::vec![Value::Int(1), Value::Int(4), Value::Int(4), Value::Int(44)]
+        ]
+    );
+    assert_eq!(
+        plan(
+            &image,
+            b"SELECT * FROM t1 LEFT OUTER JOIN t2 ON b=c ORDER BY +b"
+        ),
+        tree(&[
+            "|--SCAN t1",
+            "|--SCAN t2 LEFT-JOIN",
+            "`--USE TEMP B-TREE FOR ORDER BY"
+        ])
+    );
+}
+
+/// The line of a side an outer join keeps the unmatched rows of ends with
+/// the words for that join, and an `ON` that names the key of a table
+/// keeping its rows in the key's own tree holds the walk of that key.
+///
+/// The C library walks the side of a `RIGHT` or a `FULL` join a second
+/// time for the rows nothing matched, which it names `RIGHT-JOIN` over the
+/// lines of that walk. Item 280 of document 16 records it.
+#[test]
+fn what_the_line_of_a_side_an_outer_join_keeps_ends_with() {
+    let mut writer = crate::change::Writer::new(1024, 0, crate::header::Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t1(a INT, b INT)".as_slice(),
+        b"INSERT INTO t1 VALUES(1,2)",
+        b"CREATE TABLE t2(c INT, d INT PRIMARY KEY) WITHOUT ROWID",
+        b"INSERT INTO t2 VALUES(3,33)",
+        b"CREATE INDEX t2c ON t2(c)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let image = writer.written();
+    for (sql, lines) in [
+        (
+            b"SELECT * FROM t1 LEFT JOIN t2 ON b=d".as_slice(),
+            tree(&[
+                "|--SCAN t1",
+                "`--SEARCH t2 USING PRIMARY KEY (d=?) LEFT-JOIN",
+            ]),
+        ),
+        (
+            b"SELECT * FROM t1 JOIN t2 ON b=d",
+            tree(&["|--SCAN t1", "`--SEARCH t2 USING PRIMARY KEY (d=?)"]),
+        ),
+        // A `FULL` join keeps the unmatched rows of both sides, and a
+        // `RIGHT` join those of its own side alone. Both walk that side
+        // out of its own tree, the second walk reading the rows in the
+        // order the first left them in.
+        (
+            b"SELECT * FROM t1 FULL JOIN t2 ON b=d",
+            tree(&["|--SCAN t1", "`--SCAN t2 LEFT-JOIN"]),
+        ),
+        (
+            b"SELECT * FROM t1 RIGHT JOIN t2 ON b=d",
+            tree(&["|--SCAN t1", "`--SCAN t2"]),
+        ),
+    ] {
+        assert_eq!(plan(&image, sql), lines, "{sql:?}");
+    }
+}

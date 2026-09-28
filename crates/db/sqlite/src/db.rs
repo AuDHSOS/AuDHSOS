@@ -4110,7 +4110,17 @@ impl<'a> Database<'a> {
                 }
                 continue;
             }
+            let at = lines.len();
             detailed(side, &side.plan, lines, parent);
+            // `sqlite3WhereExplainOneScan` of
+            // `research/sqlite/src/wherecode.c:210` writes ` LEFT-JOIN` after
+            // the line of a side an outer join keeps the unmatched rows of,
+            // which is `JT_LEFT` of a `LEFT` and of a `FULL` join.
+            if matches!(side.kind, JoinKind::Left | JoinKind::Full) {
+                for (_, detail) in lines.iter_mut().skip(at).take(1) {
+                    detail.extend_from_slice(b" LEFT-JOIN");
+                }
+            }
         }
         // `sqlite3Select` writes one line per tree it sorts the rows in,
         // in the order it builds them: the groups, then the rows that
@@ -6287,16 +6297,57 @@ impl<'a> Database<'a> {
         let free = once
             || (windowless && !gathered && smallest.is_none() && (terms == 0 || answered == 0));
         covered(arena, select, sql, sides, free);
+        let gathers = self.gathered_rows(arena, select, sql, sides, (windowless, terms, calls));
         self.explain(
             sides,
             Sorting {
                 grouped: !select.group.is_empty() && !gathered,
-                distinct: select.distinct == Distinct::Distinct && !once,
+                distinct: select.distinct == Distinct::Distinct && !once && !gathers,
                 ordered: terms.saturating_sub(answered),
                 terms,
             },
         );
         smallest
+    }
+
+    /// Whether the rows a `DISTINCT` keeps one of stand beside each other
+    /// in the order the walk answers, reading the side by an index where
+    /// the statement reads no other order and one index groups them.
+    ///
+    /// Costs what [`gathers_rows`] costs.
+    fn gathered_rows(
+        &self,
+        arena: &Arena,
+        select: &Select,
+        sql: &[u8],
+        sides: &mut [Side<'_>],
+        held: (bool, usize, &[Call]),
+    ) -> bool {
+        let (windowless, terms, calls) = held;
+        let settling = Settling {
+            format: self.schema_format(),
+            collating: self.collating,
+        };
+        let settled = Settled {
+            sensitive: self.sensitive,
+            format: self.schema_format(),
+        };
+        let (gathers, plan) = gathers_rows(arena, select, sql, sides, (settling, settled));
+        // The list of the `DISTINCT` is the order the walk is chosen by
+        // where the statement reads no other order, and says nothing about
+        // which walk is read otherwise.
+        let chooses = terms == 0 && select.group.is_empty() && calls.is_empty() && windowless;
+        let Some(plan) = plan.filter(|_| chooses) else {
+            return gathers;
+        };
+        for side in sides.iter_mut().take(1) {
+            side.plan = plan.clone();
+        }
+        // The index the walk now reads holds the columns the statement
+        // reads of the side or it does not, which decides whether the row
+        // is built from the entry.
+        covered(arena, select, sql, sides, false);
+        true
     }
 
     /// Whether the walk of the one side gathers the groups of the
@@ -8791,6 +8842,262 @@ fn sorted_under(
 /// terms after it name the columns from there on.
 ///
 /// Costs O(n*m) in the columns of the index and the terms.
+/// The columns of the one side a term of the `WHERE` holds at one value,
+/// which every term reaches, one side standing at place nought.
+///
+/// `wherePathSatisfiesOrderBy` of `research/sqlite/src/where.c:5240` reads
+/// `WO_EQ`, `WO_IS` and `WO_ISNULL`, which are the terms [`terms_of`]
+/// reads as one value of a column.
+///
+/// Costs what [`terms_of`] costs.
+fn pinned(
+    arena: &Arena,
+    select: &Select,
+    sql: &[u8],
+    sides: &[Side<'_>],
+    settled: Settled,
+) -> Vec<usize> {
+    let Some(filter) = select.filter else {
+        return Vec::new();
+    };
+    terms_of(arena, (filter, select.columns), sql, sides, settled)
+        .held
+        .iter()
+        .filter(|term| term.op == BinaryOp::Eq)
+        .filter_map(|term| match term.reached {
+            Reached::Column(place) => Some(place),
+            Reached::Key => None,
+        })
+        .collect()
+}
+
+/// Whether the rows a `DISTINCT` keeps one of stand beside each other in
+/// the order the walk answers, and the plan of a walk that would answer
+/// them where this walk does not.
+///
+/// `sqlite3WhereBegin` of `research/sqlite/src/where.c:7045` reads the
+/// list of the `DISTINCT` as an order and chooses the walk by it where the
+/// statement reads no other, which is `WHERE_DISTINCTBY`, and reads the
+/// list against the walk it chose otherwise.
+///
+/// Costs what [`gathering`] costs.
+fn gathers_rows(
+    arena: &Arena,
+    select: &Select,
+    sql: &[u8],
+    sides: &[Side<'_>],
+    held: (Settling, Settled),
+) -> (bool, Option<Plan>) {
+    let (settling, settled) = held;
+    if select.distinct != Distinct::Distinct {
+        return (false, None);
+    }
+    let [side] = sides else {
+        return (false, None);
+    };
+    let Source::Table(stored) = &side.source else {
+        return (false, None);
+    };
+    let Some(places) = distinct_places(arena, select, sql, side, (settling, stored)) else {
+        return (false, None);
+    };
+    let pins = pinned(arena, select, sql, sides, settled);
+    if redundant(stored, &places, &pins) {
+        return (true, None);
+    }
+    let wanted: Vec<Termed> = places
+        .into_iter()
+        .filter(|term| {
+            !term
+                .place
+                .is_some_and(|place| held_at_one(stored, &pins, (place, term.collation)))
+        })
+        .collect();
+    // Every column of the list stands alike in the rows the walk answers,
+    // which leaves one row of them all.
+    if wanted.is_empty() {
+        return (true, None);
+    }
+    match gathering(side, stored, &wanted, settling.format) {
+        Ordering::Walked => (true, None),
+        Ordering::Index(plan) => (false, Some(plan)),
+        Ordering::Sorted => (false, None),
+    }
+}
+
+/// The columns a `DISTINCT` keeps one row per set of values of, and
+/// nothing where one of them is no column of the one side.
+///
+/// A `*` stands for every column of the side, which this reading leaves
+/// out as [`covered`] leaves it out.
+///
+/// Costs what [`termed`] costs per column of the answer.
+fn distinct_places(
+    arena: &Arena,
+    select: &Select,
+    sql: &[u8],
+    side: &Side<'_>,
+    held: (Settling, &Stored),
+) -> Option<Vec<Termed>> {
+    let mut places = Vec::new();
+    for result in arena.results(select.columns) {
+        let id = expression_of(result)?;
+        places.push(termed(arena, select, sql, side, held, id, false)?);
+    }
+    Some(places)
+}
+
+/// Whether no two rows of the side stand under the same values of the
+/// columns a `DISTINCT` names, which leaves it nothing to keep one of.
+///
+/// `isDistinctRedundant` of `research/sqlite/src/where.c:636` reads the
+/// rowid, which stands once in the table, and every unique index no
+/// column of which the list leaves out: a column a term holds at one
+/// value stands alike in every row the walk answers, and one the list
+/// names is declared `NOT NULL`, two rows that hold no value there
+/// standing under the same key.
+///
+/// Costs O(i * c) in the indexes of the table and their columns.
+fn redundant(stored: &Stored, places: &[Termed], pins: &[usize]) -> bool {
+    if places.iter().any(|term| term.place.is_none()) {
+        return true;
+    }
+    stored
+        .indexes
+        .iter()
+        .chain(stored.keyed.iter())
+        .any(|kept| {
+            kept.index.unique && kept.index.filter.is_none() && named_by(stored, kept, places, pins)
+        })
+}
+
+/// Whether the list or a term that holds a column at one value reaches
+/// every column of the index.
+///
+/// Costs O(c * p) in the columns of the index and the columns of the list.
+fn named_by(stored: &Stored, kept: &Kept, places: &[Termed], pins: &[usize]) -> bool {
+    kept.index.columns.iter().all(|keyed| {
+        // A place over an expression holds a value no column names, and one
+        // under another collation than the column's holds its entries in
+        // another order than a term or the list compares under.
+        keyed.place().is_some_and(|place| {
+            let column = stored.table.columns.get(place);
+            column.is_some_and(|column| column.collation == keyed.collation)
+                && (pins.contains(&place)
+                    || (places.iter().any(|term| {
+                        term.place == Some(place) && term.collation == keyed.collation
+                    }) && column.is_some_and(|column| column.not_null)))
+        })
+    })
+}
+
+/// What the columns a `DISTINCT` names ask of the walk: the rows that
+/// differ stand beside each other where the walk answers those columns in
+/// the order of an index, whatever order the list writes them in.
+///
+/// `wherePathSatisfiesOrderBy` of `research/sqlite/src/where.c:5147` reads
+/// the list of a `DISTINCT` as it reads an `ORDER BY`, except that a
+/// column of the index matches any term of the list and not the term at
+/// that place, which `WHERE_DISTINCTBY` says. A side already read by an
+/// index keeps it, and one read by the whole table is read out of the
+/// first index that groups the columns.
+///
+/// Costs what [`gathered`] costs per index of the table.
+fn gathering(side: &Side<'_>, stored: &Stored, wanted: &[Termed], format: u32) -> Ordering {
+    if let Plan::Keyed { root, key, .. } = &side.plan {
+        let held = stored
+            .indexes
+            .iter()
+            .chain(stored.keyed.iter())
+            .find(|kept| kept.root == *root)
+            .is_some_and(|kept| gathered(kept, key.len(), wanted, format));
+        return if held {
+            Ordering::Walked
+        } else {
+            Ordering::Sorted
+        };
+    }
+    if !matches!(side.plan, Plan::Rows(None, None)) {
+        return Ordering::Sorted;
+    }
+    for kept in &stored.indexes {
+        // A partial index answers fewer entries than the table has rows,
+        // so it groups no columns over them.
+        if kept.index.filter.is_some() {
+            continue;
+        }
+        if gathered(kept, 0, wanted, format) {
+            return Ordering::Index(Plan::Keyed {
+                root: kept.root,
+                key: Vec::new(),
+                collations: Vec::new(),
+                rowid_at: kept.index.columns.len(),
+                bounds: Bounds::default(),
+                backwards: held_backwards(kept.index.columns.first(), format),
+                reversed: false,
+            });
+        }
+    }
+    Ordering::Sorted
+}
+
+/// Whether the walk of `kept`, held to `held` many values of its key,
+/// answers the columns of `wanted` one after another from the column after
+/// that key.
+///
+/// The list of a `DISTINCT` writes no direction, so the walk answers it
+/// where every column of the index runs one way, and a column the key
+/// holds at one value stands alike in every entry the walk takes.
+///
+/// Costs O(w * w * c) in the columns of the list and of the index.
+fn gathered(kept: &Kept, held: usize, wanted: &[Termed], format: u32) -> bool {
+    let constant: Vec<usize> = kept
+        .index
+        .columns
+        .iter()
+        .take(held)
+        .filter_map(crate::schema::Keyed::place)
+        .collect();
+    for matching in [true, false] {
+        let mut left: Vec<&Termed> = wanted
+            .iter()
+            .filter(|term| !term.place.is_some_and(|place| constant.contains(&place)))
+            .collect();
+        let mut at = held;
+        while let Some(found) = left
+            .iter()
+            .position(|term| holds_column(&kept.index, at, term, matching, format))
+        {
+            left.remove(found);
+            at = at.saturating_add(1);
+        }
+        if left.is_empty() {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether a term of the `WHERE` holds the column the term of an order
+/// names at one value, which every walk answers that term of the order by.
+///
+/// `wherePathSatisfiesOrderBy` of `research/sqlite/src/where.c:5240` marks
+/// such a term answered before it reads any column of the index. Every
+/// term this engine reads compares under the column's own collation, a
+/// `COLLATE` on either side of the comparison leaving the term unread, so
+/// the term of the order answers under that collation or under none.
+///
+/// Costs O(n) in the columns held at one value.
+fn held_at_one(stored: &Stored, pins: &[usize], held: (usize, Collation)) -> bool {
+    let (place, collation) = held;
+    pins.contains(&place)
+        && stored
+            .table
+            .columns
+            .get(place)
+            .is_some_and(|column| column.collation == collation)
+}
+
 fn suffixed(
     stored: &Stored,
     root: u32,
@@ -9169,7 +9476,16 @@ fn joined(
     }
     let mut best: Option<(Plan, usize)> = None;
     let mut held = 0;
-    for kept in &stored.indexes {
+    // An index over a table that keeps its rows in the key's own tree ends
+    // its entries with that key and not with a rowid, which this walk
+    // cannot descend the table by, so such a table is read out of the key's
+    // own tree alone.
+    let indexes: &[Kept] = if stored.table.without_rowid {
+        &[]
+    } else {
+        &stored.indexes
+    };
+    for kept in indexes.iter().chain(stored.keyed.iter()) {
         // A partial index answers fewer entries than its places say.
         if kept.index.filter.is_some() {
             continue;

@@ -7888,6 +7888,45 @@ Unit tests of `crate::db` over `fixtures/indexed.db`.
 - `WHERE NULL` under an aggregate, which answers one row.
 - `WHERE abs(0)`, which is read against every row.
 
+### 6.6.417 The words an outer join puts on a line (`db-sqlite`)
+
+Unit tests of `crate::db` over an image `crate::change` writes, drawn as
+`query_plan_graph` of the suite's `tester.tcl` draws the lines.
+
+- A `LEFT` join and a `FULL` join, whose kept side's line ends with
+  ` LEFT-JOIN`, against an inner join and a `RIGHT` join.
+- An `ON` that names the key of a table keeping its rows in the key's own
+  tree, which holds the walk of that key.
+- The rows a `LEFT` join answers over such a table, which read no index of
+  it.
+
+### 6.6.416 What the rows a `DISTINCT` keeps one of ask (`db-sqlite`)
+
+Unit tests of `crate::db` over `fixtures/indexed.db` and over an image
+`crate::change` writes, drawn as `query_plan_graph` of the suite's
+`tester.tcl` draws the lines. Every answer is the one the C library's shell
+writes, but for the two cases the comments name.
+
+- A column a term holds at one value, and a list every column of which one
+  term holds.
+- A list that writes the columns of the index in the other order, and one
+  the index holds from the largest value down.
+- A side read by the whole table, read out of the index that groups the
+  columns.
+- A list that names the rowid, and one that names every column of the key's
+  own tree.
+- A column the list compares under another collation than the index holds
+  it under.
+- A list no index of the table holds every column of, a `*`, and an
+  expression.
+- A unique index over an expression, one that holds its column under
+  another collation, one that is partial, and one whose column the list
+  leaves out.
+- A list over two sides, over the rows a statement answered, and over a
+  walk held to one rowid.
+- The rows a walk chosen by the list answers, which stand in the order of
+  the index.
+
 ### 6.6.415 What a walk of one row leaves unbuilt (`db-sqlite`)
 
 Unit tests of `crate::db` over `fixtures/indexed.db`, drawn as
