@@ -2453,9 +2453,12 @@ impl Session {
         let (safety, count) = held;
         self.stamped(connection);
         let held = self.functions.entry(connection.to_owned()).or_default();
+        // A definition stands for one count of arguments, so a name defined
+        // for another count keeps its own definition, which
+        // `sqlite3_create_function` holds beside this one.
         let mut defined: Vec<Defined> = held
             .iter()
-            .filter(|one| one.name != name.as_bytes())
+            .filter(|one| one.name != name.as_bytes() || one.count != count)
             .copied()
             .collect();
         if defined.is_empty() {

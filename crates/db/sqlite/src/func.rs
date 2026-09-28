@@ -1200,10 +1200,13 @@ pub fn groups(held: &[Grouped], name: &[u8]) -> bool {
 /// The function `defined` holds under `name` for `count` arguments.
 #[must_use]
 pub fn defined(held: &[Defined], name: &[u8], count: usize) -> Option<Defined> {
+    // `sqlite3FindFunction` of `research/sqlite/src/callback.c` scores a
+    // definition made for this count of arguments above one made for any
+    // number of them, so the two stand beside each other under one name.
+    let named = |one: &&Defined| name.eq_ignore_ascii_case(one.name);
     held.iter()
-        .find(|one| {
-            one.count.is_none_or(|takes| takes == count) && name.eq_ignore_ascii_case(one.name)
-        })
+        .find(|one| named(one) && one.count == Some(count))
+        .or_else(|| held.iter().find(|one| named(one) && one.count.is_none()))
         .copied()
 }
 

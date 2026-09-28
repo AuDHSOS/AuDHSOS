@@ -728,8 +728,11 @@ fn what_a_like_the_application_defined_stands_in_front_of() {
     writer.run(b"INSERT INTO t VALUES('ghijkl')").unwrap();
     let image = writer.written();
     let database = Database::open(&image).unwrap().defining(MATCHED);
-    // The defined `like` answers that every row matches, and the `ESCAPE`
-    // of a term makes three arguments, which it takes none of.
+    // The `like` of two arguments answers that every row matches, which
+    // stands in front of the one of any number of them and of the built-in
+    // one. The `ESCAPE` of a term makes three arguments, which the built-in
+    // one takes and stands in front of a definition of any number of them
+    // for.
     assert_eq!(
         database
             .query(b"SELECT x FROM t WHERE x LIKE '%h%'")
@@ -746,8 +749,8 @@ fn what_a_like_the_application_defined_stands_in_front_of() {
             .len(),
         1
     );
-    // The defined `glob` takes any number of arguments, so the built-in one
-    // answers the term.
+    // The defined `glob` takes any number of arguments and the built-in one
+    // takes two, which the term holds, so the built-in one answers it.
     assert_eq!(
         database
             .query(b"SELECT x FROM t WHERE x GLOB '*h*'")

@@ -7,6 +7,10 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` reads a function the application defined for one count of arguments in
+  front of one it defined for any number of them, the two standing beside each other
+  under one name. D-586 records it. `like.test` goes from 139 cases passing to 140.
+
 - `db-sqlite` lets a caller that holds one writer for several connections set whether
   `LIKE` tells the letters apart per connection, which `PRAGMA case_sensitive_like`
   stands on the connection for, and the suite's harness keeps that value per
