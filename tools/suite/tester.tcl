@@ -727,6 +727,9 @@ proc sqlite3 {args} {
         # SQLITE_INNOCUOUS and SQLITE_DIRECTONLY, which say what an
         # expression of a schema object may do with the function.
         set safety unsafe
+        # `nArg` of sqlite3_create_function, which is -1 for a function
+        # that takes any number of arguments.
+        set count -1
         for {set i 0} {$i < [llength $switches]} {incr i} {
           set word [lindex $switches $i]
           set which [first_option $word $options]
@@ -740,10 +743,12 @@ proc sqlite3 {args} {
           if {$which eq "-returntype"} {
             set ::returns([lindex $args 0]) \
                 [one_word [lindex $switches $i] {integer real text blob any} type]
+          } else {
+            set count [expr {[lindex $switches $i]+0}]
           }
         }
         set ::functions([lindex $args 0]) [lindex $args end]
-        return [harness_send function %N% [lindex $args 0] $safety]
+        return [harness_send function %N% [lindex $args 0] $safety $count]
       }
       transaction {
         # A transaction inside another one is a savepoint, and a type is

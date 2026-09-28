@@ -2115,16 +2115,28 @@ fn like(
                 };
                 return Err(Error::NoFunction(named));
             };
-            let answered = (defined.answer)(defined.name, &args, row.random())?;
-            return Ok(Answer::plain(match (negated, logic(&answered)) {
-                (_, None) => Value::Null,
-                (true, Some(truth)) => Value::Int(i64::from(!truth)),
-                (false, Some(truth)) => Value::Int(i64::from(truth)),
-            }));
+            return answered_like(&defined, &args, negated, row);
         }
     };
     if let Some(escape) = escape {
         args.push(answer(arena, escape, sql, row, depth)?.value);
+    }
+    // `sqlite3IsLikeFunction` of `research/sqlite/src/func.c` reads the
+    // name of the term against the functions of the connection, so a `like`
+    // or a `glob` the application defined for this count of arguments
+    // stands in front of the built-in one and the operator calls what the
+    // application wrote. One that takes any number of arguments leaves the
+    // built-in one, which takes this count and no other.
+    let called: &[u8] = if function == Function::Like {
+        b"like"
+    } else {
+        b"glob"
+    };
+    let held = row
+        .defined(called, args.len())
+        .filter(|defined| defined.count == Some(args.len()));
+    if let Some(defined) = held {
+        return answered_like(&defined, &args, negated, row);
     }
     let (answered, _) = func::call(
         function,
@@ -2135,6 +2147,24 @@ fn like(
         given_of(row),
     )?;
     counted_like(&args, row);
+    Ok(Answer::plain(match (negated, logic(&answered)) {
+        (_, None) => Value::Null,
+        (true, Some(truth)) => Value::Int(i64::from(!truth)),
+        (false, Some(truth)) => Value::Int(i64::from(truth)),
+    }))
+}
+
+/// What a term of one of the four words the application defined a function
+/// for answers, with the `NOT` of the term read over it.
+///
+/// Costs what that function costs.
+fn answered_like(
+    defined: &crate::func::Defined,
+    args: &[Value],
+    negated: bool,
+    row: &dyn Row,
+) -> Result<Answer, Error> {
+    let answered = (defined.answer)(defined.name, args, row.random())?;
     Ok(Answer::plain(match (negated, logic(&answered)) {
         (_, None) => Value::Null,
         (true, Some(truth)) => Value::Int(i64::from(!truth)),

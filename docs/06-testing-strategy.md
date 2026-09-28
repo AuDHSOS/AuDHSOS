@@ -7888,6 +7888,18 @@ Unit tests of `crate::db` over `fixtures/indexed.db`.
 - `WHERE NULL` under an aggregate, which answers one row.
 - `WHERE abs(0)`, which is read against every row.
 
+### 6.6.421 What a `LIKE` reads its pattern from (`db-sqlite`)
+
+Unit tests of `crate::db` over images `crate::change` writes.
+
+- A pattern the statement computes, which holds the walk to no range and
+  is read for every row of the table.
+- A `like` the application defined for two arguments, which a `LIKE`
+  calls, and the same term with an `ESCAPE`, which makes three arguments
+  and reaches the built-in one.
+- A `glob` the application defined for any number of arguments, which
+  leaves the built-in one.
+
 ### 6.6.420 The term a pattern's range answers (`db-sqlite`)
 
 Unit tests of `crate::db` over an image `crate::change` writes, whose

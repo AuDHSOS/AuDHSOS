@@ -1361,11 +1361,11 @@ Size: L.
      nothing of a text entry it reaches. This engine reads such a term on
      both passes, which counts the comparisons of the text pass over.
      `like.test` holds two cases of it.
-282. A `like` or a `glob` the application defined for a count of arguments
-     of its own, which `sqlite3IsLikeFunction` of
-     `research/sqlite/src/func.c` reads as the function the operator calls,
-     leaving the range unwritten. This engine calls the built-in one.
-     `like.test` holds two cases of it.
+282. The pattern of a `LIKE` a statement binds to a parameter, which
+     `isLikeOrGlob` of `research/sqlite/src/whereexpr.c:207` reads the
+     bound value of and writes a range for. This engine takes no bindings,
+     so every parameter stands for a null. `like.test` holds two cases of
+     it.
 
 ### Done when
 

@@ -7424,7 +7424,21 @@ fn liked(
     let Some((at, reached)) = reached(arena, value, sql, sides) else {
         return Vec::new();
     };
-    let Ok(Value::Text(held)) = evaluate_row(arena, pattern, sql, &eval::NoRow(None)) else {
+    // `isLikeOrGlob` reads the pattern of a term the parser wrote as text
+    // and of one it wrote as a parameter, and no other: a pattern a
+    // statement computes stands for whatever the row it is read against
+    // makes of it, so no bound is written for it. A `COLLATE` on the
+    // pattern is read through, which is `sqlite3ExprSkipCollate` of
+    // `research/sqlite/src/whereexpr.c:205`.
+    let written = uncollated(arena, pattern);
+    let text = matches!(
+        arena.node(written),
+        Some(Node::Literal(crate::ast::Literal::Text(_)))
+    )
+    .then(|| evaluate_row(arena, written, sql, &eval::NoRow(None)).ok())
+    .flatten()
+    .and_then(|value| value.text());
+    let Some(held) = text else {
         return Vec::new();
     };
     // Only the bytes below 128 are read as a prefix, because the byte

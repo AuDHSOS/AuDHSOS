@@ -62,6 +62,37 @@ fn joined(
     Ok(Value::Text(out))
 }
 
+/// `like(pattern, value)` and `glob(...)`, each answering that the value
+/// matches whatever the pattern is.
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "the shape every function the application defines answers in"
+)]
+fn always(
+    _name: &'static [u8],
+    _args: &[Value],
+    _random: Option<&Source>,
+) -> Result<Value, crate::eval::Error> {
+    Ok(Value::Int(1))
+}
+
+/// A connection that defined `like` for two arguments and `glob` for any
+/// number of them.
+static MATCHED: &[Defined] = &[
+    Defined {
+        name: b"like",
+        count: Some(2),
+        answer: always,
+        safety: Safety::Innocuous,
+    },
+    Defined {
+        name: b"glob",
+        count: None,
+        answer: always,
+        safety: Safety::Innocuous,
+    },
+];
+
 /// The three, as a connection holds them.
 static DEFINED: &[Defined] = &[
     Defined {
@@ -679,5 +710,50 @@ fn what_the_name_affinity_answers_of_an_expression() {
     assert_eq!(
         held.query(b"SELECT affinity(1)").unwrap_err().message(),
         "no such function: affinity"
+    );
+}
+
+/// A `like` the application defined for the count of arguments the term
+/// holds stands in front of the built-in one, so `LIKE` calls what the
+/// application wrote; one that takes any number of them leaves the
+/// built-in one, which takes that count and no other.
+///
+/// `sqlite3IsLikeFunction` of `research/sqlite/src/func.c` reads the name
+/// of the term against the functions of the connection.
+#[test]
+fn what_a_like_the_application_defined_stands_in_front_of() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(x)").unwrap();
+    writer.run(b"INSERT INTO t VALUES('abcdef')").unwrap();
+    writer.run(b"INSERT INTO t VALUES('ghijkl')").unwrap();
+    let image = writer.written();
+    let database = Database::open(&image).unwrap().defining(MATCHED);
+    // The defined `like` answers that every row matches, and the `ESCAPE`
+    // of a term makes three arguments, which it takes none of.
+    assert_eq!(
+        database
+            .query(b"SELECT x FROM t WHERE x LIKE '%h%'")
+            .unwrap()
+            .rows
+            .len(),
+        2
+    );
+    assert_eq!(
+        database
+            .query(b"SELECT x FROM t WHERE x LIKE '%h%' ESCAPE 'x'")
+            .unwrap()
+            .rows
+            .len(),
+        1
+    );
+    // The defined `glob` takes any number of arguments, so the built-in one
+    // answers the term.
+    assert_eq!(
+        database
+            .query(b"SELECT x FROM t WHERE x GLOB '*h*'")
+            .unwrap()
+            .rows
+            .len(),
+        1
     );
 }

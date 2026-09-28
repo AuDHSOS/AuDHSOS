@@ -1461,7 +1461,8 @@ impl Session {
             // `load_static_extension` names a module.
             "collate" | "function" | "extension" => {
                 let third = args.get(2).map_or("", String::as_str);
-                self.told(verb, first, (second, third));
+                let fourth = args.get(3).map_or("", String::as_str);
+                self.told(verb, first, (second, third, fourth));
                 Ok(Vec::new())
             }
             // `SQLITE_TESTCTRL_INTERNAL_FUNCTIONS` turns the functions
@@ -2437,9 +2438,11 @@ impl Session {
     /// ones this harness holds, leaking the name and the list so that
     /// both outlive the file.
     ///
-    /// The function takes any number of arguments, which `db function`
-    /// of `testfixture` registers as `nArg` at -1.
-    fn functions(&mut self, connection: &str, name: &str, safety: Safety) {
+    /// The count of arguments is the one `-argcount` of `db function` wrote,
+    /// and nothing where it wrote none, which `testfixture` registers as
+    /// `nArg` at -1.
+    fn functions(&mut self, connection: &str, name: &str, held: (Safety, Option<usize>)) {
+        let (safety, count) = held;
         self.stamped(connection);
         let held = self.functions.entry(connection.to_owned()).or_default();
         let mut defined: Vec<Defined> = held
@@ -2452,7 +2455,7 @@ impl Session {
         }
         defined.push(Defined {
             name: Box::leak(name.as_bytes().to_vec().into_boxed_slice()),
-            count: None,
+            count,
             answer: called,
             safety,
         });
@@ -2462,11 +2465,18 @@ impl Session {
     /// The name `sqlite3_create_collation`, `sqlite3_create_function`
     /// or `load_static_extension` adds to the connection, which the
     /// statements of the connection reach from there on.
-    fn told(&mut self, verb: &str, connection: &str, named: (&str, &str)) {
-        let (name, safety) = named;
+    fn told(&mut self, verb: &str, connection: &str, named: (&str, &str, &str)) {
+        let (name, safety, count) = named;
         match verb {
             "collate" => self.collates(connection, name),
-            "function" => self.functions(connection, name, safety_of(safety)),
+            // `nArg` of `sqlite3_create_function` at -1 says the function
+            // takes any number of arguments, which `db function` registers
+            // for a definition that writes no `-argcount`.
+            "function" => self.functions(
+                connection,
+                name,
+                (safety_of(safety), count.parse::<usize>().ok()),
+            ),
             _ => self.extension(connection, name),
         }
     }

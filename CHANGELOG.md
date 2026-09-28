@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` writes no range for a `LIKE` or a `GLOB` whose pattern the statement
+  computes, reading a `COLLATE` on the pattern through, and calls the `like` or the
+  `glob` the application defined for the count of arguments the term holds. D-583
+  records it. Catalog 6.6.421. `like.test` goes from 126 cases passing to 128.
+
 - `db-sqlite` reads a `LIKE` or a `GLOB` whose range answers it whole for no row the
   walk takes, which asks that one pattern wrote both ends of the range and that its
   wildcard stand for what follows the prefix alone. D-582 records it. Catalog 6.6.420.

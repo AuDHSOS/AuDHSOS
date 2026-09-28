@@ -439,6 +439,14 @@ fn what_the_two_passes_of_a_pattern_s_range_answer() {
     assert_eq!(answered.stepped.likes, 0);
     // One descent per pass, and one step per entry after the first of it.
     assert_eq!(answered.stepped.searched, 4);
+    // A pattern the statement computes stands for whatever the row it is
+    // read against makes of it, so no bound is written for it and the walk
+    // reads every row of the table.
+    let held = database
+        .query(b"SELECT quote(x) FROM b WHERE x LIKE ('ab' || 'c%')")
+        .unwrap();
+    assert_eq!(held.rows.len(), 2);
+    assert_eq!(held.stepped.likes, 5);
     // A pattern that says more than the prefix is read for every entry the
     // two passes take, whether it says it in place of one character or
     // behind the wildcard.
@@ -480,4 +488,52 @@ fn what_the_two_passes_of_a_pattern_s_range_answer() {
         quoted(b"SELECT quote(x) FROM b WHERE x>=x'6162' AND x LIKE 'ab%'"),
         ["X'616263'"]
     );
+}
+
+/// A `LIKE` whose prefix reads as a number holds the walk of a column of
+/// any affinity but text to no range, because such a column holds that
+/// value as a number and a number stands before every text, so the range
+/// would reach other rows than the pattern matches.
+///
+/// `isLikeOrGlob` of `research/sqlite/src/whereexpr.c:258` reads the first
+/// character of the prefix for a digit and a minus and asks that the column
+/// be one of text affinity.
+#[test]
+fn what_a_pattern_whose_prefix_reads_as_a_number_holds() {
+    let mut writer = crate::change::Writer::new(1024, 0, crate::header::Encoding::Utf8).unwrap();
+    writer
+        .run(
+            b"CREATE TABLE t(a INTEGER PRIMARY KEY, b INTEGER COLLATE nocase UNIQUE, f TEXT COLLATE nocase UNIQUE)",
+        )
+        .unwrap();
+    for held in ["1", "12", "123", "234", "345", "45"] {
+        let mut sql = alloc::string::String::from("INSERT INTO t VALUES(");
+        sql.push_str(held);
+        sql.push(',');
+        sql.push_str(held);
+        sql.push_str(",'");
+        sql.push_str(held);
+        sql.push_str("')");
+        writer.run(sql.as_bytes()).unwrap();
+    }
+    let image = writer.written();
+    let database = Database::open(&image).unwrap();
+    // The walk of the whole table reads every row, one step per row after
+    // the first, and reads the pattern once per row.
+    let held = database
+        .query(b"SELECT a FROM t WHERE b LIKE '12%' ORDER BY +a")
+        .unwrap();
+    assert_eq!(held.rows.len(), 2);
+    assert_eq!(held.stepped.steps, 5);
+    assert_eq!(held.stepped.likes, 6);
+    // A column of text affinity holds the value as text, so the range holds
+    // the walk and no row of the table is read. The C library reads the
+    // pattern on the pass over the blobs alone, which item 281 of document
+    // 16 records, and this engine reads it on both passes.
+    let held = database
+        .query(b"SELECT a FROM t WHERE f LIKE '12%' ORDER BY +a")
+        .unwrap();
+    assert_eq!(held.rows.len(), 2);
+    assert_eq!(held.stepped.steps, 0);
+    assert_eq!(held.stepped.likes, 2);
 }
