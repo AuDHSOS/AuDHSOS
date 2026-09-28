@@ -1334,7 +1334,15 @@ Size: L.
      answers, and the order a term whose `NULLS` clause moves its nulls
      asks for, which `KEYINFO_ORDER_BIGNULL` of `sqlite3WhereIsOrdered`
      answers by reading the nulls of an index at the end. Both leave the
-     whole order to the sorter here.
+     whole order to the sorter here. The terms of a `WHERE` hold such a
+     walk, which D-576 records. A bare `min` or `max` over that key reads
+     the order too, so this engine names `SCAN u` where the C library names
+     `SEARCH u USING PRIMARY KEY`.
+278. A walk of an index over a table that keeps its rows in the key's own
+     tree. The entry of such an index ends with the key of the row and not
+     with a rowid, so the descent to the row is a read of the key's tree by
+     that key; `crate::db` reads no index of such a table and walks the key
+     or the table.
 
 ### Done when
 
@@ -1344,8 +1352,8 @@ library accepts or refuses it, with no count of what is waiting.
 ## 16.23 Q9. The suites run whole
 
 Status: `sh tools/xtask.sh sqlite-suite` runs SQLite's own test files
-under the `tclsh` of the machine. Of 123 525 cases in 843 files, 119 133
-pass, 2216 answer differently, and 2176 name something the engine
+under the `tclsh` of the machine. Of 123 546 cases in 843 files, 119 162
+pass, 2208 answer differently, and 2176 name something the engine
 refuses or a command that needs the C library's internals. The files
 that answer for tens of thousands of rows reach the five-minute
 deadline and are counted with the cases they ran by then. One run over

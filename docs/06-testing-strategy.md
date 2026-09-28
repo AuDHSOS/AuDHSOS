@@ -7888,6 +7888,22 @@ Unit tests of `crate::db` over `fixtures/indexed.db`.
 - `WHERE NULL` under an aggregate, which answers one row.
 - `WHERE abs(0)`, which is read against every row.
 
+### 6.6.414 A walk of the key's own tree (`db-sqlite`)
+
+Unit tests of `crate::db` over `fixtures/indexed.db` and over an image
+`crate::change` writes, drawn as `query_plan_graph` of the suite's
+`tester.tcl` draws the lines.
+
+- A key held by `=` and a key held by two bounds, named
+  `SEARCH u USING PRIMARY KEY`.
+- A walk the terms hold to nothing, and one whose terms name a column
+  outside the key, both named `SCAN u`.
+- The row the walk answers, read out of the entry, with the columns
+  standing where the table holds them.
+- A key no row carries, which answers no row.
+- A key of two columns, held by one term per column, whose row holds the
+  columns the table declares in that order.
+
 ### 6.6.413 How a statement of a `FROM` is read (`db-sqlite`)
 
 Unit tests of `crate::db` over `fixtures/indexed.db`, drawn as

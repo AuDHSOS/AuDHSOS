@@ -1353,6 +1353,15 @@ struct Stored {
     places: Vec<usize>,
     /// The indexes over it that this crate can walk.
     indexes: Vec<Kept>,
+    /// The primary key of a table that keeps its rows in the key's own
+    /// tree, as an index over that tree, and nothing for a table that
+    /// keeps them by rowid.
+    ///
+    /// The tree is the index, which `IsPrimaryKeyIndex` of
+    /// `research/sqlite/src/sqliteInt.h` reads, so the terms hold the walk
+    /// of the table itself. It stands apart from the indexes because
+    /// nothing writes it: a row written into the tree is the entry.
+    keyed: Option<Kept>,
 }
 
 /// Raises where `INDEXED BY name` names an index the table does not
@@ -5937,7 +5946,7 @@ impl<'a> Database<'a> {
                 None => Feed::Rows(NO_ROWS.iter()),
             };
         }
-        if let Some(held) = sought(&side.plan, side.covering.as_deref(), cursor)
+        if let Some(held) = sought(&side.plan, (side.covering.as_deref(), stored.root), cursor)
             && let Some(feed) = self.keyed(stored, held)
         {
             return feed;
@@ -5959,7 +5968,7 @@ impl<'a> Database<'a> {
         if let Plan::Rows(first, last) = plan {
             return Some(self.ranged(stored, (*first, *last)));
         }
-        sought(plan, None, cursor).and_then(|held| self.keyed(stored, held))
+        sought(plan, (None, stored.root), cursor).and_then(|held| self.keyed(stored, held))
     }
 
     /// The walk of one index, held to the key the plan names, and
@@ -5979,6 +5988,7 @@ impl<'a> Database<'a> {
             backwards,
             reversed,
             covering,
+            own,
         } = held;
         let image = self.imaged(stored.place);
         // The descent stands on the first entry the walk takes, which is
@@ -6028,6 +6038,7 @@ impl<'a> Database<'a> {
             bounds,
             from_high,
             covering,
+            own,
             rewind,
             searched: 0,
             encoding: self.encoding,
@@ -6593,7 +6604,7 @@ fn planned(
         let one = range.0.is_some() && range.0 == range.1;
         let between = *range != (None, None);
         let keyed = match &side.source {
-            Source::Table(stored) if !stored.table.without_rowid && !one => {
+            Source::Table(stored) if !one => {
                 // A walk held to a key of an index answers the rows one
                 // value names, where a range of rowids answers every
                 // row between two, so a key is taken over a range and a
@@ -7336,7 +7347,16 @@ fn plan_of(
     // `pTab->pIndex` carries the index made last first, which is the
     // order `whereLoopAddBtree` reads them in and so the order two
     // indexes the terms name as many columns of are taken in.
-    for kept in stored.indexes.iter().rev() {
+    // An index over a table that keeps its rows in the key's own tree ends
+    // its entries with that key and not with a rowid, which this walk
+    // cannot descend the table by, so such a table is read out of the
+    // key's own tree alone.
+    let indexes: &[Kept] = if stored.table.without_rowid {
+        &[]
+    } else {
+        &stored.indexes
+    };
+    for kept in indexes.iter().rev().chain(stored.keyed.iter()) {
         // A partial index answers fewer entries than the table has rows,
         // so a statement planned against one would read fewer rows than
         // it must.
@@ -7928,7 +7948,7 @@ fn detailed(side: &Side<'_>, plan: &Plan, lines: &mut Vec<Explained>, parent: us
                     &side.name,
                     &named_index(stored, *root),
                     &terms,
-                    (covering, side.least),
+                    (covering, side.least, *root == stored.root),
                 ),
             ));
         }
@@ -7942,7 +7962,7 @@ fn detailed(side: &Side<'_>, plan: &Plan, lines: &mut Vec<Explained>, parent: us
                     &side.name,
                     &named_index(stored, *root),
                     &terms,
-                    (covering, side.least),
+                    (covering, side.least, *root == stored.root),
                 ),
             ));
         }
@@ -8077,15 +8097,22 @@ fn by_rowid(name: &[u8], terms: &[&[u8]]) -> Vec<u8> {
 
 /// `SEARCH t USING INDEX i (a=? AND b>?)`, which is `SCAN t USING
 /// INDEX i` where no term holds the walk to part of the index.
-fn searched(name: &[u8], index: &[u8], terms: &[Vec<u8>], held: (bool, bool)) -> Vec<u8> {
-    let (covering, least) = held;
+fn searched(name: &[u8], index: &[u8], terms: &[Vec<u8>], held: (bool, bool, bool)) -> Vec<u8> {
+    let (covering, least, own) = held;
     if terms.is_empty() {
         return scanned(name, index, covering, least);
     }
     let mut held = b"SEARCH ".to_vec();
     held.extend_from_slice(name);
-    held.extend_from_slice(using(covering));
-    held.extend_from_slice(index);
+    // A table that keeps its rows in the key's own tree is named after
+    // that key and not after an index, which is the `PRIMARY KEY` of
+    // `sqlite3WhereExplainOneScan`.
+    if own {
+        held.extend_from_slice(b" USING PRIMARY KEY");
+    } else {
+        held.extend_from_slice(using(covering));
+        held.extend_from_slice(index);
+    }
     held.extend_from_slice(b" (");
     let spans: Vec<&[u8]> = terms.iter().map(alloc::vec::Vec::as_slice).collect();
     anded(&mut held, &spans);
@@ -8119,6 +8146,7 @@ fn term_of(stored: &Stored, root: u32, at: usize, how: &[u8]) -> Vec<u8> {
     let keyed = stored
         .indexes
         .iter()
+        .chain(stored.keyed.iter())
         .find(|kept| kept.root == root)
         .and_then(|kept| kept.index.columns.get(at));
     let named = keyed.and_then(|keyed| {
@@ -8951,6 +8979,9 @@ struct Seek {
     /// Where each place of the index stands in the table, where the
     /// row is built from the entry.
     covering: Option<Vec<Option<usize>>>,
+    /// Whether the walk reads the table's own tree, whose entries are
+    /// the rows themselves.
+    own: bool,
 }
 
 /// What `plan` holds a walk of an index to.
@@ -8960,7 +8991,8 @@ struct Seek {
 /// makes the walk fall back to the whole tree.
 ///
 /// Reading one key costs what the expression it is read from costs.
-fn sought(plan: &Plan, covering: Option<&[Option<usize>]>, cursor: &Cursor<'_>) -> Option<Seek> {
+fn sought(plan: &Plan, held: (Option<&[Option<usize>]>, u32), cursor: &Cursor<'_>) -> Option<Seek> {
+    let (covering, own) = held;
     match plan {
         Plan::Rows(_, _) | Plan::Backwards | Plan::Rowid(_) | Plan::Union(_) => None,
         Plan::Keyed {
@@ -8980,6 +9012,7 @@ fn sought(plan: &Plan, covering: Option<&[Option<usize>]>, cursor: &Cursor<'_>) 
             backwards: *backwards,
             reversed: *reversed,
             covering: covering.map(<[Option<usize>]>::to_vec),
+            own: *root == own,
         }),
         Plan::Joined {
             root,
@@ -9008,6 +9041,7 @@ fn sought(plan: &Plan, covering: Option<&[Option<usize>]>, cursor: &Cursor<'_>) 
                 backwards: false,
                 reversed: false,
                 covering: covering.map(<[Option<usize>]>::to_vec),
+                own: *root == own,
             })
         }
     }
@@ -9576,6 +9610,9 @@ struct Sought<'i, 'f> {
     /// Where each place of the index stands in the table, where the row
     /// is built from the entry and the table's tree is not descended.
     covering: Option<Vec<Option<usize>>>,
+    /// Whether the walk reads the table's own tree, whose entries are the
+    /// rows themselves.
+    own: bool,
     /// Whether the walk begins at `OP_Rewind` and stands before its
     /// first entry, which counts no search.
     rewind: bool,
@@ -9661,6 +9698,20 @@ impl<'i> Sought<'i, '_> {
         }
         if self.is_past(&entry)? {
             return Ok(None);
+        }
+        // A table that keeps its rows in the key's own tree answers the
+        // row out of the entry, which is the row, and carries no rowid.
+        if self.own {
+            read_payload(&self.image, &entry, &mut self.payload)?;
+            return values_of(
+                &self.payload,
+                self.stored,
+                None,
+                self.encoding,
+                self.collation,
+                self.schemed,
+            )
+            .map(|values| Some((None, values)));
         }
         // An index that holds every column the statement reads answers
         // the row out of the entry, which saves the O(log n) descent.
@@ -11873,6 +11924,12 @@ fn stored_of(
         }
     }
     let places = places(&table);
+    let keyed = keyed_index(&table).map(|index| Kept {
+        index,
+        root,
+        sql: Vec::new(),
+        arena: Arena::default(),
+    });
     Ok(Some(Stored {
         table,
         place,
@@ -11881,7 +11938,31 @@ fn stored_of(
         arena,
         places,
         indexes: Vec::new(),
+        keyed,
     }))
+}
+
+/// The primary key of a table that keeps its rows in the key's own tree,
+/// as an index over that tree, and nothing for a table that keeps them by
+/// rowid.
+///
+/// `sqlite3WhereExplainOneScan` writes `PRIMARY KEY` and not the index's
+/// name for it, so the name is left empty.
+///
+/// Reading the constraints costs O(n) in them.
+fn keyed_index(table: &Table) -> Option<schema::Index> {
+    table
+        .keys
+        .iter()
+        .find(|keys| keys.primary && table.without_rowid)
+        .map(|keys| schema::Index {
+            name: Vec::new(),
+            table: table.name.clone(),
+            columns: keys.columns.clone(),
+            unique: true,
+            conflict: keys.conflict,
+            filter: None,
+        })
 }
 
 /// The tables one file holds, each carrying the schema place of that

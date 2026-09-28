@@ -544,3 +544,78 @@ fn what_the_lines_under_a_statement_written_into_the_one_above_it_hang_under() {
         ])
     );
 }
+
+#[test]
+fn what_the_terms_hold_the_walk_of_a_table_that_keeps_its_rows_in_the_key_to() {
+    // The tree is the index, which `IsPrimaryKeyIndex` reads, so the plan
+    // names `PRIMARY KEY` and the terms hold the walk of the table itself.
+    assert_eq!(
+        plan(super::INDEXED, b"SELECT * FROM u WHERE a='b'"),
+        tree(&["`--SEARCH u USING PRIMARY KEY (a=?)"])
+    );
+    assert_eq!(
+        plan(super::INDEXED, b"SELECT * FROM u WHERE a>'a' AND a<'z'"),
+        tree(&["`--SEARCH u USING PRIMARY KEY (a>? AND a<?)"])
+    );
+    // An index over such a table ends its entries with that key and not
+    // with a rowid, so the walk of one is not read, and a walk the terms
+    // hold to nothing reads every row.
+    assert_eq!(
+        plan(super::INDEXED, b"SELECT * FROM u WHERE b=1"),
+        tree(&["`--SCAN u"])
+    );
+    assert_eq!(
+        plan(super::INDEXED, b"SELECT * FROM u"),
+        tree(&["`--SCAN u"])
+    );
+}
+
+#[test]
+fn what_a_walk_of_the_key_s_own_tree_answers() {
+    // The entry is the row, so the walk answers it without descending the
+    // table, and every column of it stands where the table holds it.
+    let database = Database::open(super::INDEXED).unwrap();
+    assert_eq!(
+        database.query(b"SELECT * FROM u WHERE a='x'").unwrap().rows,
+        alloc::vec![alloc::vec![Value::Text(b"x".to_vec()), Value::Int(1)]]
+    );
+    assert_eq!(
+        database
+            .query(b"SELECT b, a FROM u WHERE a>'x'")
+            .unwrap()
+            .rows,
+        alloc::vec![alloc::vec![Value::Int(2), Value::Text(b"y".to_vec())]]
+    );
+    assert!(
+        database
+            .query(b"SELECT * FROM u WHERE a='q'")
+            .unwrap()
+            .rows
+            .is_empty()
+    );
+}
+
+/// A key of two columns is held by one term per column, and the row the
+/// walk answers holds the columns the table declares in that order,
+/// where the entry holds the key's columns first.
+#[test]
+fn what_the_terms_hold_a_key_of_two_columns_to() {
+    let mut writer = crate::change::Writer::new(1024, 0, crate::header::Encoding::Utf8).unwrap();
+    writer
+        .run(b"CREATE TABLE t(a,b,c,PRIMARY KEY(b,c)) WITHOUT ROWID")
+        .unwrap();
+    writer.run(b"INSERT INTO t VALUES(1,2,3)").unwrap();
+    let image = writer.written();
+    assert_eq!(
+        plan(&image, b"SELECT * FROM t WHERE b=2 AND c=3"),
+        tree(&["`--SEARCH t USING PRIMARY KEY (b=? AND c=?)"])
+    );
+    assert_eq!(
+        Database::open(&image)
+            .unwrap()
+            .query(b"SELECT * FROM t WHERE b=2 AND c=3")
+            .unwrap()
+            .rows,
+        alloc::vec![alloc::vec![Value::Int(1), Value::Int(2), Value::Int(3)]]
+    );
+}

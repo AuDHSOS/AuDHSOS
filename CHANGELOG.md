@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` holds the walk of a table that keeps its rows in the key's own
+  tree by the terms of a `WHERE` that name the key's columns, named
+  `SEARCH u USING PRIMARY KEY (a=?)`, and answers the row out of the entry of
+  that tree. D-576 records it. Catalog 6.6.414. `eqp.test` goes from 44 cases
+  passing to 46 and `like3.test` from 198 to 199.
+
 - `db-sqlite` writes a statement of a `FROM` into the statement above it where
   nothing of what the two hold stops it, naming no line of its own for it, and
   names what is left `CO-ROUTINE` or `MATERIALIZE` with the lines of the
