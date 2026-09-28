@@ -7888,6 +7888,20 @@ Unit tests of `crate::db` over `fixtures/indexed.db`.
 - `WHERE NULL` under an aggregate, which answers one row.
 - `WHERE abs(0)`, which is read against every row.
 
+### 6.6.418 What a `LIKE` counts and where a term is read (`db-sqlite`)
+
+Unit tests of `crate::db` over an image `crate::change` writes.
+
+- A `LIKE` and a `GLOB` written as an operator and called by name, each
+  counting one comparison, and one against a null counting none.
+- A term of a `WHERE` over a table of six rows, counting one comparison per
+  row and none for the row that holds no value.
+- A `LIMIT` that stops the walk, and a statement an
+  `EXPLAIN QUERY PLAN` reads, which runs no loop.
+- A term of the `WHERE` that names the side a `LEFT JOIN` attaches, read
+  for the row that holds nothing of that side: `c IS NULL`, `c IS NOT
+  NULL`, `d>40` and a term of the side on the left.
+
 ### 6.6.417 The words an outer join puts on a line (`db-sqlite`)
 
 Unit tests of `crate::db` over an image `crate::change` writes, drawn as

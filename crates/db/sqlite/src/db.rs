@@ -2574,6 +2574,12 @@ pub struct Stepped {
     /// `OP_Prev` that moved, one per table row an index entry named,
     /// and one fewer per `OP_Sort`.
     pub searched: i64,
+    /// How many times a `LIKE` or a `GLOB` compared a pattern against a
+    /// value, which `sqlite3_like_count` of
+    /// `research/sqlite/src/func.c:975` counts: one per call of `likeFunc`
+    /// whose two arguments are both values, a call against a null
+    /// answering a null without comparing.
+    pub likes: u64,
 }
 
 impl<'a> Database<'a> {
@@ -3957,6 +3963,13 @@ impl<'a> Database<'a> {
         let mut held = self.stepped.get();
         held.sorts = held.sorts.saturating_add(1);
         held.searched = held.searched.saturating_sub(1);
+        self.stepped.set(held);
+    }
+
+    /// Counts one more comparison of a pattern against a value.
+    fn like(&self) {
+        let mut held = self.stepped.get();
+        held.likes = held.likes.saturating_add(1);
         self.stepped.set(held);
     }
 
@@ -6179,10 +6192,9 @@ impl<'a> Database<'a> {
                 mark(kept, at, at_row);
                 // A term of the `WHERE` this level answers holds for
                 // every row the levels after it read, so a row it
-                // passes over is one no row of the statement holds.
-                // The term is read again where the statement is
-                // answered, which is what makes this a cost and not an
-                // answer.
+                // passes over is one no row of the statement holds, and
+                // the term is read once here and not again over the
+                // product, which `TERM_CODED` of `wherecode.c` marks.
                 if all_hold(arena, &side.pushed, sql, cursor)? {
                     flow = self.nest(sides, deeper, cursor, arena, sql, each, kept, None)?;
                 }
@@ -6207,7 +6219,13 @@ impl<'a> Database<'a> {
                 &side.name,
                 &side.using,
             ));
-            flow = self.nest(sides, deeper, cursor, arena, sql, each, kept, None)?;
+            // A term of the `WHERE` this level answers is read for the row
+            // that holds nothing of this side as it is read for a row that
+            // holds one, which is the loop body `sqlite3WhereEnd` writes
+            // the `OP_NullRow` of a `LEFT JOIN` in front of.
+            if all_hold(arena, &side.pushed, sql, cursor)? {
+                flow = self.nest(sides, deeper, cursor, arena, sql, each, kept, None)?;
+            }
             cursor.held.pop();
         }
         Ok(flow)
@@ -6239,9 +6257,10 @@ impl<'a> Database<'a> {
                 reach,
             );
         }
+        let rest = over_all(arena, select.filter, sides);
         let mut out = Vec::new();
         self.scan(sides, arena, sql, reach, &mut |cursor: &Cursor<'b>| {
-            if keep(arena, select.filter, sql, cursor)? {
+            if all_hold(arena, &rest, sql, cursor)? {
                 out.push(Cursor {
                     held: cursor.held.clone(),
                     collation: cursor.collation,
@@ -6418,13 +6437,14 @@ impl<'a> Database<'a> {
         let (sides, keys) = over;
         let (stops, reach) = held;
         let stops = self.stops(arena, select, sql, (stops, reach))?;
+        let rest = over_all(arena, select.filter, sides);
         let mut rows = Vec::new();
         // Whether the walk read a row, which is what resolved the names
         // of the statement.
         let mut read = false;
         self.scan(sides, arena, sql, reach, &mut |cursor: &Cursor<'_>| {
             read = true;
-            if keep(arena, select.filter, sql, cursor)? {
+            if all_hold(arena, &rest, sql, cursor)? {
                 rows.push(sorted(arena, select, sql, cursor, keys)?);
                 if stops.is_some_and(|stops| rows.len() >= stops) {
                     return Ok(Flow::Stop);
@@ -6456,9 +6476,10 @@ impl<'a> Database<'a> {
             smallest,
         } = gathering;
         let terms = grouping(arena, select, sql, sides)?;
+        let rest = over_all(arena, select.filter, sides);
         let mut groups: Vec<Group<'b>> = Vec::new();
         self.scan(sides, arena, sql, reach, &mut |cursor: &Cursor<'b>| {
-            if !keep(arena, select.filter, sql, cursor)? {
+            if !all_hold(arena, &rest, sql, cursor)? {
                 return Ok(Flow::Go);
             }
             let mut key = Vec::new();
@@ -9849,6 +9870,35 @@ fn attached(
 /// Whether every term of `terms` holds for the row the walk stands on.
 ///
 /// Reading `n` terms costs what the `n` terms cost.
+/// The terms of the `WHERE` no level of the walk reads, which are the
+/// terms read once per row the walk answers.
+///
+/// `sqlite3WhereSplit` puts every other term on the level of the side it
+/// names, where `TERM_CODED` of `research/sqlite/src/whereInt.h` marks it
+/// read, so a term is read once and not again over the product.
+///
+/// Costs O(t) in the terms of the spine, each read against the levels.
+fn over_all(arena: &Arena, filter: Option<ExprId>, sides: &[Side<'_>]) -> Vec<ExprId> {
+    let mut out = Vec::new();
+    let mut spine: Vec<ExprId> = filter.into_iter().collect();
+    while let Some(id) = spine.pop() {
+        if let Some(Node::Binary {
+            op: BinaryOp::And,
+            left,
+            right,
+        }) = arena.node(id)
+        {
+            spine.push(left);
+            spine.push(right);
+            continue;
+        }
+        if !sides.iter().any(|side| side.pushed.contains(&id)) {
+            out.push(id);
+        }
+    }
+    out
+}
+
 fn all_hold(
     arena: &Arena,
     terms: &[ExprId],
@@ -13331,6 +13381,10 @@ impl eval::Row for Cursor<'_> {
 
     fn random(&self) -> Option<&crate::random::Source> {
         Some(&self.reach.database.random)
+    }
+
+    fn liked(&self) {
+        self.reach.database.like();
     }
 
     fn clock(&self) -> Option<i64> {

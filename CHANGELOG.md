@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` reads a term of the `WHERE` once per row of the level the sides it
+  names are all read on, and not again over the product, and counts the comparisons
+  of a `LIKE` and a `GLOB` for `::sqlite_like_count` of the suite's harness. D-580
+  records it. Catalog 6.6.418. `like.test` goes from 114 cases passing to 116.
+
 - `db-sqlite` keeps the rows a `DISTINCT` names one of without a tree of its own
   where the walk answers the columns of the list in the order of an index, whatever
   order the list writes them in, and chooses the walk by that list where the

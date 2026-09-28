@@ -1162,6 +1162,10 @@ struct Session {
     /// which `sqlite3_search_count` counts and `::sqlite_search_count`
     /// answers.
     searched: i64,
+    /// How many times a `LIKE` or a `GLOB` compared a pattern against a
+    /// value since the tester last counted from nought, which
+    /// `sqlite3_like_count` counts and `::sqlite_like_count` answers.
+    liked: u64,
     /// What `PRAGMA data_version` answers for each connection, and the
     /// count of commits the file had when the connection last read it:
     /// the value rises by one per commit another connection made, which
@@ -1251,6 +1255,7 @@ impl Session {
     /// A run that has answered nothing.
     fn new(file: &str) -> Self {
         Session {
+            liked: 0,
             temps: BTreeMap::new(),
             tempers: BTreeMap::new(),
             crashing: None,
@@ -1345,6 +1350,34 @@ impl Session {
     }
 
     /// What one request answers, or the message it raises.
+    /// Counts the comparisons of a `LIKE` and a `GLOB` from this many on,
+    /// which a write of `::sqlite_like_count` says.
+    fn liked_from(&mut self, first: &str) -> Result<Vec<String>, String> {
+        self.liked = u64::try_from(number_of(first)?).unwrap_or(0);
+        Ok(Vec::new())
+    }
+
+    /// Counts the commits held on the disk from this many on, which a
+    /// write of `::sqlite_sync_count` or of `::sqlite_fullsync_count` says.
+    fn synced_from(&mut self, verb: &str, first: &str) -> Result<Vec<String>, String> {
+        let held = u64::try_from(number_of(first)?).unwrap_or(0);
+        if verb == "syncs_as" {
+            self.synced.0 = held;
+        } else {
+            self.synced.1 = held;
+        }
+        Ok(Vec::new())
+    }
+
+    /// Adds the comparisons every statement of the run counted to the
+    /// count of the session, where the sorts and the searches of the last
+    /// statement alone are read.
+    fn counted_likes(&mut self) {
+        self.liked = self
+            .liked
+            .saturating_add(LIKED.with(core::cell::Cell::take));
+    }
+
     fn answered(&mut self, verb: &str, args: &[String]) -> Result<Vec<String>, String> {
         let first = args.first().map_or("", String::as_str);
         let second = args.get(1).map_or("", String::as_str);
@@ -1455,16 +1488,12 @@ impl Session {
             // `research/sqlite/src/os_unix.c`.
             "syncs" => Ok(alloc_one(&self.synced.0.to_string())),
             "fullsyncs" => Ok(alloc_one(&self.synced.1.to_string())),
-            "syncs_as" => {
-                self.synced.0 = u64::try_from(number_of(first)?).unwrap_or(0);
-                Ok(Vec::new())
-            }
-            "fullsyncs_as" => {
-                self.synced.1 = u64::try_from(number_of(first)?).unwrap_or(0);
-                Ok(Vec::new())
-            }
+            "syncs_as" | "fullsyncs_as" => self.synced_from(verb, first),
             // `sqlite3_search_count` of `vdbe.c:56`.
             "searches" => Ok(alloc_one(&self.searched.to_string())),
+            // `sqlite3_like_count` of `research/sqlite/src/func.c:900`.
+            "likes" => Ok(alloc_one(&self.liked.to_string())),
+            "likes_as" => self.liked_from(first),
             "clock" => self.ticks(first),
             // `sqlite3_set_authorizer`, `sqlite3_commit_hook`,
             // `sqlite3_rollback_hook` and `sqlite3_update_hook`.
@@ -3554,6 +3583,7 @@ impl Session {
         let stepped = STEPPED.with(core::cell::Cell::take);
         self.sorted = stepped.sorts;
         self.searched = stepped.searched;
+        self.counted_likes();
         self.stepped.insert(name.to_owned(), stepped);
         self.counters.insert(name.to_owned(), counted);
         self.pragmas.insert(name.to_owned(), kept);
@@ -3768,8 +3798,19 @@ thread_local! {
 
     /// What the walks and the sorts of the last statement counted, which
     /// `db status` answers, because `run_one` carries no connection.
+    /// How many times the statements of this run compared a pattern
+    /// against a value, which the session adds to its own count.
+    static LIKED: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
+
     static STEPPED: core::cell::Cell<db_sqlite::db::Stepped> =
-        const { core::cell::Cell::new(db_sqlite::db::Stepped { steps: 0, sorts: 0, searched: 0 }) };
+        const {
+            core::cell::Cell::new(db_sqlite::db::Stepped {
+                steps: 0,
+                sorts: 0,
+                searched: 0,
+                likes: 0,
+            })
+        };
 
     /// The line of the run on this thread, which `asked` reaches
     /// because `Comparing` is a bare function and carries nothing.
@@ -4666,6 +4707,7 @@ fn run_one(
             .opens_temp(&sql_bytes(text))
             .map_err(|error| shape(text, refusal(&error)))?;
         let answered = answered_rows(writer, text, collating, defines, outside)?;
+        LIKED.with(|held| held.set(held.get().saturating_add(answered.stepped.likes)));
         STEPPED.with(|held| held.set(answered.stepped));
         ANSWERED.with(|held| held.set(answered.rows.len()));
         for row in &answered.rows {

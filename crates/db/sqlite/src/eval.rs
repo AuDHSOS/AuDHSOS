@@ -335,6 +335,13 @@ pub trait Row {
         None
     }
 
+    /// Counts one comparison of a pattern against a value, which
+    /// `sqlite3_like_count` of `research/sqlite/src/func.c:975` counts and
+    /// a test reads to see whether an index answered a `LIKE` rather than
+    /// the walk reading every row. A caller that counts nothing answers
+    /// nothing here.
+    fn liked(&self) {}
+
     /// What the connection has written, which `changes()`,
     /// `total_changes()` and `last_insert_rowid()` answer.
     fn counted(&self) -> crate::func::Counted {
@@ -1029,6 +1036,11 @@ fn called(
         row.encoding(),
         given_of(row),
     )?;
+    // `like` and `glob` are the two names `likeFunc` stands behind, which
+    // counts its calls whether a statement wrote the name or the operator.
+    if matches!(function, Function::Like | Function::Glob) {
+        counted_like(&values, row);
+    }
     Ok(Answer {
         value,
         json,
@@ -2122,11 +2134,25 @@ fn like(
         row.encoding(),
         given_of(row),
     )?;
+    counted_like(&args, row);
     Ok(Answer::plain(match (negated, logic(&answered)) {
         (_, None) => Value::Null,
         (true, Some(truth)) => Value::Int(i64::from(!truth)),
         (false, Some(truth)) => Value::Int(i64::from(truth)),
     }))
+}
+
+/// Counts one comparison of a pattern against a value, which a call
+/// against a null is none of.
+///
+/// `likeFunc` of `research/sqlite/src/func.c:971` reads both arguments as
+/// text before it counts, and a null reads as no text, so a call that
+/// answers a null counts nothing. Costs O(1).
+fn counted_like(args: &[Value], row: &dyn Row) {
+    let valued = |at: usize| args.get(at).is_some_and(|value| *value != Value::Null);
+    if valued(0) && valued(1) {
+        row.liked();
+    }
 }
 
 /// `x BETWEEN low AND high`, which is two comparisons over one value.

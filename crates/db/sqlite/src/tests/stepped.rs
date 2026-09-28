@@ -357,3 +357,44 @@ fn what_a_walk_that_answers_part_of_an_order_counts() {
     assert_eq!(pair(b"SELECT * FROM m ORDER BY q, p"), (4, 1));
     assert_eq!(pair(b"SELECT * FROM m ORDER BY q, p, r"), (4, 1));
 }
+
+/// A `LIKE` and a `GLOB` each count one comparison per row the walk reads
+/// the term for, and a term read against a null compares nothing.
+///
+/// `sqlite3_like_count` of `research/sqlite/src/func.c:975` counts one per
+/// call of `likeFunc` that reads both arguments as text, and a term of the
+/// `WHERE` is read once per row and not again where the statement is
+/// answered, which `TERM_CODED` of `research/sqlite/src/whereInt.h` marks.
+#[test]
+fn what_a_like_and_a_glob_count() {
+    let mut writer = crate::change::Writer::new(1024, 0, crate::header::Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(x TEXT)").unwrap();
+    for word in ["a", "ab", "abc", "abcd", "xyz"] {
+        let mut sql = alloc::string::String::from("INSERT INTO t VALUES('");
+        sql.push_str(word);
+        sql.push_str("')");
+        writer.run(sql.as_bytes()).unwrap();
+    }
+    writer.run(b"INSERT INTO t VALUES(NULL)").unwrap();
+    let image = writer.written();
+    let database = Database::open(&image).unwrap();
+    let likes = |sql: &[u8]| database.query(sql).unwrap().stepped.likes;
+    // One comparison per call, and none where either side is a null.
+    assert_eq!(likes(b"SELECT 'abc' LIKE 'abc%'"), 1);
+    assert_eq!(likes(b"SELECT glob('abc*', 'abcd')"), 1);
+    assert_eq!(likes(b"SELECT 'abc' LIKE NULL"), 0);
+    assert_eq!(likes(b"SELECT NULL GLOB 'a*'"), 0);
+    // One per row the walk reads the term for: the six rows of the table,
+    // of which the one that holds no value compares nothing.
+    assert_eq!(likes(b"SELECT x FROM t WHERE x LIKE 'zzz%'"), 5);
+    assert_eq!(likes(b"SELECT x FROM t WHERE x GLOB 'zzz*'"), 5);
+    // The walk stops once the rows the `LIMIT` takes are all there.
+    assert_eq!(likes(b"SELECT x FROM t WHERE x LIKE 'abc%' LIMIT 1"), 3);
+    // A statement that writes no `LIKE` counts none, and one an
+    // `EXPLAIN QUERY PLAN` reads runs no loop.
+    assert_eq!(likes(b"SELECT x FROM t WHERE x='abc'"), 0);
+    assert_eq!(
+        likes(b"EXPLAIN QUERY PLAN SELECT x FROM t WHERE x LIKE 'abc%'"),
+        0
+    );
+}

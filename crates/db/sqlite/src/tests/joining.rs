@@ -511,3 +511,61 @@ fn how_many_sides_the_from_of_one_statement_holds() {
         .query(&sql)
         .unwrap_or_else(|error| panic!("two statements of 64 sides: {error:?}"));
 }
+
+/// A term of the `WHERE` that names the side a `LEFT JOIN` attaches is
+/// read for the row that holds nothing of that side as it is read for a
+/// row that holds one, so such a row stands where the term holds of nulls
+/// and nowhere else.
+#[test]
+fn what_a_term_that_names_the_side_a_left_join_attaches_answers() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t1(a INT, b INT)".as_slice(),
+        b"INSERT INTO t1 VALUES(1,2)",
+        b"INSERT INTO t1 VALUES(1,3)",
+        b"INSERT INTO t1 VALUES(1,4)",
+        b"CREATE TABLE t2(c INT, d INT)",
+        b"INSERT INTO t2 VALUES(3,33)",
+        b"INSERT INTO t2 VALUES(4,44)",
+        b"INSERT INTO t2 VALUES(5,55)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let image = writer.written();
+    let database = Database::open(&image).unwrap();
+    let rows = |sql: &[u8]| {
+        database
+            .query(sql)
+            .unwrap()
+            .rows
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|value| match value {
+                        crate::value::Value::Int(held) => alloc::format!("{held}"),
+                        _ => alloc::string::String::from("NULL"),
+                    })
+                    .collect::<alloc::vec::Vec<_>>()
+                    .join("|")
+            })
+            .collect::<alloc::vec::Vec<_>>()
+            .join(" ")
+    };
+    assert_eq!(
+        rows(b"SELECT * FROM t1 LEFT JOIN t2 ON b=c WHERE c IS NULL"),
+        "1|2|NULL|NULL"
+    );
+    assert_eq!(
+        rows(b"SELECT * FROM t1 LEFT JOIN t2 ON b=c WHERE d>40"),
+        "1|4|4|44"
+    );
+    assert_eq!(
+        rows(b"SELECT * FROM t1 LEFT JOIN t2 ON b=c WHERE c IS NOT NULL"),
+        "1|3|3|33 1|4|4|44"
+    );
+    // A term that names the side on the left holds of every row of it.
+    assert_eq!(
+        rows(b"SELECT * FROM t1 LEFT JOIN t2 ON b=c WHERE a=1"),
+        "1|2|NULL|NULL 1|3|3|33 1|4|4|44"
+    );
+}

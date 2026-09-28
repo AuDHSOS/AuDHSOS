@@ -2383,6 +2383,21 @@ proc harness_search_count {args} {
 trace add variable ::sqlite_search_count read harness_search_count
 
 
+# sqlite3_like_count of func.c:900: how many times a LIKE or a GLOB
+# compared a pattern against a value, which a file reads to see whether an
+# index answered the term rather than the walk reading every row. The
+# harness holds the count, so reading the variable asks for it and writing
+# it says where to count from.
+set ::sqlite_like_count 0
+proc harness_like_count {name1 name2 op} {
+  if {$op eq "write"} {
+    harness_send likes_as $::sqlite_like_count
+    return
+  }
+  set ::sqlite_like_count [lindex [harness_send likes] 0]
+}
+trace add variable ::sqlite_like_count {read write} harness_like_count
+
 # sqlite3_sync_count and sqlite3_fullsync_count of os_unix.c: how many
 # times a commit held a file on the disk, which a test reads to see that
 # a commit synced at all and that PRAGMA fullfsync reached the driver.
