@@ -7888,6 +7888,23 @@ Unit tests of `crate::db` over `fixtures/indexed.db`.
 - `WHERE NULL` under an aggregate, which answers one row.
 - `WHERE abs(0)`, which is read against every row.
 
+### 6.6.425 What an `IN` over the rowid holds the walk to (`db-sqlite`)
+
+Unit tests of `crate::db` over an image `crate::change` writes. Every
+answer is the one the C library's shell writes.
+
+- Four values, of which one names no row: three rows, and three steps of
+  the walk of the list.
+- A value two places of the list hold, which names one walk.
+- A value that is no whole number, a real that is one, and text that reads
+  as one.
+- An `ORDER BY` the walk does not answer, which is sorted.
+- A `NOT IN`, a list of no value, `rowid+0`, a column that is not the
+  rowid, and a list that names a column of the side itself, which each
+  leave the walk of the whole table.
+- A list that names a column of the side the walk reads before it, whose
+  values are read once per row of that side.
+
 ### 6.6.424 What the plan names a statement inside an expression by (`db-sqlite`)
 
 Unit tests of `crate::db` over an image `crate::change` writes, drawn as

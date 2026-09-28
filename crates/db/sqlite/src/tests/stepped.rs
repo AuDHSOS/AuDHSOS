@@ -579,3 +579,72 @@ fn what_the_rows_read_out_of_the_sorter_count() {
     assert_eq!(held.rows.len(), 2);
     assert_eq!(held.stepped.searched, 5);
 }
+
+/// An `IN` over the rowid holds the walk to one row per value of the list:
+/// the values are read once, a value two places hold names one walk, and
+/// the walk of the list counts one step per value after the first.
+///
+/// `sqlite3WhereBegin` writes a loop over the values of the list, each read
+/// as a rowid, which `WHERE_IN_ABLE` of `research/sqlite/src/whereInt.h`
+/// marks, and `OP_SeekRowid` counts no search where `OP_SeekGE` counts one.
+#[test]
+fn what_an_in_over_the_rowid_holds_the_walk_to() {
+    let mut writer = crate::change::Writer::new(1024, 0, crate::header::Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(w)").unwrap();
+    for held in 1..=6u32 {
+        let sql = alloc::format!("INSERT INTO t VALUES({held})");
+        writer.run(sql.as_bytes()).unwrap();
+    }
+    let image = writer.written();
+    let database = Database::open(&image).unwrap();
+    let held = |sql: &[u8]| {
+        let answered = database.query(sql).unwrap();
+        (
+            answered.rows.len(),
+            answered.stepped.steps,
+            answered.stepped.searched,
+            answered.stepped.sorts,
+        )
+    };
+    // Four values, of which one names no row, are four walks and three
+    // steps of the walk of the list.
+    assert_eq!(
+        held(b"SELECT w FROM t WHERE rowid IN (1,2,3,1234)"),
+        (3, 0, 3, 0)
+    );
+    // A value two places of the list hold names one walk.
+    assert_eq!(
+        held(b"SELECT w FROM t WHERE rowid IN (2,2,3)"),
+        (2, 0, 1, 0)
+    );
+    // A value that is no whole number names no row, and text that reads as
+    // one does, which `OP_SeekRowid` reads under numeric affinity.
+    assert_eq!(
+        held(b"SELECT w FROM t WHERE rowid IN (1.5,2)"),
+        (1, 0, 1, 0)
+    );
+    assert_eq!(
+        held(b"SELECT w FROM t WHERE rowid IN (1.0,2)"),
+        (2, 0, 1, 0)
+    );
+    assert_eq!(
+        held(b"SELECT w FROM t WHERE rowid IN ('2',3)"),
+        (2, 0, 1, 0)
+    );
+    // An `ORDER BY` the walk does not answer is sorted, which counts one
+    // search per row after the first out of the sorter and one back.
+    assert_eq!(
+        held(b"SELECT w FROM t WHERE rowid IN (1,2,3,1234) ORDER BY w DESC"),
+        (3, 0, 4, 1)
+    );
+    // A `NOT IN` names no row of its own, and a term over anything but the
+    // rowid itself holds the walk to nothing.
+    assert_eq!(
+        held(b"SELECT w FROM t WHERE rowid NOT IN (1,2)"),
+        (4, 5, 5, 0)
+    );
+    assert_eq!(
+        held(b"SELECT w FROM t WHERE rowid+0 IN (1,2)"),
+        (2, 5, 5, 0)
+    );
+}

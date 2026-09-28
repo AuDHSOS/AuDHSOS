@@ -1211,3 +1211,81 @@ fn what_the_plan_names_a_statement_inside_an_expression_by() {
         assert_eq!(plan(&image, sql), lines, "{sql:?}");
     }
 }
+
+/// The plan names a walk an `IN` over the rowid holds as it names one a
+/// term holds to one rowid, which is `SEARCH t USING INTEGER PRIMARY KEY
+/// (rowid=?)`, and names a scan where the term names anything else.
+#[test]
+fn how_a_walk_an_in_over_the_rowid_holds_is_named() {
+    let mut writer = crate::change::Writer::new(1024, 0, crate::header::Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE t(w)").unwrap();
+    writer.run(b"INSERT INTO t VALUES(1)").unwrap();
+    writer.run(b"INSERT INTO t VALUES(2)").unwrap();
+    let image = writer.written();
+    // A value the statement computes out of no column stands before the
+    // walk begins as a literal does.
+    for sql in [
+        b"SELECT w FROM t WHERE rowid IN (1,2,3)".as_slice(),
+        b"SELECT w FROM t WHERE rowid IN (1+1,3)",
+    ] {
+        assert_eq!(
+            plan(&image, sql),
+            tree(&["`--SEARCH t USING INTEGER PRIMARY KEY (rowid=?)"]),
+            "{sql:?}"
+        );
+    }
+    // An `ORDER BY` the walk does not answer is sorted.
+    assert_eq!(
+        plan(
+            &image,
+            b"SELECT w FROM t WHERE rowid IN (1,2,3) ORDER BY w DESC"
+        ),
+        tree(&[
+            "|--SEARCH t USING INTEGER PRIMARY KEY (rowid=?)",
+            "`--USE TEMP B-TREE FOR ORDER BY",
+        ])
+    );
+    // A `NOT IN`, a list of no value, a term over anything but the rowid
+    // itself, and a list that names a column of the side itself each leave
+    // the walk of the whole table.
+    for sql in [
+        b"SELECT w FROM t WHERE rowid NOT IN (1,2)".as_slice(),
+        b"SELECT w FROM t WHERE rowid IN ()",
+        b"SELECT w FROM t WHERE rowid+0 IN (1,2)",
+        b"SELECT w FROM t WHERE w IN (1,2)",
+        b"SELECT w FROM t WHERE rowid IN (1, w)",
+    ] {
+        assert_eq!(plan(&image, sql), tree(&["`--SCAN t"]), "{sql:?}");
+    }
+}
+
+/// A list that names a column of a side the walk reads before this one
+/// holds the walk as a list of values does, the values being read once per
+/// row of that side.
+#[test]
+fn what_an_in_naming_a_column_of_a_side_before_it_holds() {
+    let mut writer = crate::change::Writer::new(1024, 0, crate::header::Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t(w)".as_slice(),
+        b"INSERT INTO t VALUES(1)",
+        b"INSERT INTO t VALUES(2)",
+        b"CREATE TABLE u(k)",
+        b"INSERT INTO u VALUES(1)",
+        b"INSERT INTO u VALUES(2)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let image = writer.written();
+    assert_eq!(
+        plan(&image, b"SELECT w, k FROM u, t WHERE t.rowid IN (u.k, 2)"),
+        tree(&[
+            "|--SCAN u",
+            "`--SEARCH t USING INTEGER PRIMARY KEY (rowid=?)"
+        ])
+    );
+    let answered = Database::open(&image)
+        .unwrap()
+        .query(b"SELECT w, k FROM u, t WHERE t.rowid IN (u.k, 2)")
+        .unwrap();
+    assert_eq!(answered.rows.len(), 3);
+}

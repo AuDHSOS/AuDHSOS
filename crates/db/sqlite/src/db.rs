@@ -1988,6 +1988,10 @@ enum Plan {
     /// The one row of the table whose rowid a side the walk reads before
     /// this one answers, which is `OP_SeekRowid`.
     Rowid(ExprId),
+    /// The rows of the table whose rowids an `IN` names, one walk per
+    /// value: `sqlite3WhereBegin` writes a loop over the values of the
+    /// list, each read as a rowid, which `WHERE_IN_ABLE` marks.
+    Rowids(Vec<ExprId>),
 }
 
 /// One column of an index held to what a side the walk reads before this
@@ -2012,6 +2016,7 @@ impl Side<'_> {
             | Plan::Keyed { .. }
             | Plan::Joined { .. }
             | Plan::Rowid(_)
+            | Plan::Rowids(_)
             | Plan::Union(_) => (None, None),
         }
     }
@@ -6153,6 +6158,9 @@ impl<'a> Database<'a> {
         if matches!(side.plan, Plan::Backwards) {
             return self.backwards(stored);
         }
+        if let Plan::Rowids(ids) = &side.plan {
+            return self.rowids(stored, ids, cursor);
+        }
         if let Plan::Rowid(id) = &side.plan {
             // `OP_SeekRowid` reads the value as a number and takes no row
             // where it is not a whole one.
@@ -6192,6 +6200,55 @@ impl<'a> Database<'a> {
             return Some(self.ranged(stored, (*first, *last)));
         }
         sought(plan, (None, stored.root), cursor).and_then(|held| self.passes(stored, held))
+    }
+
+    /// The walks an `IN` over the rowid asks for: one of the row each value
+    /// of the list names, in the order the values collate in.
+    ///
+    /// `sqlite3CodeVerifySchema` writes the values into an ephemeral index,
+    /// which the loop of `sqlite3WhereBegin` walks, so a value two places of
+    /// the list hold names one walk and the walk of the list counts one step
+    /// per value after the first, which `OP_Next` counts.
+    ///
+    /// Costs O(n log n) in the values of the list, and O(log m) per value in
+    /// the rows of the table.
+    fn rowids<'f>(&self, stored: &'f Stored, ids: &[ExprId], cursor: &Cursor<'_>) -> Feed<'a, 'f> {
+        let reach = cursor.reach;
+        let mut values: Vec<Value> = Vec::new();
+        for id in ids {
+            let mut value =
+                evaluate_row(reach.arena, *id, reach.sql, cursor).unwrap_or(Value::Null);
+            crate::value::apply(&mut value, Affinity::Numeric);
+            values.push(value);
+        }
+        // The ephemeral index the values are written into holds each of them
+        // once, whether a row answers it or not, and the walk of it counts
+        // one step per value after the first.
+        values.sort_by(|left, right| compare(left, right, Collation::Binary));
+        values.dedup_by(|left, right| {
+            compare(left, right, Collation::Binary) == core::cmp::Ordering::Equal
+        });
+        self.search(i64::try_from(values.len().saturating_sub(1)).unwrap_or(0));
+        // `OP_SeekRowid` reads the value as a number and takes no row where
+        // it is not a whole one.
+        let rowids: Vec<i64> = values
+            .into_iter()
+            .filter_map(|value| match value {
+                Value::Int(rowid) => Some(rowid),
+                Value::Null | Value::Real(_) | Value::Text(_) | Value::Blob(_) => None,
+            })
+            .collect();
+        let feeds: Vec<Feed<'a, 'f>> = rowids
+            .into_iter()
+            .map(|rowid| self.ranged(stored, (Some(rowid), Some(rowid))))
+            .collect();
+        Feed::Union(Box::new(Union {
+            feeds,
+            at: 0,
+            seen: Vec::new(),
+            kept: Vec::new(),
+            apart: true,
+        }))
     }
 
     /// The walks one plan asks for: the range of a pattern is taken once
@@ -7250,7 +7307,12 @@ fn one_rowed(terms: &Planning<'_>, at: usize, source: &Source<'_>, plan: &Plan) 
             .iter()
             .any(|term| term.at == at && term.reached == Reached::Key && term.op == BinaryOp::Eq),
         Plan::Keyed { root, key, .. } => keyed_once(stored, *root, key),
-        Plan::Rows(_, _) | Plan::Backwards | Plan::Union(_) | Plan::Joined { .. } => false,
+        // A list of values names as many rows as it holds values.
+        Plan::Rows(_, _)
+        | Plan::Backwards
+        | Plan::Union(_)
+        | Plan::Joined { .. }
+        | Plan::Rowids(_) => false,
     }
 }
 
@@ -8082,7 +8144,11 @@ const fn whole_walk(side: &Side<'_>) -> bool {
         && match &side.plan {
             Plan::Rows(None, None) | Plan::Backwards => true,
             Plan::Keyed { key, bounds, .. } => key.is_empty() && bounds.is_empty(),
-            Plan::Rows(_, _) | Plan::Joined { .. } | Plan::Rowid(_) | Plan::Union(_) => false,
+            Plan::Rows(_, _)
+            | Plan::Joined { .. }
+            | Plan::Rowid(_)
+            | Plan::Rowids(_)
+            | Plan::Union(_) => false,
         }
 }
 
@@ -8317,7 +8383,11 @@ fn covering_of(side: &Side<'_>, read: &[usize]) -> Option<Vec<Option<usize>>> {
     const fn rooted(plan: &Plan) -> Option<u32> {
         match plan {
             Plan::Keyed { root, .. } | Plan::Joined { root, .. } => Some(*root),
-            Plan::Rows(_, _) | Plan::Backwards | Plan::Rowid(_) | Plan::Union(_) => None,
+            Plan::Rows(_, _)
+            | Plan::Backwards
+            | Plan::Rowid(_)
+            | Plan::Rowids(_)
+            | Plan::Union(_) => None,
         }
     }
 
@@ -8457,7 +8527,9 @@ fn detailed(side: &Side<'_>, plan: &Plan, lines: &mut Vec<Explained>, parent: us
             }
             lines.push((parent, by_rowid(&side.shown, &terms)));
         }
-        Plan::Rowid(_) => lines.push((parent, by_rowid(&side.shown, &[b"rowid=?"]))),
+        Plan::Rowid(_) | Plan::Rowids(_) => {
+            lines.push((parent, by_rowid(&side.shown, &[b"rowid=?"])));
+        }
         Plan::Keyed {
             root, key, bounds, ..
         } => {
@@ -9859,7 +9931,9 @@ impl Seek {
 fn sought(plan: &Plan, held: (Option<&[Option<usize>]>, u32), cursor: &Cursor<'_>) -> Option<Seek> {
     let (covering, own) = held;
     match plan {
-        Plan::Rows(_, _) | Plan::Backwards | Plan::Rowid(_) | Plan::Union(_) => None,
+        Plan::Rows(_, _) | Plan::Backwards | Plan::Rowid(_) | Plan::Rowids(_) | Plan::Union(_) => {
+            None
+        }
         Plan::Keyed {
             root,
             key,
@@ -9964,6 +10038,12 @@ fn joined(
     if let Some(key) = keyed_rowid(arena, &roots, sql, sides, at) {
         return Some((Plan::Rowid(key), usize::MAX));
     }
+    // An `IN` over the rowid names as many rows as the list holds values,
+    // which is one walk each and fewer rows than any index answers.
+    let listed = listed_rowid(arena, &roots, sql, sides, at);
+    if let Some(list) = listed {
+        return Some((Plan::Rowids(list), usize::MAX.saturating_sub(1)));
+    }
     let mut best: Option<(Plan, usize)> = None;
     let mut held = 0;
     // An index over a table that keeps its rows in the key's own tree ends
@@ -10055,6 +10135,77 @@ fn keyed_rowid(
     at: usize,
 ) -> Option<ExprId> {
     keyed_to(arena, roots, sql, sides, (at, Reached::Key), None)
+}
+
+/// The values an `IN` of the `AND` spine of `roots` holds the rowid of side
+/// `at` to, where a side the walk reads before `at` answers every one of
+/// them, and nothing where no `IN` names the rowid.
+///
+/// `sqlite3WhereBegin` writes a loop over the values of such a list, each
+/// read as a rowid, which `WHERE_IN_ABLE` of
+/// `research/sqlite/src/whereInt.h` marks. A `NOT IN` names no row of its
+/// own and a list of no value names none.
+///
+/// Walking the spine costs O(n) in its nodes.
+/// Whether the expression names no column of any side, so that its value
+/// stands before the walk begins.
+///
+/// Costs O(n) in the nodes of the expression.
+fn no_column(arena: &Arena, id: ExprId) -> bool {
+    let mut stack = alloc::vec![id];
+    while let Some(node) = stack.pop().and_then(|id| arena.node(id)) {
+        if matches!(node, Node::Column { .. }) {
+            return false;
+        }
+        arena.under(node, |child| stack.push(child));
+    }
+    true
+}
+
+fn listed_rowid(
+    arena: &Arena,
+    roots: &[ExprId],
+    sql: &[u8],
+    sides: &[Side<'_>],
+    at: usize,
+) -> Option<Vec<ExprId>> {
+    let mut spine = roots.to_vec();
+    while let Some(node) = spine.pop().and_then(|id| arena.node(id)) {
+        if let Node::Binary {
+            op: BinaryOp::And,
+            left,
+            right,
+        } = node
+        {
+            spine.push(left);
+            spine.push(right);
+            continue;
+        }
+        let Node::InList {
+            value,
+            list,
+            negated: false,
+        } = node
+        else {
+            continue;
+        };
+        if reached(arena, value, sql, sides) != Some((at, Reached::Key)) {
+            continue;
+        }
+        let held: Vec<ExprId> = arena.children(list).to_vec();
+        // Only what the sides the walk has already read answer is a key it
+        // can answer: a column of this side or of one after it is not read
+        // yet, where a value that names no side of the statement is read
+        // before the walk begins.
+        let reads = held.iter().all(|id| {
+            no_column(arena, *id)
+                || answerable(arena, *id, sql, sides).is_some_and(|other| other < at)
+        });
+        if !held.is_empty() && reads {
+            return Some(held);
+        }
+    }
+    None
 }
 
 /// What the column `column` of side `at` is held equal to by the `AND`

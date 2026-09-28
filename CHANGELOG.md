@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` holds the walk to one row per value where an `IN` names the rowid, where
+  it read every row of the table, and counts the walk of the list as the C library
+  counts it. D-590 records it. Catalog 6.6.425. `where.test` goes from 286 cases
+  passing to 287 and `in4.test` from 70 to 71.
+
 - `db-sqlite` writes the database the statement wrote in front of the name of the table
   in the line of a walk, where the side carries no alias. D-589 records it.
 
