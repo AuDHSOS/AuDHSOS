@@ -2378,3 +2378,82 @@ fn what_a_partial_index_holds_the_walk_to() {
         tree(&["`--SCAN t1"])
     );
 }
+
+#[test]
+fn which_way_the_groups_of_a_statement_come_out() {
+    // `sqlite3CopySortOrder` writes the direction of each `ORDER BY` term
+    // onto the `GROUP BY` term at that place, so the walk that gathers
+    // the groups out of an index runs the way that direction names and
+    // the statement sorts nothing of its own.
+    assert_eq!(
+        plan(
+            super::INDEXED,
+            b"SELECT a, count(*) FROM k GROUP BY a ORDER BY a DESC"
+        ),
+        "`--SCAN k USING COVERING INDEX ka\n"
+    );
+    assert_eq!(
+        plan(
+            super::INDEXED,
+            b"SELECT p, q, count(*) FROM m GROUP BY p, q ORDER BY p DESC, q DESC"
+        ),
+        "`--SCAN m USING COVERING INDEX mpq\n"
+    );
+    // A walk that gathers the groups in another direction answers the
+    // groups alone, and the rows are sorted again.
+    assert_eq!(
+        plan(
+            super::INDEXED,
+            b"SELECT p, q, count(*) FROM m GROUP BY p, q ORDER BY p, q DESC"
+        ),
+        tree(&[
+            "|--SCAN m USING COVERING INDEX mpq",
+            "`--USE TEMP B-TREE FOR ORDER BY",
+        ])
+    );
+    // An `ORDER BY` that writes a `NULLS` clause of its own asks about
+    // another order than the groups come in.
+    assert_eq!(
+        plan(
+            super::INDEXED,
+            b"SELECT a, count(*) FROM k GROUP BY a ORDER BY a DESC NULLS FIRST"
+        ),
+        tree(&[
+            "|--SCAN k USING COVERING INDEX ka",
+            "`--USE TEMP B-TREE FOR ORDER BY",
+        ])
+    );
+    // The sorter over the groups takes the direction where no index
+    // gathers them, so the statement builds one tree and not two.
+    assert_eq!(
+        plan(
+            super::INDEXED,
+            b"SELECT r, count(*) FROM m GROUP BY r ORDER BY r"
+        ),
+        "`--SCAN m USING COVERING INDEX mr\n"
+    );
+    // A last term naming the rowid is answered by the walk that answers
+    // the terms before it, the rowid standing after every column of the
+    // index, and either direction answers it where no `ORDER BY` names
+    // one.
+    assert_eq!(
+        plan(super::INDEXED, b"SELECT count(*) FROM k GROUP BY a, rowid"),
+        "`--SCAN k USING COVERING INDEX ka\n"
+    );
+    assert_eq!(
+        plan(
+            super::INDEXED,
+            b"SELECT count(*) FROM m GROUP BY p, q, rowid"
+        ),
+        "`--SCAN m USING COVERING INDEX mpq\n"
+    );
+    // A term standing after the last column of the index leaves the
+    // groups to the sorter.
+    assert_eq!(
+        plan(
+            super::INDEXED,
+            b"SELECT count(*) FROM k GROUP BY a, b, rowid"
+        ),
+        tree(&["|--SCAN k", "`--USE TEMP B-TREE FOR GROUP BY"])
+    );
+}

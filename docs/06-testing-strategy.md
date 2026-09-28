@@ -7914,6 +7914,27 @@ answer is the one the C library's shell writes.
   the statement outside answers, and one whose term writes `oid` or
   `_rowid_`.
 
+### 6.6.441 Which way the groups of a statement come out (`db-sqlite`)
+
+Unit tests of `crate::db` over the image of two tables with three indexes
+over them. Every answer is the one the C library's shell writes.
+
+- `SELECT a, count(*) FROM k GROUP BY a ORDER BY a DESC` over an index on
+  `k(a)`, named `SCAN k USING COVERING INDEX ka` alone.
+- `GROUP BY p, q ORDER BY p DESC, q DESC` over an index on `m(p, q)`, the
+  same.
+- `GROUP BY p, q ORDER BY p, q DESC` over that index, which adds
+  `USE TEMP B-TREE FOR ORDER BY`.
+- `GROUP BY a ORDER BY a DESC NULLS FIRST`, which adds the same line.
+- `GROUP BY r ORDER BY r` over an index on `m(r DESC)`, named
+  `SCAN m USING COVERING INDEX mr` alone.
+- `GROUP BY a, rowid` and `GROUP BY p, q, rowid`, each named by the index
+  that holds the terms before the rowid, and `GROUP BY a, b, rowid`, which
+  adds `USE TEMP B-TREE FOR GROUP BY`.
+- The sort counts of `crate::db::tests::stepped`, which count one tree for
+  a statement whose groups the sorter holds and none for one an index
+  gathers.
+
 ### 6.6.440 What a computed column that refuses the row refuses (`db-sqlite`)
 
 Unit tests of `crate::change`. Every answer is the one the C library's

@@ -19,6 +19,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` answers the groups of a statement in the direction the `ORDER BY` names for the terms
+  of the `GROUP BY` and gathers them out of an index whichever way that index holds its entries, so
+  `SELECT a, sum(b) FROM t1 GROUP BY a ORDER BY a DESC` sorts once where it sorted twice. D-610
+  records it. Catalog 6.6.441. `orderbyA.test` goes from 80 cases passing to 98, its every case.
+
 - `db-sqlite` refuses a function that answers another value for the same row in an expression of
   an index, in the `WHERE` of a partial index and in a generated column, and leaves one in a
   `CHECK` constraint, where it read the call when the row was written. D-607 records it. Catalog

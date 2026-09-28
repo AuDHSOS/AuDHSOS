@@ -233,9 +233,11 @@ fn the_order_the_groups_come_in_answers_an_order_by_that_names_them() {
     // that names those terms in that order sorts nothing of its own.
     assert_eq!(pair(b"SELECT p FROM m GROUP BY p ORDER BY p"), (4, 0));
     assert_eq!(pair(b"SELECT p FROM m GROUP BY p, q ORDER BY p, q"), (4, 0));
-    // A term written backwards, one with its nulls moved, one over an
-    // expression, and a count of terms the `GROUP BY` does not name.
-    assert_eq!(pair(b"SELECT p FROM m GROUP BY p ORDER BY p DESC"), (4, 1));
+    // A term written backwards is answered by the walk of the index from
+    // its last entry back.
+    assert_eq!(pair(b"SELECT p FROM m GROUP BY p ORDER BY p DESC"), (4, 0));
+    // A term with its nulls moved, one over an expression, and a count
+    // of terms the `GROUP BY` does not name.
     assert_eq!(
         pair(b"SELECT p FROM m GROUP BY p ORDER BY p NULLS LAST"),
         (4, 1)
