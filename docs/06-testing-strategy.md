@@ -7888,6 +7888,20 @@ Unit tests of `crate::db` over `fixtures/indexed.db`.
 - `WHERE NULL` under an aggregate, which answers one row.
 - `WHERE abs(0)`, which is read against every row.
 
+### 6.6.423 How the rows of a view are read (`db-sqlite`)
+
+Unit tests of `crate::db` over an image `crate::change` writes, drawn as
+`query_plan_graph` of the suite's `tester.tcl` draws the lines. Every
+answer is the one the C library's shell writes.
+
+- A view of one table, whose line stands where the name stood, alone and
+  beside a table.
+- A view that aggregates, named `CO-ROUTINE` with its lines under it.
+- The same view behind a statement written inside the `FROM`, named
+  `MATERIALIZE`.
+- The same view behind a view written into the statement that reads it,
+  which leaves it read a row at a time.
+
 ### 6.6.422 What the rows of the sorter count (`db-sqlite`)
 
 Unit tests of `crate::db` over an image `crate::change` writes.

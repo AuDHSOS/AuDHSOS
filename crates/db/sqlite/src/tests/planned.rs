@@ -1034,3 +1034,82 @@ fn what_the_line_of_a_side_an_outer_join_keeps_ends_with() {
         assert_eq!(plan(&image, sql), lines, "{sql:?}");
     }
 }
+
+/// The plan names the rows of a view as it names the rows of a statement
+/// written inside a `FROM`: the statement of the view is written into the
+/// one that reads it where nothing of what the two hold stops it, and named
+/// `CO-ROUTINE` or `MATERIALIZE` otherwise.
+///
+/// `sqlite3SelectExpand` of `research/sqlite/src/select.c` puts the
+/// statement of the view in the place of the name that stands for it.
+#[test]
+fn how_the_rows_of_a_view_are_read() {
+    let mut writer = crate::change::Writer::new(1024, 0, crate::header::Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t(a,b)".as_slice(),
+        b"INSERT INTO t VALUES(1,2)",
+        b"INSERT INTO t VALUES(3,4)",
+        b"CREATE VIEW v AS SELECT a, b FROM t WHERE a>0",
+        b"CREATE VIEW w AS SELECT count(*) AS n FROM t",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let image = writer.written();
+    for (sql, lines) in [
+        // The statement of the view reads one table and keeps every row,
+        // so its line stands where the name stood.
+        (b"SELECT * FROM v".as_slice(), tree(&["`--SCAN t"])),
+        (b"SELECT * FROM v, t", tree(&["|--SCAN t", "`--SCAN t"])),
+        // An aggregate statement is read a row at a time, which the plan
+        // names `CO-ROUTINE` and hangs the lines of that statement under.
+        (
+            b"SELECT * FROM w",
+            tree(&["|--CO-ROUTINE w", "|  `--SCAN t", "`--SCAN w"]),
+        ),
+        // A statement of its own in front of it makes the rows of the view
+        // a table of their own.
+        (
+            b"SELECT * FROM (SELECT 1), w",
+            tree(&[
+                "|--CO-ROUTINE (subquery-0)",
+                "|  `--SCAN CONSTANT ROW",
+                "|--MATERIALIZE w",
+                "|  `--SCAN t",
+                "|--SCAN (subquery-0)",
+                "`--SCAN w",
+            ]),
+        ),
+    ] {
+        assert_eq!(plan(&image, sql), lines, "{sql:?}");
+    }
+}
+
+/// A view written into the statement that reads it is no statement of its
+/// own, so a view after it is read a row at a time, which the plan names
+/// `CO-ROUTINE`.
+///
+/// The C library reads the rows of a co-routine before the rows of the
+/// sides the `FROM` writes in front of it, which item 283 of document 16
+/// records; this engine reads the sides in the order the `FROM` writes
+/// them, so the two lines of the walk stand the other way round.
+#[test]
+fn what_a_view_written_in_leaves_the_view_after_it() {
+    let mut writer = crate::change::Writer::new(1024, 0, crate::header::Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t(a,b)".as_slice(),
+        b"INSERT INTO t VALUES(1,2)",
+        b"CREATE VIEW v AS SELECT a, b FROM t WHERE a>0",
+        b"CREATE VIEW w AS SELECT count(*) AS n FROM t",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let image = writer.written();
+    assert_eq!(
+        plan(&image, b"SELECT * FROM v, w"),
+        tree(&["|--CO-ROUTINE w", "|  `--SCAN t", "|--SCAN t", "`--SCAN w"])
+    );
+    assert_eq!(
+        plan(&image, b"SELECT * FROM w, v"),
+        tree(&["|--CO-ROUTINE w", "|  `--SCAN t", "|--SCAN w", "`--SCAN t"])
+    );
+}

@@ -1754,6 +1754,22 @@ const RECURSION_ROWS: usize = 100_000;
 /// of the sides counts each of them in.
 const JOINED: usize = 64;
 
+/// What one name in a `FROM` reads, and the lines the plan names for it.
+struct Tabled<'a> {
+    /// The columns it answers.
+    shape: Shape,
+    /// Where its rows come from.
+    source: Source<'a>,
+    /// The name the plan writes it under.
+    name: Vec<u8>,
+    /// The database of the connection it stands in.
+    schema: Vec<u8>,
+    /// The lines of the statement of a view the plan writes into the one
+    /// that reads it, which stand in the place that name stands in the
+    /// `FROM`.
+    lines: Vec<Explained>,
+}
+
 /// What a view puts in the place of a table: the columns it answers,
 /// the rows its statement answered, and the name it is known by.
 struct Viewed {
@@ -2111,6 +2127,20 @@ fn valued(arena: &Arena, id: crate::ast::SelectId) -> Vec<u8> {
 
 /// The name a plan writes a statement of a `FROM` under: the alias it
 /// carries, or its own place.
+/// The line that names how the rows of a statement standing in a `FROM`
+/// are read, and nothing where the plan names no line of its own for it.
+///
+/// Costs O(n) in the bytes of the name.
+fn housed_line(nesting: Nesting, named: &[u8]) -> Option<Vec<u8>> {
+    let mut line = match nesting {
+        Nesting::Once => b"CO-ROUTINE ".to_vec(),
+        Nesting::Kept => b"MATERIALIZE ".to_vec(),
+        Nesting::Named | Nesting::Written => return None,
+    };
+    line.extend_from_slice(named);
+    Some(line)
+}
+
 fn nested_named(id: crate::ast::SelectId, alias: Option<&[u8]>) -> Vec<u8> {
     match alias {
         Some(named) => named.to_vec(),
@@ -5092,26 +5122,78 @@ impl<'a> Database<'a> {
     /// drops before it reads the conditions, are both left as they stand.
     ///
     /// Reading the two statements costs O(1) in their clauses.
+    /// The view a name in a `FROM` stands for, and nothing where the name
+    /// reaches a `WITH` term or a table of the schema first.
+    ///
+    /// Costs O(v) in the views of the connection, after what the reading of
+    /// a table costs.
+    fn viewed_by(
+        &self,
+        source: &crate::ast::Source,
+        sql: &[u8],
+        scope: Scope<'_>,
+    ) -> Option<&View> {
+        let held = match source.kind {
+            SourceKind::Table { schema, name, .. } => Some((schema, name)),
+            SourceKind::Select(_) | SourceKind::Function { .. } => None,
+        };
+        let (schema, name) = held?;
+        let named = table_named(schema, name, sql);
+        let place = match schema {
+            Some(span) => Some(self.placed(&dequote(span.text(sql)))?),
+            None => None,
+        };
+        // A `WITH` term is reached by its bare name, and a table of the
+        // schema stands in front of a view of the same name.
+        if place.is_none()
+            && scope
+                .terms
+                .iter()
+                .any(|(term, _)| term.eq_ignore_ascii_case(&named.name))
+        {
+            return None;
+        }
+        if self.located_table(place, &named.name).is_some() {
+            return None;
+        }
+        self.views.iter().find(|view| {
+            place.is_none_or(|place| view.place == place)
+                && view.name.eq_ignore_ascii_case(&named.name)
+        })
+    }
+
     fn nesting(
         &self,
         arena: &Arena,
         held: (&Select, &[u8]),
         source: &crate::ast::Source,
         at: usize,
+        scope: Scope<'_>,
     ) -> Nesting {
         let (select, sql) = held;
-        let SourceKind::Select(id) = source.kind else {
+        // `sqlite3SelectExpand` of `research/sqlite/src/select.c` puts the
+        // statement of a view in the place of the name that stands for it,
+        // so such a name is read as a statement written inside the `FROM`.
+        let held = match source.kind {
+            SourceKind::Select(id) => arena.select(id).map(|inner| (arena, inner, sql)),
+            SourceKind::Table { .. } => self.viewed_by(source, sql, scope).and_then(|view| {
+                view.arena
+                    .select(view.select)
+                    .map(|inner| (&view.arena, inner, view.sql.as_slice()))
+            }),
+            SourceKind::Function { .. } => None,
+        };
+        let Some((nested, inner, text)) = held else {
             return Nesting::Named;
         };
-        // A `VALUES` of several rows is named as the clause it is and
-        // stands for no plan of its own.
-        if !valued(arena, id).is_empty() {
-            return Nesting::Named;
+        if let SourceKind::Select(id) = source.kind {
+            // A `VALUES` of several rows is named as the clause it is and
+            // stands for no plan of its own.
+            if !valued(arena, id).is_empty() {
+                return Nesting::Named;
+            }
         }
-        if arena
-            .select(id)
-            .is_some_and(|inner| self.written_into(arena, (select, sql), (source, &inner)))
-        {
+        if self.written_into(arena, (select, sql), (source, &inner), (nested, text)) {
             return Nesting::Written;
         }
         let sources = arena.sources(select.from);
@@ -5126,7 +5208,15 @@ impl<'a> Database<'a> {
             if before > 0 && held.join.kind != JoinKind::Inner {
                 return Nesting::Kept;
             }
-            if before < at && matches!(held.kind, SourceKind::Select(_)) {
+            // `sqlite3SelectExpand` leaves the statement of a view where
+            // the name stood, so such a source is a statement of its own,
+            // and one written into the statement above it is none: the
+            // conditions are read after the writing in.
+            if before < at
+                && (self.viewed_by(held, sql, scope).is_some()
+                    || matches!(held.kind, SourceKind::Select(_)))
+                && self.nesting(arena, (select, sql), held, before, scope) != Nesting::Written
+            {
                 return Nesting::Kept;
             }
         }
@@ -5147,9 +5237,13 @@ impl<'a> Database<'a> {
         arena: &Arena,
         held: (&Select, &[u8]),
         source: (&crate::ast::Source, &Select),
+        within: (&Arena, &[u8]),
     ) -> bool {
         let (select, sql) = held;
         let (source, inner) = source;
+        // The statement of a view stands in a tree of its own, which its
+        // own text was parsed into.
+        let (nested, text) = within;
         // (7) the statement must read a table of its own, (4) it must keep
         // every row, and (17) a compound one is left as it stands.
         if inner.from.is_empty() || inner.distinct == Distinct::Distinct || inner.compound.is_some()
@@ -5158,8 +5252,8 @@ impl<'a> Database<'a> {
         }
         // An aggregate statement is read a row at a time, and a window
         // function on either statement is restriction (25).
-        if self.aggregating(arena, inner, sql)
-            || self.windowed(arena, inner, sql)
+        if self.aggregating(nested, inner, text)
+            || self.windowed(nested, inner, text)
             || self.windowed(arena, select, sql)
         {
             return false;
@@ -5186,7 +5280,7 @@ impl<'a> Database<'a> {
         // (3a)(3d)(26): the statement stands on the far side of an outer
         // join.
         if source.join.kind != JoinKind::Inner
-            && (arena.sources(inner.from).len() > 1
+            && (nested.sources(inner.from).len() > 1
                 || select.distinct == Distinct::Distinct
                 || matches!(source.join.kind, JoinKind::Right | JoinKind::Full))
         {
@@ -5229,7 +5323,8 @@ impl<'a> Database<'a> {
         held: (Option<Span>, crate::ast::Indexed),
         sql: &'s [u8],
         scope: Scope<'_>,
-    ) -> Result<(Shape, Source<'s>, Vec<u8>, Vec<u8>), Error> {
+        over: (Nesting, Option<&[u8]>),
+    ) -> Result<Tabled<'s>, Error> {
         let (schema, indexed) = held;
         // A schema in front of the name says which database of the
         // connection holds the table, which `sqlite3FindTable` of
@@ -5251,28 +5346,69 @@ impl<'a> Database<'a> {
                 .find(|(term, _)| term.eq_ignore_ascii_case(&named.name)),
         };
         if let Some((term, answered)) = found {
-            return Ok((
-                answered.shape.clone(),
-                Source::Rows(answered.answer.rows.clone()),
-                term.clone(),
-                Vec::new(),
-            ));
+            return Ok(Tabled {
+                shape: answered.shape.clone(),
+                source: Source::Rows(answered.answer.rows.clone()),
+                name: term.clone(),
+                schema: Vec::new(),
+                lines: Vec::new(),
+            });
         }
         if let Some(stored) = self.located_table(place, &named.name) {
             indexed_held(stored, indexed, sql)?;
-            return Ok((
-                shape_of(&self.named_place(stored.place), &stored.table),
-                Source::Table(stored),
-                stored.table.name.clone(),
-                self.named_place(stored.place),
-            ));
+            return Ok(Tabled {
+                shape: shape_of(&self.named_place(stored.place), &stored.table),
+                source: Source::Table(stored),
+                name: stored.table.name.clone(),
+                schema: self.named_place(stored.place),
+                lines: Vec::new(),
+            });
         }
         // A view names a statement, so the rows are the ones that
         // statement answers, which is what `sqlite3SelectExpand` puts in
-        // its place.
-        let viewed = self.viewed(place, &named, scope)?;
+        // its place, and the plan names those rows as it names the rows of
+        // a statement written inside the `FROM`.
+        let (nesting, alias) = over;
+        if let Some(line) = housed_line(nesting, alias.unwrap_or(&named.name)) {
+            self.plan_under(line);
+        }
+        let viewed = self.aside(nesting, || self.viewed(place, &named, scope));
+        if matches!(nesting, Nesting::Once | Nesting::Kept) {
+            self.plan_over();
+        }
+        let (viewed, lines) = viewed;
+        let viewed = viewed?;
         let held = self.named_place(viewed.place);
-        Ok((viewed.shape, Source::Rows(viewed.rows), viewed.name, held))
+        Ok(Tabled {
+            shape: viewed.shape,
+            source: Source::Rows(viewed.rows),
+            name: viewed.name,
+            schema: held,
+            lines,
+        })
+    }
+
+    /// Runs `inner` with the lines it writes kept aside, where the plan
+    /// writes the statement into the one above it and the lines are to
+    /// stand in the place that statement stands in the `FROM`.
+    ///
+    /// Costs what `inner` costs.
+    fn aside<T>(&self, nesting: Nesting, inner: impl FnOnce() -> T) -> (T, Vec<Explained>) {
+        let kept = (nesting == Nesting::Written).then(|| {
+            let held = self.planned.borrow_mut().take();
+            if held.is_some() {
+                *self.planned.borrow_mut() = Some(Vec::new());
+            }
+            (held, self.hanging.replace(0))
+        });
+        let answered = inner();
+        let mut lines = Vec::new();
+        if let Some((held, hanging)) = kept {
+            lines = self.planned.borrow_mut().take().unwrap_or_default();
+            *self.planned.borrow_mut() = held;
+            self.hanging.set(hanging);
+        }
+        (answered, lines)
     }
 
     /// What a statement written inside a `FROM` answers, with the line
@@ -5289,13 +5425,7 @@ impl<'a> Database<'a> {
     ) -> Result<(Answered, Vec<Explained>), Error> {
         let (arena, id, alias) = held;
         let nesting = over.1;
-        let named = match nesting {
-            Nesting::Once => Some(b"CO-ROUTINE ".to_vec()),
-            Nesting::Kept => Some(b"MATERIALIZE ".to_vec()),
-            Nesting::Named | Nesting::Written => None,
-        };
-        if let Some(mut line) = named {
-            line.extend_from_slice(&nested_named(id, alias));
+        if let Some(line) = housed_line(nesting, &nested_named(id, alias)) {
             self.plan_under(line);
         }
         let answered = self.sided(arena, id, sql, over);
@@ -5363,20 +5493,21 @@ impl<'a> Database<'a> {
             // A name is matched with its quotes off, which is
             // `sqlite3Dequote` over every identifier the parser keeps.
             let alias = source.alias.map(|span| dequote(span.text(sql)));
-            let nesting = self.nesting(arena, (select, sql), source, out.len());
+            let nesting = self.nesting(arena, (select, sql), source, out.len(), scope);
             let (shape, from, name, held, lines) = match source.kind {
                 SourceKind::Table {
                     schema,
                     name,
                     indexed,
                 } => {
-                    let (shape, from, name, held) = self.tabled(
+                    let held = self.tabled(
                         table_named(schema, name, sql),
                         (schema, indexed),
                         sql,
                         scope,
+                        (nesting, alias.as_deref()),
                     )?;
-                    (shape, from, name, held, Vec::new())
+                    (held.shape, held.source, held.name, held.schema, held.lines)
                 }
                 SourceKind::Select(id) => {
                     let held = (arena, id, alias.as_deref());

@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `db-sqlite` names the rows of a view as it names the rows of a statement written
+  inside a `FROM`: the statement of the view is written into the one that reads it
+  where nothing of what the two hold stops it, and named `CO-ROUTINE` or
+  `MATERIALIZE` otherwise. D-587 records it. Catalog 6.6.423.
+
 - `db-sqlite` reads a function the application defined for one count of arguments in
   front of one it defined for any number of them, the two standing beside each other
   under one name. D-586 records it. `like.test` goes from 139 cases passing to 140.

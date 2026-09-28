@@ -1326,10 +1326,11 @@ Size: L.
 276. The lines a plan names for a statement written inside an expression:
      `SCALAR SUBQUERY`, `LIST SUBQUERY` and `CORRELATED LIST SUBQUERY`
      stand over one, which this engine answers where the row it reads
-     stands and names no line for. A statement of a `FROM` that names a
-     view or a `WITH` term is named no `CO-ROUTINE` or `MATERIALIZE`
-     either, its rows being answered before the statement that reads them.
-     `eqp.test` holds sixteen cases of them.
+     stands and names no line for. A name that stands for a `WITH` term is
+     named no `CO-ROUTINE` or `MATERIALIZE` either, the rows of the term
+     being answered before the statement that reads them; D-587 records
+     the view, which is named as the C library names it. `eqp.test` holds
+     five cases of a statement inside an expression.
 277. The order a walk of a table that keeps its rows in the key's own tree
      answers, and the order a term whose `NULLS` clause moves its nulls
      asks for, which `KEYINFO_ORDER_BIGNULL` of `sqlite3WhereIsOrdered`
@@ -1366,6 +1367,12 @@ Size: L.
      bound value of and writes a range for. This engine takes no bindings,
      so every parameter stands for a null. `like.test` holds two cases of
      it.
+283. The rows of a co-routine read before the rows of the sides the `FROM`
+     writes in front of it: `whereLoopAddAll` of
+     `research/sqlite/src/where.c` leaves such a walk no place but the
+     outermost, a co-routine answering its rows once. This engine reads the
+     sides in the order the `FROM` writes them, which names the same lines
+     in another order. `eqp.test` holds six cases of it.
 
 ### Done when
 
