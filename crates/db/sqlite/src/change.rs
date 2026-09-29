@@ -11897,14 +11897,19 @@ fn names_key(key: &Keys, targets: &[Target]) -> bool {
 /// the rowid and what `sqlite3ColumnIndex` looks for last.
 fn places(table: &Table, named: &[Vec<u8>]) -> Result<Vec<Option<usize>>, Error> {
     if named.is_empty() {
-        // `sqlite3Insert` writes one value per column a statement may
-        // write, which leaves out every column a `GENERATED ALWAYS AS`
-        // computes.
+        // `sqlite3Insert` of `research/sqlite/src/insert.c:1246` writes
+        // one value per column a statement may write, which leaves out
+        // every column `COLFLAG_NOINSERT` marks: the ones a
+        // `GENERATED ALWAYS AS` computes and the ones a name beginning
+        // with `__hidden__` hides.
         return Ok(table
             .columns
             .iter()
             .enumerate()
-            .filter(|(_, column)| column.generated == crate::schema::Generated::Never)
+            .filter(|(_, column)| {
+                column.generated == crate::schema::Generated::Never
+                    && !crate::schema::hidden_name(&column.name)
+            })
             .map(|(at, _)| Some(at))
             .collect());
     }
@@ -14525,7 +14530,7 @@ pub(crate) fn columns_of(database: &Database<'_>, name: &[u8], every: bool) -> V
     let mut out = Vec::new();
     for (at, column) in table.columns.iter().enumerate() {
         let hidden = match column.generated {
-            crate::schema::Generated::Never => 0,
+            crate::schema::Generated::Never => i64::from(crate::schema::hidden_name(&column.name)),
             crate::schema::Generated::Virtual => 2,
             crate::schema::Generated::Stored => 3,
         };

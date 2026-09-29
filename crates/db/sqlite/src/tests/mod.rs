@@ -42,6 +42,7 @@ mod foreign;
 mod fp;
 mod generated;
 mod header;
+mod hiding;
 mod hooks;
 mod image;
 mod index;

@@ -7933,6 +7933,28 @@ is the one the C library's shell writes.
   count it wrote, and a `DELETE` that writes no row answering nought.
 - `CREATE TABLE u(c)` and `CREATE INDEX`, each answering no row.
 
+### 6.6.460 Which columns a `*` answers where one of them is hidden (`db-sqlite`)
+
+Unit tests of `crate::db` over an image `crate::change` writes. Every
+answer is the one `hidden.test` of the suite reads, the C library's shell
+being built without `SQLITE_ENABLE_HIDDEN_COLUMNS`.
+
+- `t1(__hidden__a, b)`: `SELECT *` and `SELECT t1.*`, the column `b`
+  alone; `SELECT __hidden__a, *`, the hidden column in front of it;
+  `INSERT INTO t1 VALUES('1')`, one value for the one column that is
+  left.
+- `SELECT * FROM t1 GROUP BY 1`, which groups by `b`, and `GROUP BY 2`,
+  refused `1st GROUP BY term out of range - should be between 1 and 1`.
+- `PRAGMA table_info`, the hidden column left out, and `PRAGMA
+  table_xinfo`, the hidden column with a one beside a `VIRTUAL` one with
+  a two.
+- `CREATE VIEW v1(a, b, __hidden__c)` and `CREATE VIEW v2 AS SELECT a, b,
+  c AS __hidden__c`: a `*` over each answers two columns, and the name
+  reaches the third.
+- `INSERT INTO t4 SELECT 1, 2` over `t4(a, __hidden__b, c)`, and `INSERT
+  INTO t5 SELECT * FROM t6` over two tables that each hide one column:
+  the hidden column holds what it falls back to.
+
 ### 6.6.459 What an entry of an index over a table without a rowid holds (`db-sqlite`)
 
 Unit tests of `crate::change` and `crate::db`, held against the fixture

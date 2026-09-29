@@ -13188,7 +13188,7 @@ fn answered(arena: &Arena, select: &Select, sql: &[u8], sides: &[Side<'_>]) -> V
                     for (place, column) in side.shape.columns.iter().enumerate() {
                         // A `GROUP BY` counts the columns a `*`
                         // answers.
-                        if !left_out(column, &side.using) {
+                        if !left_out(column, &side.using) && !hidden_column(column) {
                             out.push(Term::Held(at, place));
                         }
                     }
@@ -13201,8 +13201,10 @@ fn answered(arena: &Arena, select: &Select, sql: &[u8], sides: &[Side<'_>]) -> V
                     .enumerate()
                     .filter(|(_, side)| !side.exists && side.named(&called))
                 {
-                    for place in 0..side.shape.columns.len() {
-                        out.push(Term::Held(at, place));
+                    for (place, column) in side.shape.columns.iter().enumerate() {
+                        if !hidden_column(column) {
+                            out.push(Term::Held(at, place));
+                        }
                     }
                 }
             }
@@ -13210,6 +13212,12 @@ fn answered(arena: &Arena, select: &Select, sql: &[u8], sides: &[Side<'_>]) -> V
         }
     }
     out
+}
+
+/// Whether a `*` leaves the column out, which a name beginning with
+/// `__hidden__` says.
+fn hidden_column(column: &Column) -> bool {
+    schema::hidden_name(&column.name)
 }
 
 /// The terms a `GROUP BY` groups by.
@@ -14283,6 +14291,11 @@ fn shape(
                         // matched as well, under the name of the table
                         // it came from, and says that a `*` leaves it
                         // out.
+                        // A column a name beginning with `__hidden__`
+                        // hides is no column a `*` answers.
+                        if hidden_column(column) {
+                            continue;
+                        }
                         let hidden = left_out(column, &side.using);
                         if hidden && !select.nested {
                             continue;
@@ -14311,11 +14324,17 @@ fn shape(
                 if named.next().is_some() {
                     return Err(Error::Ambiguous(ambiguous_name(side)));
                 }
-                columns.extend(side.shape.columns.iter().map(|column| {
-                    let mut answered = side.answered_as(column);
-                    answered.shown = side.shown_as(column, long);
-                    answered
-                }));
+                columns.extend(
+                    side.shape
+                        .columns
+                        .iter()
+                        .filter(|column| !hidden_column(column))
+                        .map(|column| {
+                            let mut answered = side.answered_as(column);
+                            answered.shown = side.shown_as(column, long);
+                            answered
+                        }),
+                );
             }
             ResultColumn::Expr { expr, alias, text } => {
                 let written = column_parts(arena, expr);
@@ -14530,6 +14549,9 @@ fn project(
                         if held.shape.keying(place) {
                             return;
                         }
+                        if hidden_column(column) {
+                            return;
+                        }
                         if left_out(column, held.using) && !select.nested {
                             return;
                         }
@@ -14560,7 +14582,11 @@ fn project(
             ResultColumn::TableStar(span) => {
                 let named = dequote(span.text(sql));
                 for held in cursor.held.iter().filter(|held| held.named(&named)) {
-                    held.each(|_, _, value| out.push(value.clone()));
+                    held.each(|_, column, value| {
+                        if !hidden_column(column) {
+                            out.push(value.clone());
+                        }
+                    });
                 }
             }
             ResultColumn::Expr { expr, .. } => {

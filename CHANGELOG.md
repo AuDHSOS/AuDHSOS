@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` leaves a column whose name begins with `__hidden__` out of a `*`, out of the columns a
+  statement that names none writes into, and out of `PRAGMA table_info`, writing a one for it in
+  `PRAGMA table_xinfo`, where a name still reaches it. D-631 records it. Catalog 6.6.460.
+  `hidden.test` goes from 9 cases passing to 25, the file's whole count.
+
 - `db-sqlite` names the row of an entry of an index over a table that keeps its rows in the key's own
   tree by the columns of the key the index does not hold already and compares those places under the
   collations of the key, where it appended the whole key under `BINARY`: a read through such an index

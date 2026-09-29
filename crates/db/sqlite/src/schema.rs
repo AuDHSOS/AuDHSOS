@@ -1329,6 +1329,21 @@ pub(crate) fn rowid_named(name: &[u8]) -> bool {
         .any(|word| name.eq_ignore_ascii_case(word))
 }
 
+/// Whether a column of that name is one a `*` leaves out, which is a
+/// name that begins with `__hidden__`.
+///
+/// `sqlite3ColumnPropertiesFromName` of `research/sqlite/src/build.c:1400`
+/// marks such a column `COLFLAG_HIDDEN`, which is `COLFLAG_NOINSERT` as
+/// well, so a statement that names no column writes no value into it and
+/// `PRAGMA table_info` leaves it out.
+///
+/// Reading the name costs O(1).
+#[must_use]
+pub fn hidden_name(name: &[u8]) -> bool {
+    name.get(..10)
+        .is_some_and(|head| head.eq_ignore_ascii_case(b"__hidden__"))
+}
+
 /// What a value of the schema may name.
 #[derive(Clone, Copy)]
 pub(crate) enum Reading {
