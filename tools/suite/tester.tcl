@@ -690,7 +690,10 @@ proc sqlite3 {args} {
         traced %N% $sql [rows_of %N% $sql $answered]
         return [expr {[llength $answered] > 0}]
       }
-      close { return [harness_send close %N%] }
+      close {
+        harness_send close %N% 1
+        return {}
+      }
       changes { return [lindex [harness_send changes %N%] 0] }
       total_changes { return [lindex [harness_send total_changes %N%] 0] }
       last_insert_rowid { return [lindex [harness_send rowid %N%] 0] }
@@ -2331,12 +2334,15 @@ proc sqlite3_open16 {file {vfs {}}} {
 }
 
 # `sqlite3_close` and `sqlite3_close_v2` take the pointer away, which
-# leaves the file where it stands.
+# leaves the file where it stands. A connection that holds a statement
+# nothing has finalized answers `SQLITE_BUSY` to `sqlite3_close` and
+# closes nothing; `sqlite3_close_v2` closes it whatever it holds.
 proc sqlite3_close {db} {
-  harness_send close $db
-  return SQLITE_OK
+  return [lindex [harness_send close $db 0] 0]
 }
-proc sqlite3_close_v2 {db} { return [sqlite3_close $db] }
+proc sqlite3_close_v2 {db} {
+  return [lindex [harness_send close $db 1] 0]
+}
 
 # `sqlite3_table_column_metadata DB SCHEMA TABLE COLUMN`: what the
 # schema says about one column. The connection stands for the pointer,

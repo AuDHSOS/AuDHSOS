@@ -383,7 +383,10 @@ Size: S.
     harness holds, and a connection that opens again writes `NULL` as
     the empty string.
 13. A connection that closes leaves the file it read no transaction,
-    which `sqlite3_close` rolls back.
+    which `sqlite3_close` rolls back. A connection that holds a statement
+    nothing has finalized answers `SQLITE_BUSY` to `sqlite3_close` and
+    closes nothing, and `sqlite3_close_v2` closes it whatever it holds,
+    which D-622 records.
 14. `sqlite3_next_stmt` answers the statements the harness holds for one
     connection, in the order it made them, which D-319 records.
 15. `sqlite3_bind_text` and `sqlite3_bind_blob` bind the first `BYTES`

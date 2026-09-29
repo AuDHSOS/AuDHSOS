@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- The suite harness answers `sqlite3_close` over a connection that holds a statement nothing has
+  finalized with `SQLITE_BUSY` and closes nothing, where it closed the connection whatever it held,
+  and `sqlite3_close_v2` closes it as before. D-622 records it. `capi3c.test` goes from 177 cases
+  passing to 189 and `capi3.test` from 192 to 195.
+
 - `db-sqlite` refuses a `WITH` term that reads its own name where no core of it reads that name as a
   term of its `FROM`, as a `circular reference`, as `multiple recursive references` where a core of it
   recurses, and as `multiple references to recursive table` where one core names it twice, where it

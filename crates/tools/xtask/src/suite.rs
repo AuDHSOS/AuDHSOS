@@ -1413,7 +1413,7 @@ impl Session {
             // `sqlite3_system_errno` of `research/sqlite/src/main.c`:
             // what the machine answered the last open of a file with.
             "system_errno" => Ok(vec![self.errno.to_string()]),
-            "close" => Ok(self.closed(first)),
+            "close" => Ok(self.closed(first, second == "1")),
             "delete" => Ok(self.removed(first)),
             "exists" => Ok(vec![usize::from(self.sized(first).is_some()).to_string()]),
             // `sqlite3_test_control SQLITE_TESTCTRL_LOCALTIME_FAULT`,
@@ -1961,7 +1961,17 @@ impl Session {
     /// where it stands, which the harness names the owner of. The last
     /// connection over a path writes the log of that path into the file
     /// and removes the log, which `sqlite3WalClose` does.
-    fn closed(&mut self, name: &str) -> Vec<String> {
+    ///
+    /// A connection that holds a statement nothing has finalized answers
+    /// `SQLITE_BUSY` and closes nothing, which `sqlite3Close` of
+    /// `research/sqlite/src/main.c` answers where `sqlite3_close` and not
+    /// `sqlite3_close_v2` asked; the connection stands and the statement
+    /// runs on. `forced` says `sqlite3_close_v2` asked, which closes the
+    /// connection whatever it holds.
+    fn closed(&mut self, name: &str, forced: bool) -> Vec<String> {
+        if !forced && self.statements.values().any(|held| held.connection == name) {
+            return alloc_one("SQLITE_BUSY");
+        }
         if let Some(path) = self.connections.get(name).cloned()
             && self.owners.get(&path).is_some_and(|held| held == name)
             && let Some(writer) = self.held.get_mut(&path)
@@ -2008,7 +2018,7 @@ impl Session {
         self.sensitive.remove(name);
         self.collations.remove(name);
         self.functions.remove(name);
-        Vec::new()
+        alloc_one("SQLITE_OK")
     }
 
     /// Runs `sql` over the files the session holds, takes the machine to
