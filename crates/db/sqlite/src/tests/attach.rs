@@ -313,6 +313,72 @@ fn what_a_statement_reads_out_of_an_attached_database() {
 }
 
 /// What a statement writes into a database an `ATTACH` added.
+/// Two tables of one name in two databases, which the name of the
+/// database in front of each tells apart.
+#[test]
+fn which_table_of_one_name_in_two_databases_a_name_reaches() {
+    let mut main = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    main.run(b"CREATE TABLE t4(a,b)").unwrap();
+    main.run(b"INSERT INTO t4 VALUES(444,'x4')").unwrap();
+    let mut aux = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    aux.run(b"CREATE TABLE t4(a,b)").unwrap();
+    aux.run(b"INSERT INTO t4 VALUES(555,'x5')").unwrap();
+    let held = main.written();
+    let beside = aux.written();
+    let database = crate::db::Database::open(&held)
+        .unwrap()
+        .attaching(b"aux1", &beside)
+        .unwrap();
+    let answered = |sql: &[u8]| {
+        database
+            .query(sql)
+            .map(|answered| {
+                let mut out = alloc::string::String::new();
+                for row in answered.rows {
+                    for value in row {
+                        out.push_str(&alloc::string::String::from_utf8_lossy(
+                            &value.text().unwrap_or_default(),
+                        ));
+                        out.push(',');
+                    }
+                }
+                out
+            })
+            .map_err(|error| error.message())
+    };
+    // A `*` over two tables of one name in two databases answers the
+    // columns of both, where a `*` over one table twice is refused.
+    assert_eq!(
+        answered(b"SELECT * FROM main.t4, aux1.t4").unwrap(),
+        "444,x4,555,x5,"
+    );
+    assert_eq!(
+        answered(b"SELECT * FROM main.t4, main.t4"),
+        Err(alloc::string::String::from(
+            "ambiguous column name: main.t4.a"
+        ))
+    );
+    assert_eq!(
+        answered(b"SELECT a FROM main.t4, aux1.t4"),
+        Err(alloc::string::String::from("ambiguous column name: a"))
+    );
+    // A name inside brackets reaches the table of the database in front
+    // of it, and one that writes no database and that two tables of one
+    // name answer is refused.
+    assert_eq!(
+        answered(b"SELECT * FROM (main.t4 JOIN aux1.t4 ON aux1.t4.a=main.t4.a+111)").unwrap(),
+        "444,x4,555,x5,"
+    );
+    assert_eq!(
+        answered(b"SELECT aux1.t4.a FROM (main.t4 JOIN aux1.t4 ON 1)").unwrap(),
+        "555,"
+    );
+    assert_eq!(
+        answered(b"SELECT t4.a FROM (main.t4 JOIN aux1.t4 ON 1)"),
+        Err(alloc::string::String::from("ambiguous column name: t4.a"))
+    );
+}
+
 #[test]
 fn what_a_statement_writes_into_an_attached_database() {
     let mut writer = opened();

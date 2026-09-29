@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` tells two tables of one name in two databases apart, in a `FROM` and in a column written
+  with a database in front of it inside a `FROM` inside brackets, where it refused the first as one
+  name and read the second against the table alone. D-634 records it. Catalog 6.6.463. `selectD.test`
+  goes from 28 cases passing to 30.
+
 - `db-sqlite` answers the columns of the table a name in front of a `*` names inside a `FROM` inside
   brackets, where it refused every such statement as `no such table`. D-633 records it. Catalog
   6.6.462. `selectD.test` goes from 22 cases passing to 28.

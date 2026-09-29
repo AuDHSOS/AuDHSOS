@@ -14297,7 +14297,12 @@ fn every_column(
     for (at, side) in sides.iter().enumerate().filter(|(_, side)| !side.exists) {
         // A `*` stands for every column named by its side, so two sides
         // of one name make every column of them a name two sides answer.
-        if sides.iter().take(at).any(|before| before.named(&side.name)) {
+        // Two tables of one name in two databases carry two names, the
+        // database in front of each telling them apart.
+        let held = |before: &Side<'_>| {
+            before.named(&side.name) && before.schema.eq_ignore_ascii_case(&side.schema)
+        };
+        if sides.iter().take(at).any(held) {
             return Err(Error::Ambiguous(ambiguous_name(side)));
         }
         for (place, column) in side.shape.columns.iter().enumerate() {
@@ -16432,33 +16437,36 @@ impl<'a> Held<'a> {
         first
     }
 
-    /// What this side answers for the column `column` of the side
-    /// `from` it holds the columns of, or nothing where it holds none
-    /// of that side. A side with a name of its own answers nothing
-    /// here, because a name in front of a column names that side.
-    fn column_of(
+    /// What the columns of the table `from` inside the brackets answer
+    /// for `column`: one value per column of that name, of which a name
+    /// that writes no database in front of it may reach several. A side
+    /// with a name of its own answers none here, because a name in front
+    /// of a column names that side.
+    fn columns_of(
         &self,
+        schema: Option<&[u8]>,
         from: &[u8],
         column: &[u8],
         default: Collation,
-    ) -> Option<(Value, Affinity, Collation)> {
+    ) -> Vec<(Value, Affinity, Collation)> {
         if !self.shape.nested {
-            return None;
+            return Vec::new();
         }
-        let at = self
-            .shape
+        self.shape
             .columns
             .iter()
             .enumerate()
-            .find_map(|(at, held)| {
-                let matching = held.from.eq_ignore_ascii_case(from)
+            .filter(|(at, held)| {
+                held.from.eq_ignore_ascii_case(from)
                     && held.name.eq_ignore_ascii_case(column)
-                    && !self.shape.keying(at);
-                matching.then_some(at)
-            })?;
-        let held = self.shape.columns.get(at)?;
-        let value = self.values.get(at).cloned().unwrap_or(Value::Null);
-        Some((value, held.affinity, held.collation.unwrap_or(default)))
+                    && schema.is_none_or(|named| held.origin.schema.eq_ignore_ascii_case(named))
+                    && !self.shape.keying(*at)
+            })
+            .map(|(at, held)| {
+                let value = self.values.get(at).cloned().unwrap_or(Value::Null);
+                (value, held.affinity, held.collation.unwrap_or(default))
+            })
+            .collect()
     }
 
     /// Calls `each` with the place of every column, the column and the
@@ -16564,14 +16572,30 @@ impl<'a> Cursor<'a> {
         for (at, held) in self.reading() {
             // A schema in front of the column names the database the
             // side reads, which a side that reads no table has none of.
-            if schema.is_some_and(|named| !held.schema.eq_ignore_ascii_case(named)) {
+            // A side standing for the tables inside brackets reads one
+            // database per table, so the columns settle it there.
+            if schema.is_some_and(|named| !held.schema.eq_ignore_ascii_case(named))
+                && !held.shape.nested
+            {
                 continue;
             }
             // A name in front of a column names a side, or one of the
             // tables inside brackets a side holds the columns of.
             let answered = match table {
                 Some(named) if held.named(named) => held.column(column, self.collation),
-                Some(named) => held.column_of(named, column, self.collation),
+                Some(named) => {
+                    // Two tables of one name inside brackets answer the
+                    // name where no database stands in front of it, and
+                    // `lookupName` refuses it rather than choosing.
+                    let mut inside = held
+                        .columns_of(schema, named, column, self.collation)
+                        .into_iter();
+                    let first = inside.next();
+                    if inside.next().is_some() {
+                        return Answering::Many;
+                    }
+                    first
+                }
                 // A bare name does not reach the side a `USING` or a
                 // `NATURAL` matched; the side before it answers.
                 None if held.hides(column) => continue,

@@ -7933,6 +7933,22 @@ is the one the C library's shell writes.
   count it wrote, and a `DELETE` that writes no row answering nought.
 - `CREATE TABLE u(c)` and `CREATE INDEX`, each answering no row.
 
+### 6.6.463 Which table of one name in two databases a name reaches (`db-sqlite`)
+
+Unit tests of `crate::db` over `main.t4(a,b)` and `aux1.t4(a,b)`, one row
+each, the second database attached as `aux1`. Every answer is the one the
+C library's shell writes.
+
+- `SELECT * FROM main.t4, aux1.t4`, the columns of both tables, and
+  `SELECT * FROM main.t4, main.t4`, refused `ambiguous column name:
+  main.t4.a`.
+- `SELECT a FROM main.t4, aux1.t4`, refused `ambiguous column name: a`.
+- `SELECT * FROM (main.t4 JOIN aux1.t4 ON aux1.t4.a=main.t4.a+111)`, the
+  columns of both, and `SELECT aux1.t4.a` over the same brackets, the one
+  column of that database.
+- `SELECT t4.a FROM (main.t4 JOIN aux1.t4 ON 1)`, refused `ambiguous
+  column name: t4.a`.
+
 ### 6.6.462 Which columns a `*` after a name answers over a `FROM` inside brackets (`db-sqlite`)
 
 Unit tests of `crate::db` over `t1(a,b)`, `t2(a,b)` and `t3(a,b)`, one row
