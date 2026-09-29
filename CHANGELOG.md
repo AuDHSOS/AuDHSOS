@@ -7,6 +7,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` holds an aggregate call to the statement whose sides it reads a column of, read from the
+  statement it stands in outwards, so `SELECT (SELECT sum(a1) FROM t2) FROM t1` answers one row over
+  every row of `t1` where it answered one row per row of `t1`. D-619 records it. Catalog 6.6.450.
+  `aggnested.test` goes from 30 cases passing to 43, its every case that runs, `window1.test` from
+  315 to 320, `subquery.test` from 72 to 74, `count.test` from 26 to 28, `distinct.test` from 37 to
+  38 and `window4.test` from 224 to 225.
+
 - `db-sqlite` answers the rowid of each of the tables inside brackets in a `FROM` and reads a name as
   a rowid where no column of any side carries it, so `SELECT _rowid_ FROM w1 JOIN (w3 JOIN r1)`
   answers the rowid of `r1` and `SELECT rowid FROM r1 JOIN (r2 JOIN w2)` the column `w2` calls

@@ -7933,6 +7933,42 @@ is the one the C library's shell writes.
   count it wrote, and a `DELETE` that writes no row answering nought.
 - `CREATE TABLE u(c)` and `CREATE INDEX`, each answering no row.
 
+### 6.6.450 Which statement an aggregate written inside another one belongs to (`db-sqlite`)
+
+Unit tests of `crate::db` over an image `crate::change` writes. Every
+answer is the one the C library's shell writes. The tables are `t1(a1)` of
+three rows and `t2(b1)` of two.
+
+- `SELECT (SELECT sum(a1) FROM t2) FROM t1`, `SELECT (SELECT sum(t1.a1)
+  FROM t2) FROM t1`, `SELECT (SELECT sum(a1)) FROM t1` and `SELECT
+  sum(a1), (SELECT sum(a1) FROM t2) FROM t1`, each answering one row over
+  every row of `t1`.
+- `SELECT (SELECT sum(b1) FROM t2) FROM t1` and the same over `t2.b1`,
+  each answering one row per row of `t1`.
+- `SELECT (SELECT sum(rowid) FROM t2) FROM t1`, the rowid being a column
+  of `t2`.
+- `SELECT (SELECT sum(1) FROM t2) FROM t1` and the same over `count(*)`,
+  neither reading a column.
+- A statement of a `FROM` holding the call: over `(SELECT sum(a1) AS x)`,
+  over `(SELECT t2.* FROM t2)`, over `(t2 JOIN t2 AS t4)` and over
+  `(VALUES(1),(2))`.
+- `SELECT (SELECT sum(b1) FROM (SELECT b1 FROM t2 UNION ALL SELECT 9)) FROM
+  t1`, answering one row per row of `t1` over the rows of the compound.
+- `SELECT (SELECT sum(a1+1) FROM t2) FROM t1`, `SELECT (SELECT
+  sum((SELECT a1)) FROM t2) FROM t1` and `SELECT (SELECT sum((SELECT b1
+  FROM t2 LIMIT 1)) FROM t2) FROM t1`, the last reading the column of a
+  statement written inside the argument.
+- `SELECT (SELECT sum(a1 ORDER BY a1 DESC) FROM t2) FROM t1` and `SELECT
+  (SELECT sum(a1) FILTER(WHERE b1>4) FROM t2) FROM t1`.
+- `SELECT (SELECT sum(a1) FROM nope) FROM t1`, `SELECT (SELECT sum(a1)
+  FROM (SELECT x FROM nope)) FROM t1` and the same over `SELECT *`, each
+  refused `no such table: nope`.
+- `SELECT (SELECT group_concat(DISTINCT a1,'x'), 1 FROM t2) FROM t1` and
+  `SELECT (SELECT group_concat(DISTINCT a1,'x') FROM (SELECT 1)) FROM t1`,
+  each refused `DISTINCT aggregates must have exactly one argument`.
+- `SELECT (SELECT sum(a1) FROM pragma_table_info('t1')) FROM t1`, refused
+  as a statement this engine does not answer.
+
 ### 6.6.449 Which rowid a name reaches through the tables inside brackets (`db-sqlite`)
 
 Unit tests of `crate::db` over an image `crate::change` writes. Every

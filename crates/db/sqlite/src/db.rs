@@ -3241,11 +3241,120 @@ impl<'a> Database<'a> {
         arena: &Arena,
         select: &Select,
         sql: &[u8],
-        sides: &[Side<'_>],
+        held: (&[Side<'_>], Option<&dyn eval::Row>),
     ) -> Result<Vec<Call>, Error> {
-        let most = self.most_columns();
-        nested_aggregates(arena, select, sql, most, self.grouped)?;
-        aggregates(arena, select, sql, Some(sides), self.grouped, most)
+        let (sides, outer) = held;
+        nested_aggregates(self, arena, select, sql)?;
+        aggregates(self, arena, select, sql, Some(sides), outer)
+    }
+
+    /// The names the sides of one statement answer, read off the schema
+    /// without answering anything.
+    ///
+    /// Reading a chain of statements written inside `FROM` clauses costs
+    /// O(n) in the sources of them.
+    fn sided_names(&self, arena: &Arena, select: &Select, sql: &[u8]) -> Sided {
+        let mut out = Sided {
+            whole: true,
+            ..Sided::default()
+        };
+        for source in arena.sources(select.from) {
+            let alias = source.alias.map(|span| dequote(span.text(sql)));
+            match source.kind {
+                crate::ast::SourceKind::Table { name, .. } => {
+                    let called = dequote(name.text(sql));
+                    out.tables.push(alias.unwrap_or_else(|| called.clone()));
+                    if let Some(stored) = self.find(&called) {
+                        out.keyed = out.keyed || !stored.table.without_rowid;
+                        out.columns.extend(
+                            stored
+                                .table
+                                .columns
+                                .iter()
+                                .map(|column| column.name.clone()),
+                        );
+                    } else {
+                        out.whole = false;
+                    }
+                }
+                crate::ast::SourceKind::Function { .. } => out.whole = false,
+                crate::ast::SourceKind::Select(id) => {
+                    out.tables.extend(alias);
+                    arena.select(id).into_iter().for_each(|select| {
+                        let held = self.answered_names(arena, &select, sql);
+                        if !held.whole {
+                            out.whole = false;
+                        }
+                        out.keyed = out.keyed || held.keyed;
+                        out.columns.extend(held.columns);
+                        out.tables.extend(held.tables);
+                    });
+                }
+            }
+        }
+        out
+    }
+
+    /// The names a statement written inside a `FROM` answers: the columns
+    /// it answers, and the names the tables inside brackets answer under
+    /// where it stands for them.
+    fn answered_names(&self, arena: &Arena, select: &Select, sql: &[u8]) -> Sided {
+        let mut out = Sided {
+            whole: true,
+            ..Sided::default()
+        };
+        // A compound answers what its cores answer under the names of the
+        // whole, which this walk does not read.
+        if select.compound.is_some() {
+            out.whole = false;
+            return out;
+        }
+        // A list of rows answers `column1` and the names after it, one
+        // per value of its first row.
+        if !select.values.is_empty() {
+            // The parser builds each row of a `VALUES` as a row node, so
+            // what the node of the first row names is what it holds.
+            let mut width: usize = 0;
+            for first in arena.children(select.values).iter().take(1) {
+                arena.node(*first).into_iter().for_each(|node| {
+                    arena.under(node, |_| width = width.saturating_add(1));
+                });
+            }
+            for at in 1..=width {
+                let mut name = b"column".to_vec();
+                name.extend_from_slice(&number::integer_text(i64::try_from(at).unwrap_or(0)));
+                out.columns.push(name);
+            }
+            return out;
+        }
+        let inside = self.sided_names(arena, select, sql);
+        if select.nested {
+            out.tables.clone_from(&inside.tables);
+            out.keyed = inside.keyed;
+        }
+        for result in arena.results(select.columns) {
+            match *result {
+                ResultColumn::Star | ResultColumn::TableStar(_) => {
+                    if !inside.whole {
+                        out.whole = false;
+                    }
+                    out.columns.extend(inside.columns.iter().cloned());
+                }
+                ResultColumn::Expr { expr, alias, text } => {
+                    let name = alias.map_or_else(
+                        || {
+                            column_parts(arena, expr).map_or_else(
+                                || text.text(sql).to_vec(),
+                                |(_, column)| dequote(column.text(sql)),
+                            )
+                        },
+                        |span| dequote(span.text(sql)),
+                    );
+                    out.columns.push(name);
+                }
+            }
+        }
+        out
     }
 
     /// Raises where one core holds more sides than a join takes, or more
@@ -5146,7 +5255,7 @@ impl<'a> Database<'a> {
         let collations = self.collations(&shape);
         keys(arena, &select, sql, &names, &collations, self.collating)?;
         subqueries(arena, &select)?;
-        let calls = self.aggregated(arena, &select, sql, &sides)?;
+        let calls = self.aggregated(arena, &select, sql, (&sides, scope.outer))?;
         let overs = overs(arena, &select, sql, self.grouped)?;
         // The pass over a row of nulls reads every expression, and an
         // aggregate answers a value there only where the walk gathered
@@ -5213,7 +5322,7 @@ impl<'a> Database<'a> {
             Vec::new()
         };
         subqueries(arena, &select)?;
-        let calls = self.aggregated(arena, &select, sql, &sides)?;
+        let calls = self.aggregated(arena, &select, sql, (&sides, scope.outer))?;
         let overs = overs(arena, &select, sql, self.grouped)?;
         let alone = overs.is_empty();
         let (gathered, answered) = self.ordering(arena, &select, sql, (&mut sides, alone, &calls));
@@ -5592,8 +5701,7 @@ impl<'a> Database<'a> {
         if !select.group.is_empty() || select.having.is_some() {
             return true;
         }
-        aggregates(arena, select, sql, None, self.grouped, self.most_columns())
-            .is_ok_and(|calls| !calls.is_empty())
+        aggregates(self, arena, select, sql, None, None).is_ok_and(|calls| !calls.is_empty())
     }
 
     /// Whether the statement calls a window function, which is the `pWin`
@@ -6412,7 +6520,7 @@ impl<'a> Database<'a> {
             if !overs(arena, &core, sql, self.grouped)?.is_empty() {
                 return Err(Error::RecursiveWindow);
             }
-            let calls = aggregates(arena, &core, sql, None, self.grouped, self.most_columns())?;
+            let calls = aggregates(self, arena, &core, sql, None, None)?;
             if !calls.is_empty() || !core.group.is_empty() {
                 return Err(Error::Recursion);
             }
@@ -13283,26 +13391,133 @@ fn counted_node(arena: &Arena, node: Node) -> Result<(), Error> {
 
 /// Every aggregate call a statement answers with, and a refusal where
 /// one stands somewhere no group has been made yet.
+/// The names the sides of one statement answer, which is what decides
+/// the statement an aggregate call belongs to.
+#[derive(Debug, Default)]
+struct Sided {
+    /// The columns the sides answer.
+    columns: Vec<Vec<u8>>,
+    /// The names the sides answer under, which a name written in front
+    /// of a column matches.
+    tables: Vec<Vec<u8>>,
+    /// Whether one of the sides keeps a rowid.
+    keyed: bool,
+    /// Whether the walk read every side. A side whose columns the walk
+    /// cannot read off the schema clears it, and every name is then read
+    /// as one the statement answers.
+    whole: bool,
+}
+
+impl Sided {
+    /// Whether the statement answers this name.
+    ///
+    /// Reading one name is O(k) in the columns the sides answer.
+    fn answers(&self, asked: &Asked) -> bool {
+        if !self.whole {
+            return true;
+        }
+        match &asked.table {
+            Some(table) => self
+                .tables
+                .iter()
+                .any(|held| held.eq_ignore_ascii_case(table)),
+            None => {
+                self.columns
+                    .iter()
+                    .any(|held| held.eq_ignore_ascii_case(&asked.column))
+                    || (self.keyed && crate::schema::rowid_named(&asked.column))
+            }
+        }
+    }
+}
+
+/// One name an aggregate call asks for.
+#[derive(Debug)]
+struct Asked {
+    /// The name written in front of the column, where one was.
+    table: Option<Vec<u8>>,
+    /// The column.
+    column: Vec<u8>,
+}
+
+/// The names one expression reads, leaving out the ones a statement
+/// written inside it answers: `sqlite3ReferencesSrcList` of
+/// `research/sqlite/src/expr.c` leaves the sides of such a statement out
+/// of the search for the tables an aggregate call reads.
+///
+/// The walk is as deep as the tree is tall, which the parser has already
+/// bounded.
+fn readings(
+    database: &Database<'_>,
+    arena: &Arena,
+    sql: &[u8],
+    held: (ExprId, &mut Vec<Sided>),
+    out: &mut Vec<Asked>,
+) {
+    let (id, inside) = held;
+    arena
+        .node(id)
+        .into_iter()
+        .for_each(|node| reading(database, arena, sql, (node, inside), out));
+}
+
+/// The same for one node the arena holds.
+fn reading(
+    database: &Database<'_>,
+    arena: &Arena,
+    sql: &[u8],
+    held: (Node, &mut Vec<Sided>),
+    out: &mut Vec<Asked>,
+) {
+    let (node, inside) = held;
+    if let Node::Column { table, column, .. } = node {
+        let asked = Asked {
+            table: table.map(|span| dequote(span.text(sql))),
+            column: dequote(column.text(sql)),
+        };
+        if !inside.iter().any(|held| held.answers(&asked)) {
+            out.push(asked);
+        }
+    }
+    if let Node::Subquery(held) | Node::Exists(held) | Node::InSelect { select: held, .. } = node {
+        arena.select(held).into_iter().for_each(|select| {
+            inside.push(database.sided_names(arena, &select, sql));
+            for root in roots(arena, &select) {
+                readings(database, arena, sql, (root, inside), out);
+            }
+            inside.pop();
+        });
+    }
+    arena.under(node, |child| {
+        readings(database, arena, sql, (child, inside), out);
+    });
+}
+
 fn aggregates(
+    database: &Database<'_>,
     arena: &Arena,
     select: &Select,
     sql: &[u8],
     sides: Option<&[Side<'_>]>,
-    grouped: &'static [crate::func::Grouped],
-    most: usize,
+    outer: Option<&dyn eval::Row>,
 ) -> Result<Vec<Call>, Error> {
+    let grouped = database.grouped;
+    let most = database.most_columns();
     let walk = Gathering {
+        database,
         arena,
         sql,
         results: arena.results(select.columns),
         sides,
         grouped,
         most,
+        home: database.sided_names(arena, select, sql),
+        outer,
     };
     let mut calls = Vec::new();
     for column in walk.results {
         if let ResultColumn::Expr { expr, .. } = *column {
-            walk.gather(expr, &mut calls, false)?;
+            walk.gather(expr, &mut calls, false, &mut Vec::new())?;
         }
     }
     // What makes a statement an aggregate one is an aggregate among the
@@ -13314,20 +13529,20 @@ fn aggregates(
         return Err(Error::Having);
     }
     if let Some(having) = select.having {
-        walk.gather(having, &mut calls, false)?;
+        walk.gather(having, &mut calls, false, &mut Vec::new())?;
     }
     for term in arena.orders(select.order) {
-        walk.gather(term.expr, &mut calls, false)?;
+        walk.gather(term.expr, &mut calls, false, &mut Vec::new())?;
     }
     let mut misused = Vec::new();
     if let Some(id) = select.filter {
-        walk.gather(id, &mut misused, false)?;
+        walk.gather(id, &mut misused, false, &mut Vec::new())?;
     }
     if let Some(call) = misused.first() {
         return Err(Error::MisusedAggregate(call.name.clone()));
     }
     for id in arena.children(select.group) {
-        walk.gather(*id, &mut misused, false)?;
+        walk.gather(*id, &mut misused, false, &mut Vec::new())?;
     }
     if !misused.is_empty() {
         return Err(Error::GroupedAggregate);
@@ -13439,54 +13654,51 @@ fn counted_sides(arena: &Arena, select: &Select) -> Result<(), Error> {
 ///
 /// The walk is O(n) in the nodes of the statement.
 fn nested_aggregates(
+    database: &Database<'_>,
     arena: &Arena,
     select: &Select,
     sql: &[u8],
-    most: usize,
-    grouped: &'static [crate::func::Grouped],
 ) -> Result<(), Error> {
     for root in roots(arena, select) {
-        nested_columns(arena, root, sql, most, grouped)?;
+        nested_columns(database, arena, root, sql)?;
     }
     for source in arena.sources(select.from) {
         if let SourceKind::Select(id) = source.kind {
-            standing(arena, id, sql, grouped, most)?;
+            standing(database, arena, id, sql)?;
         }
     }
     if let Some((_, id)) = select.compound {
-        standing(arena, id, sql, grouped, most)?;
+        standing(database, arena, id, sql)?;
     }
     Ok(())
 }
 
 /// The same for one expression and everything under it.
 fn nested_columns(
+    database: &Database<'_>,
     arena: &Arena,
     id: ExprId,
     sql: &[u8],
-    most: usize,
-    grouped: &'static [crate::func::Grouped],
 ) -> Result<(), Error> {
     arena
         .node(id)
-        .map_or(Ok(()), |node| nested_node(arena, node, sql, most, grouped))
+        .map_or(Ok(()), |node| nested_node(database, arena, node, sql))
 }
 
 /// The same for one node the arena holds.
 fn nested_node(
+    database: &Database<'_>,
     arena: &Arena,
     node: Node,
     sql: &[u8],
-    most: usize,
-    grouped: &'static [crate::func::Grouped],
 ) -> Result<(), Error> {
     if let Node::Subquery(id) | Node::Exists(id) | Node::InSelect { select: id, .. } = node {
-        standing(arena, id, sql, grouped, most)?;
+        standing(database, arena, id, sql)?;
     }
     let mut deeper = Ok(());
     arena.under(node, |child| {
         if deeper.is_ok() {
-            deeper = nested_columns(arena, child, sql, most, grouped);
+            deeper = nested_columns(database, arena, child, sql);
         }
     });
     deeper
@@ -13494,20 +13706,17 @@ fn nested_node(
 
 /// Where every aggregate of one statement written inside another one
 /// stands, and of every statement written inside that one.
-fn standing(
-    arena: &Arena,
-    id: SelectId,
-    sql: &[u8],
-    grouped: &'static [crate::func::Grouped],
-    most: usize,
-) -> Result<(), Error> {
+fn standing(database: &Database<'_>, arena: &Arena, id: SelectId, sql: &[u8]) -> Result<(), Error> {
     let select = arena.select(id).ok_or(Error::Unsupported)?;
-    aggregates(arena, &select, sql, None, grouped, most)?;
-    nested_aggregates(arena, &select, sql, most, grouped)
+    aggregates(database, arena, &select, sql, None, None)?;
+    nested_aggregates(database, arena, &select, sql)
 }
 
 /// What the walk for the aggregate calls of one statement reads.
 struct Gathering<'a> {
+    /// The connection, which the columns of a table are read off the
+    /// schema of.
+    database: &'a Database<'a>,
     /// The tree the statement was parsed into.
     arena: &'a Arena,
     /// The text that tree points into.
@@ -13524,6 +13733,12 @@ struct Gathering<'a> {
     /// How many columns the connection takes, which the terms an
     /// aggregate reads its rows in the order of are held to.
     most: usize,
+    /// The names the sides of the statement answer, which an aggregate
+    /// call belongs to the statement by reading one of.
+    home: Sided,
+    /// The row the enclosing statement stands on, which answers an
+    /// aggregate that statement gathered.
+    outer: Option<&'a dyn eval::Row>,
 }
 
 impl Gathering<'_> {
@@ -13533,10 +13748,16 @@ impl Gathering<'_> {
     /// already bounded, so nothing here counts the steps. `inside` is
     /// set under an aggregate, where another one is a misuse rather
     /// than a call.
-    fn gather(&self, id: ExprId, out: &mut Vec<Call>, inside: bool) -> Result<(), Error> {
+    fn gather(
+        &self,
+        id: ExprId,
+        out: &mut Vec<Call>,
+        inside: bool,
+        chain: &mut Vec<Sided>,
+    ) -> Result<(), Error> {
         self.arena
             .node(id)
-            .map_or(Ok(()), |node| self.collect(id, node, out, inside))
+            .map_or(Ok(()), |node| self.collect(id, node, out, inside, chain))
     }
 
     /// The same for one node the arena holds.
@@ -13546,9 +13767,10 @@ impl Gathering<'_> {
         node: Node,
         out: &mut Vec<Call>,
         inside: bool,
+        chain: &mut Vec<Sided>,
     ) -> Result<(), Error> {
         let mut under = inside;
-        if inside {
+        if inside && chain.is_empty() {
             self.aliasing(node)?;
         }
         if let Node::Call {
@@ -13582,25 +13804,144 @@ impl Gathering<'_> {
                 if self.arena.orders(ordered).len() > self.most {
                     return Err(Error::OrderTerms);
                 }
-                out.push(Call {
-                    id,
-                    which,
-                    distinct,
-                    args,
-                    filter,
-                    ordered,
-                    name: called,
-                });
+                if self.belongs(id, (args, filter, ordered), chain) {
+                    out.push(Call {
+                        id,
+                        which,
+                        distinct,
+                        args,
+                        filter,
+                        ordered,
+                        name: called,
+                    });
+                }
                 under = true;
             }
+        }
+        // A statement written inside this one holds the aggregates that
+        // read the columns of this one, which belong to this one and not
+        // to the statement they stand in.
+        if let Node::Subquery(held) | Node::Exists(held) | Node::InSelect { select: held, .. } =
+            node
+        {
+            self.inner(held, out, chain)?;
         }
         let mut deeper = Ok(());
         self.arena.under(node, |child| {
             if deeper.is_ok() {
-                deeper = self.gather(child, out, under);
+                deeper = self.gather(child, out, under, chain);
             }
         });
         deeper
+    }
+
+    /// The calls of a statement written inside the one whose calls are
+    /// being gathered that belong to the one being gathered, and the same
+    /// for every statement written inside that one.
+    ///
+    /// `sqlite3WalkSelect` of `research/sqlite/src/walker.c` reads the
+    /// expressions of such a statement and the statements its `FROM`
+    /// holds, and counts one step of nesting for each of them, which
+    /// `analyzeAggregate` of `research/sqlite/src/expr.c` holds each call
+    /// to. An aggregate written inside the arguments of another one is a
+    /// misuse in the statement it stands in alone, so nothing here is
+    /// read as standing inside one.
+    ///
+    /// The walk is as deep as the statements nest, which the parser has
+    /// already bounded.
+    fn inner(
+        &self,
+        id: SelectId,
+        out: &mut Vec<Call>,
+        chain: &mut Vec<Sided>,
+    ) -> Result<(), Error> {
+        self.arena
+            .select(id)
+            .map_or(Ok(()), |select| self.innermost(&select, out, chain))
+    }
+
+    /// The same for one statement the arena holds.
+    fn innermost(
+        &self,
+        select: &Select,
+        out: &mut Vec<Call>,
+        chain: &mut Vec<Sided>,
+    ) -> Result<(), Error> {
+        chain.push(self.database.sided_names(self.arena, select, self.sql));
+        let deeper = roots(self.arena, select)
+            .into_iter()
+            .try_for_each(|root| self.gather(root, out, false, chain))
+            .and_then(|()| {
+                self.arena
+                    .sources(select.from)
+                    .iter()
+                    .filter_map(|source| match source.kind {
+                        SourceKind::Select(held) => Some(held),
+                        SourceKind::Table { .. } | SourceKind::Function { .. } => None,
+                    })
+                    .try_for_each(|held| self.inner(held, out, chain))
+            });
+        chain.pop();
+        deeper?;
+        // The cores of a compound each hold sides of their own and stand
+        // as deep as one another.
+        select
+            .compound
+            .map_or(Ok(()), |(_, held)| self.inner(held, out, chain))
+    }
+
+    /// Whether the call belongs to the statement whose calls are being
+    /// gathered.
+    ///
+    /// `lookupName` of `research/sqlite/src/resolve.c:1364` reads the
+    /// statements from the one the call stands in outwards and holds the
+    /// call to the first of them whose sides it reads a column of, and to
+    /// the one it stands in where it reads no column of any of them.
+    ///
+    /// Reading one call is O(n) in its arguments and the statements
+    /// written inside them.
+    fn belongs(
+        &self,
+        id: ExprId,
+        written: (Range, Option<ExprId>, Range),
+        chain: &[Sided],
+    ) -> bool {
+        // An aggregate the enclosing statement gathered is answered by
+        // the row of it, which is what holds a call to one statement.
+        if self.outer.is_some_and(|row| row.aggregate(id).is_some()) {
+            return false;
+        }
+        if chain.is_empty() {
+            return true;
+        }
+        let (args, filter, ordered) = written;
+        let mut read = Vec::new();
+        let mut inside = Vec::new();
+        for held in self.arena.children(args).iter().copied().chain(filter) {
+            readings(
+                self.database,
+                self.arena,
+                self.sql,
+                (held, &mut inside),
+                &mut read,
+            );
+        }
+        for term in self.arena.orders(ordered) {
+            readings(
+                self.database,
+                self.arena,
+                self.sql,
+                (term.expr, &mut inside),
+                &mut read,
+            );
+        }
+        if chain
+            .iter()
+            .any(|held| read.iter().any(|asked| held.answers(asked)))
+        {
+            return false;
+        }
+        read.iter().any(|asked| self.home.answers(asked))
     }
 
     /// A refusal where the node is a bare name that no side holds and
@@ -15941,10 +16282,13 @@ impl eval::Row for Cursor<'_> {
     }
 
     fn aggregate(&self, id: ExprId) -> Option<Value> {
+        // An aggregate that reads the columns of an enclosing statement
+        // belongs to that statement, whose row answers it.
         self.aggregates
             .iter()
             .find(|(call, _)| *call == id)
             .map(|(_, value)| value.clone())
+            .or_else(|| self.reach.scope.outer.and_then(|outer| outer.aggregate(id)))
     }
 
     fn schemed(&self) -> Option<bool> {
