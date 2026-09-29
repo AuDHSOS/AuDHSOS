@@ -8758,7 +8758,7 @@ impl Writer {
                 .table(over)
                 .ok_or(Error::NoTable(schema_named_as(over)))?;
             let read = crate::schema::index(arena, index, sql, table, self.collating)?;
-            let collations = collations_of(&read, self.held.header.schema_format);
+            let collations = entry_collations(table, &read, self.held.header.schema_format);
             let over = Over {
                 arena,
                 sql,
@@ -10152,14 +10152,16 @@ impl Writer {
                 }
                 entries
             };
-            let collations = collations_of(&index, self.held.header.schema_format);
-            let shared = {
+            let (collations, shared) = {
                 let bytes = self.image();
                 let database = self.reading(&bytes)?;
                 let (over, _) = database.table(&table).ok_or(Error::Unsupported)?;
-                index
-                    .unique
-                    .then(|| (index.columns.len(), Self::shown_index(over, &index)))
+                (
+                    entry_collations(over, &index, self.held.header.schema_format),
+                    index
+                        .unique
+                        .then(|| (index.columns.len(), Self::shown_index(over, &index))),
+                )
             };
             self.write_entries(
                 entries,
@@ -12749,9 +12751,13 @@ impl Writer {
         if key.contains(&Value::Null) {
             return Ok(None);
         }
-        let width = tail.len();
+        let width = entry.len().saturating_sub(one.index.columns.len());
         let order = ordering(&one.collations, self.held.header.encoding);
         let found = crate::tree::entry_tail_at(&self.held.pages, one.root, key, order, width)?;
+        // The entry names the row by the columns of the key the index
+        // does not hold, so the key of the row it names is those columns
+        // and the ones the entry holds among its own places.
+        let found = found.map(|found| keyed_row(table, &one.index, (key, &found)));
         Ok(found.filter(|found| held != Some(found.as_slice())))
     }
 
@@ -13057,7 +13063,7 @@ fn kept_indexes(database: &Database<'_>, name: &[u8]) -> Vec<Kept> {
             let reads = reads_expressions(kept.index);
             Kept {
                 index: kept.index.clone(),
-                collations: collations_of(kept.index, format),
+                collations: entry_collations(kept.table, kept.index, format),
                 root: kept.root,
                 sql: if reads { kept.sql.to_vec() } else { Vec::new() },
                 arena: if reads {
@@ -13233,8 +13239,73 @@ pub(crate) fn entry_of(
             }
         });
     }
-    key.extend_from_slice(tail);
+    key.extend(naming_values(over.table, index, tail));
     Ok(key)
+}
+
+/// The values one entry of the index carries after its own places to name
+/// the row: the rowid of a table that holds one, and the columns of the
+/// key the index does not hold already for a table that keeps its rows in
+/// the key's own tree, in the order the key holds them, which
+/// `convertToWithoutRowidTable` of `research/sqlite/src/build.c:2453`
+/// appends to `aiColumn`.
+///
+/// Reading the key costs O(k p) in `k` columns of the key and `p` places
+/// of the index.
+pub(crate) fn naming_values(
+    table: &Table,
+    index: &crate::schema::Index,
+    key: &[Value],
+) -> Vec<Value> {
+    if !table.without_rowid {
+        return key.to_vec();
+    }
+    let held = keyed_places_of(index);
+    crate::schema::key_places(table)
+        .iter()
+        .zip(key)
+        .filter(|(at, _)| !held.contains(&Some(**at)))
+        .map(|(_, value)| value.clone())
+        .collect()
+}
+
+/// The place in the table each place of the index holds, and nothing for
+/// a place over an expression.
+fn keyed_places_of(index: &crate::schema::Index) -> Vec<Option<usize>> {
+    index
+        .columns
+        .iter()
+        .map(crate::schema::Keyed::place)
+        .collect()
+}
+
+/// The key of the row one entry of the index names: the columns of the
+/// key the index holds stand where it holds them, and the others follow
+/// the places of the index in the order the key holds them.
+///
+/// Reading one entry costs O(k p) in `k` columns of the key and `p`
+/// places of the index.
+fn keyed_row(
+    table: &Table,
+    index: &crate::schema::Index,
+    entry: (&[Value], &[Value]),
+) -> Vec<Value> {
+    let (places, named) = entry;
+    if !table.without_rowid {
+        return named.to_vec();
+    }
+    let held = keyed_places_of(index);
+    let mut after = named.iter();
+    crate::schema::key_places(table)
+        .iter()
+        .filter_map(|place| {
+            held.iter()
+                .position(|one| *one == Some(*place))
+                .and_then(|at| places.get(at))
+                .or_else(|| after.next())
+                .cloned()
+        })
+        .collect()
 }
 
 /// The values of one row in the order the table stores them, which is
@@ -13303,6 +13374,35 @@ pub(crate) fn collations_of(
             backwards: format >= 4 && column.order == crate::ast::Order::Descending,
         })
         .collect()
+}
+
+/// The same, with what each place an entry carries after the places of
+/// the index compares under: the columns of the key the index does not
+/// hold already for a table that keeps its rows in the key's own tree,
+/// which `convertToWithoutRowidTable` of
+/// `research/sqlite/src/build.c:2472` writes into `azColl`, and nothing
+/// more for a table that holds a rowid, whose rowid compares as a whole
+/// number.
+///
+/// Reading the key costs O(k p) in `k` columns of the key and `p` places
+/// of the index.
+pub(crate) fn entry_collations(
+    table: &Table,
+    index: &crate::schema::Index,
+    format: u32,
+) -> Vec<crate::value::Placing> {
+    let mut out = collations_of(index, format);
+    if !table.without_rowid {
+        return out;
+    }
+    let held = keyed_places_of(index);
+    let placings = crate::schema::key_collations(table);
+    for (at, placing) in crate::schema::key_places(table).iter().zip(placings) {
+        if !held.contains(&Some(*at)) {
+            out.push(placing);
+        }
+    }
+    out
 }
 
 /// Whether one place of the entries of `index` is held in `collation`,

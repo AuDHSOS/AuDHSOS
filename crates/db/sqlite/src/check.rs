@@ -496,12 +496,17 @@ fn entries_of<'a>(
 ) -> Result<Kept<'a>, Error> {
     let index = indexed.index;
     let image = database.image();
-    let collations = crate::change::collations_of(index, database.schema_format());
-    let rows = database.held_rows_of(&index.table)?;
-    // The entry of a row ends with the key of that row, which is one
-    // value for a rowid and the columns of the `PRIMARY KEY` for a
-    // table that keeps its rows in the key's own tree.
-    let tail = rows.first().map_or(1, |(key, _)| key.len());
+    let collations =
+        crate::change::entry_collations(indexed.table, index, database.schema_format());
+    // The entry of a row ends with the places that name that row: the
+    // rowid of a table that holds one, and the columns of the `PRIMARY
+    // KEY` the index does not hold already for a table that keeps its
+    // rows in the key's own tree, of which there may be none.
+    let tail = if indexed.table.without_rowid {
+        collations.len().saturating_sub(index.columns.len())
+    } else {
+        1
+    };
     let mut keys: Vec<Vec<Value>> = Vec::new();
     let mut payload = Vec::new();
     for entry in image.entries(indexed.root) {

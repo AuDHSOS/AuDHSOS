@@ -97,7 +97,7 @@ fn stat_of(
         let key = [Value::Int(*rowid)];
         keys.push(crate::change::entry_of(index, &over, values, &key)?);
     }
-    let collations = crate::change::collations_of(index, format);
+    let collations = crate::change::entry_collations(kept.table, index, format);
     keys.sort_by(|one, other| crate::change::order_of_keys(one, other, &collations));
     let columns = index.columns.len();
     // One entry of its own is one value of its own for every prefix,

@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` names the row of an entry of an index over a table that keeps its rows in the key's own
+  tree by the columns of the key the index does not hold already and compares those places under the
+  collations of the key, where it appended the whole key under `BINARY`: a read through such an index
+  answered the wrong column or no row, and the file the engine wrote was not the file the C library
+  writes. D-630 records it. Catalog 6.6.459. `without_rowid6.test` goes from 16 cases passing to 17.
+
 - `db-sqlite` refuses a whole number of a `GROUP BY` that names a column the statement answers as an
   aggregate, where it read the number as the number. D-629 records it. Catalog 6.6.458. `misc4.test`
   goes from 14 cases passing to 17.

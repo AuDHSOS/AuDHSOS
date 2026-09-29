@@ -134,6 +134,72 @@ fn the_file_a_key_s_own_tree_is_written_into_is_the_file_the_shell_wrote() {
     assert_eq!(at, None);
 }
 
+/// An index over such a table whose places hold a column of the key
+/// names the row by the columns of the key it does not hold already, so
+/// the entry holds each column once.
+#[test]
+fn an_index_that_holds_a_column_of_the_key_names_the_row_by_the_rest() {
+    // Written by the shell:
+    //   PRAGMA page_size=512;
+    //   CREATE TABLE t(a TEXT, b INT, c TEXT, d, PRIMARY KEY(a,b))
+    //     WITHOUT ROWID;
+    //   CREATE INDEX i ON t(c,a);
+    //   CREATE INDEX j ON t(a,b);
+    //   INSERT INTO t VALUES('x',1,'p',9),('y',2,'q',8);
+    let shell: &[u8] = include_bytes!("fixtures/key-share.db");
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t(a TEXT, b INT, c TEXT, d, PRIMARY KEY(a,b)) WITHOUT ROWID".as_slice(),
+        b"CREATE INDEX i ON t(c,a)",
+        b"CREATE INDEX j ON t(a,b)",
+        b"INSERT INTO t VALUES('x',1,'p',9),('y',2,'q',8)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let mine = writer.written();
+    assert_eq!(mine.len(), shell.len());
+    assert_eq!(
+        mine.iter().zip(shell).position(|(one, other)| one != other),
+        None
+    );
+    // The row the entry names is read back through the index, and the
+    // index holds one entry per row.
+    assert_eq!(
+        answered(&mine, b"SELECT d FROM t WHERE c='p'"),
+        [alloc::vec![Value::Int(9)]]
+    );
+    // An index over every column of the key names the row by no place of
+    // its own, so its entry holds its places and nothing after them.
+    assert_eq!(
+        answered(&mine, b"SELECT d FROM t INDEXED BY j WHERE a='y'"),
+        [alloc::vec![Value::Int(8)]]
+    );
+    assert_eq!(answered(&mine, b"PRAGMA integrity_check"), [text(b"ok")]);
+}
+
+/// The places an entry of such an index carries after the places of the
+/// index compare under the collations of the key, so two rows the key
+/// holds under `NOCASE` come out of the index in the key's order.
+#[test]
+fn what_collation_the_places_that_name_the_row_compare_under() {
+    let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t(a COLLATE NOCASE, b, PRIMARY KEY(a)) WITHOUT ROWID".as_slice(),
+        b"CREATE INDEX tb ON t(b)",
+        b"INSERT INTO t VALUES('a',1),('B',1)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let image = writer.written();
+    let held = [text(b"a"), text(b"B")];
+    assert_eq!(
+        answered(&image, b"SELECT a FROM t INDEXED BY tb WHERE b=1"),
+        held
+    );
+    assert_eq!(answered(&image, b"SELECT a FROM t"), held);
+    assert_eq!(answered(&image, b"PRAGMA integrity_check"), [text(b"ok")]);
+}
+
 #[test]
 fn a_statement_that_names_the_rowid_of_such_a_table_is_refused() {
     let mut writer = Writer::new(512, 0, Encoding::Utf8).unwrap();

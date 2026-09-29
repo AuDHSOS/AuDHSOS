@@ -7933,6 +7933,22 @@ is the one the C library's shell writes.
   count it wrote, and a `DELETE` that writes no row answering nought.
 - `CREATE TABLE u(c)` and `CREATE INDEX`, each answering no row.
 
+### 6.6.459 What an entry of an index over a table without a rowid holds (`db-sqlite`)
+
+Unit tests of `crate::change` and `crate::db`, held against the fixture
+`key-share.db` the C library's shell wrote: `t(a TEXT, b INT, c TEXT, d,
+PRIMARY KEY(a,b)) WITHOUT ROWID` with `i ON t(c,a)` and `j ON t(a,b)` over
+two rows.
+
+- The bytes the writer wrote, which are the bytes of the fixture.
+- `SELECT d FROM t WHERE c='p'`, read through the index that holds one
+  column of the key, and `SELECT d FROM t INDEXED BY j WHERE a='y'`, read
+  through the index that holds every column of it.
+- A key of one column under `NOCASE` beside an index over another column:
+  the rows come out in the key's order, read through the index and read
+  out of the table.
+- `PRAGMA integrity_check`, `ok` for both tables.
+
 ### 6.6.458 What a number of a `GROUP BY` that reaches an aggregate is refused with (`db-sqlite`)
 
 Unit tests of `crate::db` over a table of two columns and one row. Every

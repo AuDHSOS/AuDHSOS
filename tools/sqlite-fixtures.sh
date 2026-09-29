@@ -462,6 +462,13 @@ rm -f "$out/key-vacuum.db"
 "$sqlite" "$out/key-vacuum.db" "PRAGMA page_size=512; PRAGMA auto_vacuum=full; CREATE TABLE t(a PRIMARY KEY, b); INSERT INTO t VALUES(1,2),(3,4);"
 printf '%s\t%s bytes\n' key-vacuum.db "$(wc -c <"$out/key-vacuum.db" | tr -d ' ')"
 
+# An index over a table that keeps its rows in the key's own tree whose
+# places hold a column of that key: the entry names the row by the columns
+# of the key the index does not hold already.
+rm -f "$out/key-share.db"
+"$sqlite" "$out/key-share.db" "PRAGMA page_size=512; CREATE TABLE t(a TEXT, b INT, c TEXT, d, PRIMARY KEY(a,b)) WITHOUT ROWID; CREATE INDEX i ON t(c,a); CREATE INDEX j ON t(a,b); INSERT INTO t VALUES('x',1,'p',9),('y',2,'q',8);"
+printf '%s\t%s bytes\n' key-share.db "$(wc -c <"$out/key-share.db" | tr -d ' ')"
+
 rm -f "$out/as-vacuum.db"
 "$sqlite" "$out/as-vacuum.db" "PRAGMA page_size=512; PRAGMA auto_vacuum=full; CREATE TABLE t(a); INSERT INTO t VALUES(1),(2); CREATE TABLE u AS SELECT a FROM t;"
 printf '%s\t%s bytes\n' as-vacuum.db "$(wc -c <"$out/as-vacuum.db" | tr -d ' ')"
