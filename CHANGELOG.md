@@ -7,6 +7,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- The suite harness holds `sqlite3_create_collation_v2` and `sqlite3_create_function_v2`, and runs
+  the script each was given where the definition is written over, taken away, or the connection is
+  closed; a function registered for every encoding stands for all three, so its script runs where
+  the last of the three is written over, and a definition that names an implementation beside a step
+  function is refused `SQLITE_MISUSE`. D-638 records it. Catalog 6.6.467. `func3.test` goes from 10
+  cases passing to 20, of 20, and `collate7.test` from 1 to 8, of 8.
+
 - The suite harness makes every statement the tester prepared again where a function or a collation
   is taken off the connection, where a `DETACH` runs and where a rollback ends a transaction that
   wrote the schema, and leaves them standing where a name is added and where an `ATTACH` runs; it

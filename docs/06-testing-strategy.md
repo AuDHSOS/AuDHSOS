@@ -7933,6 +7933,17 @@ is the one the C library's shell writes.
   count it wrote, and a `DELETE` that writes no row answering nought.
 - `CREATE TABLE u(c)` and `CREATE INDEX`, each answering no row.
 
+### 6.6.467 What the destructor of a collation or a function runs for (`suite`)
+
+The files of the suite hold the cases, which count the runs of the script
+`sqlite3_create_collation_v2` and `sqlite3_create_function_v2` were given:
+
+- `collate7.test`: a collation deleted, written over, and held by a
+  connection that closes.
+- `func3.test`: a function registered for one encoding and written over,
+  one registered for every encoding and written over for each in turn, one
+  held by a connection that closes, and one whose definition is refused.
+
 ### 6.6.466 The number the schema of a file stands at (`db-sqlite`)
 
 One unit test of `crate::change` over a connection written under

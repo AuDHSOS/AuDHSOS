@@ -691,6 +691,8 @@ proc sqlite3 {args} {
         return [expr {[llength $answered] > 0}]
       }
       close {
+        collations_gone %N%
+        functions_gone %N%
         harness_send close %N% 1
         return {}
       }
@@ -709,6 +711,7 @@ proc sqlite3 {args} {
       status { return [lindex [harness_send status %N% [lindex $args 0]] 0] }
       complete { return [lindex [harness_send complete %N% [lindex $args 0]] 0] }
       collate {
+        collation_gone %N% [lindex $args 0]
         set ::collations([lindex $args 0]) [lindex $args 1]
         return [harness_send collate %N% [lindex $args 0]]
       }
@@ -1481,6 +1484,112 @@ proc add_test_collate {name utf8 utf16le utf16be} {
   return [harness_send collate $name test_collate]
 }
 
+# `sqlite3_create_collation_v2 DB NAME CMP DEL` of
+# `research/sqlite/src/test1.c:1900` registers the collation `NAME`,
+# comparing under the proc `CMP`, and holds the script `DEL`, which
+# `testCreateCollationDel` of `test1.c:1864` runs at the global level
+# where the collation is taken off the connection, written over, or the
+# connection is closed.
+proc sqlite3_create_collation_v2 {name collation compare destructor} {
+  collation_gone $name $collation
+  set ::collations($collation) $compare
+  set ::collation_dels($name,$collation) $destructor
+  harness_send collate $name $collation
+  return {}
+}
+
+# The script the collation of that name holds, run once and dropped.
+proc collation_gone {name collation} {
+  if {![info exists ::collation_dels($name,$collation)]} { return }
+  set script $::collation_dels($name,$collation)
+  unset ::collation_dels($name,$collation)
+  uplevel #0 $script
+}
+
+# Every script the collations of one connection hold, run where the
+# connection is closed.
+proc collations_gone {name} {
+  set at [expr {[string length $name]+1}]
+  foreach key [array names ::collation_dels "$name,*"] {
+    collation_gone $name [string range $key $at end]
+  }
+}
+
+# `sqlite3_create_function_v2 DB NAME NARG ENC ?SWITCHES?` of
+# `research/sqlite/src/test1.c:1975`: the switches `-func`, `-step`,
+# `-final` and `-destroy` each name a script. A definition that names
+# `-func` beside a `-step` or a `-final` is refused `SQLITE_MISUSE`, and
+# `sqlite3_create_function_v2` of `research/sqlite/src/main.c:2118` runs
+# the script `-destroy` named where it refuses.
+#
+# `ENC` is `utf8`, `utf16le`, `utf16be` or `any`, and one definition
+# stands for one encoding: `any` makes all three, so the script
+# `-destroy` named runs where the last of the three is written over.
+proc sqlite3_create_function_v2 {name function count enc args} {
+  set script ""
+  set destroy ""
+  set steps 0
+  set direct 0
+  foreach {word held} $args {
+    switch -- $word {
+      -func { set direct 1; set script $held }
+      -step { set steps 1; set script $held }
+      -final { set steps 1 }
+      -destroy { set destroy $held }
+    }
+  }
+  set encodings [expr {$enc eq "any" ? {utf8 utf16le utf16be} : [list $enc]}]
+  if {$direct && $steps} {
+    if {$destroy ne ""} { uplevel #0 $destroy }
+    error SQLITE_MISUSE
+  }
+  function_takes $name $function $count $encodings $destroy
+  set ::functions($function) $script
+  harness_send function $name $function unsafe $count
+  return {}
+}
+
+# The encodings one definition of a function stands for: the definition
+# each encoding held is let go of, and the new one holds every encoding
+# the definition names.
+proc function_takes {name function count encodings destroy} {
+  foreach held $encodings {
+    set key $name,$function,$count,$held
+    if {![info exists ::function_at($key)]} { continue }
+    set id $::function_at($key)
+    unset ::function_at($key)
+    function_gone $id
+  }
+  incr ::function_ids
+  set ::function_dels($::function_ids) $destroy
+  set ::function_uses($::function_ids) [llength $encodings]
+  foreach held $encodings {
+    set ::function_at($name,$function,$count,$held) $::function_ids
+  }
+}
+
+# One encoding of the definition `id` let go of, with the script the
+# definition holds run where it holds no encoding any longer.
+proc function_gone {id} {
+  if {![info exists ::function_uses($id)]} { return }
+  incr ::function_uses($id) -1
+  if {$::function_uses($id) > 0} { return }
+  set script $::function_dels($id)
+  unset ::function_uses($id)
+  unset ::function_dels($id)
+  if {$script ne ""} { uplevel #0 $script }
+}
+
+# Every script the functions of one connection hold, run where the
+# connection is closed.
+proc functions_gone {name} {
+  foreach key [array names ::function_at "$name,*"] {
+    set id $::function_at($key)
+    unset ::function_at($key)
+    function_gone $id
+  }
+}
+
 # `sqlite_delete_function DB NAME` of `research/sqlite/src/test1.c:6030`
 # registers the name with no implementation and for any count of
 # arguments, which takes the function off the connection, and answers the
@@ -1497,7 +1606,9 @@ proc sqlite_delete_function {name function} {
 # refused with.
 proc sqlite_delete_collation {name collation} {
   set code [lindex [harness_send uncollate $name $collation] 0]
-  if {$code eq "SQLITE_OK"} { unset -nocomplain ::collations($collation) }
+  if {$code ne "SQLITE_OK"} { return $code }
+  unset -nocomplain ::collations($collation)
+  collation_gone $name $collation
   return $code
 }
 
