@@ -2588,3 +2588,51 @@ fn which_pattern_with_an_escape_holds_a_column_between_two_bounds() {
     assert_eq!(rows(b"SELECT p FROM m WHERE q LIKE '/a%' ESCAPE '/'"), 2);
     assert_eq!(rows(b"SELECT p FROM m WHERE q LIKE 'a/%' ESCAPE '/'"), 0);
 }
+
+/// A place of an index under a collation of its own holds the bounds of a
+/// pattern that matches under that collation and no comparison of the
+/// column's own.
+#[test]
+fn which_place_of_an_index_holds_a_term_under_its_collation() {
+    let mut writer = crate::change::Writer::new(1024, 0, crate::header::Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t2(path TEXT,x)".as_slice(),
+        b"CREATE INDEX t2path ON t2(path COLLATE nocase)",
+        b"CREATE INDEX t2path2 ON t2(path)",
+        b"INSERT INTO t2 VALUES('Abc',1),('abd',2),('xyz',3)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let image = writer.written();
+    // `LIKE` matches under `NOCASE`, so the place under that collation
+    // answers its bounds; every other term compares under the column's
+    // own collation and reaches the place under it.
+    assert_eq!(
+        plan(&image, b"SELECT x FROM t2 WHERE path LIKE 'a%'"),
+        "`--SEARCH t2 USING INDEX t2path (path>? AND path<?)\n"
+    );
+    assert_eq!(
+        plan(&image, b"SELECT x FROM t2 WHERE path IN ('Abc','abd')"),
+        "`--SEARCH t2 USING INDEX t2path2 (path=?)\n"
+    );
+    assert_eq!(
+        plan(&image, b"SELECT x FROM t2 WHERE path='abd'"),
+        "`--SEARCH t2 USING INDEX t2path2 (path=?)\n"
+    );
+    assert_eq!(
+        plan(&image, b"SELECT x FROM t2 WHERE path>'abc'"),
+        "`--SEARCH t2 USING INDEX t2path2 (path>?)\n"
+    );
+    // The rows the bounds answer are the ones the pattern matches.
+    let rows = |sql: &[u8]| {
+        Database::open(&image)
+            .unwrap()
+            .query(sql)
+            .unwrap()
+            .rows
+            .len()
+    };
+    assert_eq!(rows(b"SELECT x FROM t2 WHERE path LIKE 'a%'"), 2);
+    assert_eq!(rows(b"SELECT x FROM t2 WHERE path IN ('Abc','abd')"), 2);
+    assert_eq!(rows(b"SELECT x FROM t2 WHERE path='abc'"), 0);
+}

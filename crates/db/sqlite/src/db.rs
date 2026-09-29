@@ -8935,20 +8935,16 @@ fn plan_of(
                 }
                 crate::schema::Of::Place(place) => place,
             };
-            // A place under another collation than the column compares
-            // under, and an index held in another order than the terms
-            // ask about, each answer entries in an order no term names.
-            // A column of real affinity holds a whole number as a whole
-            // number, which `OP_RealAffinity` reads back as a real, so an
-            // entry compares against a bound as the row does not:
-            // 3175546974276630385 stands in an entry as itself and is
-            // read out of the row as 3175546974276630528. A place naming
-            // a column the table does not hold is a file whose index and
-            // table disagree.
+            // An index held in another order than the terms ask about
+            // answers entries in an order no term names. A column of real
+            // affinity holds a whole number as a whole number, which
+            // `OP_RealAffinity` reads back as a real, so an entry compares
+            // against a bound as the row does not: 3175546974276630385
+            // stands in an entry as itself and is read out of the row as
+            // 3175546974276630528. A place naming a column the table does
+            // not hold is a file whose index and table disagree.
             let found = stored.table.columns.get(place).filter(|column| {
-                held_backwards(Some(held), format) == backwards
-                    && held.collation == column.collation
-                    && column.affinity != Affinity::Real
+                held_backwards(Some(held), format) == backwards && column.affinity != Affinity::Real
             });
             let Some(column) = found else {
                 break;
@@ -8961,16 +8957,7 @@ fn plan_of(
                         term.at == at
                             && term.op == op
                             && term.reached == reached
-                            // A bound read out of a pattern holds only
-                            // where the column compares under the
-                            // collation the pattern matches under, and
-                            // only where the column holds text: a
-                            // column that converts its values to
-                            // numbers holds them before every text.
-                            && term.needs.is_none_or(|wanted| {
-                                wanted.collation == column.collation
-                                    && (column.affinity == Affinity::Text || !wanted.numeric)
-                            })
+                            && termed_place(term, held.collation, column)
                     })
                     .map(|term| {
                         // An entry holds what the table's affinity left
@@ -8999,8 +8986,14 @@ fn plan_of(
             // A list holds the column at one of its values per pass of
             // the walk, which is one descent of the index each, and the
             // columns after it run over again for every value, so the
-            // key ends where the list stands.
-            listed = listed_at(terms, (at, reached), column.affinity, held.collation);
+            // key ends where the list stands. The values compare under
+            // the collation of the column, as a comparison of its own
+            // does.
+            listed = if held.collation == column.collation {
+                listed_at(terms, (at, reached), column.affinity, held.collation)
+            } else {
+                Vec::new()
+            };
             if !listed.is_empty() {
                 collations.push(held.collation);
                 break;
@@ -9044,6 +9037,21 @@ fn plan_of(
         ));
     }
     best.map(|(_, plan)| plan)
+}
+
+/// Whether one term holds a place of an index over the column `column`,
+/// where that place is under the collation `place`.
+///
+/// A comparison of its own compares under the collation of the column, so
+/// the place holds it only where the place is under that collation as
+/// well. A bound read out of a pattern compares under the collation the
+/// pattern matches under, which is the one the place must be under, and
+/// holds only where the column holds text: a column that converts its
+/// values to numbers holds them before every text.
+fn termed_place(term: &Bound, place: Collation, column: &crate::schema::Column) -> bool {
+    term.needs.map_or(place == column.collation, |wanted| {
+        wanted.collation == place && (column.affinity == Affinity::Text || !wanted.numeric)
+    })
 }
 
 /// The rowid a term of the spine holds the walk to, which ends the key of

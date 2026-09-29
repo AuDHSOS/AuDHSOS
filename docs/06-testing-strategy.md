@@ -7933,6 +7933,19 @@ is the one the C library's shell writes.
   count it wrote, and a `DELETE` that writes no row answering nought.
 - `CREATE TABLE u(c)` and `CREATE INDEX`, each answering no row.
 
+### 6.6.454 Which place of an index holds a term under its collation (`db-sqlite`)
+
+Unit tests of `crate::db` over an image `crate::change` writes, reading
+the plan as `EXPLAIN QUERY PLAN` writes it. The table is `t2(path TEXT,x)`
+with `t2path` on `path COLLATE nocase` and `t2path2` on `path`. Every
+answer is the one the C library's shell writes.
+
+- `path LIKE 'a%'`, a `SEARCH` over `t2path` between two bounds.
+- `path IN ('Abc','abd')`, `path='abd'` and `path>'abc'`, each a `SEARCH`
+  over `t2path2`.
+- The rows each answers: two for the pattern, two for the list, none for
+  `path='abc'`.
+
 ### 6.6.453 Which pattern with an `ESCAPE` holds a column between two bounds (`db-sqlite`)
 
 Unit tests of `crate::db` over the fixture `indexed.db`, reading the plan

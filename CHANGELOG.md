@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` holds a term to a place of an index where the place is under the collation that term
+  compares under, so an index on `path COLLATE nocase` over a column of `BINARY` answers the bounds
+  of `path LIKE 'a%'`, where it read such a place as one no term reaches. D-625 records it. Catalog
+  6.6.454. `like3.test` goes from 201 cases passing to 203, `like.test` from 143 to 144 and
+  `indexexpr2.test` from 109 to 111.
+
 - `db-sqlite` holds a column a `LIKE` or a `GLOB` with an `ESCAPE` reads between two bounds, where
   the escape is a text of one byte that is neither wildcard, and takes the byte after the escape into
   the prefix, where it held the column between no bounds wherever an `ESCAPE` was written. D-624
