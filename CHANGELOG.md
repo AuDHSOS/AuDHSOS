@@ -7,6 +7,14 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` reads the schema of each database of a connection under the encoding that database's
+  header names, makes a database an `ATTACH` finds empty under the connection's encoding, and writes
+  the connection's encoding from `PRAGMA encoding` only while no database of it holds a row of schema,
+  where a `CREATE TEMP TRIGGER` on a table of a UTF-16 database was refused as `no such table`.
+  D-635 records it. Catalog 6.6.464. Under `utf16le-4096-delete` `trigger1.test` goes from 67 cases
+  passing to 86, and under `utf8-1024-delete` `pragma4.test` goes from 70 to 76 and `enc2.test` from
+  87 to 88.
+
 - `db-sqlite` tells two tables of one name in two databases apart, in a `FROM` and in a column written
   with a database in front of it inside a `FROM` inside brackets, where it refused the first as one
   name and read the second against the table alone. D-634 records it. Catalog 6.6.463. `selectD.test`

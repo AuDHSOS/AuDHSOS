@@ -7933,6 +7933,21 @@ is the one the C library's shell writes.
   count it wrote, and a `DELETE` that writes no row answering nought.
 - `CREATE TABLE u(c)` and `CREATE INDEX`, each answering no row.
 
+### 6.6.464 Which encoding each database of a connection holds its text in (`db-sqlite`)
+
+Unit tests of `crate::change` and `crate::db` over a connection whose
+database holds its text in UTF-16LE.
+
+- `CREATE TEMP TRIGGER r1 AFTER INSERT ON t1`, which reads the tables of
+  the database the connection writes while the temp schema holds no row.
+- `ATTACH 'empty.db' AS one` and a table written into it, read back
+  through the reader; `ATTACH` of a database whose header names UTF-8,
+  refused `attached databases must use the same text encoding as main
+  database`.
+- `PRAGMA encoding='UTF-16le'` in front of a `CREATE TEMP TABLE`, a row of
+  text written into it, and `PRAGMA encoding='UTF-8'` after that: the row
+  reads back as it was written and the pragma answers `UTF-16le`.
+
 ### 6.6.463 Which table of one name in two databases a name reaches (`db-sqlite`)
 
 Unit tests of `crate::db` over `main.t4(a,b)` and `aux1.t4(a,b)`, one row

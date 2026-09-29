@@ -3088,7 +3088,13 @@ impl<'a> Database<'a> {
         if is_temp(name) {
             self.temp = Some(place);
         }
-        let tables = read_tables(&image, place, self.encoding, self.collating)?;
+        // Every database of a connection holds its text in the encoding
+        // its own header names, which `sqlite3ReadSchema` reads it under.
+        // The encoding of the one the reader was opened over is no
+        // encoding of another, a database of no schema rows at all
+        // naming none in its header.
+        let encoding = image.header().encoding;
+        let tables = read_tables(&image, place, encoding, self.collating)?;
         self.tables.extend(tables);
         self.attached.push(Attached {
             name: name.to_vec(),
@@ -3556,7 +3562,9 @@ impl<'a> Database<'a> {
             let record = record::Record::parse(&payload)?;
             let text = |at: usize| -> Result<Vec<u8>, Error> {
                 Ok(match record.value(at)? {
-                    Some(record::Value::Text(bytes)) => crate::value::decoded(bytes, self.encoding),
+                    Some(record::Value::Text(bytes)) => {
+                        crate::value::decoded(bytes, image.header().encoding)
+                    }
                     _ => Vec::new(),
                 })
             };
@@ -3602,7 +3610,9 @@ impl<'a> Database<'a> {
             let record = record::Record::parse(&payload)?;
             let text = |at: usize| -> Result<Vec<u8>, Error> {
                 Ok(match record.value(at)? {
-                    Some(record::Value::Text(bytes)) => crate::value::decoded(bytes, self.encoding),
+                    Some(record::Value::Text(bytes)) => {
+                        crate::value::decoded(bytes, image.header().encoding)
+                    }
                     _ => Vec::new(),
                 })
             };
@@ -3910,7 +3920,9 @@ impl<'a> Database<'a> {
             let record = record::Record::parse(&payload)?;
             let text = |at: usize| -> Result<Vec<u8>, Error> {
                 Ok(match record.value(at)? {
-                    Some(record::Value::Text(bytes)) => crate::value::decoded(bytes, self.encoding),
+                    Some(record::Value::Text(bytes)) => {
+                        crate::value::decoded(bytes, image.header().encoding)
+                    }
                     _ => Vec::new(),
                 })
             };

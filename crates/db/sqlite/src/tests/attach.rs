@@ -313,6 +313,111 @@ fn what_a_statement_reads_out_of_an_attached_database() {
 }
 
 /// What a statement writes into a database an `ATTACH` added.
+/// The encoding each database of a connection holds its text in: the one
+/// the header of that database names, and the one the connection writes
+/// where that header names none.
+#[test]
+fn which_encoding_each_database_of_a_connection_holds_its_text_in() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf16Le).unwrap();
+    writer.opens(opening);
+    for sql in [
+        b"CREATE TABLE t1(a,b)".as_slice(),
+        b"INSERT INTO t1 VALUES(1,'x')",
+        // A trigger of the temp schema reads the tables of the database
+        // the connection writes, whose text is UTF-16 where the temp
+        // schema holds no row of schema at all.
+        b"CREATE TEMP TRIGGER r1 AFTER INSERT ON t1 BEGIN SELECT 1; END",
+        // A database an `ATTACH` finds empty holds no row of schema, so
+        // it takes the encoding of the connection.
+        b"ATTACH 'empty.db' AS one",
+        b"CREATE TABLE one.u(c)",
+        b"INSERT INTO one.u VALUES('y')",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let held = writer.written();
+    let beside = writer
+        .attached_written(b"one")
+        .expect("the bytes of the attached database");
+    let database = crate::db::Database::open(&held)
+        .unwrap()
+        .attaching(b"one", &beside)
+        .unwrap();
+    let read = |sql: &[u8]| {
+        let mut out = alloc::string::String::new();
+        for row in database.query(sql).expect("rows").rows {
+            for value in row {
+                out.push_str(&alloc::string::String::from_utf8_lossy(
+                    &value.text().unwrap_or_default(),
+                ));
+                out.push('|');
+            }
+        }
+        out
+    };
+    assert_eq!(read(b"SELECT a,b FROM t1"), "1|x|");
+    assert_eq!(read(b"SELECT c FROM one.u"), "y|");
+    // A database whose header names another encoding is no database of
+    // this connection.
+    assert_eq!(
+        writer.run(b"ATTACH 'one.db' AS two").unwrap_err().message(),
+        "attached databases must use the same text encoding as main database"
+    );
+}
+
+/// `PRAGMA encoding` writes the encoding of the connection while no
+/// database of it holds a row of schema, and writes none after that.
+#[test]
+fn when_a_pragma_writes_the_encoding_of_a_connection() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"PRAGMA encoding='UTF-16le'".as_slice(),
+        b"CREATE TEMP TABLE t(a)",
+        b"INSERT INTO t VALUES('this is a test')",
+        // The temp schema holds a row now, so this writes nothing.
+        b"PRAGMA encoding='UTF-8'",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    // The temp schema holds its text in the encoding the pragma wrote
+    // before the schema was there, which its own header names.
+    let temp = writer.temp().expect("the bytes of the temp schema");
+    let database = crate::db::Database::open(&temp).unwrap();
+    let rows = database.query(b"SELECT a FROM t").expect("rows").rows;
+    assert_eq!(
+        rows.first()
+            .and_then(|row| row.first())
+            .and_then(Value::text),
+        Some(b"this is a test".to_vec())
+    );
+    let named = |writer: &mut Writer| {
+        writer
+            .run(b"PRAGMA encoding")
+            .expect("rows")
+            .first()
+            .and_then(|row| row.first())
+            .and_then(Value::text)
+    };
+    assert_eq!(named(&mut writer), Some(b"UTF-16le".to_vec()));
+    // A database the connection holds beside the one it writes takes the
+    // encoding the pragma writes, and a row of schema in any of them
+    // fixes it.
+    let mut beside = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    beside.opens(opening);
+    beside.run(b"ATTACH 'empty.db' AS one").unwrap();
+    beside.run(b"PRAGMA encoding='UTF-16be'").unwrap();
+    assert_eq!(named(&mut beside), Some(b"UTF-16be".to_vec()));
+    beside.run(b"CREATE TABLE one.u(c)").unwrap();
+    beside.run(b"PRAGMA encoding='UTF-8'").unwrap();
+    assert_eq!(named(&mut beside), Some(b"UTF-16be".to_vec()));
+    // A row of schema in the database the connection writes fixes it the
+    // same way.
+    let mut writing = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writing.run(b"CREATE TABLE t(a)").unwrap();
+    writing.run(b"PRAGMA encoding='UTF-16le'").unwrap();
+    assert_eq!(named(&mut writing), Some(b"UTF-8".to_vec()));
+}
+
 /// Two tables of one name in two databases, which the name of the
 /// database in front of each tells apart.
 #[test]

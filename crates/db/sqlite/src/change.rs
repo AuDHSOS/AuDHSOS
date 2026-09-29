@@ -2757,7 +2757,12 @@ impl Writer {
         if memory {
             held.mode = crate::journal::Mode::Memory;
         }
-        if held.header.encoding != self.held.header.encoding {
+        // `sqlite3InitOne` of `research/sqlite/src/prepare.c:300` holds
+        // the encoding of an attached database to the connection's where
+        // the header of that database names one, which a database whose
+        // schema was never written names none of: such a database takes
+        // the encoding of the connection.
+        if held.header.schema_format != 0 && held.header.encoding != self.held.header.encoding {
             return Err(Error::AttachEncoding);
         }
         // `sqlite3BtreeGetFilename` answers no name for a database of
@@ -6612,8 +6617,21 @@ impl Writer {
             }
             crate::pragma::Setting::Reserved => self.reserving(text)?,
             crate::pragma::Setting::Encoding => {
-                self.held.header.encoding =
-                    crate::pragma::encoding_of(text).ok_or(Error::Unsupported)?;
+                let held = crate::pragma::encoding_of(text).ok_or(Error::Unsupported)?;
+                // `sqlite3InitCallback` of
+                // `research/sqlite/src/prepare.c:104` fixes the encoding
+                // of the connection at the first row of a schema it
+                // reads, so the pragma writes one only while no database
+                // of the connection holds a row of schema at all, and
+                // every database of it holds its text in the one it
+                // writes.
+                if self.encoding_fixed() {
+                    return Ok(Vec::new());
+                }
+                self.held.header.encoding = held;
+                for beside in &mut self.attached {
+                    beside.held.header.encoding = held;
+                }
             }
             crate::pragma::Setting::AutoVacuum => match crate::pragma::vacuum_of(text) {
                 0 => {}
@@ -6623,6 +6641,21 @@ impl Writer {
             _ => return Err(Error::Unsupported),
         }
         Ok(Vec::new())
+    }
+
+    /// Whether a database the connection holds beside the one it writes
+    /// holds a row of schema, which fixes the encoding of the
+    /// connection: `DBFLAG_EncodingFixed` of
+    /// `research/sqlite/src/sqliteInt.h:1899` is what
+    /// `sqlite3InitCallback` sets for the first row of any schema it
+    /// reads, and the schema cookie of the one the connection writes is
+    /// read in front of this.
+    ///
+    /// Reading the databases costs O(n) in them.
+    fn encoding_fixed(&self) -> bool {
+        self.attached
+            .iter()
+            .any(|beside| beside.held.header.schema_format != 0)
     }
 
     /// `PRAGMA foreign_key_list(table)`: one row per foreign key of the
