@@ -5291,7 +5291,10 @@ impl Writer {
     ///
     /// Taking `n` rows out costs O(n log n).
     fn unstat(&mut self, scope: Option<&[u8]>) -> Result<(), Error> {
-        let wanted = scope.map(|name| crate::value::stored(name, self.held.header.encoding));
+        // A row read out of a tree carries its text in UTF-8, whatever
+        // encoding the file holds it in, so the name is compared as this
+        // crate holds it.
+        let wanted = scope;
         let (root, held) = {
             let bytes = self.image();
             let database = self.reading(&bytes)?;
@@ -11034,7 +11037,7 @@ impl Writer {
     ///
     /// Taking one row out costs O(log n).
     fn uncount(&mut self, name: &[u8]) -> Result<(), Error> {
-        let wanted = crate::value::stored(name, self.held.header.encoding);
+        let wanted = name;
         let found = {
             let bytes = self.image();
             let database = self.reading(&bytes)?;
@@ -11046,7 +11049,7 @@ impl Writer {
             database
                 .rows_of(SEQUENCE)?
                 .iter()
-                .find(|(_, values)| named_row(values, &wanted))
+                .find(|(_, values)| named_row(values, wanted))
                 .map(|(rowid, _)| (root, *rowid))
         };
         if let Some((root, rowid)) = found {
@@ -11070,7 +11073,7 @@ impl Writer {
     ///
     /// Whatever reading or writing a page of the tree refuses.
     fn uncounted(&mut self, name: &[u8], at: usize) -> Result<(), Error> {
-        let wanted = crate::value::stored(name, self.held.header.encoding);
+        let wanted = name;
         let found: Vec<(u32, i64)> = {
             let bytes = self.image();
             let database = self.reading(&bytes)?;
@@ -11085,7 +11088,7 @@ impl Writer {
                 return Ok(());
             };
             rows.iter()
-                .filter(|(_, values)| named_column(values, at, &wanted))
+                .filter(|(_, values)| named_column(values, at, wanted))
                 .map(|(rowid, _)| (root, *rowid))
                 .collect()
         };
@@ -11102,11 +11105,11 @@ impl Writer {
     fn counted(&self, name: &[u8]) -> Result<i64, Error> {
         let bytes = self.image();
         let database = self.reading(&bytes)?;
-        let wanted = crate::value::stored(name, self.held.header.encoding);
+        let wanted = name;
         Ok(database
             .rows_of(SEQUENCE)?
             .iter()
-            .find(|(_, values)| named_row(values, &wanted))
+            .find(|(_, values)| named_row(values, wanted))
             .and_then(|(_, values)| values.get(1))
             .map_or(0, Value::to_integer))
     }
@@ -11117,7 +11120,7 @@ impl Writer {
     ///
     /// Writing one row costs O(log n).
     fn count_up(&mut self, name: &[u8], held: i64) -> Result<(), Error> {
-        let wanted = crate::value::stored(name, self.held.header.encoding);
+        let wanted = name;
         let (root, rowid, stood) = {
             let bytes = self.image();
             let database = self.reading(&bytes)?;
@@ -11125,7 +11128,7 @@ impl Writer {
             let found = database
                 .rows_of(SEQUENCE)?
                 .iter()
-                .find(|(_, values)| named_row(values, &wanted))
+                .find(|(_, values)| named_row(values, wanted))
                 .map(|(rowid, values)| (*rowid, values.get(1).map_or(0, Value::to_integer)));
             (
                 root,
@@ -11138,8 +11141,10 @@ impl Writer {
         // `autoIncrementEnd` writes one register per table, so the row
         // never counts back down.
         let held = held.max(stood);
+        // `write_in` writes the text in the encoding the file names, so
+        // the name goes in as this crate holds it.
         let record = crate::record::write_in(
-            &[Value::Text(wanted), Value::Int(held)],
+            &[Value::Text(name.to_vec()), Value::Int(held)],
             &[Affinity::None; 2],
             4,
             self.held.header.encoding,

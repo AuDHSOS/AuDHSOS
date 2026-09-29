@@ -182,17 +182,20 @@ pub enum Collation {
     Defined(&'static [u8], Comparing),
 }
 
-/// Two collations are the same collation where they are the same one
-/// of the three the library holds, or where they were defined under
-/// one name: the function behind a name is the connection's to choose
-/// and says nothing about which collation it is.
+/// Two collations are the same collation where they carry one name: the
+/// three the library holds are the three names, `BINARY` being the one
+/// name of the three variants that compare the bytes of the three
+/// encodings, and a collation an application defined is the name it was
+/// defined under, the function behind that name being the connection's
+/// to choose and saying nothing about which collation it is.
 impl PartialEq for Collation {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Collation::Defined(one, _), Collation::Defined(another, _)) => {
                 one.eq_ignore_ascii_case(another)
             }
-            _ => core::mem::discriminant(self) == core::mem::discriminant(other),
+            (Collation::Defined(..), _) | (_, Collation::Defined(..)) => false,
+            _ => self.word() == other.word(),
         }
     }
 }

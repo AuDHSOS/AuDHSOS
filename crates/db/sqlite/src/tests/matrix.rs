@@ -477,3 +477,53 @@ fn the_three_that_show_the_stored_bytes_answer_the_encoding() {
         assert_eq!(answer.rows, [wanted], "{}", case.name);
     }
 }
+
+/// What the engine writes under each encoding, read back: the name in a
+/// row of `sqlite_sequence`, and the plan of a comparison against a
+/// column of `BINARY`.
+#[test]
+fn every_encoding_the_engine_writes_under_answers_the_same() {
+    for encoding in [Encoding::Utf8, Encoding::Utf16Le, Encoding::Utf16Be] {
+        let mut writer = crate::change::Writer::new(1024, 0, encoding).unwrap();
+        for sql in [
+            b"CREATE TABLE t1(a INTEGER PRIMARY KEY AUTOINCREMENT, b TEXT)".as_slice(),
+            b"INSERT INTO t1 VALUES(NULL,'x')",
+            b"CREATE INDEX t1b ON t1(b)",
+        ] {
+            writer.run(sql).unwrap();
+        }
+        let bytes = writer.written();
+        let database = crate::db::Database::open(&bytes).unwrap();
+        // The record writer is what writes the name of the table into the
+        // encoding the file holds, so the row holds the name once.
+        let answer = database
+            .query(b"SELECT name, seq FROM sqlite_sequence")
+            .unwrap();
+        assert_eq!(
+            answer.rows,
+            [alloc::vec![
+                crate::value::Value::Text(b"t1".to_vec()),
+                crate::value::Value::Int(1)
+            ]],
+            "{encoding:?}"
+        );
+        // `BINARY` is one collation under one name whatever the encoding,
+        // so the comparison is held to the index over the column.
+        let plan = database
+            .query(b"EXPLAIN QUERY PLAN SELECT a FROM t1 WHERE b='x'")
+            .unwrap();
+        assert_eq!(
+            plan.rows.first().and_then(|row| row.last()),
+            Some(&crate::value::Value::Text(
+                b"SEARCH t1 USING COVERING INDEX t1b (b=?)".to_vec()
+            )),
+            "{encoding:?}"
+        );
+        let answer = database.query(b"SELECT a FROM t1 WHERE b='x'").unwrap();
+        assert_eq!(
+            answer.rows,
+            [alloc::vec![crate::value::Value::Int(1)]],
+            "{encoding:?}"
+        );
+    }
+}

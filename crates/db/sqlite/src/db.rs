@@ -15589,7 +15589,7 @@ fn stored_of(
     // `BINARY` is the same collation under the same name whatever the
     // encoding, and it answers by the bytes the file holds.
     let binary = binary_of(encoding);
-    if binary != Collation::Binary {
+    if !matches!(binary, Collation::Binary) {
         for column in &mut table.columns {
             if column.collation == Collation::Binary {
                 column.collation = binary;

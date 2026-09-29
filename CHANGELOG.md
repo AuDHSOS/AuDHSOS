@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` reads `BINARY` as one collation under one name whatever the encoding a file holds its
+  text in, so a comparison against a column of a UTF-16 database is held to an index over it, and
+  writes a name into `sqlite_sequence` and `sqlite_stat1` once rather than twice. D-636 records it.
+  Catalog 6.6.465. Under `utf16le-4096-delete` `where7.test` goes from 1351 cases passing to 2019,
+  `autoinc.test` from 31 to 81, `analyze.test` from 30 to 39 and `like.test` from 131 to 144.
+
 - `db-sqlite` reads the schema of each database of a connection under the encoding that database's
   header names, makes a database an `ATTACH` finds empty under the connection's encoding, and writes
   the connection's encoding from `PRAGMA encoding` only while no database of it holds a row of schema,

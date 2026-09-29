@@ -7933,6 +7933,17 @@ is the one the C library's shell writes.
   count it wrote, and a `DELETE` that writes no row answering nought.
 - `CREATE TABLE u(c)` and `CREATE INDEX`, each answering no row.
 
+### 6.6.465 What the engine writes under each encoding (`db-sqlite`)
+
+Unit tests of `crate::change` and `crate::db` over an image the writer
+wrote under each of the three encodings: `t1(a INTEGER PRIMARY KEY
+AUTOINCREMENT, b TEXT)` with one row and the index `t1b` over `b`. Every
+answer is the one the C library's shell writes.
+
+- `SELECT name, seq FROM sqlite_sequence`, the name of the table and one.
+- `EXPLAIN QUERY PLAN SELECT a FROM t1 WHERE b='x'`, a `SEARCH` over the
+  covering index, and the row that comparison answers.
+
 ### 6.6.464 Which encoding each database of a connection holds its text in (`db-sqlite`)
 
 Unit tests of `crate::change` and `crate::db` over a connection whose
