@@ -88,6 +88,17 @@ impl Code {
             extended_name,
         }
     }
+
+    /// One `SQLITE_ERROR` with the extended code that says why the
+    /// engine could not read the statement.
+    const fn wrong(extended: i64, extended_name: &'static [u8]) -> Self {
+        Code {
+            number: 1,
+            name: b"SQLITE_ERROR",
+            extended,
+            extended_name,
+        }
+    }
 }
 
 /// What `sqlite3AlterFinishAddColumn` of `research/sqlite/src/alter.c:330`
@@ -1137,6 +1148,13 @@ impl Error {
             Error::Eval(eval::Error::Refused(held)) => held.code(),
             Error::Constraint | Error::HeldConstraint(_) => Code::plain(19, b"SQLITE_CONSTRAINT"),
             Error::Auth(_) => Code::plain(23, b"SQLITE_AUTH"),
+            // `SQLITE_ERROR_MISSING_COLLSEQ` of `sqlite.h.in:500`, which
+            // `sqlite3GetCollSeq` of `research/sqlite/src/callback.c:231`
+            // sets where the connection holds no such collation.
+            Error::Schema(schema::Error::NoCollation(_))
+            | Error::Eval(eval::Error::NoCollation(_)) => {
+                Code::wrong(257, b"SQLITE_ERROR_MISSING_COLLSEQ")
+            }
             Error::LockedTable => Code::plain(6, b"SQLITE_LOCKED"),
             Error::ReadOnlyDatabase => Code::plain(8, b"SQLITE_READONLY"),
             Error::Mismatch => Code::plain(20, b"SQLITE_MISMATCH"),

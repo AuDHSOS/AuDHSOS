@@ -7,6 +7,10 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` carries `SQLITE_ERROR_MISSING_COLLSEQ` as the extended code of a refusal that names no
+  collation, where it carried `SQLITE_ERROR` twice. D-626 records it. Catalog 6.6.455.
+  `without_rowid7.test` goes from 10 cases passing to 15.
+
 - `db-sqlite` holds a term to a place of an index where the place is under the collation that term
   compares under, so an index on `path COLLATE nocase` over a column of `BINARY` answers the bounds
   of `path LIKE 'a%'`, where it read such a place as one no term reaches. D-625 records it. Catalog

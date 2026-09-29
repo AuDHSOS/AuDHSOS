@@ -203,6 +203,27 @@ fn what_code_a_refusal_of_a_statement_carries() {
     }
 }
 
+/// The code a refusal that names no collation carries, which
+/// `sqlite3GetCollSeq` of `research/sqlite/src/callback.c:231` sets to
+/// `SQLITE_ERROR_MISSING_COLLSEQ` beside the words of the refusal.
+#[test]
+fn what_code_a_refusal_that_names_no_collation_carries() {
+    use crate::db::Error as Refused;
+    for refused in [
+        Refused::Schema(crate::schema::Error::NoCollation(b"mysort".to_vec())),
+        Refused::Eval(crate::eval::Error::NoCollation(b"mysort".to_vec())),
+    ] {
+        let held = refused.code();
+        assert_eq!(held.number, 1, "{refused:?}");
+        assert_eq!(held.name, b"SQLITE_ERROR", "{refused:?}");
+        assert_eq!(held.extended, 257, "{refused:?}");
+        assert_eq!(
+            held.extended_name, b"SQLITE_ERROR_MISSING_COLLSEQ",
+            "{refused:?}"
+        );
+    }
+}
+
 /// The words each result code names, which `sqlite3_errstr` answers.
 #[test]
 fn what_words_a_result_code_names() {

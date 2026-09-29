@@ -7933,6 +7933,14 @@ is the one the C library's shell writes.
   count it wrote, and a `DELETE` that writes no row answering nought.
 - `CREATE TABLE u(c)` and `CREATE INDEX`, each answering no row.
 
+### 6.6.455 What code a refusal that names no collation carries (`db-sqlite`)
+
+Unit tests of `crate::db::Error::code`.
+
+- `crate::schema::Error::NoCollation` and
+  `crate::eval::Error::NoCollation`, each `SQLITE_ERROR` with the extended
+  code 257, `SQLITE_ERROR_MISSING_COLLSEQ`.
+
 ### 6.6.454 Which place of an index holds a term under its collation (`db-sqlite`)
 
 Unit tests of `crate::db` over an image `crate::change` writes, reading
