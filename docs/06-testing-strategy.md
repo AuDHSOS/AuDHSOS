@@ -7933,6 +7933,57 @@ is the one the C library's shell writes.
   count it wrote, and a `DELETE` that writes no row answering nought.
 - `CREATE TABLE u(c)` and `CREATE INDEX`, each answering no row.
 
+### 6.6.458 What a number of a `GROUP BY` that reaches an aggregate is refused with (`db-sqlite`)
+
+Unit tests of `crate::db` over a table of two columns and one row. Every
+answer is the one the C library's shell writes.
+
+- `SELECT a, max(b) FROM t1 GROUP BY 1, 2`, and the same core on each
+  side of a `UNION`, each refused `aggregate functions are not allowed in
+  the GROUP BY clause`.
+- `SELECT * FROM t1 GROUP BY 2`, whose number names a column of the
+  table, answering one row.
+- `SELECT a FROM t1 GROUP BY 3`, refused `1st GROUP BY term out of range
+  - should be between 1 and 1`.
+
+### 6.6.457 Which index the key of a table without a rowid is (`db-sqlite`)
+
+Unit tests of `crate::db` over an image `crate::change` writes. Every
+answer is the one the C library's shell writes.
+
+- `PRIMARY KEY(a COLLATE NOCASE, a) WITHOUT ROWID` beside `CREATE INDEX i
+  ON t(b)`: `PRAGMA index_info` under the name of the table and under
+  `sqlite_autoindex_t_1`, each two places of the column `a`; `PRAGMA
+  index_xinfo`, the two places and the column `b` after them; `PRAGMA
+  index_list`, the index `i` and then `sqlite_autoindex_t_1` with the
+  origin `pk`.
+- `PRIMARY KEY(a, a, b) WITHOUT ROWID`, whose index holds `a` once.
+- A column computed as `VIRTUAL`, no place of the index, beside one
+  computed as `STORED`, a place after the key.
+- `a INTEGER PRIMARY KEY, b UNIQUE) WITHOUT ROWID`, whose key carries the
+  second name, and `a INTEGER PRIMARY KEY DESC, b UNIQUE) WITHOUT ROWID`,
+  whose key carries the first.
+- `a, b UNIQUE PRIMARY KEY) WITHOUT ROWID`, one index under one name,
+  which `crate::db::Database::indexed` answers nothing for.
+- `PRIMARY KEY(a)` over a table that holds a rowid, and a name the schema
+  does not hold, each answering no place.
+
+### 6.6.456 Which collation a constraint writes beside a column (`db-sqlite`)
+
+Unit tests of `crate::db` over an image `crate::change` writes, reading
+the places as `PRAGMA index_xinfo` and `PRAGMA index_list` write them.
+Every answer is the one the C library's shell writes.
+
+- `a COLLATE NOCASE UNIQUE, b, UNIQUE(a COLLATE BINARY)`, two indexes,
+  the first under `NOCASE` and the second under `BINARY`.
+- `a COLLATE NOCASE UNIQUE, b, UNIQUE(a)`, one index.
+- `UNIQUE(a DESC), UNIQUE(a)`, one index, whose place runs backwards.
+- `UNIQUE(a COLLATE NOCASE)` over two rows that differ in case, refused
+  `UNIQUE constraint failed: w.a`.
+- `PRIMARY KEY(a COLLATE nosuch)`, refused `no such collation sequence:
+  nosuch`, and `a UNIQUE ON CONFLICT ROLLBACK, UNIQUE(a) ON CONFLICT
+  ABORT`, refused `conflicting ON CONFLICT clauses specified`.
+
 ### 6.6.455 What code a refusal that names no collation carries (`db-sqlite`)
 
 Unit tests of `crate::db::Error::code`.

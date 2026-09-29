@@ -698,6 +698,9 @@ impl Error {
             Error::Schema(schema::Error::DuplicateColumn(name)) => {
                 alloc::format!("duplicate column name: {}", shown(name))
             }
+            Error::Schema(schema::Error::ConflictClauses) => {
+                alloc::string::String::from("conflicting ON CONFLICT clauses specified")
+            }
             Error::Schema(schema::Error::ManyKeys(name)) => {
                 alloc::format!("table \"{}\" has more than one primary key", shown(name))
             }
@@ -4041,6 +4044,32 @@ impl<'a> Database<'a> {
                     table: &stored.table,
                 })
         })
+    }
+
+    /// The `PRIMARY KEY` of a table that keeps its rows in the key's own
+    /// tree as an index, with the place it takes among the indexes of the
+    /// table, which [`Database::indexed`] answers nothing for because no
+    /// row of `sqlite_schema` describes it.
+    ///
+    /// `PragTyp_INDEX_INFO` of `research/sqlite/src/pragma.c:1377` reads
+    /// the table of the name where no index carries it, so `name` is
+    /// either the name of the index or the name of the table.
+    ///
+    /// Reading the schema costs O(n) in its tables.
+    #[must_use]
+    pub fn keying(&self, name: &[u8]) -> Option<(&Table, usize, schema::Index)> {
+        fn held(stored: &Stored) -> Option<(&Table, usize, schema::Index)> {
+            schema::keying_index(&stored.table).map(|(at, index)| (&stored.table, at, index))
+        }
+        self.tables
+            .iter()
+            .filter(|stored| stored.table.name.eq_ignore_ascii_case(name))
+            .find_map(held)
+            .or_else(|| {
+                self.tables.iter().find_map(|stored| {
+                    held(stored).filter(|(_, _, index)| index.name.eq_ignore_ascii_case(name))
+                })
+            })
     }
 
     /// The indexes over the table of `name` this crate holds, each with
@@ -13661,8 +13690,29 @@ fn aggregates(
             Error::MisusedAggregate(call.name.clone())
         });
     }
+    // A whole number in a `GROUP BY` names a column the statement
+    // answers, and an aggregate that column holds is refused as one
+    // written there, because `resolveOrderGroupBy` of
+    // `research/sqlite/src/resolve.c:2084` reads the number as that
+    // column and `resolveSelectStep` then reads `EP_Agg` of the term the
+    // number stood for.
+    let answers = sides
+        .filter(|_| !select.group.is_empty())
+        .map(|sides| answered(arena, select, sql, sides));
     for id in arena.children(select.group) {
-        walk.gather(*id, &mut misused, Placed::default(), &mut Vec::new())?;
+        let reached = whole_number(arena, *id, sql)
+            .and_then(|place| usize::try_from(place.saturating_sub(1)).ok())
+            .zip(answers.as_ref())
+            .and_then(|(at, answers)| answers.get(at).copied());
+        let term = match reached {
+            Some(Term::Expr(expr)) => Some(expr),
+            // A column of a table holds no aggregate.
+            Some(Term::Held(..)) => None,
+            None => Some(*id),
+        };
+        if let Some(term) = term {
+            walk.gather(term, &mut misused, Placed::default(), &mut Vec::new())?;
+        }
     }
     if !misused.is_empty() {
         return Err(Error::GroupedAggregate);
@@ -15445,20 +15495,12 @@ fn stored_of(
 /// `sqlite3WhereExplainOneScan` writes `PRIMARY KEY` and not the index's
 /// name for it, so the name is left empty.
 ///
-/// Reading the constraints costs O(n) in them.
+/// Reading the constraints costs what [`schema::keying_index`] costs.
 fn keyed_index(table: &Table) -> Option<schema::Index> {
-    table
-        .keys
-        .iter()
-        .find(|keys| keys.primary && table.without_rowid)
-        .map(|keys| schema::Index {
-            name: Vec::new(),
-            table: table.name.clone(),
-            columns: keys.columns.clone(),
-            unique: true,
-            conflict: keys.conflict,
-            filter: None,
-        })
+    schema::keying_index(table).map(|(_, index)| schema::Index {
+        name: Vec::new(),
+        ..index
+    })
 }
 
 /// The tables one file holds, each carrying the schema place of that

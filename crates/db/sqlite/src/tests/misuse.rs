@@ -88,6 +88,47 @@ fn what_an_aggregate_outside_a_group_is_refused_with() {
     }
 }
 
+/// An aggregate a whole number of a `GROUP BY` reaches, which the
+/// number names as a column the statement answers.
+#[test]
+fn what_a_number_of_a_group_by_that_reaches_an_aggregate_is_refused_with() {
+    let image = written();
+    for sql in [
+        b"SELECT a, max(b) FROM t1 GROUP BY 1, 2".as_slice(),
+        b"SELECT b FROM t1 UNION SELECT max(b) FROM t1 GROUP BY 1",
+        b"SELECT max(b) FROM t1 GROUP BY 1 UNION SELECT b FROM t1",
+    ] {
+        assert_eq!(
+            refused(&image, sql),
+            "aggregate functions are not allowed in the GROUP BY clause",
+            "{sql:?}"
+        );
+    }
+    // A number that reaches a column of a table reaches no aggregate,
+    // and one past the last column the statement answers is out of
+    // range.
+    let database = Database::open(&image).expect("a database");
+    assert_eq!(
+        database
+            .query(b"SELECT * FROM t1 GROUP BY 2")
+            .unwrap()
+            .rows
+            .len(),
+        1
+    );
+    for sql in [
+        b"SELECT a FROM t1 GROUP BY 3".as_slice(),
+        b"SELECT a FROM t1 GROUP BY 0",
+        b"SELECT a FROM t1 GROUP BY -1",
+    ] {
+        assert_eq!(
+            database.query(sql).unwrap_err().message(),
+            "1st GROUP BY term out of range - should be between 1 and 1",
+            "{sql:?}"
+        );
+    }
+}
+
 /// An aggregate written where no statement groups anything, which is
 /// every expression outside a `SELECT`.
 #[test]

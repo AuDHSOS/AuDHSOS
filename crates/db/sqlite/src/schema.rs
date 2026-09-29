@@ -53,6 +53,9 @@ pub enum Error {
     GeneratedKey,
     /// More than one primary key, with the name of the table.
     ManyKeys(Vec<u8>),
+    /// Two constraints over the same columns, each with an `ON
+    /// CONFLICT` clause of its own, the clauses naming two actions.
+    ConflictClauses,
     /// `AUTOINCREMENT` on a key that is not the rowid.
     Autoincrement,
     /// `AUTOINCREMENT` on a table with no rowid to count.
@@ -245,10 +248,15 @@ pub struct Foreign {
     pub deferred: bool,
 }
 
-/// One `PRIMARY KEY` or `UNIQUE` as the statement wrote it: the name
-/// and the order of each column, the conflict clause, and whether the
-/// constraint is the `PRIMARY KEY`.
-type Written = (Vec<(usize, Order)>, crate::ast::Conflict, bool);
+/// One `PRIMARY KEY` or `UNIQUE` as the statement wrote it: the place,
+/// the order and the collation of each column, the conflict clause, and
+/// whether the constraint is the `PRIMARY KEY`. A place carries no
+/// collation of its own where the constraint wrote none beside it.
+type Written = (
+    Vec<(usize, Order, Option<Collation>)>,
+    crate::ast::Conflict,
+    bool,
+);
 
 /// One `PRIMARY KEY` or `UNIQUE` an index of the table's own holds the
 /// entries of, which is `sqlite_autoindex_<table>_<n>`.
@@ -305,25 +313,80 @@ pub fn key_collations(table: &Table) -> Vec<crate::value::Placing> {
 /// The index `at` of the table's own, counting from nought, as a
 /// `CREATE INDEX` would have described it, and nothing for the
 /// `PRIMARY KEY` of a table that keeps its rows in the key's own tree,
-/// which that tree holds rather than an index beside it.
+/// which [`keying_index`] answers because that tree holds its entries.
 #[must_use]
 pub fn own_index(table: &Table, at: usize) -> Option<Index> {
     let keys = table.keys.get(at)?;
     if table.without_rowid && keys.primary {
         return None;
     }
+    Some(named_index(table, at, keys))
+}
+
+/// The constraint `at` as an index of the table's own, under the name
+/// the place it takes among the constraints gives it.
+fn named_index(table: &Table, at: usize, keys: &Keys) -> Index {
     let mut name = b"sqlite_autoindex_".to_vec();
     name.extend_from_slice(&table.name);
     name.push(b'_');
     name.extend_from_slice(digits(at.saturating_add(1)).as_slice());
-    Some(Index {
+    Index {
         name,
         table: table.name.clone(),
         columns: keys.columns.clone(),
         unique: true,
         conflict: keys.conflict,
         filter: None,
-    })
+    }
+}
+
+/// The `PRIMARY KEY` of a table that keeps its rows in the key's own
+/// tree as an index, with the place it takes among the constraints of
+/// the table, and nothing for a table that holds a rowid.
+///
+/// The tree of the table holds the entries of this index, so no row of
+/// `sqlite_schema` describes it and the table holds no second tree for
+/// it. `PRAGMA index_list`, `PRAGMA index_info` and `PRAGMA index_xinfo`
+/// name it.
+///
+/// `convertToWithoutRowidTable` of `research/sqlite/src/build.c:2422`
+/// holds each column of the key once, dropping a place whose column and
+/// collation a place in front of it holds already, which it does for no
+/// other index.
+///
+/// Reading the constraints costs O(n + k^2) in `n` constraints and `k`
+/// columns of the key.
+#[must_use]
+pub fn keying_index(table: &Table) -> Option<(usize, Index)> {
+    if !table.without_rowid {
+        return None;
+    }
+    let at = table.keys.iter().position(|keys| keys.primary)?;
+    let keys = table.keys.get(at)?;
+    let mut index = named_index(table, at, keys);
+    let mut once: Vec<Keyed> = Vec::new();
+    for keyed in &index.columns {
+        if !once
+            .iter()
+            .any(|held| held.of == keyed.of && held.collation == keyed.collation)
+        {
+            once.push(*keyed);
+        }
+    }
+    index.columns = once;
+    Some((at, index))
+}
+
+/// Whether the rowid is another name for the one column of the
+/// constraint, which is the `PRIMARY KEY` a table that holds a rowid
+/// keeps its rows in the tree of.
+fn aliases_rowid(table: &Table, written: &Written) -> bool {
+    let (columns, _, primary) = written;
+    *primary
+        && columns.len() == 1
+        && columns
+            .first()
+            .is_some_and(|(at, _, _)| table.rowid_alias == Some(*at))
 }
 
 /// Every `PRIMARY KEY` and `UNIQUE` of a table as an index of the
@@ -334,47 +397,68 @@ pub fn own_index(table: &Table, at: usize) -> Option<Index> {
 /// table before this, so each carries the place it stands at.
 ///
 /// Comparing `n` constraints of `k` columns costs O(n^2 k).
-fn own_keys(table: &Table, written: &[Written]) -> Vec<Keys> {
+fn own_keys(table: &Table, written: &[Written]) -> Result<Vec<Keys>, Error> {
     let mut keys: Vec<Keys> = Vec::new();
-    for (columns, conflict, primary) in written {
+    let mut ordered: Vec<&Written> = Vec::new();
+    let mut aliased: Vec<&Written> = Vec::new();
+    for one in written {
+        if aliases_rowid(table, one) {
+            aliased.push(one);
+        } else {
+            ordered.push(one);
+        }
+    }
+    // The key the rowid is another name for carries the index of a table
+    // that keeps its rows in the key's own tree, and
+    // `convertToWithoutRowidTable` of `research/sqlite/src/build.c:2404`
+    // makes that index after the index of every other constraint, so it
+    // is the last of them and carries the last name.
+    if table.without_rowid {
+        ordered.extend(aliased);
+    }
+    for (columns, conflict, primary) in ordered {
         let mut keyed = Vec::new();
-        for (at, order) in columns {
-            let collation = table
-                .columns
-                .get(*at)
-                .map_or(Collation::Binary, |column| column.collation);
+        for (at, order, written) in columns {
+            let collation = written.unwrap_or_else(|| {
+                table
+                    .columns
+                    .get(*at)
+                    .map_or(Collation::Binary, |column| column.collation)
+            });
             keyed.push(Keyed {
                 of: Of::Place(*at),
                 order: *order,
                 collation,
             });
         }
-        // The `PRIMARY KEY` the rowid is another name for is the
-        // table's own tree, so it carries no index of its own.
-        let alias = *primary
-            && keyed.len() == 1
-            && keyed
-                .first()
-                .is_some_and(|keyed| table.rowid_alias == keyed.place());
-        if alias {
-            continue;
-        }
         // A constraint over the columns of one already there carries no
         // second index, and the one there takes the clause of the
-        // constraint where it carries none. The order of a column is
-        // not compared, which is what `sqlite3CreateIndex` leaves out,
-        // and the collation is the column's, so the columns settle it.
+        // constraint where it carries none, which is
+        // `sqlite3CreateIndex` of `research/sqlite/src/build.c:4338`
+        // comparing the place and the collation of each column and
+        // leaving the order of it out.
         let held = keys.iter_mut().find(|held| {
             held.columns.len() == keyed.len()
                 && held
                     .columns
                     .iter()
                     .zip(&keyed)
-                    .all(|(held, new)| held.of == new.of)
+                    .all(|(held, new)| held.of == new.of && held.collation == new.collation)
         });
         if let Some(held) = held {
+            // The index there takes the clause of the constraint where
+            // it carries none, and two clauses that name two actions
+            // are refused.
             if held.conflict == crate::ast::Conflict::Unspecified {
                 held.conflict = *conflict;
+            } else if *conflict != crate::ast::Conflict::Unspecified && held.conflict != *conflict {
+                return Err(Error::ConflictClauses);
+            }
+            // The index there stands for the key where the constraint
+            // is the key, which `sqlite3CreateIndex` writes as
+            // `pIdx->idxType = SQLITE_IDXTYPE_PRIMARYKEY`.
+            if *primary {
+                held.primary = true;
             }
             continue;
         }
@@ -384,7 +468,7 @@ fn own_keys(table: &Table, written: &[Written]) -> Vec<Keys> {
             primary: *primary,
         });
     }
-    keys
+    Ok(keys)
 }
 
 /// What one place of an index entry holds.
@@ -940,11 +1024,15 @@ pub fn table(
                     conflict,
                 } => {
                     own_key = Some((order, autoincrement));
-                    written_keys.push((alloc::vec![(table.columns.len(), order)], conflict, true));
+                    written_keys.push((
+                        alloc::vec![(table.columns.len(), order, None)],
+                        conflict,
+                        true,
+                    ));
                 }
                 ColumnConstraint::Unique(conflict) => {
                     written_keys.push((
-                        alloc::vec![(table.columns.len(), Order::Unspecified)],
+                        alloc::vec![(table.columns.len(), Order::Unspecified, None)],
                         conflict,
                         false,
                     ));
@@ -1015,7 +1103,11 @@ pub fn table(
             let column = key_name(arena, term.expr).ok_or(Error::KeyExpression)?;
             let place = index_of(&table, column, sql)
                 .ok_or_else(|| Error::NoSuchColumn(dequote(column.text(sql))))?;
-            written.push((place, term.order));
+            written.push((
+                place,
+                term.order,
+                key_collation(arena, term.expr, sql, collating)?,
+            ));
             named.push(place);
         }
         let primary = matches!(*constraint, TableConstraint::PrimaryKey { .. });
@@ -1066,7 +1158,7 @@ pub fn table(
         }
     }
 
-    table.keys = own_keys(&table, &written_keys);
+    table.keys = own_keys(&table, &written_keys)?;
     table.foreign = pointing(arena, &table, &pointed, sql)?;
     table.checks = checks;
 
@@ -1101,6 +1193,10 @@ pub fn table(
         if !table.columns.iter().any(|column| column.key > 0) {
             return Err(Error::MissingKey(table.name.clone()));
         }
+        // The rowid is no other name for a column of a table that keeps
+        // its rows in the key's own tree, which
+        // `convertToWithoutRowidTable` of
+        // `research/sqlite/src/build.c:2403` writes as `pTab->iPKey = -1`.
         table.rowid_alias = None;
         for column in &mut table.columns {
             if column.key > 0 {
@@ -1160,6 +1256,28 @@ fn key_name(arena: &Arena, id: ExprId) -> Option<Span> {
         Node::Literal(Literal::Text(span)) => Some(span),
         _ => None,
     }
+}
+
+/// The collation one place of a `PRIMARY KEY` or a `UNIQUE` names,
+/// and nothing where the place names none, in which case the column's
+/// own collation is the one the index compares under.
+///
+/// [`Error::NoCollation`] names a collation the connection does not
+/// hold, which `sqlite3LocateCollSeq` of
+/// `research/sqlite/src/callback.c:256` answers nothing for.
+fn key_collation(
+    arena: &Arena,
+    id: ExprId,
+    sql: &[u8],
+    collating: &[crate::value::Collating],
+) -> Result<Option<Collation>, Error> {
+    let Some(Node::Collate { name, .. }) = arena.node(id) else {
+        return Ok(None);
+    };
+    let named = dequote(name.text(sql));
+    crate::value::collation_of(&named, collating)
+        .map(Some)
+        .ok_or(Error::NoCollation(named))
 }
 
 /// Whether the tree holds a name as a column that is one of the two

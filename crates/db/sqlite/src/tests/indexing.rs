@@ -110,6 +110,14 @@ fn what_a_name_sqlite_keeps_and_a_key_that_counts_up_are_refused_with() {
             "expressions prohibited in PRIMARY KEY and UNIQUE constraints",
         ),
         (
+            b"CREATE TABLE t9(a, PRIMARY KEY(a COLLATE nosuch))",
+            "no such collation sequence: nosuch",
+        ),
+        (
+            b"CREATE TABLE t9(a UNIQUE ON CONFLICT ROLLBACK, UNIQUE(a) ON CONFLICT ABORT)",
+            "conflicting ON CONFLICT clauses specified",
+        ),
+        (
             b"CREATE TABLE t9(a) WITHOUT oid",
             "unknown table option: oid",
         ),

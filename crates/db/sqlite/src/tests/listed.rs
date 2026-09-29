@@ -108,6 +108,159 @@ fn what_the_places_of_an_index_answer() {
     assert!(shown(&mut writer, b"PRAGMA index_info(nosuch)").is_empty());
 }
 
+/// The collation a `PRIMARY KEY` or a `UNIQUE` of a `CREATE TABLE`
+/// writes beside a column, which the index it makes compares that place
+/// under and `PRAGMA index_xinfo` names.
+#[test]
+fn which_collation_a_constraint_writes_beside_a_column() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    // Two constraints over one column under two collations are two
+    // indexes, and the one written first is `_1`.
+    writer
+        .run(b"CREATE TABLE t(a COLLATE NOCASE UNIQUE, b, UNIQUE(a COLLATE BINARY))")
+        .unwrap();
+    assert_eq!(
+        shown(&mut writer, b"PRAGMA index_xinfo(sqlite_autoindex_t_1)"),
+        "0|0|a|0|NOCASE|1|1|-1||0|BINARY|0|"
+    );
+    assert_eq!(
+        shown(&mut writer, b"PRAGMA index_xinfo(sqlite_autoindex_t_2)"),
+        "0|0|a|0|BINARY|1|1|-1||0|BINARY|0|"
+    );
+    // A place that writes no collation is compared under the column's,
+    // so the second constraint here is the first one again and the
+    // table holds one index.
+    writer
+        .run(b"CREATE TABLE u(a COLLATE NOCASE UNIQUE, b, UNIQUE(a))")
+        .unwrap();
+    assert_eq!(
+        shown(&mut writer, b"PRAGMA index_list(u)"),
+        "0|sqlite_autoindex_u_1|1|u|0|"
+    );
+    // The order of a place is left out of that comparison.
+    writer
+        .run(b"CREATE TABLE v(a, b, UNIQUE(a DESC), UNIQUE(a))")
+        .unwrap();
+    assert_eq!(
+        shown(&mut writer, b"PRAGMA index_xinfo(sqlite_autoindex_v_1)"),
+        "0|0|a|1|BINARY|1|1|-1||0|BINARY|0|"
+    );
+    // The clause of the index there stands where the second constraint
+    // carries none and where the two name one action.
+    for sql in [
+        b"CREATE TABLE c1(a UNIQUE ON CONFLICT ROLLBACK, UNIQUE(a))".as_slice(),
+        b"CREATE TABLE c2(a UNIQUE ON CONFLICT ROLLBACK, UNIQUE(a) ON CONFLICT ROLLBACK)",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    assert_eq!(
+        shown(&mut writer, b"PRAGMA index_list(c1)"),
+        "0|sqlite_autoindex_c1_1|1|u|0|"
+    );
+    assert_eq!(
+        shown(&mut writer, b"PRAGMA index_list(c2)"),
+        "0|sqlite_autoindex_c2_1|1|u|0|"
+    );
+    // The index compares its entries under the collation the
+    // constraint wrote, so two rows that differ in case are one key.
+    writer
+        .run(b"CREATE TABLE w(a, b, UNIQUE(a COLLATE NOCASE))")
+        .unwrap();
+    writer.run(b"INSERT INTO w VALUES('x',1)").unwrap();
+    assert_eq!(
+        writer
+            .run(b"INSERT INTO w VALUES('X',2)")
+            .map_err(|refused| refused.message()),
+        Err(alloc::string::String::from("UNIQUE constraint failed: w.a"))
+    );
+}
+
+/// The `PRIMARY KEY` of a table that keeps its rows in the key's own
+/// tree, which the three pragmas name although no row of
+/// `sqlite_schema` describes it.
+#[test]
+fn which_index_the_key_of_a_table_without_a_rowid_is() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    writer
+        .run(b"CREATE TABLE t(a, b, PRIMARY KEY(a COLLATE NOCASE, a)) WITHOUT ROWID")
+        .unwrap();
+    writer.run(b"CREATE INDEX i ON t(b)").unwrap();
+    // The name of the table reaches the index, and so does the name the
+    // place the key takes among the constraints gives it.
+    assert_eq!(shown(&mut writer, b"PRAGMA index_info(t)"), "0|0|a|1|0|a|");
+    assert_eq!(
+        shown(&mut writer, b"PRAGMA index_info(sqlite_autoindex_t_1)"),
+        "0|0|a|1|0|a|"
+    );
+    // The places after the key are the columns of the table the key does
+    // not hold.
+    assert_eq!(
+        shown(&mut writer, b"PRAGMA index_xinfo(t)"),
+        "0|0|a|0|NOCASE|1|1|0|a|0|BINARY|1|2|1|b|0|BINARY|0|"
+    );
+    // The index stands among the indexes of the table at the place the
+    // constraints give it, which is in front of a `CREATE INDEX`.
+    assert_eq!(
+        shown(&mut writer, b"PRAGMA index_list(t)"),
+        "0|i|0|c|0|1|sqlite_autoindex_t_1|1|pk|0|"
+    );
+    // The key holds each column once, where two places of it name one
+    // column under one collation.
+    writer
+        .run(b"CREATE TABLE u(a, b, PRIMARY KEY(a, a, b)) WITHOUT ROWID")
+        .unwrap();
+    assert_eq!(
+        shown(&mut writer, b"PRAGMA index_xinfo(u)"),
+        "0|0|a|0|BINARY|1|1|1|b|0|BINARY|1|"
+    );
+    // A column computed as `VIRTUAL` is no place of the index, where one
+    // computed as `STORED` is.
+    writer
+        .run(b"CREATE TABLE v(a, b AS (a+1) VIRTUAL, c AS (a*2) STORED, PRIMARY KEY(a)) WITHOUT ROWID")
+        .unwrap();
+    assert_eq!(
+        shown(&mut writer, b"PRAGMA index_xinfo(v)"),
+        "0|0|a|0|BINARY|1|1|2|c|0|BINARY|0|"
+    );
+    // The rowid is no other name for a key of one `INTEGER` column here,
+    // so the key carries an index, and that index is made after every
+    // other constraint, whichever place the key was written at.
+    writer
+        .run(b"CREATE TABLE w(a INTEGER PRIMARY KEY, b UNIQUE) WITHOUT ROWID")
+        .unwrap();
+    assert_eq!(
+        shown(&mut writer, b"PRAGMA index_list(w)"),
+        "0|sqlite_autoindex_w_2|1|pk|0|1|sqlite_autoindex_w_1|1|u|0|"
+    );
+    // A key of one `INTEGER` column written backwards is no name for the
+    // rowid, so its index is made at the place it was written at.
+    writer
+        .run(b"CREATE TABLE s(a INTEGER PRIMARY KEY DESC, b UNIQUE) WITHOUT ROWID")
+        .unwrap();
+    assert_eq!(
+        shown(&mut writer, b"PRAGMA index_list(s)"),
+        "0|sqlite_autoindex_s_2|1|u|0|1|sqlite_autoindex_s_1|1|pk|0|"
+    );
+    // A `UNIQUE` the key of such a table folds into is the key's index,
+    // so no row of `sqlite_schema` describes it.
+    writer
+        .run(b"CREATE TABLE x(a, b UNIQUE PRIMARY KEY) WITHOUT ROWID")
+        .unwrap();
+    assert_eq!(
+        shown(&mut writer, b"PRAGMA index_list(x)"),
+        "0|sqlite_autoindex_x_1|1|pk|0|"
+    );
+    let bytes = writer.written();
+    let database = crate::db::Database::open(&bytes).unwrap();
+    assert!(database.indexed(b"sqlite_autoindex_x_1").is_none());
+    // A table that holds a rowid answers no place for its key under the
+    // name of the table, and no index carries a name the schema does not
+    // hold.
+    writer.run(b"CREATE TABLE y(a, b, PRIMARY KEY(a))").unwrap();
+    assert!(shown(&mut writer, b"PRAGMA index_info(y)").is_empty());
+    assert!(shown(&mut writer, b"PRAGMA index_info(nosuch)").is_empty());
+}
+
 /// `PRAGMA index_list` answers one row per index over the table, the one
 /// made last first, and `PRAGMA collation_list` one row per collation.
 #[test]

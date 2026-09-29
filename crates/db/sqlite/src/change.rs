@@ -14517,32 +14517,30 @@ struct Place {
 /// the entries are held in the order of; the places after those are the
 /// ones an entry carries to name the row.
 ///
-/// Reading the index costs O(n) in its places.
+/// The name is that of an index, or that of a table whose `PRIMARY KEY`
+/// is the tree the table keeps its rows in.
+///
+/// Reading the index costs O(n) in its places, and O(t) in the tables of
+/// the schema where no index carries the name.
 pub(crate) fn places_of(database: &Database<'_>, name: &[u8], every: bool) -> Vec<Vec<Value>> {
-    let Some(indexed) = database.indexed(name) else {
-        return Vec::new();
+    let held = if let Some(indexed) = database.indexed(name) {
+        let mut held = keyed_places(indexed.table, &indexed.index.columns);
+        if every {
+            held.extend(naming_places(&indexed));
+        }
+        held
+    } else {
+        // The `PRIMARY KEY` of a table that keeps its rows in the key's
+        // own tree is that tree, so no index carries the name.
+        let Some((table, _, index)) = database.keying(name) else {
+            return Vec::new();
+        };
+        let mut held = keyed_places(table, &index.columns);
+        if every {
+            held.extend(other_places(table, &index));
+        }
+        held
     };
-    let mut held: Vec<Place> = indexed
-        .index
-        .columns
-        .iter()
-        .map(|keyed| Place {
-            cid: keyed
-                .place()
-                .and_then(|at| i64::try_from(at).ok())
-                .unwrap_or(-2),
-            name: keyed
-                .place()
-                .and_then(|at| indexed.table.columns.get(at))
-                .map(|column| column.name.clone()),
-            back: keyed.order == crate::ast::Order::Descending,
-            collation: keyed.collation,
-            key: true,
-        })
-        .collect();
-    if every {
-        held.extend(naming_places(&indexed));
-    }
     held.iter()
         .enumerate()
         .map(|(seq, place)| {
@@ -14557,6 +14555,57 @@ pub(crate) fn places_of(database: &Database<'_>, name: &[u8], every: bool) -> Ve
                 row.push(Value::Int(i64::from(place.key)));
             }
             row
+        })
+        .collect()
+}
+
+/// The places the index holds its entries in the order of.
+fn keyed_places(table: &Table, columns: &[crate::schema::Keyed]) -> Vec<Place> {
+    columns
+        .iter()
+        .map(|keyed| Place {
+            cid: keyed
+                .place()
+                .and_then(|at| i64::try_from(at).ok())
+                .unwrap_or(-2),
+            name: keyed
+                .place()
+                .and_then(|at| table.columns.get(at))
+                .map(|column| column.name.clone()),
+            back: keyed.order == crate::ast::Order::Descending,
+            collation: keyed.collation,
+            key: true,
+        })
+        .collect()
+}
+
+/// The places the index of the `PRIMARY KEY` of a table that keeps its
+/// rows in the key's own tree carries beside the key: every column of the
+/// table the key does not hold, in the order the table holds them, which
+/// `convertToWithoutRowidTable` of `research/sqlite/src/build.c:2485`
+/// writes, leaving a column computed as `VIRTUAL` out.
+///
+/// Reading the table costs O(n k) in `n` columns and `k` places of the
+/// key.
+fn other_places(table: &Table, index: &crate::schema::Index) -> Vec<Place> {
+    let held: Vec<usize> = index
+        .columns
+        .iter()
+        .filter_map(crate::schema::Keyed::place)
+        .collect();
+    table
+        .columns
+        .iter()
+        .enumerate()
+        .filter(|(at, column)| {
+            !held.contains(at) && column.generated != crate::schema::Generated::Virtual
+        })
+        .map(|(at, column)| Place {
+            cid: i64::try_from(at).unwrap_or(-2),
+            name: Some(column.name.clone()),
+            back: false,
+            collation: column.collation,
+            key: false,
         })
         .collect()
 }
@@ -14614,17 +14663,35 @@ fn naming_places(indexed: &crate::db::Indexed<'_>) -> Vec<Place> {
 ///
 /// Reading the table costs O(n) in its indexes.
 pub(crate) fn listed_indexes(database: &Database<'_>, name: &[u8]) -> Vec<Vec<Value>> {
-    let held = database.indexes(name);
+    let mut held: Vec<(Vec<u8>, bool, &'static [u8], bool)> = database
+        .indexes(name)
+        .iter()
+        .map(|indexed| {
+            (
+                indexed.index.name.clone(),
+                indexed.index.unique,
+                origin_of(indexed),
+                indexed.index.filter.is_some(),
+            )
+        })
+        .collect();
+    // The `PRIMARY KEY` of a table that keeps its rows in the key's own
+    // tree stands among the indexes of the table at the place the
+    // constraints of the table give it, which no row of `sqlite_schema`
+    // says.
+    if let Some((_, at, index)) = database.keying(name) {
+        held.insert(at.min(held.len()), (index.name, index.unique, b"pk", false));
+    }
     held.iter()
         .rev()
         .enumerate()
-        .map(|(seq, indexed)| {
+        .map(|(seq, (named, unique, origin, partial))| {
             alloc::vec![
                 Value::Int(i64::try_from(seq).unwrap_or(0)),
-                Value::Text(indexed.index.name.clone()),
-                Value::Int(i64::from(indexed.index.unique)),
-                Value::Text(origin_of(indexed).to_vec()),
-                Value::Int(i64::from(indexed.index.filter.is_some())),
+                Value::Text(named.clone()),
+                Value::Int(i64::from(*unique)),
+                Value::Text(origin.to_vec()),
+                Value::Int(i64::from(*partial)),
             ]
         })
         .collect()

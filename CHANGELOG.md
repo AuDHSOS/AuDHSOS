@@ -7,6 +7,22 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` refuses a whole number of a `GROUP BY` that names a column the statement answers as an
+  aggregate, where it read the number as the number. D-629 records it. Catalog 6.6.458. `misc4.test`
+  goes from 14 cases passing to 17.
+
+- `db-sqlite` holds the `PRIMARY KEY` of a table that keeps its rows in the key's own tree as that
+  tree: no row of `sqlite_schema` describes it, the table holds no second tree for a `UNIQUE` over the
+  columns of the key, and `PRAGMA index_list`, `PRAGMA index_info` and `PRAGMA index_xinfo` name it,
+  where the engine wrote a second tree for such a `UNIQUE` and answered no place at all for the key.
+  D-628 records it. Catalog 6.6.457. `without_rowid6.test` goes from 9 cases passing to 16,
+  `without_rowid1.test` from 64 to 67 and `without_rowid7.test` from 15 to 16.
+
+- `db-sqlite` compares each column of a `PRIMARY KEY` or a `UNIQUE` of a `CREATE TABLE` under the
+  collation written beside it, so two constraints over one column under two collations are two
+  indexes, and refuses two `ON CONFLICT` clauses that name two actions over one index, where the
+  engine read every place under the column's collation. D-627 records it. Catalog 6.6.456.
+
 - `db-sqlite` carries `SQLITE_ERROR_MISSING_COLLSEQ` as the extended code of a refusal that names no
   collation, where it carried `SQLITE_ERROR` twice. D-626 records it. Catalog 6.6.455.
   `without_rowid7.test` goes from 10 cases passing to 15.
