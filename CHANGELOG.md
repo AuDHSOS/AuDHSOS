@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` answers each column of a `FROM` inside brackets with the value of its own place, and a
+  column the `USING` or the `NATURAL` of a join inside the brackets matched with the value whichever
+  side filled, where it read every such column by its name and the second of two columns of one name
+  answered the value of the first. D-632 records it. Catalog 6.6.461. `selectD.test` goes from 10
+  cases passing to 22 and `joinH.test` from 70 to 72.
+
 - `db-sqlite` leaves a column whose name begins with `__hidden__` out of a `*`, out of the columns a
   statement that names none writes into, and out of `PRAGMA table_info`, writing a one for it in
   `PRAGMA table_xinfo`, where a name still reaches it. D-631 records it. Catalog 6.6.460.

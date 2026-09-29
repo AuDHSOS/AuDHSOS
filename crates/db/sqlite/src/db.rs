@@ -14564,12 +14564,17 @@ fn project(
                             out.push(value.clone());
                             return;
                         }
-                        // A bare name over the tables inside brackets
-                        // reaches the column one of them filled, and
-                        // then the sides after it fill what is left.
-                        let mine = held
-                            .filled(&column.name, cursor.collation)
-                            .map_or_else(|| value.clone(), |(value, ..)| value);
+                        // A column the join inside the brackets
+                        // matched answers the value whichever of its
+                        // sides filled, and every other column the
+                        // value of its own place, two columns of one
+                        // name standing for two columns where no
+                        // `USING` matched them.
+                        let mine = if held.coalesces(&column.name) {
+                            held.coalescing(&column.name, value)
+                        } else {
+                            value.clone()
+                        };
                         out.push(cursor.coalesced(at, &column.name, &mine));
                     });
                     // The rowid of the side comes after its columns,
@@ -16292,6 +16297,34 @@ impl<'a> Held<'a> {
         self.using
             .iter()
             .any(|name| name.eq_ignore_ascii_case(column))
+    }
+
+    /// Whether the columns of that name inside the brackets stand for
+    /// one column, which the `USING` or the `NATURAL` of a join inside
+    /// the brackets matched and which the shape marks by hiding the one
+    /// of them a `*` outside the brackets leaves out.
+    fn coalesces(&self, column: &[u8]) -> bool {
+        self.shape
+            .columns
+            .iter()
+            .any(|held| held.hidden && held.name.eq_ignore_ascii_case(column))
+    }
+
+    /// The value the columns of that name inside the brackets stand for,
+    /// which a `*` answers once for a column the join inside them
+    /// matched: the first of those columns that is not nothing, which is
+    /// the one a `RIGHT JOIN` inside the brackets filled, and `own`
+    /// where every one of them is nothing.
+    ///
+    /// Reading the columns costs O(n) in them.
+    fn coalescing(&self, column: &[u8], own: &Value) -> Value {
+        for (at, held) in self.shape.columns.iter().enumerate() {
+            let value = self.values.get(at).cloned().unwrap_or(Value::Null);
+            if held.name.eq_ignore_ascii_case(column) && value != Value::Null {
+                return value;
+            }
+        }
+        own.clone()
     }
 
     /// What a bare name reaches on a side standing for the tables

@@ -7933,6 +7933,17 @@ is the one the C library's shell writes.
   count it wrote, and a `DELETE` that writes no row answering nought.
 - `CREATE TABLE u(c)` and `CREATE INDEX`, each answering no row.
 
+### 6.6.461 Which value each column of a `FROM` inside brackets answers (`db-sqlite`)
+
+Unit tests of `crate::db` over `t2(a,b)` and `t3(a,b)`, one row each.
+Every answer is the one the C library's shell writes.
+
+- `SELECT * FROM (t2 JOIN t3 ON t2.a=t3.a)` and `SELECT * FROM (t2), (t3)`,
+  each four columns of their own values.
+- `SELECT * FROM (t2 JOIN t3 USING(a))` and the same with a `LEFT JOIN`,
+  each three columns, the first of them the column the `USING` matched.
+- `SELECT a FROM (t2 JOIN t3 USING(a))`, one column.
+
 ### 6.6.460 Which columns a `*` answers where one of them is hidden (`db-sqlite`)
 
 Unit tests of `crate::db` over an image `crate::change` writes. Every

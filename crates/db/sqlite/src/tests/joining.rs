@@ -119,6 +119,74 @@ fn what_words_a_join_is_written_with() {
     }
 }
 
+/// Which value each column of a `FROM` inside brackets answers: its own,
+/// and the one whichever side filled for a column the join inside the
+/// brackets matched.
+#[test]
+fn which_value_each_column_of_a_from_inside_brackets_answers() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t2(a,b)".as_slice(),
+        b"CREATE TABLE t3(a,b)",
+        b"INSERT INTO t2 VALUES(222,'x2')",
+        b"INSERT INTO t3 VALUES(222,'x3')",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let image = writer.written();
+    let database = Database::open(&image).expect("a database");
+    let shown = |sql: &[u8]| {
+        let mut out = alloc::string::String::new();
+        for row in database.query(sql).expect("rows").rows {
+            for value in row {
+                out.push_str(&alloc::string::String::from_utf8_lossy(
+                    &value.text().unwrap_or_default(),
+                ));
+                out.push('|');
+            }
+        }
+        out
+    };
+    // Two columns of one name stand for two columns where no `USING`
+    // matched them, so each answers the value of its own table.
+    assert_eq!(
+        shown(b"SELECT * FROM (t2 JOIN t3 ON t2.a=t3.a)"),
+        "222|x2|222|x3|"
+    );
+    assert_eq!(shown(b"SELECT * FROM (t2), (t3)"), "222|x2|222|x3|");
+    // A column the `USING` matched is answered once, by whichever side
+    // filled it.
+    assert_eq!(shown(b"SELECT * FROM (t2 JOIN t3 USING(a))"), "222|x2|x3|");
+    assert_eq!(
+        shown(b"SELECT * FROM (t2 LEFT JOIN t3 USING(a))"),
+        "222|x2|x3|"
+    );
+    assert_eq!(shown(b"SELECT a FROM (t2 JOIN t3 USING(a))"), "222|");
+    // A column the `USING` matched that no side filled answers nothing.
+    let mut writing = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE u2(a,b)".as_slice(),
+        b"CREATE TABLE u3(a,b)",
+        b"INSERT INTO u2 VALUES(NULL,'y2')",
+    ] {
+        writing.run(sql).unwrap();
+    }
+    let held = writing.written();
+    let reader = Database::open(&held).expect("a database");
+    let rows = reader
+        .query(b"SELECT * FROM (u2 LEFT JOIN u3 USING(a))")
+        .expect("rows")
+        .rows;
+    assert_eq!(
+        rows,
+        [alloc::vec![
+            crate::value::Value::Null,
+            crate::value::Value::Text(b"y2".to_vec()),
+            crate::value::Value::Null
+        ]]
+    );
+}
+
 /// An `ON` or a `USING` on the first source of a `FROM` is refused
 /// naming the word, and a second constraint on one join is a syntax
 /// error, which the grammar of `research/sqlite/src/parse.y:892` makes
