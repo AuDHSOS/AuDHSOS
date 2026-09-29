@@ -7933,6 +7933,18 @@ is the one the C library's shell writes.
   count it wrote, and a `DELETE` that writes no row answering nought.
 - `CREATE TABLE u(c)` and `CREATE INDEX`, each answering no row.
 
+### 6.6.466 The number the schema of a file stands at (`db-sqlite`)
+
+One unit test of `crate::change` over a connection written under
+512-byte pages. Every answer is the one `pragma_schema_version` of the C
+library's shell writes for the same statements.
+
+- A file of no table, nought.
+- `CREATE TABLE t(a)`, one.
+- `CREATE TABLE u(b)` inside a transaction, two, and the rollback of that
+  transaction, one again.
+- A rollback of a transaction that wrote a row and no schema, one.
+
 ### 6.6.465 What the engine writes under each encoding (`db-sqlite`)
 
 Unit tests of `crate::change` and `crate::db` over an image the writer

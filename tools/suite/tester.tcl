@@ -1474,10 +1474,31 @@ proc add_test_collate {name utf8 utf16le utf16be} {
               $utf8 $utf16le $utf16be]
   if {$chosen eq ""} {
     unset -nocomplain ::collations(test_collate)
-    return [harness_send uncollate $name test_collate]
+    harness_send uncollate $name test_collate
+    return {}
   }
   set ::collations(test_collate) [list test_collate $chosen]
   return [harness_send collate $name test_collate]
+}
+
+# `sqlite_delete_function DB NAME` of `research/sqlite/src/test1.c:6030`
+# registers the name with no implementation and for any count of
+# arguments, which takes the function off the connection, and answers the
+# code the registration was refused with.
+proc sqlite_delete_function {name function} {
+  set code [lindex [harness_send unfunction $name $function] 0]
+  if {$code eq "SQLITE_OK"} { unset -nocomplain ::functions($function) }
+  return $code
+}
+
+# `sqlite_delete_collation DB NAME` of `research/sqlite/src/test1.c:6056`
+# registers the name with no comparison function, which takes the
+# collation off the connection, and answers the code the registration was
+# refused with.
+proc sqlite_delete_collation {name collation} {
+  set code [lindex [harness_send uncollate $name $collation] 0]
+  if {$code eq "SQLITE_OK"} { unset -nocomplain ::collations($collation) }
+  return $code
 }
 
 # `add_test_collate_needed DB` of `test1.c:3460` registers the callback

@@ -265,6 +265,16 @@ fn configured() -> Configuration {
 /// under three, so five is past every file of the suite.
 const DEADLINE: Duration = Duration::from_secs(300);
 
+/// What `sqlite3_create_function` of `research/sqlite/src/main.c:2034`
+/// refuses a definition over a name the connection already holds with,
+/// where a statement of the connection stands on a row.
+const BUSY_FUNCTION: &str = "unable to delete/modify user-function due to active statements";
+
+/// What `sqlite3_create_collation` of `research/sqlite/src/main.c:2920`
+/// refuses a definition over a name the connection already holds with,
+/// where a statement of the connection stands on a row.
+const BUSY_COLLATION: &str = "unable to delete/modify collation sequence due to active statements";
+
 /// How many cases in a row one file may have refused for the same reason
 /// before the file is ended. A loop whose end a command this harness has
 /// none of decides runs without bound, and the file is scored with what
@@ -909,9 +919,17 @@ fn ran_each(
                 Locked::Reads => {}
             }
         }
+        // `sqlite3RollbackAll` of `research/sqlite/src/main.c:1523`
+        // makes every statement of the connection again where the
+        // transaction it ends had written the schema, which the number
+        // the schema stands at says.
+        let cookie = names_word(text, b"rollback").then(|| writer.cookie());
         match run_one(writer, text, collating, defines, outside) {
             Ok(values) => out.extend(values.iter().map(|value| listed(value, null))),
             Err(message) => return (out, Err(message)),
+        }
+        if cookie.is_some_and(|held| held != writer.cookie()) {
+            ROLLED.with(|held| held.set(true));
         }
     }
     (out, Ok(()))
@@ -1468,7 +1486,7 @@ impl Session {
             "collate" | "function" | "extension" => {
                 let third = args.get(2).map_or("", String::as_str);
                 let fourth = args.get(3).map_or("", String::as_str);
-                self.told(verb, first, (second, third, fourth));
+                self.told(verb, first, (second, third, fourth))?;
                 Ok(Vec::new())
             }
             // `SQLITE_TESTCTRL_INTERNAL_FUNCTIONS` turns the functions
@@ -1478,11 +1496,10 @@ impl Session {
                 Ok(Vec::new())
             }
             // `sqlite3_create_collation` with no function deletes the
-            // collation of that name.
-            "uncollate" => {
-                self.uncollates(first, second);
-                Ok(Vec::new())
-            }
+            // collation of that name, and `sqlite3_create_function` with
+            // no implementation the function of that name.
+            "uncollate" => Ok(self.uncollates(first, second)),
+            "unfunction" => Ok(self.unfunctions(first, second)),
             "null" => {
                 self.nulls.insert(first.to_owned(), second.to_owned());
                 Ok(Vec::new())
@@ -2409,8 +2426,13 @@ impl Session {
     /// A file defines a handful of collations, so leaking one list per
     /// definition costs O(n^2) bytes over n definitions and nothing
     /// that matters.
-    fn collates(&mut self, connection: &str, name: &str) {
-        self.stamped(connection);
+    fn collates(&mut self, connection: &str, name: &str) -> Result<(), String> {
+        if self.holds_collation(connection, name) {
+            if self.stepping(connection) {
+                return Err(String::from(BUSY_COLLATION));
+            }
+            self.stamped(connection);
+        }
         let held = self.collations.entry(connection.to_owned()).or_default();
         let mut collating: Vec<Collating> = held
             .iter()
@@ -2422,6 +2444,27 @@ impl Session {
             by: asked,
         });
         *held = Box::leak(collating.into_boxed_slice());
+        Ok(())
+    }
+
+    /// Whether the connection holds a collation of that name, which
+    /// `sqlite3FindCollSeq` of `research/sqlite/src/callback.c:159`
+    /// answers for `sqlite3_create_collation`.
+    fn holds_collation(&self, connection: &str, name: &str) -> bool {
+        self.collations
+            .get(connection)
+            .is_some_and(|held| held.iter().any(|one| one.name == name.as_bytes()))
+    }
+
+    /// Whether a statement of the connection stands on a row, which
+    /// `db->nVdbeActive` of `research/sqlite/src/main.c:2033` counts and
+    /// a function or a collation may not be taken away under.
+    ///
+    /// Reading every statement of the session costs O(n) in their count.
+    fn stepping(&self, connection: &str) -> bool {
+        self.statements
+            .values()
+            .any(|held| held.connection == connection && held.ran && held.row)
     }
 
     /// Turns the functions the C library keeps for its own use on where
@@ -2448,8 +2491,19 @@ impl Session {
     }
 
     /// Takes the collation of that name off the connection, which
-    /// `sqlite3_create_collation` with no comparison function does.
-    fn uncollates(&mut self, connection: &str, name: &str) {
+    /// `sqlite3_create_collation` with no comparison function does, and
+    /// answers the code it is refused with.
+    ///
+    /// A name the connection holds no collation under leaves the
+    /// connection as it stands, which `sqlite3_create_collation` of
+    /// `research/sqlite/src/main.c:2918` reads `pColl->xCmp` for.
+    fn uncollates(&mut self, connection: &str, name: &str) -> Vec<String> {
+        if !self.holds_collation(connection, name) {
+            return alloc_one("SQLITE_OK");
+        }
+        if self.stepping(connection) {
+            return alloc_one("SQLITE_BUSY");
+        }
         self.stamped(connection);
         let held = self.collations.entry(connection.to_owned()).or_default();
         let collating: Vec<Collating> = held
@@ -2458,6 +2512,32 @@ impl Session {
             .copied()
             .collect();
         *held = Box::leak(collating.into_boxed_slice());
+        alloc_one("SQLITE_OK")
+    }
+
+    /// Takes the function of that name taking any count of arguments off
+    /// the connection, which `sqlite3_create_function` with no
+    /// implementation does, and answers the code it is refused with.
+    ///
+    /// `sqlite_delete_function` of `research/sqlite/src/test1.c:6044`
+    /// names `nArg` at -1, so a definition made for a count of its own
+    /// stands.
+    fn unfunctions(&mut self, connection: &str, name: &str) -> Vec<String> {
+        if !self.holds_function(connection, name, None) {
+            return alloc_one("SQLITE_OK");
+        }
+        if self.stepping(connection) {
+            return alloc_one("SQLITE_BUSY");
+        }
+        self.stamped(connection);
+        let held = self.functions.entry(connection.to_owned()).or_default();
+        let defined: Vec<Defined> = held
+            .iter()
+            .filter(|one| one.name != name.as_bytes() || one.count.is_some())
+            .copied()
+            .collect();
+        *held = Box::leak(defined.into_boxed_slice());
+        alloc_one("SQLITE_OK")
     }
 
     /// Keeps a function the tester defined under its name, beside the
@@ -2467,9 +2547,19 @@ impl Session {
     /// The count of arguments is the one `-argcount` of `db function` wrote,
     /// and nothing where it wrote none, which `testfixture` registers as
     /// `nArg` at -1.
-    fn functions(&mut self, connection: &str, name: &str, held: (Safety, Option<usize>)) {
+    fn functions(
+        &mut self,
+        connection: &str,
+        name: &str,
+        held: (Safety, Option<usize>),
+    ) -> Result<(), String> {
         let (safety, count) = held;
-        self.stamped(connection);
+        if self.holds_function(connection, name, count) {
+            if self.stepping(connection) {
+                return Err(String::from(BUSY_FUNCTION));
+            }
+            self.stamped(connection);
+        }
         let held = self.functions.entry(connection.to_owned()).or_default();
         // A definition stands for one count of arguments, so a name defined
         // for another count keeps its own definition, which
@@ -2489,12 +2579,29 @@ impl Session {
             safety,
         });
         *held = Box::leak(defined.into_boxed_slice());
+        Ok(())
+    }
+
+    /// Whether the connection holds a function of that name taking that
+    /// count of arguments, which `sqlite3FindFunction` of
+    /// `research/sqlite/src/callback.c:403` answers for
+    /// `sqlite3_create_function`.
+    fn holds_function(&self, connection: &str, name: &str, count: Option<usize>) -> bool {
+        self.functions.get(connection).is_some_and(|held| {
+            held.iter()
+                .any(|one| one.name == name.as_bytes() && one.count == count)
+        })
     }
 
     /// The name `sqlite3_create_collation`, `sqlite3_create_function`
     /// or `load_static_extension` adds to the connection, which the
     /// statements of the connection reach from there on.
-    fn told(&mut self, verb: &str, connection: &str, named: (&str, &str, &str)) {
+    fn told(
+        &mut self,
+        verb: &str,
+        connection: &str,
+        named: (&str, &str, &str),
+    ) -> Result<(), String> {
         let (name, safety, count) = named;
         match verb {
             "collate" => self.collates(connection, name),
@@ -2506,7 +2613,10 @@ impl Session {
                 name,
                 (safety_of(safety), count.parse::<usize>().ok()),
             ),
-            _ => self.extension(connection, name),
+            _ => {
+                self.extension(connection, name);
+                Ok(())
+            }
         }
     }
 
@@ -2793,7 +2903,11 @@ impl Session {
 
     /// What one statement of `connection` answers, with the names of its
     /// columns.
-    fn read_statement(&self, connection: &str, sql: &str) -> Result<db_sqlite::db::Answer, String> {
+    fn read_statement(
+        &mut self,
+        connection: &str,
+        sql: &str,
+    ) -> Result<db_sqlite::db::Answer, String> {
         let path = self
             .connections
             .get(connection)
@@ -2801,10 +2915,20 @@ impl Session {
             .ok_or_else(|| format!("no such connection: {connection}"))?;
         let collating = self.collations.get(connection).copied().unwrap_or_default();
         let defines = self.defines(connection);
+        let asks = self.authorizers.contains_key(connection);
+        WHO.with(|who| who.borrow_mut().clone_from(&connection.to_owned()));
         let writer = self
             .held
-            .get(&path)
+            .get_mut(&path)
             .ok_or_else(|| format!("no such database: {path}"))?;
+        // `sqlite3_set_authorizer` stands on the connection, so a
+        // statement the tester prepared is read against it as a statement
+        // of a `db eval` is.
+        if asks {
+            writer.asks(asking);
+        } else {
+            writer.asks_nothing();
+        }
         answered_rows(writer, sql, collating, defines, false)
     }
 
@@ -2865,7 +2989,7 @@ impl Session {
             && (held.cookie != self.cookie(&connection) || held.stamp != self.stamp(&connection))
         {
             if let Some(held) = self.statements.get_mut(name) {
-                held.ran = true;
+                held.ran = false;
                 held.row = false;
             }
             return Err(stale());
@@ -2879,8 +3003,12 @@ impl Session {
         let answered = match answered {
             Ok(answered) => answered,
             Err(message) => {
+                // `sqlite3_step` resets a statement its last step refused
+                // and runs it again, which the library is built without
+                // `SQLITE_OMIT_AUTORESET` for, so the statement stands
+                // where it was made and answers the refusal again.
                 if let Some(held) = self.statements.get_mut(name) {
-                    held.ran = true;
+                    held.ran = false;
                     held.row = false;
                 }
                 return Err(message);
@@ -2941,12 +3069,19 @@ impl Session {
             .ok_or_else(|| format!("no such connection: {connection}"))?;
         let collating = self.collations.get(connection).copied().unwrap_or_default();
         let defines = self.defines(connection);
+        let asks = self.authorizers.contains_key(connection);
+        WHO.with(|who| who.borrow_mut().clone_from(&connection.to_owned()));
         let writer = self
             .held
             .get_mut(&path)
             .ok_or_else(|| format!("no such database: {path}"))?;
         writer.collates(collating);
         writer.defines(defines);
+        if asks {
+            writer.asks(asking);
+        } else {
+            writer.asks_nothing();
+        }
         let ran = writer
             .run(&sql_bytes(sql))
             .map(|rows| db_sqlite::db::Answer {
@@ -3523,10 +3658,11 @@ impl Session {
         if names_file(sql) {
             self.telling_files();
         }
-        if names_word(sql, b"attach") {
-            // `sqlite3DetachDatabase` makes every statement of the
-            // connection again, because the databases it reads have
-            // moved.
+        if names_word(sql, b"detach") {
+            // `OP_Expire` of `research/sqlite/src/attach.c:415` carries
+            // nought for a `DETACH`, which makes every statement of the
+            // connection again, and one for an `ATTACH`, which makes
+            // the `ATTACH` itself again and leaves the others standing.
             self.stamped(name);
         }
         let null = self.nulls.get(name).cloned().unwrap_or_default();
@@ -3621,6 +3757,9 @@ impl Session {
             self.synced.1 = self.synced.1.saturating_add(syncs);
         }
         self.sensitive.insert(name.to_owned(), sensitive);
+        if ROLLED.with(core::cell::Cell::take) {
+            self.stamped(name);
+        }
         let stepped = STEPPED.with(core::cell::Cell::take);
         self.sorted = stepped.sorts;
         self.searched = stepped.searched;
@@ -3842,6 +3981,11 @@ thread_local! {
     /// How many times the statements of this run compared a pattern
     /// against a value, which the session adds to its own count.
     static LIKED: core::cell::Cell<u64> = const { core::cell::Cell::new(0) };
+
+    /// Whether a rollback of this run ended a transaction that had
+    /// written the schema, which the connection counts as one reason for
+    /// its statements to be made again.
+    static ROLLED: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
 
     static STEPPED: core::cell::Cell<db_sqlite::db::Stepped> =
         const {

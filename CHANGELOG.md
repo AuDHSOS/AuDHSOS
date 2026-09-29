@@ -7,6 +7,16 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- The suite harness makes every statement the tester prepared again where a function or a collation
+  is taken off the connection, where a `DETACH` runs and where a rollback ends a transaction that
+  wrote the schema, and leaves them standing where a name is added and where an `ATTACH` runs; it
+  refuses a definition over a name the connection holds while a statement stands on a row, runs a
+  prepared statement against the authorizer of the connection, answers the refusal again at the next
+  step, and holds `sqlite_delete_function` and `sqlite_delete_collation`. `Writer::cookie` answers
+  the number the schema of the file stands at. D-637 records it. Catalog 6.6.466. `schema.test` goes
+  from 35 cases passing to 51, of 51, `schema2.test` from 40 to 45, `enc2.test` from 87 to 88 and
+  `misc4.test` from 17 to 19.
+
 - `db-sqlite` reads `BINARY` as one collation under one name whatever the encoding a file holds its
   text in, so a comparison against a column of a UTF-16 database is held to an index over it, and
   writes a name into `sqlite_sequence` and `sqlite_stat1` once rather than twice. D-636 records it.

@@ -1807,6 +1807,16 @@ impl Writer {
         self.held.pages.written(&self.held.header)
     }
 
+    /// The number the schema of the file stands at, which every change
+    /// to the schema raises and a rollback lowers again, and which
+    /// `PRAGMA schema_version` answers.
+    ///
+    /// Reading the header costs O(1).
+    #[must_use]
+    pub const fn cookie(&self) -> u32 {
+        self.held.header.schema_cookie
+    }
+
     /// The file as the transaction of this connection found it, which is
     /// what a connection that did not begin that transaction reads:
     /// `sqlite3PagerSharedLock` answers the pages of the file and a

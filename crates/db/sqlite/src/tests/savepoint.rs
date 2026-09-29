@@ -261,3 +261,21 @@ fn a_statement_that_stops_where_it_stands_keeps_what_it_wrote() {
     writer.run(b"RELEASE one").unwrap();
     assert_eq!(rows(&writer), alloc::vec![1, 2]);
 }
+
+#[test]
+fn the_number_the_schema_stands_at_rises_with_a_table_and_falls_with_a_rollback() {
+    let mut writer = writer();
+    assert_eq!(writer.cookie(), 0);
+    writer.run(b"CREATE TABLE t(a)").unwrap();
+    let made = writer.cookie();
+    assert_eq!(made, 1);
+    writer.run(b"BEGIN").unwrap();
+    writer.run(b"CREATE TABLE u(b)").unwrap();
+    assert_eq!(writer.cookie(), 2);
+    writer.run(b"ROLLBACK").unwrap();
+    assert_eq!(writer.cookie(), made);
+    writer.run(b"BEGIN").unwrap();
+    writer.run(b"INSERT INTO t VALUES(1)").unwrap();
+    writer.run(b"ROLLBACK").unwrap();
+    assert_eq!(writer.cookie(), made);
+}
