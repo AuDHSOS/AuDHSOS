@@ -7,6 +7,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` asks the authorizer for the `UPDATE` that writes the row of a `CREATE TABLE` or a
+  `CREATE VIEW` in the schema's own table: one `SQLITE_UPDATE` per column it sets and one
+  `SQLITE_READ` of the rowid it names. `SQLITE_ALTER_TABLE` carries the column for a `DROP COLUMN`
+  and for the two `NOT NULL` forms, and carries none for a `RENAME COLUMN`. D-639 records it.
+  Catalog 6.6.468. `auth2.test` goes from 5 cases passing to 7 and `alterauth.test` from 6 to 7,
+  of 7.
+
 - The suite harness holds `sqlite3_create_collation_v2` and `sqlite3_create_function_v2`, and runs
   the script each was given where the definition is written over, taken away, or the connection is
   closed; a function registered for every encoding stands for all three, so its script runs where

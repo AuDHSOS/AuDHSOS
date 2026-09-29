@@ -963,18 +963,31 @@ impl Authorizer<'_> {
                 let column = dequote(altered.column.text(sql));
                 self.ask(Action::AlterTable, &schema, &table, &column)
             }
+            // `sqlite3AlterRenameColumn` of
+            // `research/sqlite/src/alter.c:629` names no column, where
+            // the two forms below name one.
             crate::ast::Definition::RenameColumn(altered) => {
                 let schema =
                     Self::schema_word(altered.schema, self.temping(altered.schema, sql), sql);
                 let table = dequote(altered.table.text(sql));
-                let column = dequote(altered.column.text(sql));
-                self.ask(Action::AlterTable, &schema, &table, &column)
+                self.ask(Action::AlterTable, &schema, &table, b"")
             }
+            // `sqlite3AlterSetNotNull` of
+            // `research/sqlite/src/alter.c:2721` names the column the
+            // constraint is over, and `sqlite3AlterDropConstraint` of
+            // `alter.c:2766` names none.
             crate::ast::Definition::DropConstraint(altered) => {
                 let schema =
                     Self::schema_word(altered.schema, self.temping(altered.schema, sql), sql);
                 let table = dequote(altered.table.text(sql));
-                self.ask(Action::AlterTable, &schema, &table, b"")
+                let column = match altered.which {
+                    crate::ast::Constrained::NotNull(column)
+                    | crate::ast::Constrained::SetNotNull(column, _) => dequote(column.text(sql)),
+                    crate::ast::Constrained::Named(_) | crate::ast::Constrained::Add(..) => {
+                        Vec::new()
+                    }
+                };
+                self.ask(Action::AlterTable, &schema, &table, &column)
             }
             crate::ast::Definition::Vacuum(_) => Ok(Answer::Ok),
             // `sqlite3Attach` of `research/sqlite/src/attach.c:393`
@@ -1020,7 +1033,35 @@ impl Authorizer<'_> {
         if let crate::ast::TableBody::Select(select) = made.body {
             self.select(arena, select, sql)?;
         }
-        Ok(answered)
+        if answered == Answer::Ignore {
+            return Ok(answered);
+        }
+        self.wrote_schema_row(temporary, &schema)
+    }
+
+    /// The `UPDATE` of the schema's own table that a `CREATE TABLE` and a
+    /// `CREATE VIEW` end with, which `sqlite3EndTable` of
+    /// `research/sqlite/src/build.c:2903` writes as a statement of its
+    /// own: one action per column it sets, in the order it sets them, and
+    /// one read of the rowid its `WHERE` names.
+    ///
+    /// # Errors
+    ///
+    /// [`Error`] names what the function refused.
+    fn wrote_schema_row(&self, temporary: bool, schema: &[u8]) -> Result<Answer, Error> {
+        let table = Self::schema_table(temporary);
+        for column in [
+            b"type".as_slice(),
+            b"name",
+            b"tbl_name",
+            b"rootpage",
+            b"sql",
+        ] {
+            if self.ask(Action::Update, table, column, schema)? == Answer::Ignore {
+                return Ok(Answer::Ignore);
+            }
+        }
+        self.ask(Action::Read, table, b"ROWID", schema)
     }
 
     /// `CREATE VIEW`, which writes the schema's own table and so is
@@ -1038,10 +1079,14 @@ impl Authorizer<'_> {
         } else {
             Action::CreateView
         };
-        self.all(&[
+        if self.all(&[
             (Action::Insert, Self::schema_table(temporary), b"", &schema),
             (action, &name, b"", &schema),
-        ])
+        ])? == Answer::Ignore
+        {
+            return Ok(Answer::Ignore);
+        }
+        self.wrote_schema_row(temporary, &schema)
     }
 
     /// `CREATE INDEX`, which is asked for under the temporary schema

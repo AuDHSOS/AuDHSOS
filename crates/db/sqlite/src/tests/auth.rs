@@ -571,6 +571,8 @@ fn what_an_alter_is_asked_for() {
         b"ALTER TABLE t2 DROP COLUMN y",
         b"ALTER TABLE t2 RENAME COLUMN y TO z",
         b"ALTER TABLE t2 ALTER y DROP NOT NULL",
+        b"ALTER TABLE t2 ADD CONSTRAINT c9 CHECK (x>0)",
+        b"ALTER TABLE t2 DROP CONSTRAINT c9",
     ] {
         rule(Action::AlterTable, Answer::Deny);
         assert_eq!(
@@ -847,6 +849,7 @@ fn what_the_authorizer_of_a_connection_is_asked() {
     what_clauses_of_a_statement_are_read();
     what_a_denied_function_refuses();
     what_a_create_is_asked_for();
+    what_the_statement_that_writes_a_row_of_the_schema_is_asked_for();
     what_a_drop_is_asked_for();
     what_an_alter_is_asked_for();
     what_a_statement_that_writes_is_asked_for();
@@ -1250,5 +1253,40 @@ fn what_a_foreign_key_whose_parent_is_ignored_refuses() {
     assert_eq!(
         read(&writer, b"SELECT count(*) FROM kid").unwrap(),
         [[Value::Int(0)]]
+    );
+}
+
+/// A `CREATE TABLE` and a `CREATE VIEW` end with the `UPDATE` that writes
+/// their row of the schema's own table, so the function is asked for each
+/// column that statement sets and for the rowid it reads.
+fn what_the_statement_that_writes_a_row_of_the_schema_is_asked_for() {
+    let mut writer = told();
+    allows();
+    writer.run(b"CREATE TABLE t3(a)").unwrap();
+    // Two actions for the table and six for the statement that writes
+    // its row.
+    assert_eq!(COUNT.load(Ordering::Relaxed), 8);
+    allows();
+    writer.run(b"CREATE VIEW v3 AS SELECT 1").unwrap();
+    assert_eq!(COUNT.load(Ordering::Relaxed), 8);
+    for sql in [
+        b"CREATE TABLE t4(a)".as_slice(),
+        b"CREATE VIEW v4 AS SELECT 1",
+    ] {
+        rule(Action::Update, Answer::Deny);
+        assert_eq!(writer.run(sql).unwrap_err().message(), "not authorized");
+        rule(Action::Update, Answer::Ignore);
+        writer.run(sql).unwrap();
+        rule(Action::Read, Answer::Deny);
+        assert_eq!(writer.run(sql).unwrap_err().message(), "not authorized");
+    }
+    allows();
+    assert_eq!(
+        read(
+            &writer,
+            b"SELECT count(*) FROM sqlite_master WHERE name LIKE '%4'"
+        )
+        .unwrap(),
+        alloc::vec![alloc::vec![Value::Int(0)]]
     );
 }

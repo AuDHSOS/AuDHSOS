@@ -7933,6 +7933,18 @@ is the one the C library's shell writes.
   count it wrote, and a `DELETE` that writes no row answering nought.
 - `CREATE TABLE u(c)` and `CREATE INDEX`, each answering no row.
 
+### 6.6.468 What the statement that writes a row of the schema is asked for (`db-sqlite`)
+
+One scenario of the unit test of `crate::auth` over a connection told a
+function, beside the cases of `auth2.test` and `alterauth.test`.
+
+- A `CREATE TABLE` and a `CREATE VIEW`, each asked for eight actions: the
+  write of the schema's own table, the table or the view, the five columns
+  the `UPDATE` sets, and the rowid it reads.
+- The same two statements refused where the function denies the
+  `SQLITE_UPDATE` of a column or the `SQLITE_READ` of the rowid, and left
+  undone where it ignores either.
+
 ### 6.6.467 What the destructor of a collation or a function runs for (`suite`)
 
 The files of the suite hold the cases, which count the runs of the script
