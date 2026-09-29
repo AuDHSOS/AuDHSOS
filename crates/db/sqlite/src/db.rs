@@ -513,6 +513,12 @@ pub enum Error {
     /// A core of a `WITH` term that reads itself and answers an
     /// aggregate.
     Recursion,
+    /// A core of a `WITH` term that names the term twice in its `FROM`,
+    /// with the name of the term.
+    RecursiveTable(Vec<u8>),
+    /// A `WITH` term that reads itself where a core of it already does,
+    /// with the name of the term.
+    RecursiveReferences(Vec<u8>),
     /// A core of a `WITH` term that reads itself and answers a window
     /// function.
     RecursiveWindow,
@@ -791,6 +797,14 @@ impl Error {
             Error::RecursiveWindow => {
                 alloc::string::String::from("cannot use window functions in recursive queries")
             }
+            Error::RecursiveTable(name) => alloc::format!(
+                "multiple references to recursive table: {}",
+                alloc::string::String::from_utf8_lossy(name)
+            ),
+            Error::RecursiveReferences(name) => alloc::format!(
+                "multiple recursive references: {}",
+                alloc::string::String::from_utf8_lossy(name)
+            ),
             _ => return None,
         })
     }
@@ -6469,6 +6483,7 @@ impl<'a> Database<'a> {
         scope: Scope<'_>,
     ) -> Result<Answered, Error> {
         counted_names(arena, cte, name)?;
+        recursion(arena, cte, name, sql)?;
         let mut answered = match self.recursive(arena, cte, name, sql, scope)? {
             Some(answered) => answered,
             None => self.statement(arena, cte.select, sql, scope)?,
@@ -6492,26 +6507,20 @@ impl<'a> Database<'a> {
     ///
     /// Reading them costs O(n) in the expressions of those cores.
     ///
+    /// The cores that recurse stand under `UNION` or `UNION ALL` alone,
+    /// which [`recursion`] holds them to before this reads them.
+    ///
     /// # Errors
     ///
-    /// [`Error::Unsupported`], [`Error::RecursiveWindow`] and
-    /// [`Error::Recursion`] name which of the three stands there.
+    /// [`Error::RecursiveWindow`] and [`Error::Recursion`] name which of
+    /// the two stands there.
     fn recursed(
         &self,
         arena: &Arena,
         links: &[Link],
-        (first, split): (usize, Compound),
+        first: usize,
         sql: &[u8],
     ) -> Result<(), Error> {
-        // `multiSelect` refuses a recursive core under an operator that
-        // is neither `UNION` nor `UNION ALL`.
-        if links.iter().skip(first).any(|link| {
-            link.operator
-                .is_some_and(|operator| !matches!(operator, Compound::Union | Compound::UnionAll))
-        }) || !matches!(split, Compound::Union | Compound::UnionAll)
-        {
-            return Err(Error::Unsupported);
-        }
         for core in links
             .iter()
             .skip(first)
@@ -6554,12 +6563,13 @@ impl<'a> Database<'a> {
         else {
             return Ok(None);
         };
-        // `sqlite3SelectNew` refuses a term whose first core reads it,
-        // because the walk would then start from nothing.
-        let Some(split) = before(&links, first) else {
-            return Err(Error::Unsupported);
-        };
-        self.recursed(arena, &links, (first, split), sql)?;
+        // The core in front of the ones that recurse answers the rows the
+        // walk starts from, and the operator it carries says whether a row
+        // those already hold stands for the one being put behind them.
+        // [`recursion`] holds that operator to `UNION` and `UNION ALL`, so
+        // the term always carries one.
+        let split = before(&links, first).unwrap_or(Compound::UnionAll);
+        self.recursed(arena, &links, first, sql)?;
         let mut answered = self.started(arena, &links, first, sql, scope)?;
         renamed(arena, cte.columns, (sql, name), &mut answered)?;
         let collations = self.collations(&answered.shape);
@@ -14941,6 +14951,136 @@ fn counted_names(arena: &Arena, cte: &crate::ast::Cte, name: &[u8]) -> Result<()
         Some(width) => Err(Error::Names(name.to_vec(), width, written.len())),
         None => Ok(()),
     }
+}
+
+/// Refuses a `WITH` term that reads its own name where no core of it
+/// reads that name as a term of its `FROM`.
+///
+/// `withExpand` of `research/sqlite/src/select.c:5769` marks the cores
+/// that name the term in their `FROM` as recursive, from the last core
+/// leftwards while each of them names it under the operator the last one
+/// carries, and refuses a second such name in one core as `multiple
+/// references to recursive table`. It then resolves the cores in front of
+/// them, where the name is a `circular reference`, and reads the whole
+/// term again, where the name is a `multiple recursive references`.
+///
+/// Reading one term costs O(n) in its nodes.
+fn recursion(arena: &Arena, cte: &crate::ast::Cte, name: &[u8], sql: &[u8]) -> Result<(), Error> {
+    let links = chain(arena, cte.select);
+    let last = links.len().saturating_sub(1);
+    // The operator the last core carries is the one the cores that
+    // recurse stand under.
+    let held = last
+        .checked_sub(1)
+        .and_then(|at| links.get(at))
+        .and_then(|link| link.operator);
+    let may = matches!(held, Some(Compound::Union | Compound::UnionAll));
+    let mut first = links.len();
+    for at in (1..links.len()).rev() {
+        let carried = links
+            .get(at.saturating_sub(1))
+            .and_then(|link| link.operator);
+        if !may || carried != held {
+            break;
+        }
+        let named = links
+            .get(at)
+            .map_or(0, |link| termed_sources(arena, &link.core, name, sql));
+        if named > 1 {
+            return Err(Error::RecursiveTable(name.to_vec()));
+        }
+        if named == 0 {
+            break;
+        }
+        first = at;
+    }
+    for link in links.iter().take(first) {
+        if reads_term(arena, &link.core, name, sql, true) {
+            return Err(Error::Circular(name.to_vec()));
+        }
+    }
+    if first == links.len() {
+        return Ok(());
+    }
+    for (at, link) in links.iter().enumerate() {
+        if reads_term(arena, &link.core, name, sql, at < first) {
+            return Err(Error::RecursiveReferences(name.to_vec()));
+        }
+    }
+    Ok(())
+}
+
+/// How many terms of one core's `FROM` name `name` with no database in
+/// front of it, which is what `withExpand` counts as a term that
+/// recurses.
+fn termed_sources(arena: &Arena, core: &Select, name: &[u8], sql: &[u8]) -> usize {
+    arena
+        .sources(core.from)
+        .iter()
+        .filter(|source| match source.kind {
+            SourceKind::Table {
+                schema: None,
+                name: written,
+                ..
+            } => dequote(written.text(sql)).eq_ignore_ascii_case(name),
+            SourceKind::Table { .. } | SourceKind::Function { .. } | SourceKind::Select(_) => false,
+        })
+        .count()
+}
+
+/// Whether one core reads `name` as a `WITH` term: a term of its `FROM`
+/// where `direct` is set, a statement of its `FROM`, or a statement one
+/// of its expressions or of the rows of its `VALUES` holds. A `WITH` of the core's own under that name
+/// answers it, so the name reaches no term above it.
+///
+/// Reading one core costs O(n) in its nodes.
+fn reads_term(arena: &Arena, core: &Select, name: &[u8], sql: &[u8], direct: bool) -> bool {
+    if arena
+        .ctes(core.ctes)
+        .iter()
+        .any(|cte| dequote(cte.name.text(sql)).eq_ignore_ascii_case(name))
+    {
+        return false;
+    }
+    if direct && termed_sources(arena, core, name, sql) > 0 {
+        return true;
+    }
+    let inside = arena.sources(core.from).iter().any(|source| {
+        matches!(source.kind, SourceKind::Select(id) if reads_statement(arena, id, name, sql))
+    });
+    // The rows of a `VALUES` hold statements of their own, which the
+    // roots of a core do not carry.
+    inside
+        || arena
+            .children(core.values)
+            .iter()
+            .any(|row| reads_expression(arena, *row, name, sql))
+        || roots(arena, core)
+            .into_iter()
+            .any(|root| reads_expression(arena, root, name, sql))
+}
+
+/// The same for every core of one statement.
+fn reads_statement(arena: &Arena, id: SelectId, name: &[u8], sql: &[u8]) -> bool {
+    chain(arena, id)
+        .iter()
+        .any(|link| reads_term(arena, &link.core, name, sql, true))
+}
+
+/// The same for the statements one expression holds.
+fn reads_expression(arena: &Arena, id: ExprId, name: &[u8], sql: &[u8]) -> bool {
+    arena.node(id).is_some_and(|node| {
+        let mut found = match node {
+            Node::Subquery(held) | Node::Exists(held) | Node::InSelect { select: held, .. } => {
+                reads_statement(arena, held, name, sql)
+            }
+            _ => false,
+        };
+        arena.under(node, |child| {
+            found = found || reads_expression(arena, child, name, sql);
+        });
+        found
+    })
 }
 
 /// Puts one row behind the rows a recursive term has answered, unless

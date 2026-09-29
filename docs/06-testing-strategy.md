@@ -7933,6 +7933,30 @@ is the one the C library's shell writes.
   count it wrote, and a `DELETE` that writes no row answering nought.
 - `CREATE TABLE u(c)` and `CREATE INDEX`, each answering no row.
 
+### 6.6.452 What a `WITH` term that reads its own name is refused with (`db-sqlite`)
+
+Unit tests of `crate::db` over an image `crate::change` writes. Every
+answer is the one the C library's shell writes. The table is
+`tree(x,p)`.
+
+- A name no core reads as a term of its `FROM`, refused `circular
+  reference`: in a statement of a `WHERE`, in a statement of a `FROM`, in
+  a row of a `VALUES`, under `INTERSECT`, and in the core in front of the
+  one that recurses.
+- `WITH t(id) AS (VALUES(2) UNION ALL SELECT x FROM tree, t WHERE p=id AND
+  p IN (SELECT id FROM t)) SELECT id FROM t`, refused `multiple recursive
+  references: t`.
+- `WITH t(x) AS (VALUES(4) UNION ALL SELECT x+1 FROM t, main.t, t WHERE
+  x<10) SELECT * FROM t`, refused `multiple references to recursive table:
+  t`.
+- `WITH t(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM t WHERE x<3) SELECT *
+  FROM t`, answering three rows, and `WITH s(x) AS (VALUES(1) UNION ALL
+  VALUES(2) UNION SELECT x+1 FROM s WHERE x<3) SELECT * FROM s ORDER BY
+  x`, where the core in front of an operator of its own answers rows the
+  walk starts from.
+- A `WITH` of a statement written inside the term under the same name,
+  answered as its own.
+
 ### 6.6.451 What an aggregate a statement answers no group for is refused with (`db-sqlite`)
 
 Unit tests of `crate::db` over an image `crate::change` writes. Every

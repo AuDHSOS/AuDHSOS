@@ -4993,6 +4993,94 @@ fn what_the_integrity_check_finds_of_the_types_a_row_holds() {
     assert_eq!(checked(&bytes), [b"non-REAL value in t.b".to_vec()]);
 }
 
+/// What a `WITH` term that reads its own name is refused with, and the
+/// recursion that stands.
+#[test]
+fn what_a_with_term_that_reads_its_own_name_is_refused_with() {
+    use crate::change::Writer;
+    use crate::db::Database;
+    let mut writer = Writer::new(4096, 0, Encoding::Utf8).unwrap();
+    writer.run(b"CREATE TABLE tree(x,p)").unwrap();
+    writer
+        .run(b"INSERT INTO tree VALUES(4,2),(5,4),(2,NULL)")
+        .unwrap();
+    let written = writer.written();
+    let database = Database::open(&written).unwrap();
+    for (sql, message) in [
+        // A name no core reads as a term of its `FROM` is a circle: in a
+        // statement of a `WHERE`, in a statement of a `FROM`, in a row of
+        // a `VALUES`, under an operator that answers no recursion, and in
+        // the core in front of the one that recurses.
+        (
+            b"WITH t(id) AS (VALUES(2) UNION ALL                SELECT x FROM tree WHERE p IN (SELECT id FROM t)) SELECT id FROM t"
+                .as_slice(),
+            "circular reference: t",
+        ),
+        (
+            b"WITH s(i) AS (SELECT 1 UNION ALL SELECT i FROM (SELECT i FROM s)) SELECT * FROM s",
+            "circular reference: s",
+        ),
+        (
+            b"WITH i(x,y) AS (VALUES(1,(SELECT x FROM i))) SELECT * FROM i",
+            "circular reference: i",
+        ),
+        (
+            b"WITH s(i) AS (SELECT 1 INTERSECT SELECT i FROM s) SELECT * FROM s",
+            "circular reference: s",
+        ),
+        (
+            b"WITH i AS (WITH j AS (SELECT 5) SELECT 5 FROM i UNION SELECT 8 FROM i)                SELECT * FROM i",
+            "circular reference: i",
+        ),
+        // A name a core that recurses reads somewhere other than its
+        // `FROM` is a second recursive read.
+        (
+            b"WITH t(id) AS (VALUES(2) UNION ALL SELECT x FROM tree, t                WHERE p=id AND p IN (SELECT id FROM t)) SELECT id FROM t",
+            "multiple recursive references: t",
+        ),
+        // Two terms of one `FROM` under the name, where a database in
+        // front of it names a table and not the term.
+        (
+            b"WITH t(x) AS (VALUES(4) UNION ALL                SELECT x+1 FROM t, main.t, t WHERE x<10) SELECT * FROM t",
+            "multiple references to recursive table: t",
+        ),
+    ] {
+        assert_eq!(
+            database.query(sql).unwrap_err().message(),
+            message,
+            "{sql:?}"
+        );
+    }
+    let rows = |sql: &[u8]| database.query(sql).map(|answer| answer.rows);
+    // A core that reads the name as a term of its `FROM` recurses, and a
+    // `WITH` of the term's own under that name answers it.
+    assert_eq!(
+        rows(b"WITH t(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM t WHERE x<3) SELECT * FROM t")
+            .unwrap(),
+        [[Value::Int(1)], [Value::Int(2)], [Value::Int(3)]]
+    );
+    // The cores that recurse are the ones under the operator the last
+    // core carries, so a core in front of an operator of its own answers
+    // rows the walk starts from.
+    assert_eq!(
+        rows(
+            b"WITH s(x) AS (VALUES(1) UNION ALL VALUES(2) UNION SELECT x+1 FROM s WHERE x<3) \
+               SELECT * FROM s ORDER BY x"
+        )
+        .unwrap(),
+        [[Value::Int(1)], [Value::Int(2)], [Value::Int(3)]]
+    );
+    // A `WITH` of a statement written inside the term answers its own
+    // name, so a name it reads reaches no term above it.
+    for sql in [
+        b"WITH i AS (SELECT * FROM (WITH i AS (SELECT 1) SELECT * FROM i)) SELECT * FROM i"
+            .as_slice(),
+        b"WITH i AS (SELECT (WITH i AS (SELECT 1) SELECT * FROM i)) SELECT * FROM i",
+    ] {
+        assert_eq!(rows(sql).unwrap(), [[Value::Int(1)]], "{sql:?}");
+    }
+}
+
 /// The `WITH` terms a statement reaches, and the circle a statement
 /// reaches through another term.
 #[test]

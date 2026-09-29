@@ -7,6 +7,13 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` refuses a `WITH` term that reads its own name where no core of it reads that name as a
+  term of its `FROM`, as a `circular reference`, as `multiple recursive references` where a core of it
+  recurses, and as `multiple references to recursive table` where one core names it twice, where it
+  read the name as no table at all or answered rows until the memory was gone. D-621 records it.
+  Catalog 6.6.452. `with1.test` goes from 86 cases passing to 90, `with2.test` from 61 to 63,
+  `with5.test` from 12 to 14 and `unionall.test` from 43 to 44.
+
 - `db-sqlite` refuses an aggregate that belongs to a statement and stands where that statement
   answers none, the `WHERE` of it and the arguments of a window function, with `misuse of aggregate:
   name()`, and writes `misuse of aggregate function name()` for one written in a clause that allows
