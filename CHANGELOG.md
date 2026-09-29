@@ -7,6 +7,10 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` answers the columns of the table a name in front of a `*` names inside a `FROM` inside
+  brackets, where it refused every such statement as `no such table`. D-633 records it. Catalog
+  6.6.462. `selectD.test` goes from 22 cases passing to 28.
+
 - `db-sqlite` answers each column of a `FROM` inside brackets with the value of its own place, and a
   column the `USING` or the `NATURAL` of a join inside the brackets matched with the value whichever
   side filled, where it read every such column by its name and the second of two columns of one name

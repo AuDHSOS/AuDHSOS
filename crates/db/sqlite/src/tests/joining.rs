@@ -187,6 +187,68 @@ fn which_value_each_column_of_a_from_inside_brackets_answers() {
     );
 }
 
+/// Which columns a `*` written after a name and a dot answers over a
+/// `FROM` inside brackets: the columns of the table of that name.
+#[test]
+fn which_columns_a_star_after_a_name_answers_over_a_from_inside_brackets() {
+    let mut writer = Writer::new(1024, 0, Encoding::Utf8).unwrap();
+    for sql in [
+        b"CREATE TABLE t1(a,b)".as_slice(),
+        b"CREATE TABLE t2(a,b)",
+        b"CREATE TABLE t3(a,b)",
+        b"CREATE TABLE t4(a,b)",
+        b"INSERT INTO t1 VALUES(111,'x1')",
+        b"INSERT INTO t2 VALUES(222,'x2')",
+        b"INSERT INTO t3 VALUES(333,'x3')",
+        b"INSERT INTO t4 VALUES(444,'x4')",
+    ] {
+        writer.run(sql).unwrap();
+    }
+    let image = writer.written();
+    let database = Database::open(&image).expect("a database");
+    let shown = |sql: &[u8]| {
+        let mut out = alloc::string::String::new();
+        for row in database.query(sql).expect("rows").rows {
+            for value in row {
+                out.push_str(&alloc::string::String::from_utf8_lossy(
+                    &value.text().unwrap_or_default(),
+                ));
+                out.push('|');
+            }
+        }
+        out
+    };
+    let inside = b" FROM (t2 JOIN t3 ON t3.a=t2.a+111)";
+    let held = |columns: &[u8]| {
+        let mut sql = b"SELECT ".to_vec();
+        sql.extend_from_slice(columns);
+        sql.extend_from_slice(inside);
+        sql
+    };
+    assert_eq!(shown(&held(b"t3.*")), "333|x3|");
+    assert_eq!(shown(&held(b"t2.*")), "222|x2|");
+    assert_eq!(shown(&held(b"t3.*, t2.*")), "333|x3|222|x2|");
+    assert_eq!(shown(&held(b"t2.*, t3.*")), "222|x2|333|x3|");
+    // The name reaches a table however many brackets stand around it.
+    assert_eq!(
+        shown(
+            b"SELECT t3.* FROM t1 JOIN (t2 JOIN (t3 JOIN t4 ON t4.a=t3.a+111) \
+              ON t3.a=t2.a+111) ON t2.a=t1.a+111"
+        ),
+        "333|x3|"
+    );
+    // A number of a `GROUP BY` counts the columns such a `*` answers.
+    assert_eq!(
+        shown(b"SELECT t3.* FROM (t2 JOIN t3 ON t3.a=t2.a+111) GROUP BY 1"),
+        "333|x3|"
+    );
+    // A name no table inside the brackets carries is refused.
+    assert_eq!(
+        database.query(&held(b"nosuch.*")).unwrap_err().message(),
+        "no such table: nosuch"
+    );
+}
+
 /// An `ON` or a `USING` on the first source of a `FROM` is refused
 /// naming the word, and a second constraint on one join is a syntax
 /// error, which the grammar of `research/sqlite/src/parse.y:892` makes

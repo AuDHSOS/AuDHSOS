@@ -46,6 +46,9 @@ fn which_columns_a_star_answers_where_one_of_them_is_hidden() {
         "NULL|1|x|y|"
     );
     assert_eq!(shown(&writer, b"SELECT t1.* FROM t1"), "1|y|");
+    // A `*` after the name of a table inside brackets leaves the hidden
+    // column of that table out as well.
+    assert_eq!(shown(&writer, b"SELECT t1.* FROM (t1)"), "1|y|");
     // A number of a `GROUP BY` counts the columns the `*` answers, of
     // which the hidden one is none.
     assert_eq!(shown(&writer, b"SELECT * FROM t1 GROUP BY 1"), "1|y|");

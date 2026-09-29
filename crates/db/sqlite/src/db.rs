@@ -2301,6 +2301,28 @@ impl Side<'_> {
         !self.name.is_empty() && self.name.eq_ignore_ascii_case(named)
     }
 
+    /// Whether a `*` written after the name `called` and a dot answers
+    /// any column of this side: every column where the statement calls
+    /// the side by that name, and the columns of the table of that name
+    /// where the side stands for the tables inside brackets, which
+    /// answer under their own names.
+    ///
+    /// `selectExpander` of `research/sqlite/src/select.c:6230` expands
+    /// the tables inside brackets into the `FROM` above them before it
+    /// reads the name in front of a `*`, so that name reaches each of
+    /// them.
+    ///
+    /// Reading the columns costs O(n) in them.
+    fn stars(&self, called: &[u8]) -> bool {
+        self.named(called)
+            || (self.shape.nested
+                && self
+                    .shape
+                    .columns
+                    .iter()
+                    .any(|column| column.from.eq_ignore_ascii_case(called)))
+    }
+
     /// One column of this side as the statement above it answers the
     /// column: under this side's name where the side has one, and
     /// under the name it already carries where the side is the tables
@@ -13199,10 +13221,19 @@ fn answered(arena: &Arena, select: &Select, sql: &[u8], sides: &[Side<'_>]) -> V
                 for (at, side) in sides
                     .iter()
                     .enumerate()
-                    .filter(|(_, side)| !side.exists && side.named(&called))
+                    .filter(|(_, side)| !side.exists && side.stars(&called))
                 {
                     for (place, column) in side.shape.columns.iter().enumerate() {
-                        if !hidden_column(column) {
+                        if hidden_column(column) {
+                            continue;
+                        }
+                        // The name reaches a side the statement calls by
+                        // it, and the tables inside brackets under their
+                        // own names, whose rowid a `*` leaves out.
+                        if side.named(&called)
+                            || (!side.shape.keying(place)
+                                && column.from.eq_ignore_ascii_case(&called))
+                        {
                             out.push(Term::Held(at, place));
                         }
                     }
@@ -14242,6 +14273,107 @@ fn aggregating(
     })
 }
 
+/// The columns a `*` answers: those of every side of the `FROM`, with the
+/// places among them that hold the rowid of a table inside brackets.
+///
+/// # Errors
+///
+/// [`Error::NoTables`] for a `*` written where the statement reads no
+/// table, and [`Error::Ambiguous`] where two sides carry one name.
+///
+/// Reading the sides costs O(n) in their columns.
+fn every_column(
+    sides: &[Side<'_>],
+    nested: bool,
+    long: bool,
+) -> Result<(Vec<Column>, Vec<usize>), Error> {
+    // `selectExpander` refuses a `*` written where the statement reads
+    // no table.
+    if sides.is_empty() {
+        return Err(Error::NoTables);
+    }
+    let mut columns = Vec::new();
+    let mut keys = Vec::new();
+    for (at, side) in sides.iter().enumerate().filter(|(_, side)| !side.exists) {
+        // A `*` stands for every column named by its side, so two sides
+        // of one name make every column of them a name two sides answer.
+        if sides.iter().take(at).any(|before| before.named(&side.name)) {
+            return Err(Error::Ambiguous(ambiguous_name(side)));
+        }
+        for (place, column) in side.shape.columns.iter().enumerate() {
+            // The column a side standing for the tables inside brackets
+            // answers as the rowid of one of them is left out, which
+            // `selectExpander` of `research/sqlite/src/select.c:6230`
+            // leaves out of the columns of a nested `FROM` it expands.
+            // A column a name beginning with `__hidden__` hides is no
+            // column a `*` answers either.
+            if side.shape.keying(place) || hidden_column(column) {
+                continue;
+            }
+            // The columns a `USING` or a `NATURAL` matched are answered
+            // once and not twice, which is the side that hides them
+            // leaving them out. A statement that stands for the tables
+            // inside brackets answers such a column as well, under the
+            // name of the table it came from, and says that a `*` leaves
+            // it out.
+            let hidden = left_out(column, &side.using);
+            if hidden && !nested {
+                continue;
+            }
+            let mut answered = side.answered_as(column);
+            answered.hidden = hidden;
+            answered.shown = side.shown_as(column, long);
+            columns.push(answered);
+        }
+        // A statement standing for the tables inside brackets answers the
+        // rowid of each of them that keeps one, under the first name no
+        // column of that table carries.
+        if let Some(name) = keyed_name(side).filter(|_| nested) {
+            keys.push(columns.len());
+            columns.push(keyed_column(side, name));
+        }
+    }
+    Ok((columns, keys))
+}
+
+/// The columns a `*` written after a name and a dot answers: those of the
+/// side the statement calls by that name, and those of the table of that
+/// name inside a `FROM` inside brackets, whose rowid it leaves out.
+///
+/// # Errors
+///
+/// [`Error::NoTable`] where no side answers the name, and
+/// [`Error::Ambiguous`] where two of them do.
+///
+/// Reading the sides costs O(n) in their columns.
+fn starred_columns(sides: &[Side<'_>], called: &[u8], long: bool) -> Result<Vec<Column>, Error> {
+    let mut named = sides
+        .iter()
+        .filter(|side| !side.exists && side.stars(called));
+    let side = named
+        .next()
+        .ok_or_else(|| Error::NoTable(called.to_vec()))?;
+    if named.next().is_some() {
+        return Err(Error::Ambiguous(ambiguous_name(side)));
+    }
+    Ok(side
+        .shape
+        .columns
+        .iter()
+        .enumerate()
+        .filter(|(place, column)| {
+            !hidden_column(column)
+                && (side.named(called)
+                    || (!side.shape.keying(*place) && column.from.eq_ignore_ascii_case(called)))
+        })
+        .map(|(_, column)| {
+            let mut answered = side.answered_as(column);
+            answered.shown = side.shown_as(column, long);
+            answered
+        })
+        .collect())
+}
+
 /// The columns a statement answers: their names, and what a
 /// comparison against each of them does.
 fn shape(
@@ -14262,79 +14394,12 @@ fn shape(
     for result in arena.results(select.columns) {
         match *result {
             ResultColumn::Star => {
-                // `selectExpander` refuses a `*` written where the
-                // statement reads no table.
-                if sides.is_empty() {
-                    return Err(Error::NoTables);
-                }
-                for (at, side) in sides.iter().enumerate().filter(|(_, side)| !side.exists) {
-                    // A `*` stands for every column named by its side,
-                    // so two sides of one name make every column of
-                    // them a name two sides answer.
-                    if sides.iter().take(at).any(|before| before.named(&side.name)) {
-                        return Err(Error::Ambiguous(ambiguous_name(side)));
-                    }
-                    // The columns a `USING` or a `NATURAL` matched are
-                    // answered once and not twice, which is the side
-                    // that hides them leaving them out.
-                    for (place, column) in side.shape.columns.iter().enumerate() {
-                        // The column a side standing for the tables
-                        // inside brackets answers as the rowid of one of
-                        // them is left out, which `selectExpander` of
-                        // `research/sqlite/src/select.c:6230` leaves out
-                        // of the columns of a nested `FROM` it expands.
-                        if side.shape.keying(place) {
-                            continue;
-                        }
-                        // A statement that stands for the tables
-                        // inside brackets answers the column a `USING`
-                        // matched as well, under the name of the table
-                        // it came from, and says that a `*` leaves it
-                        // out.
-                        // A column a name beginning with `__hidden__`
-                        // hides is no column a `*` answers.
-                        if hidden_column(column) {
-                            continue;
-                        }
-                        let hidden = left_out(column, &side.using);
-                        if hidden && !select.nested {
-                            continue;
-                        }
-                        let mut answered = side.answered_as(column);
-                        answered.hidden = hidden;
-                        answered.shown = side.shown_as(column, long);
-                        columns.push(answered);
-                    }
-                    // A statement standing for the tables inside
-                    // brackets answers the rowid of each of them that
-                    // keeps one, under the first name no column of that
-                    // table carries.
-                    if let Some(name) = keyed_name(side).filter(|_| select.nested) {
-                        keys.push(columns.len());
-                        columns.push(keyed_column(side, name));
-                    }
-                }
+                let (held, keyed) = every_column(sides, select.nested, long)?;
+                keys.extend(keyed.into_iter().map(|at| at.saturating_add(columns.len())));
+                columns.extend(held);
             }
             ResultColumn::TableStar(span) => {
-                let called = dequote(span.text(sql));
-                let mut named = sides
-                    .iter()
-                    .filter(|side| !side.exists && side.named(&called));
-                let side = named.next().ok_or_else(|| Error::NoTable(called.clone()))?;
-                if named.next().is_some() {
-                    return Err(Error::Ambiguous(ambiguous_name(side)));
-                }
-                columns.extend(
-                    side.shape
-                        .columns
-                        .iter()
-                        .filter(|column| !hidden_column(column))
-                        .map(|column| {
-                            let mut answered = side.answered_as(column);
-                            answered.shown = side.shown_as(column, long);
-                            answered
-                        }),
-                );
+                columns.extend(starred_columns(sides, &dequote(span.text(sql)), long)?);
             }
             ResultColumn::Expr { expr, alias, text } => {
                 let written = column_parts(arena, expr);
@@ -14586,9 +14651,23 @@ fn project(
             }
             ResultColumn::TableStar(span) => {
                 let named = dequote(span.text(sql));
-                for held in cursor.held.iter().filter(|held| held.named(&named)) {
-                    held.each(|_, column, value| {
-                        if !hidden_column(column) {
+                for held in &cursor.held {
+                    // The name reaches a side the statement calls by it,
+                    // and the tables inside brackets under their own
+                    // names, whose rowid a `*` leaves out.
+                    if held.named(&named) {
+                        held.each(|_, column, value| {
+                            if !hidden_column(column) {
+                                out.push(value.clone());
+                            }
+                        });
+                        continue;
+                    }
+                    // The shape of the tables inside brackets holds no
+                    // hidden column, a `*` inside them leaving it out
+                    // already.
+                    held.each(|place, column, value| {
+                        if column.from.eq_ignore_ascii_case(&named) && !held.shape.keying(place) {
                             out.push(value.clone());
                         }
                     });
@@ -16304,10 +16383,12 @@ impl<'a> Held<'a> {
     /// the brackets matched and which the shape marks by hiding the one
     /// of them a `*` outside the brackets leaves out.
     fn coalesces(&self, column: &[u8]) -> bool {
-        self.shape
-            .columns
-            .iter()
-            .any(|held| held.hidden && held.name.eq_ignore_ascii_case(column))
+        self.shape.nested
+            && self
+                .shape
+                .columns
+                .iter()
+                .any(|held| held.hidden && held.name.eq_ignore_ascii_case(column))
     }
 
     /// The value the columns of that name inside the brackets stand for,

@@ -7933,6 +7933,21 @@ is the one the C library's shell writes.
   count it wrote, and a `DELETE` that writes no row answering nought.
 - `CREATE TABLE u(c)` and `CREATE INDEX`, each answering no row.
 
+### 6.6.462 Which columns a `*` after a name answers over a `FROM` inside brackets (`db-sqlite`)
+
+Unit tests of `crate::db` over `t1(a,b)`, `t2(a,b)` and `t3(a,b)`, one row
+each. Every answer is the one the C library's shell writes.
+
+- `SELECT t3.* FROM (t2 JOIN t3 ON t3.a=t2.a+111)` and `SELECT t2.*` over
+  the same, each the two columns of that table.
+- `SELECT t3.*, t2.*` and `SELECT t2.*, t3.*`, each four columns in the
+  order the statement writes them.
+- `SELECT t3.* FROM t1 JOIN (t2 JOIN (t3 JOIN t4 ON t4.a=t3.a+111) ON
+  t3.a=t2.a+111) ON t2.a=t1.a+111`, the two columns of the table two
+  levels of brackets down.
+- `SELECT nosuch.* FROM (t2 JOIN t3 ON t3.a=t2.a+111)`, refused `no such
+  table: nosuch`.
+
 ### 6.6.461 Which value each column of a `FROM` inside brackets answers (`db-sqlite`)
 
 Unit tests of `crate::db` over `t2(a,b)` and `t3(a,b)`, one row each.
