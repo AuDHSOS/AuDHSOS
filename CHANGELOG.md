@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` refuses an aggregate that belongs to a statement and stands where that statement
+  answers none, the `WHERE` of it and the arguments of a window function, with `misuse of aggregate:
+  name()`, and writes `misuse of aggregate function name()` for one written in a clause that allows
+  none, where it wrote the second message for both. D-620 records it. Catalog 6.6.451.
+  `window1.test` goes from 320 cases passing to 323.
+
 - `db-sqlite` holds an aggregate call to the statement whose sides it reads a column of, read from the
   statement it stands in outwards, so `SELECT (SELECT sum(a1) FROM t2) FROM t1` answers one row over
   every row of `t1` where it answered one row per row of `t1`. D-619 records it. Catalog 6.6.450.

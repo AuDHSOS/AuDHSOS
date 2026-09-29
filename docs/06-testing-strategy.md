@@ -7933,6 +7933,24 @@ is the one the C library's shell writes.
   count it wrote, and a `DELETE` that writes no row answering nought.
 - `CREATE TABLE u(c)` and `CREATE INDEX`, each answering no row.
 
+### 6.6.451 What an aggregate a statement answers no group for is refused with (`db-sqlite`)
+
+Unit tests of `crate::db` over an image `crate::change` writes. Every
+answer is the one the C library's shell writes. The tables are `t1(a1)` of
+three rows and `t2(b1)` of two.
+
+- `SELECT count(*) FROM t1 WHERE (SELECT sum(a1) FROM t2)` and the same
+  over `(SELECT sum(1) FILTER(WHERE a1) FROM t2)`, each refused `misuse of
+  aggregate: sum()`.
+- `SELECT ntile((SELECT sum(a1))) OVER(ORDER BY a1) FROM t1`, refused the
+  same.
+- `SELECT count(*) FROM t1 WHERE sum(a1)`, refused the same, and `SELECT
+  a1 FROM t1 WHERE sum(a1)`, refused `misuse of aggregate function
+  sum()`.
+- `SELECT ntile(sum(a1)) OVER(ORDER BY a1) FROM t1` and `SELECT
+  ntile((SELECT count(*) FROM t2)) OVER(ORDER BY a1) FROM t1`, each
+  answering rows, the aggregate belonging to the statement that wrote it.
+
 ### 6.6.450 Which statement an aggregate written inside another one belongs to (`db-sqlite`)
 
 Unit tests of `crate::db` over an image `crate::change` writes. Every

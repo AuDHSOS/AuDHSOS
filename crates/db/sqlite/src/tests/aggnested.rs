@@ -148,6 +148,55 @@ fn which_statement_an_aggregate_written_inside_another_one_belongs_to() {
             "{sql:?}"
         );
     }
+}
+
+/// A `WHERE` and the arguments of a window function answer no aggregate
+/// of the statement they belong to.
+#[test]
+fn what_an_aggregate_a_statement_answers_no_group_for_is_refused_with() {
+    let image = written();
+    let database = Database::open(&image).expect("a database");
+    for (sql, message) in [
+        (
+            b"SELECT count(*) FROM t1 WHERE (SELECT sum(a1) FROM t2)".as_slice(),
+            "misuse of aggregate: sum()",
+        ),
+        (
+            b"SELECT count(*) FROM t1 WHERE (SELECT sum(1) FILTER(WHERE a1) FROM t2)",
+            "misuse of aggregate: sum()",
+        ),
+        (
+            b"SELECT ntile((SELECT sum(a1))) OVER(ORDER BY a1) FROM t1",
+            "misuse of aggregate: sum()",
+        ),
+        (
+            b"SELECT count(*) FROM t1 WHERE sum(a1)",
+            "misuse of aggregate: sum()",
+        ),
+        (
+            b"SELECT a1 FROM t1 WHERE sum(a1)",
+            "misuse of aggregate function sum()",
+        ),
+    ] {
+        assert_eq!(
+            database.query(sql).unwrap_err().message(),
+            message,
+            "{sql:?}"
+        );
+    }
+    // An aggregate written in the arguments of a window function belongs
+    // to the statement that wrote it, which answers it over its group.
+    assert_eq!(
+        answered(&image, b"SELECT ntile(sum(a1)) OVER(ORDER BY a1) FROM t1"),
+        "1"
+    );
+    assert_eq!(
+        answered(
+            &image,
+            b"SELECT ntile((SELECT count(*) FROM t2)) OVER(ORDER BY a1) FROM t1"
+        ),
+        "1 1 2"
+    );
     // A table-valued function is a side this engine does not answer, and
     // the names of it are read as the statement's own until it is.
     assert_eq!(

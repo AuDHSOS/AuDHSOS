@@ -12864,6 +12864,10 @@ struct Call {
     filter: Option<ExprId>,
     /// The name it was written under, which names it in a refusal.
     name: Vec<u8>,
+    /// Whether it stands inside a statement written inside the one it
+    /// belongs to, which the refusal of a place that answers no
+    /// aggregate names it by.
+    nested: bool,
 }
 
 /// One group of rows while it is being accumulated.
@@ -13517,7 +13521,7 @@ fn aggregates(
     let mut calls = Vec::new();
     for column in walk.results {
         if let ResultColumn::Expr { expr, .. } = *column {
-            walk.gather(expr, &mut calls, false, &mut Vec::new())?;
+            walk.gather(expr, &mut calls, Placed::default(), &mut Vec::new())?;
         }
     }
     // What makes a statement an aggregate one is an aggregate among the
@@ -13529,20 +13533,31 @@ fn aggregates(
         return Err(Error::Having);
     }
     if let Some(having) = select.having {
-        walk.gather(having, &mut calls, false, &mut Vec::new())?;
+        walk.gather(having, &mut calls, Placed::default(), &mut Vec::new())?;
     }
     for term in arena.orders(select.order) {
-        walk.gather(term.expr, &mut calls, false, &mut Vec::new())?;
+        walk.gather(term.expr, &mut calls, Placed::default(), &mut Vec::new())?;
     }
     let mut misused = Vec::new();
     if let Some(id) = select.filter {
-        walk.gather(id, &mut misused, false, &mut Vec::new())?;
+        walk.gather(id, &mut misused, Placed::default(), &mut Vec::new())?;
     }
+    // A `WHERE` answers no aggregate. One written there where the
+    // statement gathers no group is a misuse of the function, which
+    // `lookupName` of `research/sqlite/src/resolve.c:1289` refuses for a
+    // clause that allows none; every other one is an aggregate with no
+    // group, which `sqlite3ExprCodeTarget` of
+    // `research/sqlite/src/expr.c:5340` refuses when it finds no
+    // `AggInfo`.
     if let Some(call) = misused.first() {
-        return Err(Error::MisusedAggregate(call.name.clone()));
+        return Err(if call.nested || grouped {
+            Error::LooseAggregate(call.name.clone())
+        } else {
+            Error::MisusedAggregate(call.name.clone())
+        });
     }
     for id in arena.children(select.group) {
-        walk.gather(*id, &mut misused, false, &mut Vec::new())?;
+        walk.gather(*id, &mut misused, Placed::default(), &mut Vec::new())?;
     }
     if !misused.is_empty() {
         return Err(Error::GroupedAggregate);
@@ -13712,6 +13727,21 @@ fn standing(database: &Database<'_>, arena: &Arena, id: SelectId, sql: &[u8]) ->
     nested_aggregates(database, arena, &select, sql)
 }
 
+/// Where an expression stands, which says what an aggregate written
+/// there is refused for.
+#[derive(Clone, Copy, Default)]
+struct Placed {
+    /// Whether it stands inside the arguments of an aggregate, where
+    /// another aggregate is a misuse.
+    inside: bool,
+    /// Whether it stands inside the arguments of a window function.
+    /// `sqlite3WindowRewrite` of `research/sqlite/src/window.c:960`
+    /// moves those arguments into a statement of its own, which answers
+    /// them over the rows of the window, so an aggregate of an enclosing
+    /// statement has no group to answer over there.
+    windowed: bool,
+}
+
 /// What the walk for the aggregate calls of one statement reads.
 struct Gathering<'a> {
     /// The connection, which the columns of a table are read off the
@@ -13752,12 +13782,12 @@ impl Gathering<'_> {
         &self,
         id: ExprId,
         out: &mut Vec<Call>,
-        inside: bool,
+        placed: Placed,
         chain: &mut Vec<Sided>,
     ) -> Result<(), Error> {
         self.arena
             .node(id)
-            .map_or(Ok(()), |node| self.collect(id, node, out, inside, chain))
+            .map_or(Ok(()), |node| self.collect(id, node, out, placed, chain))
     }
 
     /// The same for one node the arena holds.
@@ -13766,12 +13796,15 @@ impl Gathering<'_> {
         id: ExprId,
         node: Node,
         out: &mut Vec<Call>,
-        inside: bool,
+        placed: Placed,
         chain: &mut Vec<Sided>,
     ) -> Result<(), Error> {
-        let mut under = inside;
-        if inside && chain.is_empty() {
+        let mut under = placed;
+        if placed.inside && chain.is_empty() {
             self.aliasing(node)?;
+        }
+        if matches!(node, Node::Over { .. }) {
+            under.windowed = true;
         }
         if let Node::Call {
             name,
@@ -13789,7 +13822,7 @@ impl Gathering<'_> {
             };
             let called = dequote(name.text(self.sql));
             if let Some(which) = agg::lookup_in(self.grouped, &called, count) {
-                if inside {
+                if placed.inside {
                     return Err(Error::MisusedAggregate(called));
                 }
                 // `DISTINCT` puts the rows through one column, so there
@@ -13804,7 +13837,14 @@ impl Gathering<'_> {
                 if self.arena.orders(ordered).len() > self.most {
                     return Err(Error::OrderTerms);
                 }
+                let nested = !chain.is_empty();
                 if self.belongs(id, (args, filter, ordered), chain) {
+                    // The arguments of a window function are answered
+                    // over the rows of the window, so an aggregate of an
+                    // enclosing statement has no group there.
+                    if nested && placed.windowed {
+                        return Err(Error::LooseAggregate(called));
+                    }
                     out.push(Call {
                         id,
                         which,
@@ -13813,9 +13853,10 @@ impl Gathering<'_> {
                         filter,
                         ordered,
                         name: called,
+                        nested,
                     });
                 }
-                under = true;
+                under.inside = true;
             }
         }
         // A statement written inside this one holds the aggregates that
@@ -13824,7 +13865,7 @@ impl Gathering<'_> {
         if let Node::Subquery(held) | Node::Exists(held) | Node::InSelect { select: held, .. } =
             node
         {
-            self.inner(held, out, chain)?;
+            self.inner(held, out, under, chain)?;
         }
         let mut deeper = Ok(());
         self.arena.under(node, |child| {
@@ -13853,11 +13894,12 @@ impl Gathering<'_> {
         &self,
         id: SelectId,
         out: &mut Vec<Call>,
+        placed: Placed,
         chain: &mut Vec<Sided>,
     ) -> Result<(), Error> {
         self.arena
             .select(id)
-            .map_or(Ok(()), |select| self.innermost(&select, out, chain))
+            .map_or(Ok(()), |select| self.innermost(&select, out, placed, chain))
     }
 
     /// The same for one statement the arena holds.
@@ -13865,21 +13907,26 @@ impl Gathering<'_> {
         &self,
         select: &Select,
         out: &mut Vec<Call>,
+        placed: Placed,
         chain: &mut Vec<Sided>,
     ) -> Result<(), Error> {
+        let held = Placed {
+            inside: false,
+            windowed: placed.windowed,
+        };
         chain.push(self.database.sided_names(self.arena, select, self.sql));
         let deeper = roots(self.arena, select)
             .into_iter()
-            .try_for_each(|root| self.gather(root, out, false, chain))
+            .try_for_each(|root| self.gather(root, out, held, chain))
             .and_then(|()| {
                 self.arena
                     .sources(select.from)
                     .iter()
                     .filter_map(|source| match source.kind {
-                        SourceKind::Select(held) => Some(held),
+                        SourceKind::Select(inner) => Some(inner),
                         SourceKind::Table { .. } | SourceKind::Function { .. } => None,
                     })
-                    .try_for_each(|held| self.inner(held, out, chain))
+                    .try_for_each(|inner| self.inner(inner, out, held, chain))
             });
         chain.pop();
         deeper?;
@@ -13887,7 +13934,7 @@ impl Gathering<'_> {
         // as deep as one another.
         select
             .compound
-            .map_or(Ok(()), |(_, held)| self.inner(held, out, chain))
+            .map_or(Ok(()), |(_, inner)| self.inner(inner, out, held, chain))
     }
 
     /// Whether the call belongs to the statement whose calls are being
