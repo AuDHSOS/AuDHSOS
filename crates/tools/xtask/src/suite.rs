@@ -1966,9 +1966,17 @@ impl Session {
     /// `SQLITE_BUSY` and closes nothing, which `sqlite3Close` of
     /// `research/sqlite/src/main.c` answers where `sqlite3_close` and not
     /// `sqlite3_close_v2` asked; the connection stands and the statement
-    /// runs on. `forced` says `sqlite3_close_v2` asked, which closes the
+    /// runs on. A pointer that names no connection answers
+    /// `SQLITE_MISUSE` to either form. `forced` says `sqlite3_close_v2`
+    /// asked, which closes the
     /// connection whatever it holds.
     fn closed(&mut self, name: &str, forced: bool) -> Vec<String> {
+        // A pointer the connection was closed at already is no
+        // connection, which `sqlite3Close` answers `SQLITE_MISUSE` for
+        // before it reads anything of it.
+        if !self.connections.contains_key(name) {
+            return alloc_one("SQLITE_MISUSE");
+        }
         if !forced && self.statements.values().any(|held| held.connection == name) {
             return alloc_one("SQLITE_BUSY");
         }
@@ -2923,7 +2931,8 @@ impl Session {
     }
 
     /// One statement of `connection` run through its writer, which
-    /// answers no row.
+    /// answers the rows it wrote, which a `PRAGMA` prepared as a
+    /// statement of its own reads.
     fn ran_one(&mut self, connection: &str, sql: &str) -> Result<db_sqlite::db::Answer, String> {
         let path = self
             .connections
@@ -2940,7 +2949,10 @@ impl Session {
         writer.defines(defines);
         let ran = writer
             .run(&sql_bytes(sql))
-            .map(|_| db_sqlite::db::Answer::default())
+            .map(|rows| db_sqlite::db::Answer {
+                rows,
+                ..db_sqlite::db::Answer::default()
+            })
             .map_err(|error| shape(sql, refusal(&error)));
         let counted = writer.counts();
         self.counters.insert(connection.to_owned(), counted);

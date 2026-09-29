@@ -386,13 +386,17 @@ Size: S.
     which `sqlite3_close` rolls back. A connection that holds a statement
     nothing has finalized answers `SQLITE_BUSY` to `sqlite3_close` and
     closes nothing, and `sqlite3_close_v2` closes it whatever it holds,
-    which D-622 records.
+    which D-622 records. A pointer that names no connection answers
+    `SQLITE_MISUSE` to either form and `bad parameter or other API misuse`
+    to `sqlite3_errmsg`, which D-623 records.
 14. `sqlite3_next_stmt` answers the statements the harness holds for one
     connection, in the order it made them, which D-319 records.
 15. `sqlite3_bind_text` and `sqlite3_bind_blob` bind the first `BYTES`
     bytes of the value, and `sqlite3_bind_text16` and `sqlite3_prepare16`
     read the UTF-16 text they are given back as UTF-8, which D-320
-    records.
+    records. The tail `sqlite3_prepare16` answers is UTF-16, as the text
+    it was given is, and a `PRAGMA` prepared as a statement of its own
+    answers the rows it wrote, which D-623 records.
 16. The connection command answers the errors `tclsqlite.c` writes for a
     method that is no method and for a count of values a method does not
     take, `db transaction` opens a savepoint inside a transaction the

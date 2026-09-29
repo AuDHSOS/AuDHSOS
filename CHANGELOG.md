@@ -7,6 +7,11 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- The suite harness answers the rows a `PRAGMA` wrote for a statement prepared over it, answers the
+  tail of `sqlite3_prepare16` as UTF-16, and answers `SQLITE_MISUSE` and `bad parameter or other API
+  misuse` for a pointer whose connection was closed already. D-623 records it. `capi3c.test` goes
+  from 189 cases passing to 194, `capi3.test` from 195 to 197 and `vacuum.test` from 40 to 44.
+
 - The suite harness answers `sqlite3_close` over a connection that holds a statement nothing has
   finalized with `SQLITE_BUSY` and closes nothing, where it closed the connection whatever it held,
   and `sqlite3_close_v2` closes it as before. D-622 records it. `capi3c.test` goes from 177 cases

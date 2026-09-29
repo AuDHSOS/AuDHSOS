@@ -1973,11 +1973,16 @@ proc harness_try {verb args} {
 # with the text after it written into the variable the caller names. A
 # statement the engine refuses raises `(code) message`, which is what
 # `test_prepare` of `research/sqlite/src/test1.c` writes.
-proc harness_prepare {db sql tailvar legacy} {
+proc harness_prepare {db sql tailvar legacy {wide 0}} {
   set answered [harness_send prepare $db $sql $legacy]
   if {$tailvar ne ""} {
     upvar 2 $tailvar tail
     set tail [lindex $answered 1]
+    # `sqlite3_prepare16` points at the text it was given, so the tail of
+    # a statement given as UTF-16 is UTF-16 as well.
+    if {$wide} {
+      set tail [encoding convertto unicode $tail]
+    }
   }
   set ::harness_error [lindex $answered 2]
   if {$::harness_error ne ""} {
@@ -2004,13 +2009,13 @@ proc harness_utf8 {sql} {
   return [string trimright [encoding convertfrom unicode $sql] "\x00"]
 }
 proc sqlite3_prepare16 {db sql bytes {tailvar ""}} {
-  return [harness_prepare $db [harness_utf8 $sql] $tailvar 1]
+  return [harness_prepare $db [harness_utf8 $sql] $tailvar 1 1]
 }
 proc sqlite3_prepare16_v2 {db sql bytes {tailvar ""}} {
-  return [harness_prepare $db [harness_utf8 $sql] $tailvar 0]
+  return [harness_prepare $db [harness_utf8 $sql] $tailvar 0 1]
 }
 proc sqlite3_prepare16_v3 {db sql bytes flags {tailvar ""}} {
-  return [harness_prepare $db [harness_utf8 $sql] $tailvar 0]
+  return [harness_prepare $db [harness_utf8 $sql] $tailvar 0 1]
 }
 
 # `sqlite3_next_stmt DB STMT`: the statement after the one named, and
@@ -2337,11 +2342,14 @@ proc sqlite3_open16 {file {vfs {}}} {
 # leaves the file where it stands. A connection that holds a statement
 # nothing has finalized answers `SQLITE_BUSY` to `sqlite3_close` and
 # closes nothing; `sqlite3_close_v2` closes it whatever it holds.
-proc sqlite3_close {db} {
-  return [lindex [harness_send close $db 0] 0]
-}
-proc sqlite3_close_v2 {db} {
-  return [lindex [harness_send close $db 1] 0]
+proc sqlite3_close {db} { return [harness_close $db 0] }
+proc sqlite3_close_v2 {db} { return [harness_close $db 1] }
+proc harness_close {db forced} {
+  set answered [lindex [harness_send close $db $forced] 0]
+  if {$answered eq "SQLITE_MISUSE"} {
+    set ::harness_error "bad parameter or other API misuse"
+  }
+  return $answered
 }
 
 # `sqlite3_table_column_metadata DB SCHEMA TABLE COLUMN`: what the
