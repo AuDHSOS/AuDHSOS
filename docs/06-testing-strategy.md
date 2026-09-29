@@ -7933,6 +7933,22 @@ is the one the C library's shell writes.
   count it wrote, and a `DELETE` that writes no row answering nought.
 - `CREATE TABLE u(c)` and `CREATE INDEX`, each answering no row.
 
+### 6.6.453 Which pattern with an `ESCAPE` holds a column between two bounds (`db-sqlite`)
+
+Unit tests of `crate::db` over the fixture `indexed.db`, reading the plan
+as `EXPLAIN QUERY PLAN` writes it. Every answer is the one the C library's
+shell writes.
+
+- `q LIKE 'a%' ESCAPE '/'` and `q LIKE '/a%' ESCAPE '/'` over the index
+  `mq`, and `b GLOB 'v1/*' ESCAPE '/'` over the covering index `kb`, each
+  a `SEARCH` between two bounds.
+- An escape of two bytes, of none, of a wildcard, and one that is no text
+  written as one byte, each a `SCAN`.
+- `q LIKE '/' ESCAPE '/'`, whose prefix is the escape and nothing else, a
+  `SCAN`.
+- The rows the bounds answer: two for `q LIKE 'a%' ESCAPE '/'` and for `q
+  LIKE '/a%' ESCAPE '/'`, none for `q LIKE 'a/%' ESCAPE '/'`.
+
 ### 6.6.452 What a `WITH` term that reads its own name is refused with (`db-sqlite`)
 
 Unit tests of `crate::db` over an image `crate::change` writes. Every

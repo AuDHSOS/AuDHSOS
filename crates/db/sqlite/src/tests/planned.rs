@@ -2525,3 +2525,66 @@ fn what_a_star_over_two_sides_of_one_name_is_refused_with() {
         "HAVING clause on a non-aggregate query"
     );
 }
+
+/// The bounds a `LIKE` with an `ESCAPE` holds a column between, which
+/// the plan names, and the shapes of `ESCAPE` that hold it between none.
+#[test]
+fn which_pattern_with_an_escape_holds_a_column_between_two_bounds() {
+    // `mq` compares under `NOCASE`, which `LIKE` matches under, and `kb`
+    // under `BINARY`, which `GLOB` matches under.
+    for (sql, line) in [
+        (
+            b"SELECT p FROM m WHERE q LIKE 'a%' ESCAPE '/'".as_slice(),
+            "`--SEARCH m USING INDEX mq (q>? AND q<?)\n",
+        ),
+        // The escape takes the byte after it into the prefix and stands
+        // for no byte of its own.
+        (
+            b"SELECT p FROM m WHERE q LIKE '/a%' ESCAPE '/'",
+            "`--SEARCH m USING INDEX mq (q>? AND q<?)\n",
+        ),
+        (
+            b"SELECT b FROM k WHERE b GLOB 'v1/*' ESCAPE '/'",
+            "`--SEARCH k USING COVERING INDEX kb (b>? AND b<?)\n",
+        ),
+        // An escape of more than one byte, an escape of none, and one
+        // that is a wildcard of its own hold the column between no
+        // bounds.
+        (
+            b"SELECT p FROM m WHERE q LIKE 'a%' ESCAPE '//'",
+            "`--SCAN m USING COVERING INDEX mpq\n",
+        ),
+        (
+            b"SELECT p FROM m WHERE q LIKE 'a%' ESCAPE ''",
+            "`--SCAN m USING COVERING INDEX mpq\n",
+        ),
+        (
+            b"SELECT p FROM m WHERE q LIKE 'a%' ESCAPE '%'",
+            "`--SCAN m USING COVERING INDEX mpq\n",
+        ),
+        (
+            b"SELECT p FROM m WHERE q LIKE 'a%' ESCAPE q",
+            "`--SCAN m USING COVERING INDEX mpq\n",
+        ),
+        // A prefix that is the escape and nothing else stands for no
+        // character at all.
+        (
+            b"SELECT p FROM m WHERE q LIKE '/' ESCAPE '/'",
+            "`--SCAN m USING COVERING INDEX mpq\n",
+        ),
+    ] {
+        assert_eq!(plan(super::INDEXED, sql), line, "{sql:?}");
+    }
+    // The rows the bounds answer are the ones the pattern matches.
+    let rows = |sql: &[u8]| {
+        Database::open(super::INDEXED)
+            .unwrap()
+            .query(sql)
+            .unwrap()
+            .rows
+            .len()
+    };
+    assert_eq!(rows(b"SELECT p FROM m WHERE q LIKE 'a%' ESCAPE '/'"), 2);
+    assert_eq!(rows(b"SELECT p FROM m WHERE q LIKE '/a%' ESCAPE '/'"), 2);
+    assert_eq!(rows(b"SELECT p FROM m WHERE q LIKE 'a/%' ESCAPE '/'"), 0);
+}

@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Fixed
 
+- `db-sqlite` holds a column a `LIKE` or a `GLOB` with an `ESCAPE` reads between two bounds, where
+  the escape is a text of one byte that is neither wildcard, and takes the byte after the escape into
+  the prefix, where it held the column between no bounds wherever an `ESCAPE` was written. D-624
+  records it. Catalog 6.6.453. `like.test` goes from 140 cases passing to 143, `like3.test` from 199
+  to 201 and `indexexpr1.test` from 92 to 99.
+
 - The suite harness answers the rows a `PRAGMA` wrote for a statement prepared over it, answers the
   tail of `sqlite3_prepare16` as UTF-16, and answers `SQLITE_MISUSE` and `bad parameter or other API
   misuse` for a pointer whose connection was closed already. D-623 records it. `capi3c.test` goes

@@ -8119,11 +8119,11 @@ fn terms_of<'a>(
             negated,
         }) = arena.node(id)
         {
-            if !negated && escape.is_none() {
+            if !negated {
                 out.extend(liked(
                     arena,
                     op,
-                    (id, value, pattern),
+                    (id, value, pattern, escape),
                     sql,
                     sides,
                     sensitive,
@@ -8645,16 +8645,26 @@ fn bounded(
 fn liked(
     arena: &Arena,
     op: crate::ast::LikeOp,
-    held: (ExprId, ExprId, ExprId),
+    held: (ExprId, ExprId, ExprId, Option<ExprId>),
     sql: &[u8],
     sides: &[Side<'_>],
     sensitive: bool,
 ) -> Vec<Bound> {
-    let (term, value, pattern) = held;
+    let (term, value, pattern, escape) = held;
     let wildcards: &[u8] = match op {
         crate::ast::LikeOp::Like => b"%_",
         crate::ast::LikeOp::Glob => b"*?[",
         crate::ast::LikeOp::Regexp | crate::ast::LikeOp::Match => return Vec::new(),
+    };
+    // `sqlite3IsLikeFunction` of `research/sqlite/src/func.c:2426` reads
+    // an `ESCAPE` of one byte written as text and no other, and refuses
+    // one that is a wildcard of its own.
+    let escaped = match escape {
+        None => None,
+        Some(held) => match single_byte(arena, held, sql) {
+            Some(byte) if !wildcards.get(..2).unwrap_or_default().contains(&byte) => Some(byte),
+            _ => return Vec::new(),
+        },
     };
     // `sqlite3IsLikeFunction`: `GLOB` tells the letters apart and `LIKE`
     // does not, except on a connection `PRAGMA case_sensitive_like` set.
@@ -8679,16 +8689,10 @@ fn liked(
     let Some(held) = text else {
         return Vec::new();
     };
-    // Only the bytes below 128 are read as a prefix, because the byte
-    // after one above 127 is part of the same character and incrementing
-    // the one would write over the other.
-    let count = held
-        .iter()
-        .position(|byte| *byte >= 0x80 || wildcards.contains(byte))
-        .unwrap_or(held.len());
-    let Some(prefix) = held.get(..count).filter(|held| !held.is_empty()) else {
+    let Some((count, unescaped)) = prefixed(&held, wildcards, escaped) else {
         return Vec::new();
     };
+    let prefix = unescaped.as_slice();
     let low: Vec<u8> = prefix
         .iter()
         .map(|byte| {
@@ -8760,6 +8764,71 @@ fn liked(
             needs: Some(needs),
         },
     ]
+}
+
+/// The one byte a text of one byte holds, and nothing where the
+/// expression is not a text written as one byte.
+fn single_byte(arena: &Arena, id: ExprId, sql: &[u8]) -> Option<u8> {
+    let written = uncollated(arena, id);
+    matches!(
+        arena.node(written),
+        Some(Node::Literal(crate::ast::Literal::Text(_)))
+    )
+    .then(|| evaluate_row(arena, written, sql, &eval::NoRow(None)).ok())
+    .flatten()
+    .and_then(|value| value.text())
+    .filter(|text| text.len() == 1)
+    .and_then(|text| text.first().copied())
+}
+
+/// Where the prefix of a pattern ends and what it holds: the bytes in
+/// front of the first wildcard, the byte an `ESCAPE` stands in front of
+/// counting as one of them and the escape bytes themselves dropped.
+///
+/// Only the bytes below 128 are read, because the byte after one above
+/// 127 is part of the same character and incrementing the one would write
+/// over the other. Nothing where the pattern holds no prefix or where the
+/// prefix is the escape and nothing else, which `isLikeOrGlob` of
+/// `research/sqlite/src/whereexpr.c:255` refuses.
+fn prefixed(held: &[u8], wildcards: &[u8], escaped: Option<u8>) -> Option<(usize, Vec<u8>)> {
+    let mut count = 0;
+    while let Some(byte) = held.get(count).copied() {
+        if escaped == Some(byte)
+            && held
+                .get(count.saturating_add(1))
+                .is_some_and(|next| (0x01..0x80).contains(next))
+        {
+            count = count.saturating_add(2);
+            continue;
+        }
+        if byte >= 0x80 || wildcards.contains(&byte) {
+            break;
+        }
+        count = count.saturating_add(1);
+    }
+    let read = held.get(..count).unwrap_or_default();
+    if read.len() == 1 && escaped == read.first().copied() {
+        return None;
+    }
+    let unescaped = unescaped_bytes(read, escaped);
+    (!unescaped.is_empty()).then_some((count, unescaped))
+}
+
+/// The bytes of a prefix with the ones an `ESCAPE` stands in front of
+/// left as they are and the escape bytes themselves dropped.
+fn unescaped_bytes(read: &[u8], escaped: Option<u8>) -> Vec<u8> {
+    let mut out = Vec::with_capacity(read.len());
+    let mut at = 0;
+    while let Some(byte) = read.get(at).copied() {
+        at = at.saturating_add(1);
+        if escaped == Some(byte) {
+            out.extend(read.get(at).copied());
+            at = at.saturating_add(1);
+            continue;
+        }
+        out.push(byte);
+    }
+    out
 }
 
 /// Whether the bytes read as a number, which is what `sqlite3AtoF`

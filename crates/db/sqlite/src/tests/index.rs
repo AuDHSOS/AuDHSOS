@@ -490,11 +490,12 @@ fn what_pattern_holds_the_column_between_no_bounds() {
         (b"SELECT rowid FROM m WHERE q GLOB 'A*'", "1,3"),
         // A pattern that begins with a wildcard, one that begins with a
         // character past the first 128, one written after `NOT`, one
-        // with an `ESCAPE`, and one that is no text of its own.
+        // whose `ESCAPE` is no text written as one byte, and one that is
+        // no text of its own.
         (b"SELECT a FROM o WHERE t GLOB '*x'", ""),
         (b"SELECT a FROM o WHERE t GLOB '\xc3\xa9*'", ""),
         (b"SELECT rowid FROM m WHERE q NOT LIKE 'a%'", "2,4"),
-        (b"SELECT a FROM o WHERE t LIKE 'sh%' ESCAPE '\\'", "2"),
+        (b"SELECT a FROM o WHERE t LIKE 'sh%' ESCAPE char(47)", "2"),
         (
             b"SELECT rowid FROM m WHERE q LIKE q ORDER BY rowid",
             "1,2,3,4",
