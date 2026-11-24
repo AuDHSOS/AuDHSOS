@@ -137,9 +137,7 @@ impl PublicKey {
             .map_err(|_| RsaError::BadSignature)
     }
 
-    /// The modulus, for the one caller that has a private exponent and
-    /// wants the same arithmetic.
-    #[cfg(feature = "test-signing")]
+    /// The modulus, for the callers that hold a private exponent.
     pub(crate) const fn modulus(&self) -> &Modulus {
         &self.modulus
     }

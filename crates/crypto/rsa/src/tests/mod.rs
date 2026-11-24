@@ -7,6 +7,7 @@
 mod bigint;
 mod key;
 mod pkcs1;
+mod private;
 mod pss;
 
 use crate::key::PublicKey;

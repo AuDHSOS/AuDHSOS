@@ -9,6 +9,7 @@ pub mod error;
 pub mod hash;
 pub mod key;
 pub mod pkcs1;
+pub mod private;
 pub mod pss;
 #[cfg(feature = "test-signing")]
 pub mod signing;
@@ -18,6 +19,7 @@ pub(crate) mod window;
 pub use error::RsaError;
 pub use hash::{HashId, MAX_DIGEST};
 pub use key::PublicKey;
+pub use private::PrivateKey;
 
 #[cfg(test)]
 mod tests;
