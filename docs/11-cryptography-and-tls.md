@@ -106,7 +106,7 @@ takes `test-support` as a dev-dependency. Four carry a feature for the
 data their own tests and the tests above them need: `test-signing` on
 `crypto-ec` and on `crypto-rsa`, `test-certificates` on `audhsos-x509`,
 and `test-doubles` on `crypto-rng`. What `test-signing` holds on
-`crypto-ec` is ECDSA alone; Ed25519 signing is product surface (D-135). None is enabled by a product build. No crate of this track is depended on by
+`crypto-ec` is ECDSA alone; Ed25519 signing is product surface (D-135). What `test-signing` holds on `crypto-rsa` is the variable-time `signing` module; `PrivateKey::sign_pkcs1` is product surface (D-197). None is enabled by a product build. No crate of this track is depended on by
 the kernel; the dependency edges run from userland only, and from the
 network track of [document 12](12-parallel-work.md), which uses
 `crypto-rng` for initial sequence numbers and transaction ids (D-51).
@@ -620,7 +620,7 @@ separate workspace and no part of the checks.
 | Self-written cryptography has flaws that tests do not find | a connection that looks encrypted but is not | vector tests from the standards, the RFC 8448 trace, negative tests for every rejection rule, fuzzing, the constant-time review section per crate, verification-only asymmetric surface |
 | Constant-time properties are lost to compiler optimization | timing side channels | no tables, no secret-dependent control flow at the source level; `black_box` where the source must not be folded away; the discipline is documented per function |
 | Self-written RSA has flaws the tests do not find | a chain that looks verified and is not | the construction of D-80 rather than a decoder, a negative test for each rejection rule of both encodings, the `CertificateVerify` of RFC 8448 as a vector from outside, the fuzz target `rsa`, and three real chains through `tools/tls-probe` |
-| Wide arithmetic is written for one purpose and used for another | a bignum that is safe for public values used where values are secret | `crypto-bignum` holds two arithmetics and names them apart: `montgomery` and `pow` for values that are on the wire, `montgomery_secret` and `pow_secret` for an exponent that is not. Its README states which is which and what each protects; `crypto-rsa` uses only the first pair and signs only behind `test-signing`, and `crypto-dh` is the one caller with a secret exponent and uses only the second |
+| Wide arithmetic is written for one purpose and used for another | a bignum that is safe for public values used where values are secret | `crypto-bignum` holds two arithmetics and names them apart: `montgomery` and `pow` for values that are on the wire, `montgomery_secret` and `pow_secret` for an exponent that is not. Its README states which is which and what each protects; `crypto-rsa` verifies with the first pair and signs with `pow_secret` (D-197), and `crypto-dh` is the one caller with a secret exponent and uses only the second |
 | No revocation checking | a revoked certificate is accepted | stated as a known limit; short-lived anchors and operator-chosen trust stores are the only mitigation in this version |
 | The track grows past its estimate | kernel phases slip | the track is independent; work on it happens between phases, never instead of one |
 | Zeroization is best effort without `unsafe` | key material may remain in freed memory | keys live in `Secret<N>` with the shortest possible lifetime; the limit is documented rather than hidden |
@@ -813,7 +813,8 @@ outside this repository with `openssl genrsa 2048` and recorded with the
 command that made it, as D-83 requires.
 
 Signing exists behind `test-signing` and is one call into `pow` with a
-wide exponent. No key is generated (D-83).
+wide exponent. No key is generated (D-83). Product signing is
+`PrivateKey::sign_pkcs1` on `pow_secret` (D-197).
 
 ### 11.15.4 What changes above the primitive
 

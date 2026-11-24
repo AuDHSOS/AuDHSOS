@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `crypto-rsa`: `PrivateKey` and `PrivateKey::sign_pkcs1`, RSASSA-PKCS1-v1_5
+  signing as product surface on the constant-time `pow_secret` ladder. Each
+  signature is verified before it is returned; a refused one is wiped. Tests
+  cover a 1032-bit key, whose 129 bytes are narrower than the 136 the ladder
+  writes (D-197).
+
 - SMP on up to sixteen xAPIC processors: serial AP startup, private descriptor
   tables and timers, fixed-home scheduling, remote preemption, and synchronous
   TLB invalidation. Owner-aware cells preserve same-processor reentry refusal.
