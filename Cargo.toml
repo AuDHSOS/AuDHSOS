@@ -41,6 +41,7 @@ members = [
     "crates/net/dns",
     "crates/net/dhcp",
     "crates/net/http",
+    "crates/net/https",
     "crates/net/stack",
     "crates/boot/uefi-x86_64",
     "crates/elf",
@@ -143,6 +144,7 @@ net-tcp = { path = "crates/net/tcp" }
 net-dns = { path = "crates/net/dns" }
 net-dhcp = { path = "crates/net/dhcp" }
 net-http = { path = "crates/net/http" }
+net-https = { path = "crates/net/https" }
 net-stack = { path = "crates/net/stack" }
 boot-uefi-x86_64 = { path = "crates/boot/uefi-x86_64" }
 audhsos-elf = { path = "crates/elf" }

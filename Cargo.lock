@@ -541,6 +541,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "net-https"
+version = "0.1.0"
+dependencies = [
+ "audhsos-time",
+ "audhsos-tls",
+ "audhsos-x509",
+ "crypto-rng",
+ "net-http",
+ "net-wire",
+]
+
+[[package]]
 name = "net-ip"
 version = "0.1.0"
 dependencies = [
