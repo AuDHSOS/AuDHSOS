@@ -7,6 +7,12 @@ follows Keep a Changelog; the project follows Semantic Versioning.
 
 ### Added
 
+- `net-https`: `exchange` runs one HTTPS request over a caller's `Transport`
+  and hands the response to a `Handler`; `audhsos-tls` carries it, `net-http`
+  writes and decodes it. End of the transport before `close_notify` is
+  `HttpsError::Closed` unless the message is complete. Tests run it against
+  the test server of `audhsos-tls`, down to one-byte reads (D-198).
+
 - `crypto-rsa`: `PrivateKey` and `PrivateKey::sign_pkcs1`, RSASSA-PKCS1-v1_5
   signing as product surface on the constant-time `pow_secret` ladder. Each
   signature is verified before it is returned; a refused one is wiped. Tests

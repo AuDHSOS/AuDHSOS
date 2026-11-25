@@ -435,6 +435,21 @@ pub(crate) const CRATES: &[Crate] = &[
         target: Target::Host,
     },
     Crate {
+        name: "net-https",
+        path: "crates/net/https",
+        kind: Kind::Logic,
+        deps: &[
+            "audhsos-time",
+            "audhsos-tls",
+            "audhsos-x509",
+            "crypto-rng",
+            "net-http",
+            "net-wire",
+        ],
+        coverage_gate: true,
+        target: Target::Host,
+    },
+    Crate {
         name: "net-stack",
         path: "crates/net/stack",
         kind: Kind::Logic,

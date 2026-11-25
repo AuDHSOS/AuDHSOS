@@ -589,7 +589,7 @@ checklist in 4.9.
 | T5 | `audhsos-der` | M | implemented, the time conversion included: `read_time` yields a `CivilTime` the calendar validated |
 | T6 | `audhsos-x509` with the test certificate builder | L | implemented |
 | T7 | `audhsos-tls` | XL | implemented |
-| T8 | Integration, jointly with step D10 of [document 12](12-parallel-work.md): transport over a TCP connection of `server-net`, `random_bytes`, and the HTTP client of `net-http` | M | Phase 15, the one step left |
+| T8 | Integration, jointly with step D10 of [document 12](12-parallel-work.md): transport over a TCP connection of `server-net`, `random_bytes`, and the HTTP client of `net-http` | M | the join of TLS and HTTP is `net-https` (D-198); the `Transport` of `app-tls` over `server-net` remains, Phase 15 |
 | R1 | `crypto-bignum`: the limb core out of `crypto-ec`, a runtime `Modulus`, and exponentiation (11.15) | M-L | implemented |
 | R2 | `crypto-rsa`: the key with its bounds, and PKCS #1 v1.5 | M | implemented |
 | R3 | `crypto-rsa`: MGF1 and EMSA-PSS-VERIFY | M | implemented |

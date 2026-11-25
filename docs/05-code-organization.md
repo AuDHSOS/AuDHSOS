@@ -126,6 +126,7 @@ AuDHSOS/
 │   │   ├── dns/               net-dns: the RFC 1035 message format, name compression, the stub resolver
 │   │   ├── dhcp/              net-dhcp: the RFC 2131 client state machine, its options, the lease timers
 │   │   ├── http/              net-http: HTTP/1.1 client encoding and parsing
+│   │   ├── https/             net-https: one HTTPS exchange over a caller's transport (D-198)
 │   │   ├── stack/             net-stack: interface, demultiplexing, poll
 │   │   └── ssh/               audhsos-ssh: SSH-2 client, sans-I/O: packets, negotiation, key exchange, cipher (document 14, track S)
 │   └── tools/
@@ -217,6 +218,7 @@ AuDHSOS/
 | `net-dns` | n4 | all | no | yes, fuzz | `net-udp`, `net-wire`, `audhsos-time`, `audhsos-collections`, `crypto-rng`; `test-support` and `crypto-rng` with `test-doubles` as dev-dependencies |
 | `net-dhcp` | n4 | all | no | yes | `net-udp`, `net-wire`, `audhsos-time`, `audhsos-collections`, `crypto-rng`; `test-support` and `crypto-rng` with `test-doubles` as dev-dependencies |
 | `net-http` | n4 | all | no | yes, fuzz | `net-wire`; `test-support` as a dev-dependency |
+| `net-https` | c5 | all | no | yes | `audhsos-tls`, `crypto-rng`, `net-http`, `net-wire`; `audhsos-time`, `audhsos-tls` with `test-server`, `audhsos-x509` with `test-certificates` and `crypto-rng` with `test-doubles` as dev-dependencies |
 | `net-stack` | n5 | all | no | yes | every `net-` crate, `audhsos-time`, `audhsos-collections`, `crypto-rng`; `test-support` and `crypto-rng` with `test-doubles` as dev-dependencies |
 | `test-support` | dev | host | no | yes | - (depends on no workspace crate, so that every crate can use it as a dev-dependency without a cycle) |
 | `fuzz-support` | dev | host | allowlisted | yes, and Miri over `counters` and `sancov`, which hold its `unsafe` | - |

@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Manuel Baesler and contributors
+
+[package]
+name = "net-https"
+description = "One HTTPS exchange over a caller's transport: audhsos-tls carrying a net-http request and response"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+audhsos-tls.workspace = true
+crypto-rng.workspace = true
+net-http.workspace = true
+net-wire.workspace = true
+
+[dev-dependencies]
+audhsos-time.workspace = true
+audhsos-tls = { workspace = true, features = ["test-server"] }
+audhsos-x509 = { workspace = true, features = ["test-certificates"] }
+crypto-rng = { workspace = true, features = ["test-doubles"] }
+
+[lints]
+workspace = true
